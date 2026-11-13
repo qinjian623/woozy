@@ -1,0 +1,723 @@
+// TEST-ONLY harness (never merged): real B behaviour driven from a tiny
+// synthetic NativeIR module.  This file lives in package nativeemit so it can
+// call the non-pub b_* helpers B owns.
+//
+// The synthetic module exercises: integer/float constants, add/sub/mul,
+// guarded signed division and remainder (including the wrap block and PHI),
+// float fcmp/fneg, float->int convert, direct calls through a function value,
+// block parameters-free branch/conditional CFG, reverse post order, string
+// literal storage, the executable main wrapper and the GC poll at entry.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+// ---- pure helper checks -----------------------------------------------------
+
+pub func b_harness_pure() i32 {
+    if b_integer_literal(0, 1) != "false" { return 1; }
+    if b_integer_literal(1, 1) != "true" { return 2; }
+    if b_integer_literal(255, 8) != "-1" { return 3; }
+    if b_integer_literal(128, 8) != "-128" { return 4; }
+    if b_integer_literal(127, 8) != "127" { return 5; }
+    if b_integer_literal(4294967295, 32) != "-1" { return 6; }
+    if b_integer_literal(2147483648, 32) != "-2147483648" { return 7; }
+    if b_integer_literal(12, 32) != "12" { return 8; }
+    if b_integer_literal(18446744073709551615, 64) != "-1" { return 9; }
+    if b_integer_literal(9223372036854775808, 64) != "-9223372036854775808" {
+        return 10;
+    }
+    if b_all_ones(8) != 255 { return 11; }
+    if b_all_ones(64) != 18446744073709551615 { return 12; }
+    if b_signed_minimum(8) != 128 { return 13; }
+    if b_signed_minimum(64) != 9223372036854775808 { return 14; }
+    if b_wide_literal(true, 2147483648) != "-2147483648" { return 15; }
+    if b_wide_literal(false, 18446744073709551615) != "18446744073709551615" {
+        return 16;
+    }
+    let narrow = b_float_bits_of(b_float_value(4294967295, 32).reference);
+    switch narrow {
+        case option.Option.Some(item): {
+            if item != 4294967295 { return 17; }
+        }
+        case option.Option.None: return 17;
+    }
+    let wide = b_float_bits_of(b_float_value(18446744073709551615, 64).reference);
+    switch wide {
+        case option.Option.Some(item): {
+            if item != 18446744073709551615 { return 18; }
+        }
+        case option.Option.None: return 18;
+    }
+    if b_float_value(0, 32).reference != "bitcast (i32 0 to float)" { return 19; }
+    if b_float_value(0, 64).reference != "bitcast (i64 0 to double)" { return 20; }
+    // Conversion bounds: -1.0, -2^63, 2^63, 2^64 for both widths.
+    if b_float_pow2(0, true, 64).reference !=
+       "bitcast (i64 13830554455654793216 to double)" { return 21; }
+    if b_float_pow2(63, false, 64).reference !=
+       "bitcast (i64 4890909195324358656 to double)" { return 22; }
+    if b_float_pow2(64, false, 64).reference !=
+       "bitcast (i64 4895412794951729152 to double)" { return 23; }
+    if b_float_pow2(63, true, 64).reference !=
+       "bitcast (i64 14114281232179134464 to double)" { return 24; }
+    if b_float_pow2(0, true, 32).reference != "bitcast (i32 3212836864 to float)" {
+        return 25;
+    }
+    if b_float_pow2(63, true, 32).reference != "bitcast (i32 3741319168 to float)" {
+        return 26;
+    }
+    if b_float_pow2(64, false, 32).reference !=
+       "bitcast (i32 1602224128 to float)" { return 27; }
+    let none = b_float_bits_of("not a constant");
+    switch none {
+        case option.Option.Some(item): return 28;
+        case option.Option.None: {}
+    }
+    // Canonical literal spelling round-trips through the LLVM-independent
+    // signed printer for every width the backend uses.
+    if b_integer_literal(255, 64) != "255" { return 29; }
+    if b_integer_literal(18446744073709551614, 64) != "-2" { return 30; }
+    return 0;
+}
+
+// ---- synthetic module construction -----------------------------------------
+
+func b_harness_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func b_harness_source(node usize) hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: node),
+        span: b_harness_span());
+}
+
+func b_harness_int(state inout types.Context, bits u32) usize throws Error {
+    var value = model.empty_type(model.TypeKind.SignedInt);
+    value.bits = bits;
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test int type"); }
+}
+
+func b_harness_float(state inout types.Context, bits u32) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Float);
+    value.bits = bits;
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test float type"); }
+}
+
+func b_harness_type(kind model.TypeKind, state inout types.Context) usize throws Error {
+    let value = model.empty_type(kind);
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test type"); }
+}
+
+func b_harness_vec(element usize, state inout types.Context) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Vec);
+    value.type_args = [element];
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test vec type"); }
+}
+
+func b_harness_nominal(kind model.TypeKind, declaration usize,
+                       state inout types.Context) usize throws Error {
+    var value = model.empty_type(kind);
+    value.declaration = declaration;
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test nominal type"); }
+}
+
+func b_harness_function(result usize, parameters Vec[model.ParameterType],
+                        state inout types.Context) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Function);
+    value.result = result;
+    value.parameters = parameters;
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern test function type"); }
+}
+
+func b_harness_throws(result usize, parameters Vec[model.ParameterType],
+                      error_type usize, state inout types.Context) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Function);
+    value.result = result;
+    value.parameters = parameters;
+    value.throws_type = option.Option[usize].Some(error_type);
+    try { return types.intern(inout state, value); }
+    catch error types.Error { throw invalid("cannot intern throwing type"); }
+}
+
+func b_harness_constant(result usize, type_id usize,
+                        bits u64) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Constant;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.bits = bits;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_binary(result usize, type_id usize, left usize, right usize,
+                      op hir.BinaryOp) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Binary;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [left, right];
+    instruction.binary = op;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_unary(result usize, type_id usize, input usize,
+                     op hir.UnaryOp) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Unary;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.unary = op;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_convert(result usize, type_id usize,
+                       input usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Convert;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_vec_init(result usize, type_id usize,
+                        inputs Vec[usize]) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.VecInit;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = inputs;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_vec_read(result usize, type_id usize,
+                        inputs Vec[usize]) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.VecRead;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = inputs;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_vec_set(type_id usize,
+                       inputs Vec[usize]) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.VecSet;
+    instruction.type_id = type_id;
+    instruction.inputs = inputs;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_vec_length(result usize, type_id usize,
+                          input usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.VecLength;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_struct_init(result usize, type_id usize,
+                           inputs Vec[usize]) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.StructInit;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = inputs;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_field_read(result usize, type_id usize, input usize,
+                          field usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.FieldRead;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.field = field;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_enum_init(result usize, type_id usize, variant usize,
+                         inputs Vec[usize]) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.EnumInit;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.variant = variant;
+    instruction.inputs = inputs;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_enum_test(result usize, type_id usize, input usize,
+                         variant usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.EnumTest;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.variant = variant;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_enum_payload(result usize, type_id usize, input usize,
+                            variant usize, field usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.EnumPayload;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = [input];
+    instruction.variant = variant;
+    instruction.field = field;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_function_value(result usize, type_id usize,
+                              symbol usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Function;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.function = symbol;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_call(result usize, type_id usize, signature usize,
+                    inputs Vec[usize], origin usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Call;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.inputs = inputs;
+    instruction.signature = signature;
+    instruction.origin = option.Option[usize].Some(origin);
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_load(result usize, type_id usize,
+                    slot usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Load;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.slot = slot;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_string(result usize, type_id usize,
+                      utf8 string) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.StringLiteral;
+    instruction.result = option.Option[usize].Some(result);
+    instruction.type_id = type_id;
+    instruction.utf8 = utf8;
+    instruction.source = b_harness_span();
+    return instruction;
+}
+
+func b_harness_terminator(kind nativeir.Exit, inputs Vec[usize],
+                          targets Vec[usize]) nativeir.Terminator {
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = kind;
+    terminator.inputs = inputs;
+    terminator.targets = targets;
+    terminator.source = b_harness_span();
+    return terminator;
+}
+
+func b_harness_block(instructions Vec[nativeir.Instruction],
+                     terminator nativeir.Terminator) nativeir.BasicBlock {
+    return nativeir.BasicBlock(instructions: instructions, terminator: terminator,
+        parameters: []);
+}
+
+func b_harness_block_with(instructions Vec[nativeir.Instruction],
+                          terminator nativeir.Terminator,
+                          parameters Vec[nativeir.BlockParameter]) nativeir.BasicBlock {
+    return nativeir.BasicBlock(instructions: instructions, terminator: terminator,
+        parameters: parameters);
+}
+
+func b_harness_parameter(value usize, type_id usize,
+                         error bool) nativeir.BlockParameter {
+    return nativeir.BlockParameter(value: value, type_id: type_id, call: 0,
+        error: error);
+}
+
+func b_harness_try(signature usize, inputs Vec[usize], success usize,
+                   failure usize, origin usize) nativeir.Terminator {
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.TryCall;
+    terminator.inputs = inputs;
+    terminator.targets = [success, failure];
+    terminator.signature = signature;
+    terminator.origin = option.Option[usize].Some(origin);
+    terminator.source = b_harness_span();
+    return terminator;
+}
+
+func b_harness_call_origin(signature usize, symbol usize) hir.NodeData {
+    let call = hir.Call(kind: hir.CalleeKind.Direct, signature: signature,
+        direct_symbol: option.Option[usize].Some(symbol),
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None);
+    return hir.NodeData.Call(call);
+}
+
+func b_harness_hir_function(symbol usize, signature usize,
+                            node usize) hir.HirFunction {
+    return hir.HirFunction(symbol: symbol, signature: signature, parameters: [],
+        body: 0, scope: 0, source: b_harness_source(node), captures: [],
+        is_async: false);
+}
+
+func b_harness_empty_slot() nativeir.Slot {
+    return nativeir.Slot(type_id: 0, parameter: option.Option[u32].None,
+        is_inout: false, owner: option.Option[hir.OwnerRef].None,
+        owning_parameter: false, binding: option.Option[usize].None);
+}
+
+pub func b_harness_emit() Vec[string] throws Error {
+    var context = types.context();
+    let i32_type = b_harness_int(inout context, 32);
+    let i64_type = b_harness_int(inout context, 64);
+    let f64_type = b_harness_float(inout context, 64);
+    let bool_type = b_harness_type(model.TypeKind.Bool, inout context);
+    let string_type = b_harness_type(model.TypeKind.String, inout context);
+    let unit_type = b_harness_type(model.TypeKind.Unit, inout context);
+    let usize_type = b_harness_type(model.TypeKind.Usize, inout context);
+    let vec_i32 = b_harness_vec(i32_type, inout context);
+    let pair_type = b_harness_nominal(model.TypeKind.NominalStruct, 100,
+        inout context);
+    let choice_type = b_harness_nominal(model.TypeKind.NominalEnum, 110,
+        inout context);
+    let parameter = model.ParameterType(mode: model.ParamMode.Ordinary,
+        type_id: i32_type);
+    let fn1 = b_harness_function(i32_type, [parameter], inout context);
+    let fn0 = b_harness_function(i32_type, [], inout context);
+    let fn_i64 = b_harness_function(i64_type, [], inout context);
+    let fn_bool = b_harness_function(bool_type, [], inout context);
+    let fn_unit = b_harness_function(unit_type, [], inout context);
+    let fthrow1 = b_harness_throws(i32_type, [parameter], i32_type, inout context);
+    let fthrow0 = b_harness_throws(i32_type, [], i32_type, inout context);
+
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    module.nodes = [
+        hir.HirNode(type_id: i32_type, source: b_harness_source(0), scope: 0,
+            children: [], data: b_harness_call_origin(fn1, 11), errors: [],
+            exits: []),
+        hir.HirNode(type_id: i32_type, source: b_harness_source(1), scope: 0,
+            children: [], data: b_harness_call_origin(fn0, 12), errors: [],
+            exits: []),
+        hir.HirNode(type_id: i32_type, source: b_harness_source(2), scope: 0,
+            children: [], data: b_harness_call_origin(fthrow0, 13), errors: [],
+            exits: []),
+        hir.HirNode(type_id: i32_type, source: b_harness_source(3), scope: 0,
+            children: [], data: b_harness_call_origin(fthrow1, 14), errors: [],
+            exits: []),
+        hir.HirNode(type_id: i32_type, source: b_harness_source(4), scope: 0,
+            children: [], data: b_harness_call_origin(fn0, 15), errors: [],
+            exits: [])
+    ];
+    module.functions = [
+        b_harness_hir_function(10, fthrow0, 0),
+        b_harness_hir_function(11, fn1, 0),
+        b_harness_hir_function(12, fn0, 1),
+        b_harness_hir_function(13, fthrow0, 2),
+        b_harness_hir_function(14, fthrow1, 3),
+        b_harness_hir_function(15, fn0, 4),
+        b_harness_hir_function(16, fn1, 0),
+        b_harness_hir_function(17, fn_i64, 0),
+        b_harness_hir_function(18, fn0, 0),
+        b_harness_hir_function(19, fn0, 0),
+        b_harness_hir_function(20, fn_bool, 0),
+        b_harness_hir_function(21, fn_bool, 0),
+        b_harness_hir_function(22, fn_unit, 0)
+    ];
+    module.nominals = [
+        hir.NominalDecl(symbol: 100, kind: model.TypeKind.NominalStruct,
+            params: [], fields: [
+                hir.FieldDecl(symbol: 101, type_id: i32_type, exported: false,
+                    source: b_harness_source(0)),
+                hir.FieldDecl(symbol: 102, type_id: i32_type, exported: false,
+                    source: b_harness_source(0))
+            ], variants: [], source: b_harness_source(0)),
+        hir.NominalDecl(symbol: 110, kind: model.TypeKind.NominalEnum,
+            params: [], fields: [], variants: [
+                hir.VariantDecl(symbol: 111, payload: [
+                    hir.FieldDecl(symbol: 113, type_id: i32_type,
+                        exported: false, source: b_harness_source(0))
+                ], source: b_harness_source(0)),
+                hir.VariantDecl(symbol: 112, payload: [],
+                    source: b_harness_source(0))
+            ], source: b_harness_source(0))
+    ];
+
+    var cfg = nativeir.empty_module(module);
+    // symbol 10 (throwing entry):
+    //   double(21) + 7 / 2 - 7 % 2 - 8 + floatmath() + vecmath() + f13() == 84
+    var compute = vec.empty[nativeir.Instruction]();
+    vec.push(compute, b_harness_constant(0, i32_type, 21));
+    vec.push(compute, b_harness_function_value(1, fn1, 11));
+    vec.push(compute, b_harness_call(2, i32_type, fn1, [1, 0], 0));
+    vec.push(compute, b_harness_constant(3, i32_type, 7));
+    vec.push(compute, b_harness_constant(4, i32_type, 2));
+    vec.push(compute, b_harness_binary(5, i32_type, 3, 4, hir.BinaryOp.Divide));
+    vec.push(compute, b_harness_binary(6, i32_type, 3, 4,
+        hir.BinaryOp.Remainder));
+    vec.push(compute, b_harness_binary(7, i32_type, 2, 5, hir.BinaryOp.Add));
+    vec.push(compute, b_harness_binary(8, i32_type, 7, 6, hir.BinaryOp.Subtract));
+    vec.push(compute, b_harness_constant(9, i32_type, 8));
+    vec.push(compute, b_harness_binary(10, i32_type, 8, 9,
+        hir.BinaryOp.Subtract));
+    vec.push(compute, b_harness_function_value(11, fn0, 12));
+    vec.push(compute, b_harness_call(12, i32_type, fn0, [11], 1));
+    vec.push(compute, b_harness_binary(13, i32_type, 10, 12, hir.BinaryOp.Add));
+    vec.push(compute, b_harness_string(14, string_type, "a\"b\\c\td\u{e9}"));
+    vec.push(compute, b_harness_function_value(15, fthrow0, 13));
+    vec.push(compute, b_harness_function_value(16, fn0, 15));
+    vec.push(compute, b_harness_call(17, i32_type, fn0, [16], 4));
+    var compute_success = vec.empty[nativeir.Instruction]();
+    vec.push(compute_success, b_harness_binary(18, i32_type, 13, 20,
+        hir.BinaryOp.Add));
+    vec.push(compute_success, b_harness_binary(21, i32_type, 18, 17,
+        hir.BinaryOp.Add));
+    let compute_error = vec.empty[nativeir.Instruction]();
+
+    // symbol 11: double(x) = x * 2
+    var double = vec.empty[nativeir.Instruction]();
+    vec.push(double, b_harness_load(0, i32_type, 0));
+    vec.push(double, b_harness_constant(1, i32_type, 2));
+    vec.push(double, b_harness_binary(2, i32_type, 0, 1, hir.BinaryOp.Multiply));
+    var double_slot = b_harness_empty_slot();
+    double_slot.type_id = i32_type;
+    double_slot.parameter = option.Option[u32].Some(0);
+
+    // symbol 12: floatmath() -> 0 with a two-way branch
+    var entry = vec.empty[nativeir.Instruction]();
+    vec.push(entry, b_harness_constant(0, f64_type, 4611686018427387904));
+    vec.push(entry, b_harness_constant(1, f64_type, 0));
+    vec.push(entry, b_harness_binary(2, f64_type, 0, 1, hir.BinaryOp.Add));
+    vec.push(entry, b_harness_unary(3, f64_type, 2, hir.UnaryOp.Negate));
+    vec.push(entry, b_harness_convert(4, i32_type, 3));
+    vec.push(entry, b_harness_binary(5, bool_type, 0, 1, hir.BinaryOp.Less));
+    var joined = vec.empty[nativeir.Instruction]();
+    vec.push(joined, b_harness_constant(6, i32_type, 2));
+    vec.push(joined, b_harness_binary(7, i32_type, 4, 6, hir.BinaryOp.Add));
+    var empty = vec.empty[nativeir.Instruction]();
+    vec.push(empty, b_harness_constant(8, i32_type, 0));
+
+    // symbol 13: () -> i32 throws i32, forwards a try-call to symbol 14.
+    var throw13 = vec.empty[nativeir.Instruction]();
+    vec.push(throw13, b_harness_function_value(0, fthrow1, 14));
+    vec.push(throw13, b_harness_constant(1, i32_type, 7));
+    var throw13_error = vec.empty[nativeir.Instruction]();
+
+    // symbol 14: (i32) -> i32 throws i32, returns x * 6.
+    var throw14 = vec.empty[nativeir.Instruction]();
+    vec.push(throw14, b_harness_load(0, i32_type, 0));
+    vec.push(throw14, b_harness_constant(1, i32_type, 6));
+    vec.push(throw14, b_harness_binary(2, i32_type, 0, 1,
+        hir.BinaryOp.Multiply));
+    var throw14_slot = b_harness_empty_slot();
+    throw14_slot.type_id = i32_type;
+    throw14_slot.parameter = option.Option[u32].Some(0);
+
+    // symbol 15: real Vec instructions.  VecSet rewrites element 0, VecRead
+    // reads element 1, and VecLength yields 2, so the result is 6.  C emits
+    // the VecInit/VecRead/VecSet/VecLength bodies; B's vec_field and
+    // vec_memory supply the descriptor and payload TBAA tags.
+    var vecmath = vec.empty[nativeir.Instruction]();
+    vec.push(vecmath, b_harness_constant(0, i32_type, 3));
+    vec.push(vecmath, b_harness_constant(1, i32_type, 4));
+    vec.push(vecmath, b_harness_vec_init(2, vec_i32, [0, 1]));
+    vec.push(vecmath, b_harness_constant(3, i32_type, 0));
+    vec.push(vecmath, b_harness_constant(4, i32_type, 9));
+    vec.push(vecmath, b_harness_vec_set(unit_type, [2, 3, 4]));
+    vec.push(vecmath, b_harness_constant(5, i32_type, 1));
+    vec.push(vecmath, b_harness_vec_read(6, i32_type, [2, 5]));
+    vec.push(vecmath, b_harness_vec_length(7, usize_type, 2));
+    vec.push(vecmath, b_harness_convert(8, i32_type, 7));
+    vec.push(vecmath, b_harness_binary(9, i32_type, 6, 8,
+        hir.BinaryOp.Add));
+
+    // symbol 16: identity, widening and narrowing integer conversions.  This
+    // must spell no `trunc i32 ... to i32` and no invalid same-width trunc.
+    var int_convert = vec.empty[nativeir.Instruction]();
+    vec.push(int_convert, b_harness_load(0, i32_type, 0));
+    vec.push(int_convert, b_harness_convert(1, i32_type, 0));
+    vec.push(int_convert, b_harness_convert(2, i64_type, 1));
+    vec.push(int_convert, b_harness_convert(3, i32_type, 2));
+    var int_convert_slot = b_harness_empty_slot();
+    int_convert_slot.type_id = i32_type;
+    int_convert_slot.parameter = option.Option[u32].Some(0);
+
+    // symbol 17: float-to-i64 conversion.  The width-64 case is the identity
+    // after fptosi and must not append `trunc i64 ... to i64`.
+    var float_to_i64 = vec.empty[nativeir.Instruction]();
+    vec.push(float_to_i64, b_harness_constant(0, f64_type,
+        4611686018427387904));
+    vec.push(float_to_i64, b_harness_convert(1, i64_type, 0));
+
+    // symbol 18: nominal struct construction and field lookup.
+    var pair = vec.empty[nativeir.Instruction]();
+    vec.push(pair, b_harness_constant(0, i32_type, 11));
+    vec.push(pair, b_harness_constant(1, i32_type, 31));
+    vec.push(pair, b_harness_struct_init(2, pair_type, [0, 1]));
+    vec.push(pair, b_harness_field_read(3, i32_type, 2, 101));
+    vec.push(pair, b_harness_field_read(4, i32_type, 2, 102));
+    vec.push(pair, b_harness_binary(5, i32_type, 3, 4, hir.BinaryOp.Add));
+
+    // symbol 19: nominal enum tag test and payload projection.
+    var choice = vec.empty[nativeir.Instruction]();
+    vec.push(choice, b_harness_constant(0, i32_type, 7));
+    vec.push(choice, b_harness_enum_init(1, choice_type, 111, [0]));
+    vec.push(choice, b_harness_enum_test(2, bool_type, 1, 111));
+    vec.push(choice, b_harness_enum_payload(3, i32_type, 1, 111, 113));
+
+    // symbols 20..22: Bool/Unit Constants must dispatch through the ordinary
+    // instruction path, not types.bit_width.  They are emitted through
+    // declare_source_functions -> emit_function -> emit_instruction.
+    var false_fn = vec.empty[nativeir.Instruction]();
+    vec.push(false_fn, b_harness_constant(0, bool_type, 0));
+    var true_fn = vec.empty[nativeir.Instruction]();
+    vec.push(true_fn, b_harness_constant(0, bool_type, 1));
+    var unit_fn = vec.empty[nativeir.Instruction]();
+    vec.push(unit_fn, b_harness_constant(0, unit_type, 0));
+
+    vec.push(cfg.functions, nativeir.Function(symbol: 10, signature: fthrow0,
+        is_async: false, slots: [],
+        blocks: [
+            b_harness_block(compute,
+                b_harness_try(fthrow0, [15], 1, 2, 2)),
+            b_harness_block_with(compute_success,
+                b_harness_terminator(nativeir.Exit.Return, [21], []),
+                [b_harness_parameter(20, i32_type, false)]),
+            b_harness_block_with(compute_error,
+                b_harness_terminator(nativeir.Exit.ErrorReturn, [22], []),
+                [b_harness_parameter(22, i32_type, true)])
+        ],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 11, signature: fn1,
+        is_async: false, slots: [double_slot],
+        blocks: [b_harness_block(double,
+            b_harness_terminator(nativeir.Exit.Return, [2], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 12, signature: fn0,
+        is_async: false, slots: [],
+        blocks: [
+            b_harness_block(entry,
+                b_harness_terminator(nativeir.Exit.Conditional, [5], [1, 2])),
+            b_harness_block(joined,
+                b_harness_terminator(nativeir.Exit.Return, [7], [])),
+            b_harness_block(empty,
+                b_harness_terminator(nativeir.Exit.Return, [8], []))
+        ],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 13, signature: fthrow0,
+        is_async: false, slots: [],
+        blocks: [
+            b_harness_block(throw13,
+                b_harness_try(fthrow1, [0, 1], 1, 2, 3)),
+            b_harness_block_with(vec.empty[nativeir.Instruction](),
+                b_harness_terminator(nativeir.Exit.Return, [10], []),
+                [b_harness_parameter(10, i32_type, false)]),
+            b_harness_block_with(throw13_error,
+                b_harness_terminator(nativeir.Exit.ErrorReturn, [11], []),
+                [b_harness_parameter(11, i32_type, true)])
+        ],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 14, signature: fthrow1,
+        is_async: false, slots: [throw14_slot],
+        blocks: [b_harness_block(throw14,
+            b_harness_terminator(nativeir.Exit.Return, [2], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 15, signature: fn0,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(vecmath,
+            b_harness_terminator(nativeir.Exit.Return, [9], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 16, signature: fn1,
+        is_async: false, slots: [int_convert_slot],
+        blocks: [b_harness_block(int_convert,
+            b_harness_terminator(nativeir.Exit.Return, [3], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 17, signature: fn_i64,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(float_to_i64,
+            b_harness_terminator(nativeir.Exit.Return, [1], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 18, signature: fn0,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(pair,
+            b_harness_terminator(nativeir.Exit.Return, [5], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 19, signature: fn0,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(choice,
+            b_harness_terminator(nativeir.Exit.Return, [3], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 20, signature: fn_bool,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(false_fn,
+            b_harness_terminator(nativeir.Exit.Return, [0], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 21, signature: fn_bool,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(true_fn,
+            b_harness_terminator(nativeir.Exit.Return, [0], []))],
+        source: b_harness_span(), handlers: []));
+    vec.push(cfg.functions, nativeir.Function(symbol: 22, signature: fn_unit,
+        is_async: false, slots: [],
+        blocks: [b_harness_block(unit_fn,
+            b_harness_terminator(nativeir.Exit.Return, [0], []))],
+        source: b_harness_span(), handlers: []));
+
+    var state = new_emitter(cfg, default_options());
+    // Root sets the executable entry before emitting functions, exactly as
+    // src/backend/native/emit.cpp::run does; B.emit_main repeats and validates.
+    state.gc_entry_symbol = option.Option[usize].Some(10);
+    declare_runtime_types(inout state);
+    declare_source_functions(inout state);
+    for var index usize = 0; index < vec.len(state.input.functions); index += 1 {
+        emit_function(index, inout state);
+    }
+    emit_main(10, inout state);
+    return sections(state);
+}

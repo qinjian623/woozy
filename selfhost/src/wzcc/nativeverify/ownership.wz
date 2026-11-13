@@ -1,0 +1,1173 @@
+// Native CFG verifier: ownership flag dataflow.
+//
+// Direct port of src/ir/ownership_verify.inc.  The checks cover the flags that
+// the emitter actually reads and writes; they do not infer ownership from
+// marker counts.  A removed take or drop leaves a live slot at a return, a
+// backedge, or the next initialization of that slot.  Slot flags alone do not
+// prove that two slots received distinct logical copies, so the unbound owned
+// value is tracked between creation, store and take as well.
+package nativeverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct ParameterEntry {
+    value usize;
+    parameter nativeir.BlockParameter;
+}
+
+struct ParameterMap {
+    entries Vec[ParameterEntry];
+}
+
+func parameter_entry_compare(left ParameterEntry, right ParameterEntry) i32 {
+    return usize_compare(left.value, right.value);
+}
+
+func parameter_map() ParameterMap {
+    return ParameterMap(entries: vec.empty[ParameterEntry]());
+}
+
+func parameter_insert(state inout ParameterMap, value usize,
+                      parameter nativeir.BlockParameter) {
+    let entry = ParameterEntry(value: value, parameter: parameter);
+    let at = sorted_position(state.entries, entry, parameter_entry_compare);
+    if at < vec.len(state.entries) &&
+       parameter_entry_compare(state.entries[at], entry) == 0 {
+        return;
+    }
+    vec.push(state.entries, entry);
+    for var index usize = vec.len(state.entries) - 1; index > at; index -= 1 {
+        state.entries[index] = state.entries[index - 1];
+    }
+    state.entries[at] = entry;
+}
+
+func parameter_find(state ParameterMap, value usize)
+    option.Option[nativeir.BlockParameter] {
+    let probe = ParameterEntry(value: value,
+        parameter: nativeir.BlockParameter(value: 0, type_id: 0, call: 0,
+            error: false));
+    let at = sorted_index(state.entries, probe, parameter_entry_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[nativeir.BlockParameter].Some(
+            state.entries[at].parameter);
+    }
+    return option.Option[nativeir.BlockParameter].None;
+}
+
+func parameter_require(state ParameterMap, value usize)
+    nativeir.BlockParameter throws VerifyError {
+    let found = parameter_find(state, value);
+    switch found {
+        case option.Option.Some(parameter): return parameter;
+        case option.Option.None:
+            throw support(model.SupportError.Invalid("missing block parameter"));
+    }
+}
+
+// std::map<ValueId, ValueId> for the real SSA field chain of an element
+// address.
+struct ElementRoot {
+    value usize;
+    root usize;
+}
+
+struct ElementRootMap {
+    entries Vec[ElementRoot];
+}
+
+func element_root_compare(left ElementRoot, right ElementRoot) i32 {
+    return usize_compare(left.value, right.value);
+}
+
+func element_root_map() ElementRootMap {
+    return ElementRootMap(entries: vec.empty[ElementRoot]());
+}
+
+func element_root_find(state ElementRootMap, value usize)
+    option.Option[usize] {
+    let at = sorted_index(state.entries, ElementRoot(value: value, root: 0),
+        element_root_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[usize].Some(state.entries[at].root);
+    }
+    return option.Option[usize].None;
+}
+
+func element_root_insert(state inout ElementRootMap, value usize,
+                         root usize) {
+    let entry = ElementRoot(value: value, root: root);
+    let at = sorted_position(state.entries, entry, element_root_compare);
+    if at < vec.len(state.entries) &&
+       element_root_compare(state.entries[at], entry) == 0 {
+        return;
+    }
+    vec.push(state.entries, entry);
+    for var index usize = vec.len(state.entries) - 1; index > at; index -= 1 {
+        state.entries[index] = state.entries[index - 1];
+    }
+    state.entries[at] = entry;
+}
+
+// Producing operations that create a new owned value.
+func op_produces_owner(op nativeir.Op) bool {
+    return op_is(op, nativeir.Op.Copy) || op_is(op, nativeir.Op.Move) ||
+           op_is(op, nativeir.Op.StructInit) ||
+           op_is(op, nativeir.Op.EnumInit) ||
+           op_is(op, nativeir.Op.VecInit) || op_is(op, nativeir.Op.VecRead) ||
+           op_is(op, nativeir.Op.VecSlice) ||
+           op_is(op, nativeir.Op.IterationRead) ||
+           op_is(op, nativeir.Op.Call) ||
+           op_is(op, nativeir.Op.SystemCall) ||
+           op_is(op, nativeir.Op.ForeignCall) ||
+           op_is(op, nativeir.Op.Binary) ||
+           op_is(op, nativeir.Op.Function) ||
+           op_is(op, nativeir.Op.TraitObject) ||
+           op_is(op, nativeir.Op.TraitCall);
+}
+
+func op_is_indirect_use(op nativeir.Op) bool {
+    return op_is(op, nativeir.Op.LoadIndirect) ||
+           op_is(op, nativeir.Op.StoreIndirect) ||
+           op_is(op, nativeir.Op.ReplaceIndirect);
+}
+
+func ownership_slot_root(state Body, value usize) option.Option[usize]
+    throws VerifyError {
+    var current = value;
+    var visited = node_set();
+    for true {
+        need(node_set_insert(inout visited, current),
+             "ownership root cycle", state.f.source);
+        let found = instruction_find(state.instructions, current);
+        var definition = nativeir.empty_instruction();
+        var present = false;
+        switch found {
+            case option.Option.Some(item): definition = item; present = true;
+            case option.Option.None: {}
+        }
+        if !present {
+            return option.Option[usize].None;
+        }
+        if op_is(definition.op, nativeir.Op.Load) ||
+           op_is(definition.op, nativeir.Op.Address) ||
+           op_is(definition.op, nativeir.Op.Move) {
+            return option.Option[usize].Some(definition.slot);
+        }
+        if op_is(definition.op, nativeir.Op.FieldRead) ||
+           op_is(definition.op, nativeir.Op.FieldAddress) ||
+           op_is(definition.op, nativeir.Op.Borrow) ||
+           op_is(definition.op, nativeir.Op.Copy) ||
+           op_is(definition.op, nativeir.Op.VecElementAddress) {
+            if vec.len(definition.inputs) == 0 {
+                return option.Option[usize].None;
+            }
+            current = definition.inputs[0];
+            continue;
+        }
+        if op_is(definition.op, nativeir.Op.VecRead) &&
+           vec.len(definition.inputs) > 0 {
+            let kind = require_type(state.m.h, definition.type_id,
+                definition.source).kind;
+            if type_is(kind, model.TypeKind.Vec) ||
+               type_is(kind, model.TypeKind.Slice) {
+                current = definition.inputs[0];
+                continue;
+            }
+        }
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].None;
+}
+
+func inert_function(origin option.Option[usize], h hir.HirModule) bool {
+    // No-origin function instructions are direct-call metadata or constant
+    // noncapturing values, never a captured environment temporary.
+    var present = false;
+    var origin_id usize = 0;
+    switch origin {
+        case option.Option.Some(value): present = true; origin_id = value;
+        case option.Option.None: {}
+    }
+    if !present || origin_id >= vec.len(h.nodes) {
+        return true;
+    }
+    switch h.nodes[origin_id].data {
+        case hir.NodeData.FunctionValue(value):
+            return vec.len(value.captures) == 0 &&
+                   !option.is_some(value.bound);
+        default: return false;
+    }
+}
+
+func instruction_owned_value(state Body, instructions InstructionMap,
+                             parameters ParameterMap, value usize)
+    bool throws VerifyError {
+    let definition = instruction_find(instructions, value);
+    var has_definition = false;
+    var instruction = nativeir.empty_instruction();
+    switch definition {
+        case option.Option.Some(item): has_definition = true; instruction = item;
+        case option.Option.None: {}
+    }
+    if has_definition &&
+       (op_is(instruction.op, nativeir.Op.StringLiteral) ||
+        (op_is(instruction.op, nativeir.Op.Function) &&
+         inert_function(instruction.origin, state.m.h))) {
+        return false; // Static bytes / null-environment Fn have no owner.
+    }
+    var type_id usize = 0;
+    if has_definition {
+        type_id = instruction.type_id;
+    } else {
+        type_id = parameter_require(parameters, value).type_id;
+    }
+    return classify(state, type_id).needs_drop;
+}
+
+func move_call(state Body, saved NodeSet, signature_id usize,
+               inputs Vec[usize]) bool throws VerifyError {
+    let signature = require_type(state.m.h, signature_id, state.f.source);
+    for var index usize = 0; index < vec.len(signature.parameters);
+        index += 1 {
+        if param_mode_id(signature.parameters[index].mode) ==
+               param_mode_id(model.ParamMode.Move) &&
+           index + 1 < vec.len(inputs) &&
+           node_set_has(saved, inputs[index + 1]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func ownership(state inout Body) throws VerifyError {
+    let block_count = vec.len(state.f.blocks);
+    let slot_count = vec.len(state.f.slots);
+    let signature = require_type(state.m.h, state.f.signature,
+        state.f.source);
+    var entry = vec.make[u32](slot_count, 1); // bit 1 dead, bit 2 live
+    for var index usize = 0; index < slot_count; index += 1 {
+        let slot = state.f.slots[index];
+        let own = classify(state, slot.type_id).needs_drop;
+        if capture_slot(state, index) {
+            need(!option.is_some(slot.owner) &&
+                     !option.is_some(slot.parameter) && !slot.is_inout &&
+                     !slot.owning_parameter,
+                 "capture slot cannot own or be an incoming parameter",
+                 state.f.source);
+            continue;
+        }
+        need(own == option.is_some(slot.owner),
+             "owning slot missing identity/live flag", state.f.source);
+        var parameter_index usize = 0;
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(value):
+                parameter_index = usize(value); is_parameter = true;
+            case option.Option.None: {}
+        }
+        if is_parameter {
+            let declared = parameter_type(signature, parameter_index,
+                state.f.source);
+            need(slot.owning_parameter ==
+                     (own && param_mode_id(declared.mode) ==
+                                param_mode_id(model.ParamMode.Move)),
+                 "parameter ownership differs from signature", state.f.source);
+        } else {
+            need(!slot.owning_parameter, "local has incoming owner",
+                state.f.source);
+        }
+        if slot.owning_parameter {
+            entry[index] = 2;
+        }
+        if !option.is_some(slot.owner) {
+            continue;
+        }
+        let owner = option_owner(slot.owner);
+        var matches = false;
+        if owner_kind_id(owner.kind) == owner_kind_id(hir.OwnerKind.Binding) {
+            for local in state.m.h.ownership.locals {
+                if u64(local.symbol) == owner.identity &&
+                   local.type_id == slot.type_id &&
+                   hir_scope_function(state.m.h, local.scope) ==
+                       state.f.symbol {
+                    matches = true;
+                }
+            }
+        } else if owner_kind_id(owner.kind) ==
+                  owner_kind_id(hir.OwnerKind.Temporary) {
+            for temporary in state.m.h.ownership.temporaries {
+                if u64(temporary.producer) == owner.identity &&
+                   temporary.type_id == slot.type_id &&
+                   hir_scope_function(state.m.h,
+                       hir_node(state.m.h,
+                           temporary.producer).scope) == state.f.symbol {
+                    matches = true;
+                }
+            }
+        } else if owner_kind_id(owner.kind) ==
+                  owner_kind_id(hir.OwnerKind.Iteration) &&
+                  owner.identity < u64(vec.len(state.m.h.nodes)) {
+            let node = state.m.h.nodes[usize(owner.identity)];
+            if kind_is(hir.node_kind(node.data), hir.NodeKind.ForIn) &&
+               hir_node(state.m.h, hir_child(node, 0)).type_id ==
+                   slot.type_id {
+                matches = true;
+            }
+        }
+        need(matches, "owning slot identity/type differs from frozen HIR",
+            state.f.source);
+        if !is_parameter {
+            var initialized = false;
+            for block in state.f.blocks {
+                for instruction in block.instructions {
+                    if op_is(instruction.op, nativeir.Op.Store) &&
+                       instruction.slot == index {
+                        initialized = true;
+                    }
+                }
+            }
+            need(initialized, "owning slot never actually initialized",
+                state.f.source);
+        }
+    }
+    var parameters = parameter_map();
+    for block in state.f.blocks {
+        for parameter in block.parameters {
+            parameter_insert(inout parameters, parameter.value, parameter);
+        }
+    }
+    // A move argument is transferred at actual callee entry.  A take moved
+    // before a later throwing argument must not silence that failure prefix's
+    // live flag.  Each take therefore needs its real consuming use in the same
+    // native block, with the actual saved value, not just matching metadata.
+    for block in state.f.blocks {
+        for var position usize = 0;
+            position < vec.len(block.instructions); position += 1 {
+            let take = block.instructions[position];
+            if !op_is(take.op, nativeir.Op.Take) {
+                continue;
+            }
+            var saved = node_set();
+            for other_block in state.f.blocks {
+                for store in other_block.instructions {
+                    if op_is(store.op, nativeir.Op.Store) &&
+                       store.slot == take.slot {
+                        node_set_insert(inout saved, store.inputs[0]);
+                    }
+                }
+            }
+            var consumed = false;
+            for var next usize = position + 1;
+                next < vec.len(block.instructions); next += 1 {
+                let instruction = block.instructions[next];
+                if op_is(instruction.op, nativeir.Op.Store) &&
+                   instruction.slot != take.slot &&
+                   option.is_some(
+                       state.f.slots[instruction.slot].owner) &&
+                   node_set_has(saved, instruction.inputs[0]) {
+                    consumed = true;
+                }
+                if (op_is(instruction.op, nativeir.Op.StructInit) ||
+                    op_is(instruction.op, nativeir.Op.EnumInit) ||
+                    op_is(instruction.op, nativeir.Op.VecInit) ||
+                    op_is(instruction.op, nativeir.Op.Function)) {
+                    for value in instruction.inputs {
+                        if node_set_has(saved, value) {
+                            consumed = true;
+                        }
+                    }
+                }
+                if op_is(instruction.op, nativeir.Op.VecSet) &&
+                   vec.len(instruction.inputs) == 3 &&
+                   node_set_has(saved, instruction.inputs[2]) {
+                    consumed = true;
+                }
+                if op_is(instruction.op, nativeir.Op.ReplaceIndirect) &&
+                   vec.len(instruction.inputs) == 2 &&
+                   node_set_has(saved, instruction.inputs[1]) {
+                    consumed = true;
+                }
+                if op_is(instruction.op, nativeir.Op.Call) &&
+                   move_call(state, saved, instruction.signature,
+                       instruction.inputs) {
+                    consumed = true;
+                }
+                if op_is(instruction.op, nativeir.Op.ExitBegin) &&
+                   vec.len(instruction.inputs) > 0 &&
+                   node_set_has(saved, instruction.inputs[0]) {
+                    consumed = true;
+                }
+            }
+            let terminator = block.terminator;
+            if exit_is(terminator.kind, nativeir.Exit.TryCall) &&
+               move_call(state, saved, terminator.signature,
+                   terminator.inputs) {
+                consumed = true;
+            }
+            if (exit_is(terminator.kind, nativeir.Exit.Return) ||
+                exit_is(terminator.kind, nativeir.Exit.ErrorReturn)) &&
+               vec.len(terminator.inputs) > 0 &&
+               node_set_has(saved, terminator.inputs[0]) {
+                consumed = true;
+            }
+            need(consumed,
+                 "actual take is not followed by its consuming operation/callee entry",
+                 take.source);
+        }
+    }
+    // Batch/action identity checks.
+    for block in state.f.blocks {
+        var batch = vec.empty[hir.CleanupStep]();
+        var has_batch = false;
+        var next usize = 0;
+        var origin = option.Option[usize].None;
+        var batch_kind u64 = 0;
+        for instruction in block.instructions {
+            if op_is(instruction.op, nativeir.Op.BeginBorrow) {
+                let borrow_owner = instruction.owner;
+                if owner_kind_is(borrow_owner, hir.OwnerKind.Binding) {
+                    let root = ownership_slot_root(state,
+                        instruction.inputs[0]);
+                    var root_is_slot = false;
+                    switch root {
+                        case option.Option.Some(value):
+                            root_is_slot = value == instruction.slot;
+                        case option.Option.None: {}
+                    }
+                    need(root_is_slot,
+                         "borrow does not use actual binding storage",
+                         instruction.source);
+                } else {
+                    var stored = false;
+                    for other_block in state.f.blocks {
+                        for store in other_block.instructions {
+                            if op_is(store.op, nativeir.Op.Store) &&
+                               store.slot == instruction.slot &&
+                               usize_vec_equal(store.inputs,
+                                   instruction.inputs) {
+                                stored = true;
+                            }
+                        }
+                    }
+                    need(stored,
+                         "borrow does not use actual owned temporary",
+                         instruction.source);
+                }
+            }
+            if op_is(instruction.op, nativeir.Op.OwnershipBegin) {
+                need(!has_batch, "nested ownership batch",
+                    instruction.source);
+                origin = instruction.origin;
+                batch_kind = instruction.bits;
+                if batch_kind == 0 {
+                    if option.is_some(origin) {
+                        for full in state.m.h.ownership.full_expressions {
+                            if u64(full.node) ==
+                               u64(option_usize(origin)) {
+                                batch = full.actions; has_batch = true;
+                            }
+                        }
+                    }
+                } else {
+                    if option.is_some(origin) {
+                        for lifetime in state.m.h.ownership.calls {
+                            if u64(lifetime.node) ==
+                               u64(option_usize(origin)) {
+                                batch = lifetime.on_return; has_batch = true;
+                            }
+                        }
+                    }
+                }
+                need(has_batch, "batch not present in HIR", instruction.source);
+                next = 0;
+            } else if op_is(instruction.op, nativeir.Op.OwnershipEnd) {
+                need(has_batch && next == vec.len(batch) &&
+                         compare_option(instruction.origin, origin) == 0 &&
+                         instruction.bits == batch_kind,
+                     "actual full-expression/call cleanup incomplete",
+                     instruction.source);
+                has_batch = false;
+            } else if has_batch {
+                need(next < vec.len(batch),
+                     "extra full-expression action", instruction.source);
+                let action = batch[next];
+                next += 1;
+                var matches = false;
+                if op_is(instruction.op, nativeir.Op.Destroy) {
+                    matches = cleanup_kind_id(action.kind) ==
+                                  cleanup_kind_id(
+                                      hir.CleanupKind.DestroyIfLive) &&
+                              instruction.slot < vec.len(state.f.slots) &&
+                              state.f.slots[instruction.slot].type_id ==
+                                  action.type_id;
+                } else if op_is(instruction.op, nativeir.Op.EndBorrow) {
+                    matches = cleanup_kind_id(action.kind) ==
+                              cleanup_kind_id(hir.CleanupKind.EndBorrow);
+                }
+                need(owner_ref_option_equal(instruction.owner,
+                         option.Option[hir.OwnerRef].Some(action.owner)) &&
+                         matches,
+                     "actual full-expression/call owning operation differs from HIR",
+                     instruction.source);
+            }
+            if !op_is(instruction.op, nativeir.Op.Store) {
+                continue;
+            }
+            if instruction.slot >= vec.len(state.f.slots) ||
+               !option.is_some(state.f.slots[instruction.slot].owner) ||
+               !owner_kind_is(state.f.slots[instruction.slot].owner,
+                   hir.OwnerKind.Temporary) {
+                continue;
+            }
+            let owner = option_owner(
+                state.f.slots[instruction.slot].owner);
+            let node = hir_node(state.m.h, usize(owner.identity));
+            let producer = instruction_find(state.instructions,
+                instruction.inputs[0]);
+            var has_producer = false;
+            var producer_instruction = nativeir.empty_instruction();
+            switch producer {
+                case option.Option.Some(value):
+                    has_producer = true; producer_instruction = value;
+                case option.Option.None: {}
+            }
+            let node_kind = hir.node_kind(node.data);
+            if kind_is(node_kind, hir.NodeKind.Read) {
+                need(has_producer &&
+                         op_is(producer_instruction.op, nativeir.Op.Copy) &&
+                         vec.len(producer_instruction.inputs) == 1,
+                     "owned Read lacks actual logical copy",
+                     instruction.source);
+                let load = instruction_require(state.instructions,
+                    producer_instruction.inputs[0]);
+                let load_slot = state.f.slots[load.slot];
+                var symbol usize = 0;
+                switch node.data {
+                    case hir.NodeData.Read(read): symbol = read.symbol;
+                    default: {}
+                }
+                var source_ok = false;
+                if owner_ref_is(load_slot.owner, hir.OwnerKind.Binding,
+                       u64(symbol)) {
+                    source_ok = true;
+                }
+                if capture_slot(state, load.slot) {
+                    var binding usize = 0;
+                    var has_binding = false;
+                    switch load_slot.binding {
+                        case option.Option.Some(value):
+                            binding = value; has_binding = true;
+                        case option.Option.None: {}
+                    }
+                    if has_binding && binding == symbol {
+                        source_ok = true;
+                    }
+                }
+                need(op_is(load.op, nativeir.Op.Load) && source_ok,
+                     "owned Read copies wrong source", instruction.source);
+            } else if kind_is(node_kind, hir.NodeKind.FieldRead) {
+                need(has_producer &&
+                         op_is(producer_instruction.op, nativeir.Op.Copy) &&
+                         vec.len(producer_instruction.inputs) == 1 &&
+                         op_is(instruction_require(state.instructions,
+                                  producer_instruction.inputs[0]).op,
+                             nativeir.Op.FieldRead),
+                     "owned field projection lacks actual logical copy",
+                     instruction.source);
+            } else if kind_is(node_kind, hir.NodeKind.Move) {
+                var has_binding = false;
+                var binding usize = 0;
+                switch node.data {
+                    case hir.NodeData.Move(move_value): {
+                        switch move_value.binding {
+                            case option.Option.Some(value):
+                                has_binding = true; binding = value;
+                            case option.Option.None: {}
+                        }
+                    }
+                    default: {}
+                }
+                if has_binding {
+                    need(has_producer &&
+                             op_is(producer_instruction.op,
+                                 nativeir.Op.Move) &&
+                             owner_ref_is(
+                                 state.f.slots[
+                                     producer_instruction.slot].owner,
+                                 hir.OwnerKind.Binding, u64(binding)),
+                         "Move replaced by copy/borrow", instruction.source);
+                }
+            } else if kind_is(node_kind, hir.NodeKind.Call) && !has_producer {
+                let parameter = parameter_require(parameters,
+                    instruction.inputs[0]);
+                need(u64(parameter.call) == owner.identity && !parameter.error,
+                     "owning call result from inactive/wrong channel",
+                     instruction.source);
+            }
+        }
+        need(!has_batch, "ownership batch crosses block",
+            block.terminator.source);
+    }
+    // Track the unbound owned value between creation, store and take.
+    var empty_values = value_flag_map();
+    var temporary_values = slot_temporary_map();
+    for block in state.f.blocks {
+        for parameter in block.parameters {
+            if instruction_owned_value(state, state.instructions, parameters,
+                   parameter.value) {
+                value_flag_insert(inout empty_values, parameter.value, 1);
+            }
+        }
+        for instruction in block.instructions {
+            var has_result = false;
+            var result usize = 0;
+            switch instruction.result {
+                case option.Option.Some(value): has_result = true; result = value;
+                case option.Option.None: {}
+            }
+            if has_result && op_produces_owner(instruction.op) &&
+               !(op_is(instruction.op, nativeir.Op.Function) &&
+                 inert_function(instruction.origin, state.m.h)) &&
+               instruction_owned_value(state, state.instructions, parameters,
+                   result) {
+                value_flag_insert(inout empty_values, result, 1);
+            }
+            if op_is(instruction.op, nativeir.Op.Store) &&
+               instruction.slot < vec.len(state.f.slots) &&
+               owner_kind_is(state.f.slots[instruction.slot].owner,
+                   hir.OwnerKind.Temporary) {
+                need(slot_temporary_insert(inout temporary_values,
+                         instruction.slot, instruction.inputs[0]),
+                     "owning temporary has multiple initializing instructions",
+                     instruction.source);
+            }
+        }
+    }
+    // Every use reached through a vec_element_address must still have an
+    // owning handle for that container.  Trace the real SSA field chain to the
+    // indexed address, then map its receiver value to the owning slot(s) that
+    // actually stored that value.  Liveness is checked path-sensitively below.
+    var element_roots = element_root_map();
+    for entry_value in state.instructions.entries {
+        if !op_is(entry_value.instruction.op,
+                  nativeir.Op.VecElementAddress) &&
+           !op_is(entry_value.instruction.op, nativeir.Op.FieldAddress) {
+            continue;
+        }
+        var current = entry_value.value;
+        var visited = node_set();
+        var root = option.Option[usize].None;
+        for true {
+            need(node_set_insert(inout visited, current),
+                 "Vec element address chain cycle", state.f.source);
+            let found = instruction_find(state.instructions, current);
+            var definition = nativeir.empty_instruction();
+            var present = false;
+            switch found {
+                case option.Option.Some(value):
+                    definition = value; present = true;
+                case option.Option.None: {}
+            }
+            if !present {
+                break;
+            }
+            if op_is(definition.op, nativeir.Op.VecElementAddress) {
+                root = option.Option[usize].Some(current);
+                break;
+            }
+            if !op_is(definition.op, nativeir.Op.FieldAddress) ||
+               vec.len(definition.inputs) != 1 {
+                break;
+            }
+            current = definition.inputs[0];
+        }
+        switch root {
+            case option.Option.Some(value):
+                element_root_insert(inout element_roots, entry_value.value,
+                    value);
+            case option.Option.None: {}
+        }
+    }
+    var stored_owners = value_owner_map(slot_count);
+    for block in state.f.blocks {
+        for instruction in block.instructions {
+            if op_is(instruction.op, nativeir.Op.Store) &&
+               vec.len(instruction.inputs) == 1 &&
+               instruction.slot < vec.len(state.f.slots) &&
+               option.is_some(state.f.slots[instruction.slot].owner) {
+                value_owner_add(inout stored_owners, instruction.inputs[0],
+                    instruction.slot);
+            }
+        }
+    }
+    var iterating = vec.make[option.Option[BoolSet]](block_count,
+        option.Option[BoolSet].None);
+    iterating[0] = option.Option[BoolSet].Some(bool_set(slot_count));
+    var borrowed = vec.make[option.Option[Vec[usize]]](block_count,
+        option.Option[Vec[usize]].None);
+    borrowed[0] = option.Option[Vec[usize]].Some(vec.empty[usize]());
+    var incoming = vec.make[option.Option[Vec[u32]]](block_count,
+        option.Option[Vec[u32]].None);
+    incoming[0] = option.Option[Vec[u32]].Some(u32_vec_copy(entry));
+    var incoming_values = vec.make[option.Option[ValueFlagMap]](block_count,
+        option.Option[ValueFlagMap].None);
+    incoming_values[0] = option.Option[ValueFlagMap].Some(
+        value_flag_copy(empty_values));
+    var work = vec.empty[usize]();
+    vec.push(work, 0);
+    for vec.len(work) > 0 {
+        let popped = vec.pop(work);
+        var block usize = 0;
+        switch popped {
+            case option.Option.Some(value): block = value;
+            case option.Option.None: {}
+        }
+        var flags = vec.empty[u32]();
+        switch incoming[block] {
+            case option.Option.Some(value): flags = u32_vec_copy(value);
+            case option.Option.None: {}
+        }
+        var borrows = vec.empty[usize]();
+        switch borrowed[block] {
+            case option.Option.Some(value): borrows = usize_vec_copy(value);
+            case option.Option.None: {}
+        }
+        var iterations = bool_set(slot_count);
+        switch iterating[block] {
+            case option.Option.Some(value): iterations = bool_set_copy(value);
+            case option.Option.None: {}
+        }
+        var values = value_flag_map();
+        switch incoming_values[block] {
+            case option.Option.Some(value): values = value_flag_copy(value);
+            case option.Option.None: {}
+        }
+        for parameter in state.f.blocks[block].parameters {
+            if !instruction_owned_value(state, state.instructions, parameters,
+                   parameter.value) {
+                continue;
+            }
+            need(value_flag_require(values, parameter.value) == 1,
+                 "call overwrites an untransferred owned result",
+                 state.f.source);
+            value_flag_set(inout values, parameter.value, 2);
+        }
+        for instruction in state.f.blocks[block].instructions {
+            if op_is(instruction.op, nativeir.Op.VecElementAddress) &&
+               option.is_some(instruction.result) {
+                require_element_owner(state, element_roots, stored_owners,
+                    slot_count, flags, option_usize(instruction.result),
+                    instruction.source);
+            }
+            if op_is_indirect_use(instruction.op) {
+                for value in instruction.inputs {
+                    require_element_owner(state, element_roots, stored_owners,
+                        slot_count, flags, value, instruction.source);
+                }
+            }
+            if op_is(instruction.op, nativeir.Op.Store) &&
+               instruction.slot < vec.len(state.f.slots) &&
+               option.is_some(state.f.slots[instruction.slot].owner) {
+                consume_owned_value(state, parameters, inout values,
+                    instruction.inputs[0], instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.StructInit) ||
+               op_is(instruction.op, nativeir.Op.EnumInit) ||
+               op_is(instruction.op, nativeir.Op.VecInit) ||
+               op_is(instruction.op, nativeir.Op.Function) {
+                for value in instruction.inputs {
+                    consume_owned_value(state, parameters, inout values, value,
+                        instruction.source);
+                }
+            }
+            if op_is(instruction.op, nativeir.Op.VecSet) &&
+               vec.len(instruction.inputs) == 3 {
+                consume_owned_value(state, parameters, inout values,
+                    instruction.inputs[2], instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.ReplaceIndirect) &&
+               vec.len(instruction.inputs) == 2 {
+                consume_owned_value(state, parameters, inout values,
+                    instruction.inputs[1], instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.Call) {
+                call_inputs(state, parameters, inout values,
+                    instruction.signature, instruction.inputs,
+                    instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.Take) {
+                let value = slot_temporary_require(temporary_values,
+                    instruction.slot);
+                if instruction_owned_value(state, state.instructions,
+                       parameters, value) {
+                    need(value_flag_require(values, value) == 1,
+                         "temporary take duplicates an available owned value",
+                         instruction.source);
+                    value_flag_set(inout values, value, 2);
+                }
+            }
+            var has_result = false;
+            var result usize = 0;
+            switch instruction.result {
+                case option.Option.Some(value): has_result = true; result = value;
+                case option.Option.None: {}
+            }
+            if has_result && op_produces_owner(instruction.op) &&
+               !(op_is(instruction.op, nativeir.Op.Function) &&
+                 inert_function(instruction.origin, state.m.h)) &&
+               instruction_owned_value(state, state.instructions, parameters,
+                   result) {
+                need(value_flag_require(values, result) == 1,
+                     "owned result overwritten before transfer",
+                     instruction.source);
+                value_flag_set(inout values, result, 2);
+            }
+            if op_is(instruction.op, nativeir.Op.IterationBegin) {
+                need(bool_set_add(inout iterations, instruction.slot),
+                     "duplicate actual iteration registration",
+                     instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.IterationEnd) {
+                need(bool_set_remove(inout iterations, instruction.slot),
+                     "end_iteration without actual registration",
+                     instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.IterationTest) ||
+               op_is(instruction.op, nativeir.Op.IterationNext) ||
+               op_is(instruction.op, nativeir.Op.IterationRead) {
+                need(bool_set_has(iterations, instruction.slot),
+                     "iteration operation without actual registration",
+                     instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.Destroy) {
+                need(!bool_set_has(iterations, instruction.slot),
+                     "destroy before actual end_iteration",
+                     instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.Load) &&
+               instruction.slot < vec.len(state.f.slots) &&
+               option.is_some(state.f.slots[instruction.slot].owner) &&
+               (!option.is_some(
+                    state.f.slots[instruction.slot].parameter) ||
+                state.f.slots[instruction.slot].owning_parameter) {
+                need(flags[instruction.slot] == 2,
+                     "read of inactive owning binding", instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.BeginBorrow) {
+                vec.push(borrows, instruction.slot);
+            } else if op_is(instruction.op, nativeir.Op.EndBorrow) {
+                need(vec.len(borrows) > 0,
+                     "end_borrow without actual active borrow",
+                     instruction.source);
+                let borrow_slot = borrows[vec.len(borrows) - 1];
+                let slot = state.f.slots[borrow_slot];
+                var ends_same = false;
+                if owner_kind_is(instruction.owner, hir.OwnerKind.Binding) {
+                    var binding usize = 0;
+                    var has_binding = false;
+                    switch slot.binding {
+                        case option.Option.Some(value):
+                            binding = value; has_binding = true;
+                        case option.Option.None: {}
+                    }
+                    if has_binding &&
+                       u64(binding) == owner_identity(instruction.owner) {
+                        ends_same = true;
+                    }
+                }
+                if owner_ref_option_equal(slot.owner, instruction.owner) {
+                    ends_same = true;
+                }
+                need(ends_same,
+                     "end_borrow ends different actual storage",
+                     instruction.source);
+                let popped_borrow = vec.pop(borrows);
+                switch popped_borrow {
+                    case option.Option.Some(value): {}
+                    case option.Option.None: {}
+                }
+            }
+            if op_is(instruction.op, nativeir.Op.Move) ||
+               op_is(instruction.op, nativeir.Op.Destroy) {
+                var active = false;
+                for borrow_slot in borrows {
+                    if borrow_slot == instruction.slot {
+                        active = true;
+                    }
+                }
+                need(!active,
+                     "move/destroy while actual borrow remains active",
+                     instruction.source);
+            }
+            if op_is(instruction.op, nativeir.Op.Store) &&
+               instruction.slot < vec.len(state.f.slots) &&
+               option.is_some(state.f.slots[instruction.slot].owner) {
+                need(flags[instruction.slot] == 1,
+                     "owning store overwrites a live value",
+                     instruction.source);
+                flags[instruction.slot] = 2;
+            } else if op_is(instruction.op, nativeir.Op.Move) &&
+                      instruction.slot < vec.len(state.f.slots) &&
+                      option.is_some(state.f.slots[instruction.slot].owner) {
+                need(flags[instruction.slot] == 2,
+                     "move of inactive owning slot", instruction.source);
+                flags[instruction.slot] = 1;
+            } else if op_is(instruction.op, nativeir.Op.Take) {
+                need(flags[instruction.slot] == 2,
+                     "take of inactive owning temporary", instruction.source);
+                need(owner_kind_is(state.f.slots[instruction.slot].owner,
+                         hir.OwnerKind.Temporary),
+                     "take must transfer temporary storage",
+                     instruction.source);
+                flags[instruction.slot] = 1;
+            } else if op_is(instruction.op, nativeir.Op.Destroy) {
+                need(!option.is_some(
+                         state.f.slots[instruction.slot].parameter) ||
+                         state.f.slots[instruction.slot].owning_parameter,
+                     "destroy of ordinary borrowed parameter",
+                     instruction.source);
+                flags[instruction.slot] = 1;
+            }
+        }
+        let terminator = state.f.blocks[block].terminator;
+        if exit_is(terminator.kind, nativeir.Exit.TryCall) {
+            call_inputs(state, parameters, inout values, terminator.signature,
+                terminator.inputs, terminator.source);
+        }
+        if exit_is(terminator.kind, nativeir.Exit.Return) ||
+           exit_is(terminator.kind, nativeir.Exit.ErrorReturn) {
+            if vec.len(terminator.inputs) > 0 {
+                consume_owned_value(state, parameters, inout values,
+                    terminator.inputs[0], terminator.source);
+            }
+            need(vec.len(borrows) == 0 && bool_set_count(iterations) == 0,
+                 "function leaves active borrow/iteration",
+                 terminator.source);
+            for var index usize = 0; index < slot_count; index += 1 {
+                need(!option.is_some(state.f.slots[index].owner) ||
+                         flags[index] == 1,
+                     "function leaves a live owning slot (missing actual take/destroy)",
+                     terminator.source);
+            }
+            for value in values.entries {
+                need(value.state == 1,
+                     "function leaves an untransferred owned result",
+                     terminator.source);
+            }
+        }
+        for target in terminator.targets {
+            if exit_is(terminator.kind, nativeir.Exit.Conditional) {
+                let condition = instruction_find(state.instructions,
+                    terminator.inputs[0]);
+                var skip = false;
+                switch condition {
+                    case option.Option.Some(value): {
+                        if op_is(value.op, nativeir.Op.Constant) &&
+                           type_is(require_type(state.m.h, value.type_id,
+                                    terminator.source).kind,
+                               model.TypeKind.Bool) {
+                            var taken = terminator.targets[1];
+                            if value.bits != 0 {
+                                taken = terminator.targets[0];
+                            }
+                            if target != taken {
+                                skip = true;
+                            }
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+                if skip {
+                    continue;
+                }
+            }
+            var known = false;
+            switch incoming[target] {
+                case option.Option.Some(value): known = true;
+                case option.Option.None: {}
+            }
+            if !known {
+                incoming[target] = option.Option[Vec[u32]].Some(
+                    u32_vec_copy(flags));
+                incoming_values[target] = option.Option[ValueFlagMap].Some(
+                    value_flag_copy(values));
+                borrowed[target] = option.Option[Vec[usize]].Some(
+                    usize_vec_copy(borrows));
+                iterating[target] = option.Option[BoolSet].Some(
+                    bool_set_copy(iterations));
+                vec.push(work, target);
+            } else {
+                var existing_borrows = vec.empty[usize]();
+                switch borrowed[target] {
+                    case option.Option.Some(value):
+                        existing_borrows = value;
+                    case option.Option.None: {}
+                }
+                var existing_iterations = bool_set(slot_count);
+                switch iterating[target] {
+                    case option.Option.Some(value):
+                        existing_iterations = value;
+                    case option.Option.None: {}
+                }
+                need(usize_vec_equal(existing_borrows, borrows) &&
+                         bool_set_equal(existing_iterations, iterations),
+                     "actual borrow/iteration state differs at CFG join",
+                     terminator.source);
+                var next_flags = vec.empty[u32]();
+                switch incoming[target] {
+                    case option.Option.Some(value):
+                        next_flags = u32_vec_copy(value);
+                    case option.Option.None: {}
+                }
+                var next_values = value_flag_map();
+                switch incoming_values[target] {
+                    case option.Option.Some(value):
+                        next_values = value_flag_copy(value);
+                    case option.Option.None: {}
+                }
+                for var index usize = 0; index < slot_count; index += 1 {
+                    next_flags[index] = next_flags[index] | flags[index];
+                }
+                for value in values.entries {
+                    let current = value_flag_require(next_values, value.value);
+                    value_flag_set(inout next_values, value.value,
+                        current | value.state);
+                }
+                var changed = false;
+                switch incoming[target] {
+                    case option.Option.Some(value):
+                        changed = !u32_vec_equal(value, next_flags);
+                    case option.Option.None: {}
+                }
+                var values_changed = false;
+                switch incoming_values[target] {
+                    case option.Option.Some(value):
+                        values_changed = !value_flag_equal(value, next_values);
+                    case option.Option.None: {}
+                }
+                if changed || values_changed {
+                    incoming[target] = option.Option[Vec[u32]].Some(next_flags);
+                    incoming_values[target] = option.Option[ValueFlagMap].Some(
+                        next_values);
+                    vec.push(work, target);
+                }
+            }
+        }
+    }
+}
+
+func option_owner(value option.Option[hir.OwnerRef]) hir.OwnerRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None:
+            return hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 0);
+    }
+}
+
+func consume_owned_value(state Body, parameters ParameterMap,
+                         values inout ValueFlagMap, value usize,
+                         source model.Span) throws VerifyError {
+    if !instruction_owned_value(state, state.instructions, parameters, value) {
+        return;
+    }
+    need(value_flag_require(values, value) == 2,
+         "owned value reused or transferred without a logical copy/take",
+         source);
+    value_flag_set(inout values, value, 1);
+}
+
+func call_inputs(state Body, parameters ParameterMap,
+                 values inout ValueFlagMap, signature_id usize,
+                 inputs Vec[usize], source model.Span) throws VerifyError {
+    let signature = require_type(state.m.h, signature_id, source);
+    for var index usize = 0; index < vec.len(signature.parameters);
+        index += 1 {
+        if param_mode_id(signature.parameters[index].mode) ==
+               param_mode_id(model.ParamMode.Move) &&
+           index + 1 < vec.len(inputs) {
+            consume_owned_value(state, parameters, inout values,
+                inputs[index + 1], source);
+        }
+    }
+}
+
+func require_element_owner(state Body, element_roots ElementRootMap,
+                           stored_owners ValueOwnerMap, slot_count usize,
+                           flags Vec[u32], address usize,
+                           source model.Span) throws VerifyError {
+    let found = element_root_find(element_roots, address);
+    var root usize = 0;
+    var present = false;
+    switch found {
+        case option.Option.Some(value): root = value; present = true;
+        case option.Option.None: {}
+    }
+    if !present {
+        return;
+    }
+    let root_instruction = instruction_require(state.instructions, root);
+    need(vec.len(root_instruction.inputs) > 0,
+         "Vec element address has no receiver", source);
+    let owners = receiver_owners(state, stored_owners, slot_count,
+        root_instruction.inputs[0]);
+    need(bool_set_count(owners) > 0,
+         "Vec element address receiver has no tracked owning storage", source);
+    var live = false;
+    for var slot usize = 0; slot < slot_count; slot += 1 {
+        if bool_set_has(owners, slot) && slot < vec.len(flags) &&
+           flags[slot] == 2 {
+            live = true;
+        }
+    }
+    need(live, "Vec element address owner is not live at field use", source);
+}
+
+func receiver_owners(state Body, stored_owners ValueOwnerMap,
+                     slot_count usize, value usize) BoolSet
+    throws VerifyError {
+    var current = value;
+    var visited = node_set();
+    for true {
+        need(node_set_insert(inout visited, current),
+             "Vec element receiver ownership cycle", state.f.source);
+        let stored = value_owner_find(stored_owners, current);
+        switch stored {
+            case option.Option.Some(owners): {
+                if bool_set_count(owners) > 0 {
+                    return bool_set_copy(owners);
+                }
+            }
+            case option.Option.None: {}
+        }
+        let definition = instruction_find(state.instructions, current);
+        var instruction = nativeir.empty_instruction();
+        var present = false;
+        switch definition {
+            case option.Option.Some(item): instruction = item; present = true;
+            case option.Option.None: {}
+        }
+        if !present {
+            return bool_set(slot_count);
+        }
+        if (op_is(instruction.op, nativeir.Op.Load) ||
+            op_is(instruction.op, nativeir.Op.Move)) &&
+           instruction.slot < vec.len(state.f.slots) &&
+           option.is_some(state.f.slots[instruction.slot].owner) {
+            var result = bool_set(slot_count);
+            bool_set_add(inout result, instruction.slot);
+            return result;
+        }
+        if (!op_is(instruction.op, nativeir.Op.Copy) &&
+            !op_is(instruction.op, nativeir.Op.Borrow)) ||
+           vec.len(instruction.inputs) == 0 {
+            return bool_set(slot_count);
+        }
+        current = instruction.inputs[0];
+    }
+    return bool_set(slot_count);
+}

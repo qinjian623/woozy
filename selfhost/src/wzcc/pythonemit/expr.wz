@@ -1,0 +1,1167 @@
+// Expression, pattern and foreign-access emission for the pure-Python backend.
+//
+// Direct migration of Emitter::expression_inner and its helpers from
+// src/backend/python/emitter.cpp.  Text is the only output; every value,
+// cleanup action and call classification comes unchanged from the verified
+// HIR records.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func unary_op_id(op hir.UnaryOp) u32 {
+    switch op {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+func foreign_access_id(kind hir.ForeignAccessKind) u32 {
+    switch kind {
+        case hir.ForeignAccessKind.PropertyRead: return 0;
+        case hir.ForeignAccessKind.PropertyPlace: return 1;
+        case hir.ForeignAccessKind.IndexRead: return 2;
+        case hir.ForeignAccessKind.IndexPlace: return 3;
+        case hir.ForeignAccessKind.SliceRead: return 4;
+        case hir.ForeignAccessKind.SlicePlace: return 5;
+    }
+}
+
+func require_usize(value option.Option[usize], message string) usize throws Failure {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: throw internal(message);
+    }
+}
+
+func save(state inout EmitState, suite inout Vec[Statement], value string,
+          node hir.HirNode) string throws Failure {
+    let result = "_t" + usize_text(state.current) + "_" + u64_text(state.serial);
+    state.serial += 1;
+    line_hir(inout suite, result + " = " + value, node);
+    return result;
+}
+
+func value_save(state inout EmitState, suite inout Vec[Statement], value string,
+                id usize) string throws Failure {
+    let node = node_at(state, id);
+    if !ordered_contains(state.temporary_ids, u64(id)) {
+        return save(inout state, inout suite, value, node);
+    }
+    return save(inout state, inout suite,
+        "_frame.put(" + owner_key(hir.OwnerKind.Temporary, u64(id)) + ", " +
+            type_ops_name(node.type_id) + ", " + value + ")", node);
+}
+
+func read_symbol(state EmitState, symbol usize) string {
+    // A capture local is a borrowed row field, not an Owner slot.
+    let owner = (ordered_contains(state.cells, u64(symbol)) ||
+                 ordered_contains(state.owned_bindings, u64(symbol))) &&
+                !ordered_contains(state.capture_locals, u64(symbol));
+    if owner {
+        return symbol_name(symbol) + ".value";
+    }
+    return symbol_name(symbol);
+}
+
+func binary_text(state EmitState, op hir.BinaryOp, left string, right string,
+                 operand usize) string throws Failure {
+    let type_value = type_of(state.module, operand);
+    let operation = operation_text(op);
+    if kind_is(type_value.kind, model.TypeKind.String) {
+        return "_rt.text_binary('" + operation + "', " + left + ", " +
+            right + ")";
+    }
+    if kind_is(type_value.kind, model.TypeKind.Float) {
+        return "_rt.float_binary('" + operation + "', " + left + ", " +
+            right + ", " + u32_text(type_value.bits) + ")";
+    }
+    return "_rt.binary('" + operation + "', " + left + ", " + right + ", " +
+        numeric_text(state.module, operand) + ")";
+}
+
+func constant_value(state inout EmitState, value hir.ConstantValue,
+                    suite inout Vec[Statement],
+                    node hir.HirNode) string throws Failure {
+    switch value.data {
+        case hir.ConstantData.UnitLiteral(payload):
+            return save(inout state, inout suite, "None", node);
+        case hir.ConstantData.BoolLiteral(payload):
+            if payload.value {
+                return save(inout state, inout suite, "True", node);
+            }
+            return save(inout state, inout suite, "False", node);
+        case hir.ConstantData.IntegerLiteral(payload):
+            return save(inout state, inout suite, payload.decimal, node);
+        case hir.ConstantData.FloatLiteral(payload):
+            let bits = type_of(state.module, value.type_id).bits;
+            return save(inout state, inout suite,
+                "_rt.ieee(" + u64_text(payload.bits) + ", " + u32_text(bits) +
+                    ")", node);
+        case hir.ConstantData.StringLiteral(payload):
+            return save(inout state, inout suite, python_string_literal(payload.utf8), node);
+        case hir.ConstantData.FunctionValue(payload):
+            if vec.len(payload.captures) != 0 || payload.move_capture ||
+               option.is_some(payload.bound) {
+                throw rejected_at(
+                    "A constant function value cannot capture or bind a receiver",
+                    node.source.span);
+            }
+            return save(inout state, inout suite, function_symbol_name(payload.symbol), node);
+        case hir.ConstantData.ConstantAggregate(payload):
+            let fields = vec.empty[string]();
+            for field in payload.fields {
+                vec.push(fields, constant_value(inout state, field, inout suite, node));
+            }
+            var result = tuple_text(fields);
+            switch payload.variant {
+                case option.Option.Some(variant):
+                    result = "(" + usize_text(variant) + ", " + result + ")";
+                case option.Option.None: {}
+            }
+            return save(inout state, inout suite, result, node);
+    }
+}
+
+// The environment is exactly one record row installed into a Vec.  Its element
+// descriptor recurses into the capture field types so copy/drop/trace of the
+// resulting Vec handle every captured owning value.
+func environment(state inout EmitState, types Vec[usize], values Vec[string],
+                 node hir.HirNode,
+                 suite inout Vec[Statement]) string throws Failure {
+    if vec.len(types) == 0 || vec.len(types) != vec.len(values) {
+        throw internal("function environment has no matching row");
+    }
+    let fields = vec.empty[string]();
+    for type_id in types {
+        vec.push(fields, type_ops_name(type_id));
+    }
+    let row = save(inout state, inout suite, tuple_text(values), node);
+    let rows = vec.empty[string]();
+    vec.push(rows, row);
+    return save(inout state, inout suite,
+        "_rt.Vec.create(_rt.ValueType('struct', fields=" + tuple_text(fields) +
+            "), " + tuple_text(rows) + ")", node);
+}
+
+func bound_adapter(state inout EmitState, value hir.FunctionValue,
+                   node hir.HirNode) string throws Failure {
+    var bound = hir.BoundReceiver(type_id: 0, mode: model.ParamMode.Ordinary);
+    switch value.bound {
+        case option.Option.Some(item): bound = item;
+        case option.Option.None:
+            throw internal("unbound function value requested an adapter");
+    }
+    // std::find-style assignment keeps the last function with the symbol.
+    var target i64 = -1;
+    for var index usize = 0; index < vec.len(state.module.functions);
+        index += 1 {
+        if state.module.functions[index].symbol == value.symbol {
+            target = i64(index);
+        }
+    }
+    if target < 0 {
+        throw internal("bound method target is not a verified function");
+    }
+    let function = state.module.functions[usize(target)];
+    let signature = type_of(state.module, function.signature);
+    if vec.len(signature.parameters) == 0 {
+        throw internal("bound method has no Self parameter");
+    }
+    let mode = signature.parameters[0].mode;
+    if mode_id(bound.mode) != mode_id(mode) {
+        throw internal("bound receiver mode differs from the method signature");
+    }
+    if mode_id(mode) == 1 {
+        throw rejected_at(
+            "Python cannot bind an inout-Self method as a function value",
+            node.source.span);
+    }
+    let cache = usize_text(value.symbol) + ":" + u32_text(mode_id(mode)) + ":" +
+        usize_text(bound.type_id);
+    for var index usize = 0; index < vec.len(state.bound_adapter_keys);
+        index += 1 {
+        if state.bound_adapter_keys[index] == cache {
+            return state.bound_adapter_values[index];
+        }
+    }
+    let helper = "_bound" + u64_text(state.bound_adapter_count);
+    state.bound_adapter_count += 1;
+    let parameters = vec.empty[string]();
+    let arguments = vec.empty[string]();
+    vec.push(parameters, "_env");
+    for var index usize = 1; index < vec.len(signature.parameters); index += 1 {
+        vec.push(parameters, "_a" + usize_text(index - 1));
+        vec.push(arguments, "_a" + usize_text(index - 1));
+    }
+    let body = vec.empty[Statement]();
+    var receiver = "_env.get(0)[0]";
+    if mode_id(mode) == 2 {
+        // ops.copy retains/replicates the receiver exactly once per call; the
+        // copy, not the environment field, is what the move Self consumes.
+        vec.push(body, stmt_at("_receiver = " +
+            type_ops_name(bound.type_id) + ".copy(" + receiver + ")",
+            node.source.span));
+        receiver = "_receiver";
+    }
+    vec.push(arguments, receiver);
+    var cursor = vec.len(arguments) - 1;
+    for cursor > 0 {
+        arguments[cursor] = arguments[cursor - 1];
+        cursor -= 1;
+    }
+    arguments[0] = receiver;
+    vec.push(body, stmt_at("return " + function_symbol_name(value.symbol) +
+        "(" + join_text(arguments) + ")", node.source.span));
+    vec.push(state.adapters, stmt_suite(
+        "def " + helper + "(" + join_text(parameters) + ")", true,
+        node.source.span, body));
+    vec.push(state.bound_adapter_keys, cache);
+    vec.push(state.bound_adapter_values, helper);
+    return helper;
+}
+
+func function_value_expression(state inout EmitState, node hir.HirNode, id usize,
+                               suite inout Vec[Statement]) string throws Failure {
+    switch node.data {
+        case hir.NodeData.FunctionValue(item):
+            return function_value_with(inout state, node, id, item, inout suite);
+        default:
+            throw internal("non-expression in verified expression position");
+    }
+}
+
+func function_value_with(state inout EmitState, node hir.HirNode, id usize,
+                         value hir.FunctionValue,
+                         suite inout Vec[Statement]) string throws Failure {
+    switch value.bound {
+        case option.Option.Some(bound):
+            if vec.len(value.captures) != 0 || vec.len(node.children) != 1 {
+                throw internal("verified bound function value shape changed");
+            }
+            let receiver = expression(inout state, node.children[0], inout suite);
+            let captured_types = vec.empty[usize]();
+            vec.push(captured_types, bound.type_id);
+            let captured_values = vec.empty[string]();
+            vec.push(captured_values,
+                take_value(state, node.children[0], receiver));
+            let environment_value = environment(inout state, captured_types,
+                captured_values, node, inout suite);
+            let adapter = bound_adapter(inout state, value, node);
+            return value_save(inout state, inout suite,
+                "_rt.FunctionValue(" + adapter + ", " + environment_value +
+                    ")", id);
+        case option.Option.None: {}
+    }
+    if vec.len(value.captures) == 0 {
+        if vec.len(node.children) != 0 {
+            throw internal(
+                "verified noncapturing function value gained children");
+        }
+        // A noncapturing value keeps the old immutable-function identity.
+        return value_save(inout state, inout suite, function_symbol_name(value.symbol), id);
+    }
+    if vec.len(node.children) != vec.len(value.captures) {
+        throw internal("verified function value capture arity changed");
+    }
+    let captured_types = vec.empty[usize]();
+    let captured_values = vec.empty[string]();
+    for var index usize = 0; index < vec.len(value.captures); index += 1 {
+        let child = node.children[index];
+        let captured = expression(inout state, child, inout suite);
+        // An owning Read produced its one copy as an owning temporary; a
+        // synthetic move transfer is already an owning temporary.  Taking here
+        // installs that exact value once and never copies it again.
+        vec.push(captured_values, take_value(state, child, captured));
+        vec.push(captured_types, value.captures[index].type_id);
+    }
+    let environment_value = environment(inout state, captured_types, captured_values,
+        node, inout suite);
+    return value_save(inout state, inout suite,
+        "_rt.FunctionValue(" + function_symbol_name(value.symbol) + ", " +
+            environment_value + ")", id);
+}
+
+// ---------------------------------------------------------------------------
+// Patterns
+
+func pattern_names(state inout EmitState, pattern hir.Pattern) {
+    switch pattern.binding {
+        case option.Option.Some(symbol):
+            ordered_insert(inout state.named, u64(symbol));
+        case option.Option.None: {}
+    }
+    for child in pattern.payload {
+        pattern_names(inout state, child);
+    }
+}
+
+func pattern_test(state EmitState, pattern hir.Pattern, value string,
+                  depth usize) string throws Failure {
+    if depth > 128 {
+        throw rejected_at(
+            "Python pattern generation exceeds its safe nesting depth",
+            pattern.source.span);
+    }
+    switch pattern.literal {
+        case option.Option.Some(literal):
+            if option.is_some(pattern.variant) ||
+               option.is_some(pattern.binding) ||
+               vec.len(pattern.payload) != 0 {
+                throw rejected_at("Python literal pattern has invalid fields",
+                    pattern.source.span);
+            }
+            switch literal {
+                case hir.PatternLiteral.BoolLiteral(boolean):
+                    if boolean.value {
+                        return value + " is True";
+                    }
+                    return value + " is False";
+                case hir.PatternLiteral.IntegerLiteral(integer):
+                    return value + " == " + integer.decimal;
+                case hir.PatternLiteral.FloatLiteral(float_value):
+                    let bits = type_of(state.module, pattern.type_id).bits;
+                    return "_rt.float_binary('eq', " + value + ", _rt.ieee(" +
+                        u64_text(float_value.bits) + ", " + u32_text(bits) +
+                        "), " + u32_text(bits) + ")";
+                case hir.PatternLiteral.StringLiteral(string_value):
+                    return value + " == " +
+                        python_string_literal(string_value.utf8);
+            }
+        case option.Option.None: {}
+    }
+    var variant usize = 0;
+    switch pattern.variant {
+        case option.Option.Some(symbol): variant = symbol;
+        case option.Option.None: return "True";
+    }
+    var test = value + "[0] == " + usize_text(variant);
+    for var index usize = 0; index < vec.len(pattern.payload); index += 1 {
+        let child = pattern.payload[index];
+        if option.is_some(child.variant) || option.is_some(child.literal) {
+            test += " and (" + pattern_test(state, child,
+                value + "[1][" + usize_text(index) + "]", depth + 1) + ")";
+        }
+    }
+    return test;
+}
+
+func pattern_bind(state inout EmitState, pattern hir.Pattern, value string,
+                  suite inout Vec[Statement], depth usize) throws Failure {
+    if depth > 128 {
+        throw rejected_at(
+            "Python pattern generation exceeds its safe nesting depth",
+            pattern.source.span);
+    }
+    var has_binding = false;
+    var binding usize = 0;
+    switch pattern.binding {
+        case option.Option.Some(symbol):
+            has_binding = true;
+            binding = symbol;
+        case option.Option.None: {}
+    }
+    if has_binding {
+        let owning = owned(state, pattern.type_id);
+        var initial = value;
+        if owning {
+            initial = "_frame.slot(" +
+                owner_key(hir.OwnerKind.Binding, u64(binding)) + ", " +
+                type_ops_name(pattern.type_id) + ")";
+        }
+        vec.push(suite, stmt_at(symbol_name(binding) + " = " + initial,
+            pattern.source.span));
+        ordered_insert(inout state.available, u64(binding));
+        if owning {
+            vec.push(suite, stmt_at(symbol_name(binding) + ".install(" +
+                type_ops_name(pattern.type_id) + ".copy(" + value + "))",
+                pattern.source.span));
+        }
+    }
+    for var index usize = 0; index < vec.len(pattern.payload); index += 1 {
+        pattern_bind(inout state, pattern.payload[index],
+            value + "[1][" + usize_text(index) + "]", inout suite, depth + 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expressions
+
+func field_expression(state inout EmitState, node hir.HirNode, id usize,
+                      field usize, place bool,
+                      suite inout Vec[Statement]) string throws Failure {
+    let receiver = expression(inout state, node.children[0], inout suite);
+    let receiver_type = node_at(state, node.children[0]).type_id;
+    let index = usize_text(field_index(state, receiver_type, field));
+    var value = "";
+    if place {
+        value = "_rt.Field(" + receiver + ", " + index + ")";
+    } else {
+        value = receiver + "[" + index + "]";
+        if ordered_contains(state.temporary_ids, u64(id)) {
+            value = type_ops_name(node.type_id) + ".copy(" + value + ")";
+        }
+    }
+    return value_save(inout state, inout suite, value, id);
+}
+
+func index_expression(state inout EmitState, node hir.HirNode, id usize,
+                      place bool,
+                      suite inout Vec[Statement]) string throws Failure {
+    let receiver = expression(inout state, node.children[0], inout suite);
+    let index = expression(inout state, node.children[1], inout suite);
+    if place {
+        return save(inout state, inout suite, "_rt.Index(" + receiver + ", " + index + ")",
+            node);
+    }
+    let receiver_type = node_at(state, node.children[0]).type_id;
+    var value = "";
+    if kind_is(type_of(state.module, receiver_type).kind,
+               model.TypeKind.String) {
+        value = "_rt.text_at(" + receiver + ", " + index + ")";
+    } else {
+        value = receiver + ".get(" + index + ")";
+    }
+    if owned(state, node.type_id) {
+        value = type_ops_name(node.type_id) + ".copy(" + value + ")";
+    }
+    return value_save(inout state, inout suite, value, id);
+}
+
+func host_access_invoke(state inout EmitState, id usize, node hir.HirNode,
+                        call string, unit bool,
+                        suite inout Vec[Statement]) string throws Failure {
+    var invoke = vec.empty[Statement]();
+    var value = "";
+    if unit {
+        line_hir(inout invoke, call, node);
+    } else {
+        value = value_save(inout state, inout invoke, call, id);
+    }
+    var error = false;
+    var failure = vec.empty[Statement]();
+    for plan in node.exits {
+        if exit_kind_id(plan.kind) == 4 {
+            steps(inout state, plan.actions, inout failure, node, true);
+            error = true;
+        }
+    }
+    if error {
+        vec.push(suite, stmt_suite("try", true, node.source.span, invoke));
+        line_hir(inout failure, "raise", node);
+        vec.push(suite, stmt_suite("except _rt.TypedError", true,
+            node.source.span, failure));
+    } else {
+        append_suite(inout suite, invoke);
+    }
+    return value;
+}
+
+func foreign_location_text(state EmitState, node hir.HirNode,
+                           declaration model.ForeignDeclaration) string throws Failure {
+    return foreign_location(state.module, node, declaration);
+}
+
+func foreign_access_expression(state inout EmitState, node hir.HirNode,
+                               id usize, read hir.ForeignRead,
+                               suite inout Vec[Statement]) string throws Failure {
+    let declaration = foreign_declaration(state.module, read.binding);
+    var access u32 = 99;
+    switch read.access {
+        case option.Option.Some(kind): access = foreign_access_id(kind);
+        case option.Option.None: {}
+    }
+    if access != 99 {
+        let location = foreign_location_text(state, node, declaration);
+        var text_flag = "False";
+        if kind_is(type_of(state.module, node.type_id).kind,
+                   model.TypeKind.String) {
+            text_flag = "True";
+        }
+        if access == 0 {
+            let property = binding_property(declaration);
+            let base = expression(inout state, node.children[0], inout suite);
+            return host_access_invoke(inout state, id, node,
+                "_lang_host_get(" + base + ", " + path_tuple(property.getter) +
+                    ", " + location + ", " + text_flag + ")", false, inout suite);
+        }
+        if access == 2 {
+            let base = expression(inout state, node.children[0], inout suite);
+            let index = expression(inout state, node.children[1], inout suite);
+            return host_access_invoke(inout state, id, node,
+                "_lang_host_getitem(" + base + ", " + index + ", " + location +
+                    ", " + text_flag + ")", false, inout suite);
+        }
+        if access == 4 {
+            let base = expression(inout state, node.children[0], inout suite);
+            var start = "None";
+            switch read.start {
+                case option.Option.Some(child):
+                    start = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            var finish = "None";
+            switch read.end {
+                case option.Option.Some(child):
+                    finish = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            return host_access_invoke(inout state, id, node,
+                "_lang_host_getitem(" + base + ", slice(" + start + ", " +
+                    finish + "), " + location + ", " + text_flag + ")",
+                false, inout suite);
+        }
+        throw internal("foreign access place in expression position");
+    }
+    if read.binding >= vec.len(state.module.foreign_bindings) {
+        throw internal("foreign binding index out of range");
+    }
+    let binding = state.module.foreign_bindings[read.binding];
+    var declared = model.BindingCallable(call_kind: "", owner_type:
+        option.Option[string].None, parameters: [], return_type: "",
+        error_type: option.Option[string].None, return_ownership: "",
+        storage: "", receiver_escapes: "", effects: []);
+    var has_declared = false;
+    switch binding.signature {
+        case option.Option.Some(_):
+            declared = binding_callable(declaration);
+            has_declared = true;
+        case option.Option.None: {}
+    }
+    var base = "";
+    var path = "";
+    switch binding.owner {
+        case option.Option.Some(_):
+            if !has_declared || vec.len(node.children) != 1 {
+                throw internal("verified foreign receiver arity changed");
+            }
+            base = expression(inout state, node.children[0], inout suite);
+            if declared.call_kind == "callable" {
+                path = "()";
+            } else if declared.call_kind == "method" &&
+                      vec.len(declaration.host_attribute) > 0 {
+                path = path_tuple(declaration.host_attribute);
+            } else {
+                throw internal("verified foreign method has no host path");
+            }
+        case option.Option.None:
+            if vec.len(node.children) != 0 ||
+               vec.len(declaration.host_attribute) == 0 {
+                throw internal("verified module read has no host path");
+            }
+            let host_name = host_module_name(state.module, declaration.module);
+            base = save(inout state, inout suite,
+                "_rt.host_module(" + python_string_literal(declaration.module) +
+                    ", " + python_string_literal(host_name) + ")", node);
+            path = path_tuple(declaration.host_attribute);
+    }
+    var invoke = vec.empty[Statement]();
+    var text_flag = "False";
+    if kind_is(type_of(state.module, node.type_id).kind,
+               model.TypeKind.String) {
+        text_flag = "True";
+    }
+    let location = foreign_location_text(state, node, declaration);
+    let value = value_save(inout state, inout invoke,
+        "_rt.foreign_read(" + base + ", " + path + ", " + location + ", " +
+            text_flag + ")", id);
+    var error = false;
+    var failure = vec.empty[Statement]();
+    for plan in node.exits {
+        if exit_kind_id(plan.kind) == 4 {
+            steps(inout state, plan.actions, inout failure, node, true);
+            error = true;
+        }
+    }
+    if error {
+        vec.push(suite, stmt_suite("try", true, node.source.span, invoke));
+        line_hir(inout failure, "raise", node);
+        vec.push(suite, stmt_suite("except _rt.TypedError", true,
+            node.source.span, failure));
+    } else {
+        append_suite(inout suite, invoke);
+    }
+    return value;
+}
+
+func path_tuple(values Vec[string]) string {
+    let literals = vec.empty[string]();
+    for value in values {
+        vec.push(literals, python_string_literal(value));
+    }
+    return tuple_text(literals);
+}
+
+func binding_property(declaration model.ForeignDeclaration) model.BindingProperty throws Failure {
+    switch declaration.detail {
+        case model.ForeignDetail.Property(value): return value;
+        default: throw internal("verified foreign property has no declaration");
+    }
+}
+
+func emit_borrows(state inout EmitState, suite inout Vec[Statement],
+                  node hir.HirNode, consumer usize, operand u32,
+                  expression_id usize) throws Failure {
+    for use in state.module.ownership.uses {
+        if use.consumer == consumer && use.operand == operand &&
+           use_kind_id(use.kind) == 0 && !option.is_some(use.destination) {
+            var key = "";
+            switch use.root {
+                case option.Option.Some(root):
+                    key = owner_key(hir.OwnerKind.Binding, u64(root));
+                case option.Option.None:
+                    key = owner_key(hir.OwnerKind.Temporary,
+                        u64(expression_id));
+            }
+            line_hir(inout suite, "_frame.borrow(" + key + ")", node);
+        }
+    }
+}
+
+func call_expression(state inout EmitState, node hir.HirNode, id usize,
+                     call hir.Call,
+                     suite inout Vec[Statement]) string throws Failure {
+    switch call.kind {
+        case hir.CalleeKind.System:
+            return system_call_expression(inout state, node, id, call, inout suite);
+        case hir.CalleeKind.Foreign:
+            return foreign_call_expression(inout state, node, id, call, inout suite);
+        default: {}
+    }
+    return generic_call_expression(inout state, node, id, call, inout suite);
+}
+
+func system_call_expression(state inout EmitState, node hir.HirNode, id usize,
+                            call hir.Call,
+                            suite inout Vec[Statement]) string throws Failure {
+    let args = vec.make[string](vec.len(call.args), "");
+    for argument in call.args {
+        if usize(argument.parameter_index) >= vec.len(args) {
+            throw internal("verified system call argument index");
+        }
+        args[usize(argument.parameter_index)] =
+            expression(inout state, argument.expression, inout suite);
+        emit_borrows(inout state, inout suite, node, id, argument.source_index,
+            argument.expression);
+    }
+    var operation u32 = 0;
+    switch call.system {
+        case option.Option.Some(value): operation = value;
+        case option.Option.None:
+            throw internal("verified system call lost its operation");
+    }
+    let spec = operation_spec(state.specs, operation);
+    var element = "None";
+    var tags = "{}";
+    let weak_operation = operation == 201 || operation == 202 || operation == 203;
+    var weak_box = false;
+    if weak_operation {
+        let target = weak_target_type(state.module, spec.operation, node);
+        weak_box = canonical_weak_box(state.module, target);
+        if !weak_box && !canonical_weak_target(state.module, target) {
+            throw rejected_at("Python Weak target is not canonical",
+                node.source.span);
+        }
+        let target_type = type_of(state.module, target);
+        if kind_is(target_type.kind, model.TypeKind.NominalStruct) && !weak_box {
+            throw rejected_at(
+                "Python supports Weak only for Vec, function values and std/box.Box; native-only shared handles are unavailable",
+                node.source.span);
+        }
+    }
+    if operation == 34 || operation == 35 || operation == 33 ||
+       operation == 190 {
+        element = type_ops_name(type_of(state.module, node.type_id).type_args[0]);
+    }
+    if kind_is(type_of(state.module, node.type_id).kind,
+               model.TypeKind.NominalEnum) {
+        let entries = vec.empty[string]();
+        for declaration in state.module.nominals {
+            if declaration.symbol == type_of(state.module, node.type_id).declaration {
+                for variant in declaration.variants {
+                    vec.push(entries,
+                        python_string_literal(
+                            project_symbol(state.module, variant.symbol).name) +
+                        ": " + usize_text(variant.symbol));
+                }
+            }
+        }
+        tags = "{" + join_text(entries) + "}";
+    }
+    var call_text = "";
+    if spec.operation == 197 {
+        call_text = "_rt.Slice.create(" + join_text(args) + ")";
+    } else if spec.operation == 199 {
+        call_text = args[0] + ".sub(" + args[1] + ", " + args[2] + ")";
+    } else if spec.operation == 198 {
+        call_text = args[0] + ".len()";
+    } else if spec.operation == 200 {
+        call_text = args[0] + ".to_vec(" +
+            type_ops_name(type_of(state.module, node.type_id).type_args[0]) +
+            ")";
+    } else {
+        call_text = "_rt.value_call(" +
+            python_string_literal(substring_from(spec.name, 8)) + ", " +
+            tuple_text(args) + ", " + element + ", " + tags;
+        if weak_operation {
+            if weak_box {
+                call_text += ", True";
+            } else {
+                call_text += ", False";
+            }
+        }
+        call_text += ")";
+    }
+    let value = value_save(inout state, inout suite, call_text, id);
+    for lifetime in state.module.ownership.calls {
+        if lifetime.node == id {
+            steps(inout state, lifetime.on_return, inout suite, node, false);
+        }
+    }
+    return value;
+}
+
+func foreign_call_expression(state inout EmitState, node hir.HirNode, id usize,
+                             call hir.Call,
+                             suite inout Vec[Statement]) string throws Failure {
+    var callee_id usize = 0;
+    switch call.callee {
+        case option.Option.Some(value): callee_id = value;
+        case option.Option.None:
+            throw internal("verified foreign call lost target/binding");
+    }
+    var binding_id usize = 0;
+    switch call.binding {
+        case option.Option.Some(value): binding_id = value;
+        case option.Option.None:
+            throw internal("verified foreign call lost target/binding");
+    }
+    let declaration = foreign_declaration(state.module, binding_id);
+    let declared = binding_callable(declaration);
+    let callee = expression(inout state, callee_id, inout suite);
+    let positional = vec.empty[string]();
+    let keywords = vec.empty[string]();
+    var operand u32 = 1;
+    for argument in call.args {
+        let value = expression(inout state, argument.expression, inout suite);
+        emit_borrows(inout state, inout suite, node, id, operand, argument.expression);
+        operand += 1;
+        if mode_id(argument.mode) != 0 {
+            throw rejected_at(
+                "Python foreign calls support ordinary arguments only",
+                node.source.span);
+        }
+        switch argument.label {
+            case option.Option.Some(_):
+                if usize(argument.parameter_index) >=
+                   vec.len(declared.parameters) {
+                    throw internal("verified foreign argument index");
+                }
+                vec.push(keywords,
+                    python_string_literal(
+                        declared.parameters[usize(argument.parameter_index)].name) +
+                    ": " + value);
+            case option.Option.None:
+                vec.push(positional, value);
+        }
+    }
+    let result_type = type_of(state.module,
+        type_of(state.module, call.signature).result);
+    let unit = kind_is(result_type.kind, model.TypeKind.Unit);
+    var returns_text = "False";
+    if kind_is(result_type.kind, model.TypeKind.String) {
+        returns_text = "True";
+    }
+    var invoke = vec.empty[Statement]();
+    var unit_text = "False";
+    if unit {
+        unit_text = "True";
+    }
+    let location = foreign_location_text(state, node, declaration);
+    let value = value_save(inout state, inout invoke,
+        "_rt.foreign_call(" + callee + ", " + tuple_text(positional) + ", {" +
+            join_text(keywords) + "}, " + location + ", " + unit_text + ", " +
+            returns_text + ")", id);
+    var error = false;
+    var failure = vec.empty[Statement]();
+    for plan in node.exits {
+        if exit_kind_id(plan.kind) == 4 {
+            steps(inout state, plan.actions, inout failure, node, true);
+            error = true;
+        }
+    }
+    if error {
+        vec.push(suite, stmt_suite("try", true, node.source.span, invoke));
+        line_hir(inout failure, "raise", node);
+        vec.push(suite, stmt_suite("except _rt.TypedError", true,
+            node.source.span, failure));
+    } else {
+        append_suite(inout suite, invoke);
+    }
+    for lifetime in state.module.ownership.calls {
+        if lifetime.node == id {
+            steps(inout state, lifetime.on_return, inout suite, node, false);
+        }
+    }
+    return value;
+}
+
+func generic_call_expression(state inout EmitState, node hir.HirNode, id usize,
+                             call hir.Call,
+                             suite inout Vec[Statement]) string throws Failure {
+    var direct = true;
+    switch call.kind {
+        case hir.CalleeKind.Direct: direct = true;
+        default: direct = false;
+    }
+    var callee = "";
+    if direct {
+        let symbol = require_usize(call.direct_symbol,
+            "verified direct call lost its symbol");
+        callee = save(inout state, inout suite, function_symbol_name(symbol), node);
+    } else {
+        let expression_id = require_usize(call.callee,
+            "verified call lost its callee");
+        callee = expression(inout state, expression_id, inout suite);
+    }
+    // An owned indirect callee is borrowed after its own evaluation and before
+    // any argument evaluation, so a throwing argument cannot enter the callee
+    // body.  The matching end_borrow steps come from the verified
+    // success/typed-error plans; the owning value itself is released only at
+    // the end of the full expression.
+    if !direct && option.is_some(call.callee) {
+        let callee_id = require_usize(call.callee, "verified call lost its callee");
+        if owned(state, node_at(state, callee_id).type_id) &&
+           ordered_contains(state.temporary_ids, u64(callee_id)) {
+            line_hir(inout suite, "_frame.borrow(" +
+                owner_key(hir.OwnerKind.Temporary, u64(callee_id)) + ")", node);
+        }
+    }
+    let args = vec.make[string](vec.len(call.args), "");
+    // Evaluate the published source-order vector before arranging formals.
+    var operand u32 = 0;
+    if option.is_some(call.callee) {
+        operand = 1;
+    }
+    for argument in call.args {
+        if usize(argument.parameter_index) >= vec.len(args) {
+            throw internal("verified call argument index");
+        }
+        args[usize(argument.parameter_index)] =
+            expression(inout state, argument.expression, inout suite);
+        emit_borrows(inout state, inout suite, node, id, operand, argument.expression);
+        operand += 1;
+    }
+    for argument in call.args {
+        if mode_id(argument.mode) == 2 {
+            args[usize(argument.parameter_index)] = take_value(state,
+                argument.expression, args[usize(argument.parameter_index)]);
+        }
+    }
+    var invoke = vec.empty[Statement]();
+    let value = value_save(inout state, inout invoke,
+        callee + "(" + join_text(args) + ")", id);
+    var error = false;
+    var failure = vec.empty[Statement]();
+    for plan in node.exits {
+        if exit_kind_id(plan.kind) == 4 {
+            steps(inout state, plan.actions, inout failure, node, true);
+            error = true;
+        }
+    }
+    if error {
+        vec.push(suite, stmt_suite("try", true, node.source.span, invoke));
+        line_hir(inout failure, "raise", node);
+        vec.push(suite, stmt_suite("except _rt.TypedError", true,
+            node.source.span, failure));
+    } else {
+        append_suite(inout suite, invoke);
+    }
+    for lifetime in state.module.ownership.calls {
+        if lifetime.node == id {
+            steps(inout state, lifetime.on_return, inout suite, node, false);
+        }
+    }
+    return value;
+}
+
+func expression(state inout EmitState, id usize,
+                suite inout Vec[Statement]) string throws Failure {
+    if state.outlining && state.expression_depth >= 16 {
+        return outlined_expression(inout state, id, inout suite);
+    }
+    state.expression_depth += 1;
+    var value = "";
+    try {
+        value = expression_inner(inout state, id, inout suite);
+    } catch error Failure {
+        state.expression_depth -= 1;
+        throw error;
+    }
+    state.expression_depth -= 1;
+    return value;
+}
+
+func expression_inner(state inout EmitState, id usize,
+                      suite inout Vec[Statement]) string throws Failure {
+    let node = node_at(state, id);
+    exits(state, node, false);
+    switch node.data {
+        case hir.NodeData.ConstantLiteral(payload): {
+            let constant = constant_value(inout state, payload.value,
+                inout suite, node);
+            return value_save(inout state, inout suite, constant, id);
+        }
+        case hir.NodeData.UnitLiteral(payload):
+            return save(inout state, inout suite, "None", node);
+        case hir.NodeData.BoolLiteral(payload):
+            if payload.value {
+                return save(inout state, inout suite, "True", node);
+            }
+            return save(inout state, inout suite, "False", node);
+        case hir.NodeData.IntegerLiteral(payload):
+            return save(inout state, inout suite, payload.decimal, node);
+        case hir.NodeData.FloatLiteral(payload): {
+            let bits = type_of(state.module, node.type_id).bits;
+            return save(inout state, inout suite,
+                "_rt.ieee(" + u64_text(payload.bits) + ", " + u32_text(bits) +
+                    ")", node);
+        }
+        case hir.NodeData.StringLiteral(payload):
+            return value_save(inout state, inout suite,
+                python_string_literal(payload.utf8), id);
+        case hir.NodeData.Read(payload): {
+            let selected = read_symbol(state, payload.symbol);
+            if ordered_contains(state.temporary_ids, u64(id)) {
+                return value_save(inout state, inout suite,
+                    type_ops_name(node.type_id) + ".copy(" + selected + ")",
+                    id);
+            }
+            return value_save(inout state, inout suite, selected, id);
+        }
+        case hir.NodeData.Place(payload):
+            return save(inout state, inout suite, symbol_name(payload.symbol), node);
+        case hir.NodeData.FunctionValue(payload):
+            return function_value_expression(inout state, node, id, inout suite);
+        case hir.NodeData.TraitObjectInit(payload): {
+            let concrete = expression(inout state, node.children[0], inout suite);
+            let methods = vec.empty[string]();
+            for method in payload.methods {
+                vec.push(methods, function_symbol_name(method));
+            }
+            return value_save(inout state, inout suite,
+                "_rt.DynObject.create(" + type_ops_name(payload.concrete) +
+                    ", " + concrete + ", " + tuple_text(methods) + ")", id);
+        }
+        case hir.NodeData.TraitDispatch(payload): {
+            let receiver = expression(inout state, node.children[0], inout suite);
+            if vec.len(payload.args) == 0 {
+                throw internal("trait dispatch argument index");
+            }
+            let arguments = vec.make[string](vec.len(payload.args) - 1, "");
+            for var index usize = 1; index < vec.len(payload.args); index += 1 {
+                let argument = payload.args[index];
+                if argument.parameter_index == 0 ||
+                   usize(argument.parameter_index) > vec.len(arguments) {
+                    throw internal("trait dispatch argument index");
+                }
+                arguments[usize(argument.parameter_index) - 1] =
+                    expression(inout state, argument.expression, inout suite);
+            }
+            let value = value_save(inout state, inout suite,
+                receiver + ".call(" + u32_text(payload.index) + ", " +
+                    tuple_text(arguments) + ")", id);
+            for lifetime in state.module.ownership.calls {
+                if lifetime.node == id {
+                    steps(inout state, lifetime.on_return, inout suite, node, false);
+                }
+            }
+            return value;
+        }
+        case hir.NodeData.StructInit(payload): {
+            let values = vec.make[string](vec.len(payload.fields), "");
+            for argument in payload.fields {
+                if usize(argument.parameter_index) >= vec.len(values) {
+                    throw internal("verified struct field index");
+                }
+                let value = expression(inout state, argument.expression, inout suite);
+                values[usize(argument.parameter_index)] =
+                    take_value(state, argument.expression, value);
+            }
+            return value_save(inout state, inout suite, tuple_text(values), id);
+        }
+        case hir.NodeData.EnumInit(payload): {
+            let values = vec.make[string](vec.len(payload.payload), "");
+            for argument in payload.payload {
+                if usize(argument.parameter_index) >= vec.len(values) {
+                    throw internal("verified enum field index");
+                }
+                let value = expression(inout state, argument.expression, inout suite);
+                values[usize(argument.parameter_index)] =
+                    take_value(state, argument.expression, value);
+            }
+            return value_save(inout state, inout suite,
+                "(" + usize_text(payload.variant) + ", " + tuple_text(values) +
+                    ")", id);
+        }
+        case hir.NodeData.FieldRead(payload):
+            return field_expression(inout state, node, id, payload.field, false, inout suite);
+        case hir.NodeData.FieldPlace(payload):
+            return field_expression(inout state, node, id, payload.field, true, inout suite);
+        case hir.NodeData.Move(payload): {
+            var value = "";
+            var has_binding = false;
+            var binding usize = 0;
+            switch payload.binding {
+                case option.Option.Some(symbol):
+                    has_binding = true;
+                    binding = symbol;
+                case option.Option.None: {}
+            }
+            if has_binding {
+                if owned(state, node.type_id) {
+                    value = symbol_name(binding) + ".take()";
+                } else {
+                    value = read_symbol(state, binding);
+                }
+            } else {
+                value = take_value(state, node.children[0],
+                    expression(inout state, node.children[0], inout suite));
+            }
+            return value_save(inout state, inout suite, value, id);
+        }
+        case hir.NodeData.VecInit(payload): {
+            let values = vec.empty[string]();
+            for child in node.children {
+                let value = expression(inout state, child, inout suite);
+                vec.push(values, take_value(state, child, value));
+            }
+            let element = type_of(state.module, node.type_id).type_args[0];
+            return value_save(inout state, inout suite,
+                "_rt.Vec.create(" + type_ops_name(element) + ", " +
+                    tuple_text(values) + ")", id);
+        }
+        case hir.NodeData.IndexRead(payload):
+            return index_expression(inout state, node, id, false, inout suite);
+        case hir.NodeData.IndexPlace(payload):
+            return index_expression(inout state, node, id, true, inout suite);
+        case hir.NodeData.VecSlice(payload): {
+            let receiver = expression(inout state, node.children[0], inout suite);
+            var start = "None";
+            switch payload.start {
+                case option.Option.Some(child):
+                    start = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            var finish = "None";
+            switch payload.end {
+                case option.Option.Some(child):
+                    finish = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            let receiver_type = node_at(state, node.children[0]).type_id;
+            var value = "";
+            if kind_is(type_of(state.module, node.type_id).kind,
+                       model.TypeKind.String) {
+                value = "_rt.text_slice(" + receiver + ", " + start + ", " +
+                    finish + ")";
+            } else if kind_is(type_of(state.module, receiver_type).kind,
+                              model.TypeKind.Slice) {
+                value = receiver + ".sub(" + start + ", " + finish + ")";
+            } else {
+                value = receiver + ".slice(" + start + ", " + finish + ")";
+            }
+            return value_save(inout state, inout suite, value, id);
+        }
+        case hir.NodeData.Unary(payload): {
+            let operand = expression(inout state, node.children[0], inout suite);
+            let op = unary_op_id(payload.op);
+            var text_value = "inv";
+            if op == 0 {
+                text_value = "neg";
+            } else if op == 1 {
+                text_value = "not";
+            }
+            let operand_type = node_at(state, node.children[0]).type_id;
+            if kind_is(type_of(state.module, operand_type).kind,
+                       model.TypeKind.Float) {
+                let bits = type_of(state.module, node.type_id).bits;
+                return save(inout state, inout suite,
+                    "_rt.float_neg(" + operand + ", " + u32_text(bits) + ")",
+                    node);
+            }
+            let number = numeric_text(state.module, operand_type);
+            return save(inout state, inout suite,
+                "_rt.unary('" + text_value + "', " + operand + ", " + number +
+                    ")", node);
+        }
+        case hir.NodeData.Binary(payload): {
+            let left = expression(inout state, node.children[0], inout suite);
+            let right = expression(inout state, node.children[1], inout suite);
+            let left_type = node_at(state, node.children[0]).type_id;
+            let operation = binary_text(state, payload.op, left, right,
+                left_type);
+            return value_save(inout state, inout suite, operation, id);
+        }
+        case hir.NodeData.IntegerConvert(payload): {
+            let value = expression(inout state, node.children[0], inout suite);
+            let source_type = type_of(state.module,
+                node_at(state, node.children[0]).type_id);
+            let target_type = type_of(state.module, node.type_id);
+            if kind_is(source_type.kind, model.TypeKind.Float) &&
+               kind_is(target_type.kind, model.TypeKind.Float) {
+                // The runtime stores f32 after its own rounding, and every
+                // finite binary32 value is exactly representable in Python's
+                // binary64 float.  Identity and widening therefore keep the
+                // saved value and its source order.  A binary64 -> binary32
+                // narrowing must round once to the target storage width.
+                if source_type.bits == 64 && target_type.bits == 32 {
+                    return save(inout state, inout suite,
+                        "_rt.float_to_float(" + value + ", 32)", node);
+                }
+                return save(inout state, inout suite, value, node);
+            }
+            if kind_is(target_type.kind, model.TypeKind.Float) {
+                return save(inout state, inout suite,
+                    "_rt.int_to_float(" + value + ", " +
+                        u32_text(target_type.bits) + ")", node);
+            }
+            let number = numeric_text(state.module, node.type_id);
+            if kind_is(source_type.kind, model.TypeKind.Float) {
+                return save(inout state, inout suite,
+                    "_rt.float_to_int(" + value + ", " + number + ")", node);
+            }
+            return save(inout state, inout suite,
+                "_rt.convert(" + value + ", " + number + ")", node);
+        }
+        case hir.NodeData.ShortCircuit(payload): {
+            let left = expression(inout state, node.children[0], inout suite);
+            let result = save(inout state, inout suite, left, node);
+            var branch = stmt_suite("if not " + result, true, node.source.span,
+                []);
+            if logical_op_id(payload.op) == 0 {
+                branch = stmt_suite("if " + result, true, node.source.span, []);
+            }
+            let right = expression(inout state, node.children[1], inout branch.body);
+            line_hir(inout branch.body, result + " = " + right, node);
+            vec.push(suite, branch);
+            return result;
+        }
+        case hir.NodeData.Call(payload):
+            return call_expression(inout state, node, id, payload, inout suite);
+        case hir.NodeData.ForeignRead(payload):
+            return foreign_access_expression(inout state, node, id, payload, inout suite);
+        default:
+            throw internal("non-expression in verified expression position");
+    }
+}
+
+func logical_op_id(op hir.LogicalOp) u32 {
+    switch op {
+        case hir.LogicalOp.And: return 0;
+        case hir.LogicalOp.Or: return 1;
+    }
+}

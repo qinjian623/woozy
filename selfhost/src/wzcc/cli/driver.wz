@@ -2,12 +2,13 @@ package cli;
 import "app/wzcc/model" as model;
 import "app/wzcc/render" as render;
 import "app/wzcc/source" as source;
+import "app/wzcc/input" as input;
 import "app/wzcc/lexer" as lexer;
 import "app/wzcc/parser" as parser;
-import "std/fs" as fs;
 import "std/io" as io;
 import "std/os" as os;
 import "std/strconv" as strconv;
+import "std/text" as text;
 
 func finish(options Options, sources Vec[model.Source], state model.PhaseState,
             failure model.FailureKind, has_value bool, diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
@@ -18,7 +19,15 @@ func finish(options Options, sources Vec[model.Source], state model.PhaseState,
             return 3;
         }
     } else if render.succeeded(state, has_value, diagnostics) {
-        io.println("syntax ok: " + options.path);
+        if options.command == "build" {
+            var output = options.output;
+            if options.backend == "native" {
+                if text.ends_with(output, "/") { output += "program"; }
+                else { output += "/program"; }
+            }
+            io.println("build ok: " + output);
+        } else if options.syntax { io.println("syntax ok: " + options.path); }
+        else { io.println("check ok: " + options.project); }
     } else {
         for diagnostic in diagnostics {
             var location = "";
@@ -35,44 +44,49 @@ func finish(options Options, sources Vec[model.Source], state model.PhaseState,
     }
     return render.exit_code(state, failure, has_value, diagnostics);
 }
-
-func fail(options Options, code string, phase string, message string, failure model.FailureKind) i32 throws os.Error {
+func fail(options Options, sources Vec[model.Source], code string, phase string,
+          message string, failure model.FailureKind) i32 throws os.Error {
     var diagnostic = model.diagnostic(code, phase, message, model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
     diagnostic.has_primary = false;
-    return finish(options, [], model.PhaseState.Failed, failure, false, [diagnostic]);
+    return finish(options, sources, model.PhaseState.Failed, failure, false, [diagnostic]);
 }
-
+func os_text(problem os.Error) string {
+    switch problem {
+        case os.Error.Interrupted(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.System(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed): return "no progress";
+    }
+}
+func help_text() string {
+    return "Usage: woozyc --help | --version\n" +
+        "       woozyc check --syntax-only [--format json] FILE\n" +
+        "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
+        "       woozyc build --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
+        "       Native build also accepts --opt 0|2 and --target TRIPLE";
+}
+func syntax_command(options Options, manager inout source.Manager) i32 throws os.Error {
+    let read = input.read(options.path, inout manager);
+    if !render.succeeded(read.state, read.has_value, read.diagnostics) {
+        return finish(options, manager.snapshots, read.state, read.failure, read.has_value, read.diagnostics);
+    }
+    let lexed = lexer.lex(read.value);
+    if !render.succeeded(lexed.state, lexed.has_value, lexed.diagnostics) {
+        return finish(options, manager.snapshots, lexed.state, lexed.failure, lexed.has_value, lexed.diagnostics);
+    }
+    let parsed = parser.parse(lexed);
+    return finish(options, manager.snapshots, parsed.state, parsed.failure, parsed.has_value, parsed.diagnostics);
+}
 pub func run(args Vec[string]) i32 throws os.Error {
     let options = arguments(args);
-    if !options.valid {
-        io.eprintln(options.error);
-        return 2;
-    }
+    if !options.valid { io.eprintln(options.error); return 2; }
     if options.command == "lsp" || options.command == "capabilities" {
         io.eprintln("E_CAPABILITY_UNAVAILABLE: " + options.command + " is not implemented");
         return 1;
     }
-    if options.command == "--version" {
-        io.println("woozyc 0.1.0-selfhost (compiler-dev/1)");
-        return 0;
-    }
-    if options.command == "--help" {
-        io.println("Usage: woozyc --help | --version\n       woozyc check --syntax-only [--format json] FILE\n       woozyc check --project MANIFEST [--backend native|python] [--format json]\n       woozyc build --project MANIFEST --out-dir DIR [--format json]\nSelf-host port in progress: project checking and build are not implemented yet.");
-        return 0;
-    }
-    if !options.syntax {
-        return fail(options, "E_CAPABILITY_UNAVAILABLE", "toolchain",
-            "self-host project/type checking and code generation are not implemented yet", model.FailureKind.Unsupported);
-    }
-    try {
-        let input = source.snapshot(1, 1, 1, options.path, fs.read_file(options.path));
-        let lexed = lexer.lex(input);
-        if !render.succeeded(lexed.state, lexed.has_value, lexed.diagnostics) {
-            return finish(options, [input], lexed.state, lexed.failure, lexed.has_value, lexed.diagnostics);
-        }
-        let parsed = parser.parse(lexed);
-        return finish(options, [input], parsed.state, parsed.failure, parsed.has_value, parsed.diagnostics);
-    } catch error os.Error {
-        return fail(options, "E_INPUT_IO", "toolchain", "cannot read source file: " + options.path, model.FailureKind.Environment);
-    }
+    if options.command == "--version" { io.println("woozyc 0.1.0-selfhost (compiler-dev/1)"); return 0; }
+    if options.command == "--help" { io.println(help_text()); return 0; }
+    var manager = source.manager();
+    if options.syntax { return syntax_command(options, inout manager); }
+    return project_command(options, inout manager);
 }

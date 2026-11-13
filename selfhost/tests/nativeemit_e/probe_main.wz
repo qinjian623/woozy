@@ -1,0 +1,34 @@
+// Test driver for the independent E probes.  Each case is printed between
+// markers so the Python runner can split the exact generated LLVM text.
+package app;
+
+import "app/wzcc/nativeemit" as n;
+import "std/io" as io;
+import "std/os" as os;
+
+func print_case(name string, expected string, actual string, llvm string) throws os.Error {
+    io.print("===CASE " + name + "===\n");
+    io.print("===EXPECTED " + expected + "\n");
+    io.print("===ACTUAL " + actual + "\n");
+    io.print(llvm);
+    io.print("===ENDCASE===\n");
+}
+
+func main() i32 throws os.Error {
+    try {
+        for item in n.e_review_cases() {
+            print_case(item.name, item.expected, item.actual, item.llvm);
+        }
+        for item in n.e_review_extra_cases() {
+            print_case(item.name, item.expected, item.actual, item.llvm);
+        }
+    } catch error n.Error {
+        switch error {
+            case n.Error.Failure(code, kind, message): {
+                io.eprintln(code + ": " + message);
+            }
+        }
+        return 1;
+    }
+    return 0;
+}

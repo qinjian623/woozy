@@ -1,0 +1,19 @@
+package app;
+import "app/wzcc/nativeemit" as n;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+func main() i32 throws os.Error {
+    for var which usize = 0; which < 9; which += 1 {
+        io.println("== CASE " + strconv.format_u64(u64(which)));
+        try { io.print(n.review_d_ir(which)); }
+        catch error n.Error {
+            switch error {
+                case n.Error.Failure(code, kind, message):
+                    io.println("ERROR " + code + ": " + message);
+            }
+        }
+    }
+    return 0;
+}

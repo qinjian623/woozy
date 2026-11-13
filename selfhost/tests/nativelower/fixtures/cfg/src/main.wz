@@ -1,0 +1,121 @@
+// End-to-end Native CFG fixture.
+//
+// The source is compiled by the frozen C++ helper to produce the reference
+// .nir text and, once the self-hosted frontend exists, by the Wz compiler for
+// the same O0/O2 text.  It intentionally exercises pattern/switch lowering,
+// iterator and index places, typed TryCall edges, defer cleanups, owning
+// temporaries, named arguments, short circuits, function values and async
+// await/cancel exits.
+package app;
+
+import "std/os" as os;
+
+struct Point {
+    x i64;
+    y i64;
+}
+
+struct Holder {
+    items Vec[i64];
+}
+
+enum Maybe {
+    None;
+    Some(value i64);
+}
+
+enum Failure {
+    Bad(value i64);
+}
+
+func maybe(value i64) Maybe {
+    if value > 0 {
+        return Maybe.Some(value: value);
+    }
+    return Maybe.None;
+}
+
+func risky(value i64) i64 throws Failure {
+    if value < 0 {
+        throw Failure.Bad(value: value);
+    }
+    return value + 1;
+}
+
+func bump(point inout Point, dx i64, dy i64) {
+    point.x += dx;
+    point.y += dy;
+}
+
+func apply(operation func(i64) i64, value i64) i64 {
+    return operation(value);
+}
+
+func increment(value i64) i64 {
+    return value + 1;
+}
+
+async func work(value i64) i64 {
+    return value + 1;
+}
+
+async func main() i32 throws os.Error {
+    var point = Point(x: 1, y: 2);
+    var holder = Holder(items: [1, 2, 3]);
+    var total i64 = 0;
+    defer {
+        total += 100;
+    }
+    bump(inout point, 3, 4);
+    if point.x != 4 || point.y != 6 {
+        return 1;
+    }
+    holder.items[1] = 9;
+    holder.items[2] += 5;
+    for item in holder.items {
+        total += item;
+    }
+    var count i64 = 0;
+    for index in holder.items {
+        switch maybe(index) {
+            case Maybe.None: {
+                count += 1;
+            }
+            case Maybe.Some(payload): {
+                count += payload;
+            }
+        }
+    }
+    let direct = apply(increment, 4);
+    if direct != 5 {
+        return 2;
+    }
+    try {
+        total += risky(2);
+    } catch error Failure {
+        return 3;
+    }
+    var caught i64 = 0;
+    try {
+        total += risky(-2);
+    } catch error Failure {
+        caught = 1;
+    }
+    if caught != 1 {
+        return 4;
+    }
+    let task = work(7);
+    let awaited = await task;
+    if awaited != 8 {
+        return 5;
+    }
+    let choose = point.x > 0 && holder.items[0] == 1;
+    if !choose || count != 18 {
+        return 6;
+    }
+    // Deferred cleanup runs after the return value is saved.
+    if total != 21 {
+        return 7;
+    }
+    return 0;
+}

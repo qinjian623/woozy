@@ -1,0 +1,64 @@
+package nativelower;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativelayout" as nativelayout;
+import "std/option" as option;
+import "std/vec" as vec;
+func expect(value bool, message string) throws model.SupportError {
+    if !value { throw model.SupportError.Invalid("review: " + message); }
+}
+func make_state() Lower {
+    let resolved = model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    let h = hir.empty_module(resolved, 0, model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    return Lower(h: h, aggregates: nativelayout.aggregate_types(h),
+        f: nativeir.Function(symbol: 0, signature: 0, is_async: false, slots: [], blocks: [],
+            source: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0), handlers: []),
+        current: 0, next_value: 0, slots: [], loops: [], unit: 0, boolean: 0,
+        temporaries: [], iterations: [], handlers: []);
+}
+pub func review_helpers() string throws model.SupportError {
+    var state = make_state();
+    slot_emplace(inout state, 0, 0);
+    slot_emplace(inout state, 0, 99);
+    expect(slot_require(state, 0) == 0, "emplace Some(0)");
+    let saved_slots = copy_slots(state);
+    slot_set(inout state, 0, 7);
+    expect(saved_slots[0].slot == 0 && slot_require(state, 0) == 7, "slot snapshot isolation");
+    loop_emplace(inout state, 0, 1, 2);
+    loop_emplace(inout state, 8, 3, 4);
+    let saved_loops = copy_loops(state);
+    loop_erase(inout state, 0);
+    expect(vec.len(state.loops) == 1 && state.loops[0].node == 8 && vec.len(saved_loops) == 2, "loop erase isolation");
+    temporary_set(inout state, 0, 0);
+    iteration_set(inout state, 0, 9);
+    expect(owner_slot(state, hir.OwnerRef(kind: hir.OwnerKind.Temporary, identity: 0)) == 0, "temporary zero");
+    expect(owner_slot(state, hir.OwnerRef(kind: hir.OwnerKind.Iteration, identity: 0)) == 9, "iteration zero");
+    let saved_temps = copy_temporaries(state);
+    temporary_set(inout state, 0, 5);
+    expect(saved_temps[0].slot == 0, "temporary snapshot");
+    expect(uses_slot(nativeir.Op.BeginBorrow) && uses_slot(nativeir.Op.IterationNext) &&
+        !uses_slot(nativeir.Op.EndBorrow) && !uses_slot(nativeir.Op.VecSet), "slot opcode classification");
+    var source = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    for var index usize = 0; index < 4; index += 1 { slot_new(inout state, index + 10); }
+    state.f.slots[0].parameter = option.Option[u32].Some(0);
+    state.f.slots[3].binding = option.Option[usize].Some(900);
+    state.f.slots[3].owner = option.Option[hir.OwnerRef].Some(hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 900));
+    for var index usize = 0; index < 5; index += 1 { block(inout state); }
+    state.current = 0; jump(inout state, 2, source);
+    state.current = 1; access(inout state, nativeir.Op.Load, 1, source); jump(inout state, 3, source);
+    state.current = 2; store(inout state, 3, 99, source); jump(inout state, 4, source);
+    state.current = 3; end(inout state, nativeir.Exit.Return, [], [], source);
+    state.current = 4; end(inout state, nativeir.Exit.Return, [], [], source);
+    vec.push(state.f.handlers, nativeir.Handler(target: hir.CatchTarget(try_node: 0, index: 0), block: 1, slot: 1, protected_entry: 0));
+    vec.push(state.f.handlers, nativeir.Handler(target: hir.CatchTarget(try_node: 0, index: 1), block: 4, slot: 3, protected_entry: 2));
+    take_function(inout state);
+    expect(vec.len(state.f.blocks) == 3 && vec.len(state.f.slots) == 3 && vec.len(state.f.handlers) == 1, "dead block slot counts");
+    expect(state.f.blocks[0].terminator.targets[0] == 1 && state.f.blocks[1].terminator.targets[0] == 2, "block ids");
+    expect(state.f.blocks[1].instructions[0].slot == 2 && state.f.blocks[1].instructions[0].inputs[0] == 99, "slot ids and stable SSA");
+    expect(state.f.slots[1].type_id == 12 && state.f.slots[2].type_id == 13, "unused slot retained");
+    expect(state.f.handlers[0].block == 2 && state.f.handlers[0].protected_entry == 1 && state.f.handlers[0].slot == 2, "handler remap");
+    expect(option_require(state.f.slots[0].parameter) == 0 && option_require(state.f.slots[2].owner).identity == 900, "parameter zero and owner identity");
+    return "helpers: map snapshots, Option(0), owner kinds, slot opcodes, dead blocks/slots/handlers/SSA passed\n";
+}

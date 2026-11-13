@@ -1,0 +1,134 @@
+// Test-only E probe for the five existing Vec-buffer filesystem operations.
+//
+// It builds the same records as e_stat_bytes.wz, calls the production
+// B emit_instruction -> system_call entry, and prints one LLVM module
+// containing getcwd, getdents, readlink, nanosleep and getrandom functions.
+// The driver checks both the emitted call signatures (descriptor pointer,
+// never a data/length pair) and real success/failure results.
+package nativeemit;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct EFsAbiCase { pub llvm string; }
+
+func fa_struct(symbol usize, fields Vec[hir.FieldDecl]) hir.NominalDecl {
+    return hir.NominalDecl(symbol: symbol, kind: model.TypeKind.NominalStruct,
+        params: [], fields: fields, variants: [], source: sb_source());
+}
+func fa_function(state inout Emitter, name string, parameters Vec[string],
+                 signature usize, result usize,
+                 operation u32) throws Error {
+    let result_layout = lower_type(result, inout state);
+    let function = sb_begin(inout state, name, parameters, result_layout);
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.SystemCall;
+    instruction.type_id = result;
+    instruction.signature = signature;
+    instruction.system = option.Option[u32].Some(operation);
+    vec.clear(state.frame.values);
+    var inputs Vec[usize] = [];
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        vec.push(state.frame.values, ValueBinding(value_id: index, type_id: 0,
+            value: parameter(state, function, index)));
+        vec.push(inputs, index);
+    }
+    instruction.inputs = inputs;
+    let result_id = vec.len(inputs);
+    instruction.result = option.Option[usize].Some(result_id);
+    emit_instruction(instruction, inout state);
+    let value = value(state, result_id);
+    terminate("ret " + typed(value), inout state);
+}
+
+pub func e_fs_abi_case() EFsAbiCase throws Error {
+    var resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    var c = types.context();
+
+    var i32_type = model.empty_type(model.TypeKind.SignedInt);
+    i32_type.bits = 32;
+    let i32_id = sb_intern(inout c, i32_type);
+    var u32_type = model.empty_type(model.TypeKind.UnsignedInt);
+    u32_type.bits = 32;
+    let u32_id = sb_intern(inout c, u32_type);
+    var i64_type = model.empty_type(model.TypeKind.SignedInt);
+    i64_type.bits = 64;
+    let i64_id = sb_intern(inout c, i64_type);
+    let usize_id = sb_intern(inout c, model.empty_type(model.TypeKind.Usize));
+    let str_id = sb_intern(inout c, model.empty_type(model.TypeKind.String));
+    var u8_type = model.empty_type(model.TypeKind.UnsignedInt);
+    u8_type.bits = 8;
+    let u8_id = sb_intern(inout c, u8_type);
+    var vec_type = model.empty_type(model.TypeKind.Vec);
+    vec_type.type_args = [u8_id];
+    let vec_id = sb_intern(inout c, vec_type);
+
+    var timespec_type = model.empty_type(model.TypeKind.NominalStruct);
+    timespec_type.declaration = 10;
+    let timespec_id = sb_intern(inout c, timespec_type);
+    var vec_timespec = model.empty_type(model.TypeKind.Vec);
+    vec_timespec.type_args = [timespec_id];
+    let vec_timespec_id = sb_intern(inout c, vec_timespec);
+
+    let sig_getcwd = sb_function_type(inout c, [vec_id, usize_id], i64_id);
+    let sig_getdents = sb_function_type(inout c, [i32_id, vec_id, usize_id], i64_id);
+    let sig_readlink = sb_function_type(inout c, [str_id, vec_id, usize_id], i64_id);
+    let sig_nanosleep = sb_function_type(inout c,
+        [timespec_id, vec_timespec_id], i64_id);
+    let sig_getrandom = sb_function_type(inout c,
+        [vec_id, usize_id, u32_id], i64_id);
+
+    module.types = c;
+    module.nominals = [
+        fa_struct(10, [
+            sb_field(11, i64_id), sb_field(12, i64_id)])];
+
+    var state = new_emitter(nativeir.empty_module(module), default_options());
+    declare_runtime_types(inout state);
+    fa_function(inout state, "ex_getcwd", ["ptr", "i64"], sig_getcwd, i64_id, 50);
+    fa_function(inout state, "ex_getdents", ["i32", "ptr", "i64"],
+        sig_getdents, i64_id, 51);
+    let str_layout = lower_type(str_id, inout state);
+    let timespec_layout = lower_type(timespec_id, inout state);
+    // Pass the string by address in this probe so the test isolates the Vec
+    // descriptor ABI rather than the aggregate string calling convention.
+    let i64_layout = lower_type(i64_id, inout state);
+    let readlink_function = sb_begin(inout state, "ex_readlink",
+        ["ptr", "ptr", "i64"], i64_layout);
+    let string_address = parameter(state, readlink_function, 0);
+    let string_value = e_load(str_layout, string_address, inout state);
+    vec.clear(state.frame.values);
+    vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: str_id,
+        value: string_value));
+    vec.push(state.frame.values, ValueBinding(value_id: 1, type_id: 0,
+        value: parameter(state, readlink_function, 1)));
+    vec.push(state.frame.values, ValueBinding(value_id: 2, type_id: 0,
+        value: parameter(state, readlink_function, 2)));
+    var readlink_instruction = nativeir.empty_instruction();
+    readlink_instruction.op = nativeir.Op.SystemCall;
+    readlink_instruction.type_id = i64_id;
+    readlink_instruction.signature = sig_readlink;
+    readlink_instruction.system = option.Option[u32].Some(52);
+    var readlink_inputs Vec[usize] = [];
+    vec.push(readlink_inputs, 0);
+    vec.push(readlink_inputs, 1);
+    vec.push(readlink_inputs, 2);
+    readlink_instruction.inputs = readlink_inputs;
+    readlink_instruction.result = option.Option[usize].Some(3);
+    emit_instruction(readlink_instruction, inout state);
+    let readlink_value = value(state, 3);
+    terminate("ret " + typed(readlink_value), inout state);
+    fa_function(inout state, "ex_nanosleep",
+        [timespec_layout, "ptr"], sig_nanosleep, i64_id, 75);
+    fa_function(inout state, "ex_getrandom", ["ptr", "i64", "i32"],
+        sig_getrandom, i64_id, 76);
+    return EFsAbiCase(llvm: text.join(sections(state), ""));
+}

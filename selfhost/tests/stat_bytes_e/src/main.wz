@@ -1,0 +1,21 @@
+package app;
+import "app/wzcc/nativeemit" as n;
+import "std/io" as io;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    try {
+        let stat = n.e_stat_bytes_case();
+        io.print("===STAT_BYTES===\n" + stat.llvm + "===END_STAT_BYTES===\n");
+        let fs = n.e_fs_abi_case();
+        io.print("===FS_ABI===\n" + fs.llvm + "===END_FS_ABI===\n");
+    } catch error n.Error {
+        switch error {
+            case n.Error.Failure(code, kind, message): {
+                io.eprintln(code + ": " + message);
+            }
+        }
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,98 @@
+package main;
+
+import "std/box" as box;
+import "std/option" as option;
+import "std/vec" as vec;
+import "std/weak" as weak;
+
+struct Holder {
+    cell Weak[Vec[i32]];
+}
+
+struct Cell {
+    data Vec[i32];
+}
+
+enum Wrap {
+    Empty;
+    Some(cell Weak[Vec[i32]]);
+}
+
+func double(value i32) i32 { return value * 2; }
+
+func main() i32 {
+    // Weak of a Vec: live, dead and empty paths
+    let empty Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    switch weak.upgrade(empty) {
+    case option.Option.Some(ignored):
+        return 1;
+    case option.Option.None: {}
+    }
+    {
+        let values Vec[i32] = [5, 6];
+        let weak_vec Weak[Vec[i32]] = weak.downgrade[Vec[i32]](values);
+        switch weak.upgrade(weak_vec) {
+        case option.Option.Some(strong):
+            if strong[0] != 5 || strong[1] != 6 { return 2; }
+        case option.Option.None:
+            return 3;
+        }
+        let holder = Holder(cell: weak_vec);
+        let holder_copy = holder;
+        switch weak.upgrade(holder_copy.cell) {
+        case option.Option.Some(strong):
+            if vec.len(strong) != 2 { return 4; }
+        case option.Option.None:
+            return 5;
+        }
+        let cell = Cell(data: values);
+        var wrapped Wrap = Wrap.Some(cell: weak_vec);
+        let wrap_alias = wrapped;
+        switch wrap_alias {
+        case Wrap.Some(cell):
+            switch weak.upgrade(cell) {
+            case option.Option.Some(strong):
+                if strong[1] != 6 { return 6; }
+            case option.Option.None:
+                return 7;
+            }
+        case Wrap.Empty:
+            return 11;
+        }
+        let cell_box box.Box[Cell] = box.new[Cell](cell);
+        let weak_box Weak[box.Box[Cell]] = weak.downgrade[box.Box[Cell]](cell_box);
+        switch weak.upgrade(weak_box) {
+        case option.Option.Some(strong):
+            if box.get[Cell](strong).data[0] != 5 { return 8; }
+        case option.Option.None:
+            return 9;
+        }
+    }
+    // Weak function values: immortal encoding, live closure, dead closure
+    let plain func(i32) i32 = double;
+    let weak_plain Weak[func(i32) i32] = weak.downgrade[func(i32) i32](plain);
+    switch weak.upgrade(weak_plain) {
+    case option.Option.Some(callback):
+        if callback(4) != 8 { return 12; }
+    case option.Option.None:
+        return 13;
+    }
+    let limit i32 = 3;
+    let closure func(i32) i32 = func(value i32) i32 { return value + limit; };
+    let weak_closure Weak[func(i32) i32] = weak.downgrade[func(i32) i32](closure);
+    switch weak.upgrade(weak_closure) {
+    case option.Option.Some(callback):
+        if callback(4) != 7 { return 14; }
+    case option.Option.None:
+        return 15;
+    }
+    let weak_dead Weak[func(i32) i32] = weak.downgrade[func(i32) i32](
+        func(value i32) i32 { return value + limit; });
+    switch weak.upgrade(weak_dead) {
+    case option.Option.Some(callback):
+        return 16;
+    case option.Option.None: {}
+    }
+    // every strong owner is gone: the control blocks must be dead
+    return 0;
+}

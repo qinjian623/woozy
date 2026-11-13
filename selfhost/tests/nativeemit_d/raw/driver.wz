@@ -1,0 +1,493 @@
+// Independent NativeIR driver for the D async/GC share.
+//
+// Every case builds a real nativeir.Module and calls the production
+// declare_runtime_types / declare_source_functions / emit_function /
+// emit_async_main algorithms.  There is no VerifiedModule and no copied D
+// algorithm here.  The generated LLVM text is returned to the test runner,
+// which splits the cases, runs LLVM verify + the coroutine pipeline, llc,
+// links against the real native runtime and executes the runnable cases.
+//
+// Cases:
+//   0 async main returns i32 42 (control)
+//   1 async main cancel return (control, no typed error on stderr)
+//   2 async main i32 error return (control, typed error on stderr)
+//   3 await Task[Unit, Unit] succeeds
+//   4 await Task[i32, Unit] succeeds
+//   5 Vec[Vec[i32]] strong-edge trace and clear are registered and collected
+//   6 completed Task with an owning Task result; GC trace, then the generated
+//     frame clear is invoked twice (idempotent) before release
+//   7 completed Task with an owning Task error; same clear idempotence check
+//   8 cancelled Task whose owning result was never written; clear is a no-op
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nir;
+import "app/wzcc/types" as types;
+import "std/option" as o;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func rd_input() nir.Module {
+    let r = model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return nir.empty_module(hir.empty_module(r, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+}
+
+func rd_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func rd_type(m inout nir.Module, t model.Type) usize throws Error {
+    try { return types.intern(inout m.hir.types, t); }
+    catch error types.Error { throw invalid("raw driver type invalid"); }
+}
+
+func rd_unit(m inout nir.Module) usize throws Error {
+    return rd_type(inout m, model.empty_type(model.TypeKind.Unit));
+}
+
+func rd_i32(m inout nir.Module) usize throws Error {
+    var t = model.empty_type(model.TypeKind.SignedInt);
+    t.bits = 32;
+    return rd_type(inout m, t);
+}
+
+func rd_vec(m inout nir.Module, element usize) usize throws Error {
+    var t = model.empty_type(model.TypeKind.Vec);
+    t.type_args = [element];
+    return rd_type(inout m, t);
+}
+
+func rd_task(m inout nir.Module, value usize, error usize) usize throws Error {
+    var t = model.empty_type(model.TypeKind.Task);
+    t.type_args = [value, error];
+    return rd_type(inout m, t);
+}
+
+func rd_fn(m inout nir.Module, result usize) usize throws Error {
+    var t = model.empty_type(model.TypeKind.Function);
+    t.result = result;
+    return rd_type(inout m, t);
+}
+
+func rd_fn_param(m inout nir.Module, parameter usize, result usize) usize throws Error {
+    var t = model.empty_type(model.TypeKind.Function);
+    t.parameters = [model.ParameterType(mode: model.ParamMode.Ordinary,
+        type_id: parameter)];
+    t.result = result;
+    return rd_type(inout m, t);
+}
+
+func rd_instruction(op nir.Op, result_id usize, type_id usize) nir.Instruction {
+    var i = nir.empty_instruction();
+    i.op = op;
+    i.result = o.Option[usize].Some(result_id);
+    i.type_id = type_id;
+    return i;
+}
+
+func rd_constant(result_id usize, type_id usize, bits u64) nir.Instruction {
+    var i = rd_instruction(nir.Op.Constant, result_id, type_id);
+    i.bits = bits;
+    return i;
+}
+
+func rd_function_value(result_id usize, symbol usize) nir.Instruction {
+    var i = rd_instruction(nir.Op.Function, result_id, 0);
+    i.function = symbol;
+    return i;
+}
+
+func rd_call_node(m inout nir.Module, symbol usize, signature usize) usize {
+    let node_id = vec.len(m.hir.nodes);
+    let call = hir.Call(kind: hir.CalleeKind.Direct, signature: signature,
+        direct_symbol: o.Option[usize].Some(symbol), callee: o.Option[usize].None,
+        args: [], type_args: [], binding: o.Option[usize].None,
+        c_callable: o.Option[u32].None, omitted: [], system: o.Option[u32].None);
+    let node = hir.HirNode(type_id: signature,
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: node_id),
+            span: rd_span()),
+        scope: 0, children: [], data: hir.NodeData.Call(call), errors: [], exits: []);
+    vec.push(m.hir.nodes, node);
+    return node_id;
+}
+
+func rd_call(result_id usize, result_type usize, signature usize,
+             origin usize, callee_id usize, extra Vec[usize]) nir.Instruction {
+    var i = rd_instruction(nir.Op.Call, result_id, result_type);
+    var inputs = vec.empty[usize]();
+    vec.push(inputs, callee_id);
+    for item in extra { vec.push(inputs, item); }
+    i.inputs = inputs;
+    i.signature = signature;
+    i.origin = o.Option[usize].Some(origin);
+    return i;
+}
+
+func rd_system(result_id usize, type_id usize, operation u32,
+               inputs Vec[usize]) nir.Instruction {
+    var i = rd_instruction(nir.Op.SystemCall, result_id, type_id);
+    i.system = o.Option[u32].Some(operation);
+    i.inputs = inputs;
+    return i;
+}
+
+func rd_store(slot usize, type_id usize, value_id usize) nir.Instruction {
+    var i = rd_instruction(nir.Op.Store, 0, type_id);
+    i.result = o.Option[usize].None;
+    i.slot = slot;
+    i.inputs = [value_id];
+    return i;
+}
+
+func rd_block(kind nir.Exit, inputs Vec[usize], targets Vec[usize],
+              instructions Vec[nir.Instruction],
+              parameters Vec[nir.BlockParameter]) nir.BasicBlock {
+    var terminator = nir.empty_terminator();
+    terminator.kind = kind;
+    terminator.inputs = inputs;
+    terminator.targets = targets;
+    return nir.BasicBlock(instructions: instructions, terminator: terminator,
+        parameters: parameters);
+}
+
+func rd_parameter(value usize, type_id usize) nir.BlockParameter {
+    return nir.BlockParameter(value: value, type_id: type_id, call: 0,
+        error: false);
+}
+
+func rd_function(symbol usize, signature usize, is_async bool,
+                 slots Vec[nir.Slot], blocks Vec[nir.BasicBlock]) nir.Function {
+    return nir.Function(symbol: symbol, signature: signature,
+        is_async: is_async, slots: slots, blocks: blocks, source: rd_span(),
+        handlers: []);
+}
+
+func rd_owner_slot(type_id usize, identity u64) nir.Slot {
+    return nir.Slot(type_id: type_id, parameter: o.Option[u32].None,
+        is_inout: false,
+        owner: o.Option[hir.OwnerRef].Some(hir.OwnerRef(
+            kind: hir.OwnerKind.Binding, identity: identity)),
+        owning_parameter: false, binding: o.Option[usize].Some(usize(identity)));
+}
+
+func rd_find_function(state Emitter, name string) usize throws Error {
+    for var index usize = 0; index < vec.len(state.functions); index += 1 {
+        if state.functions[index].name == name { return index; }
+    }
+    throw invalid("generated function is missing: " + name);
+}
+
+// ---- control cases ---------------------------------------------------------
+
+func rd_control(which usize) string throws Error {
+    var m = rd_input();
+    let unit = rd_unit(inout m);
+    let integer = rd_i32(inout m);
+    let task = rd_task(inout m, integer, integer);
+    let signature = rd_fn(inout m, task);
+    let constant = rd_constant(0, integer, 42);
+    var blocks = vec.empty[nir.BasicBlock]();
+    if which == 0 {
+        vec.push(blocks, rd_block(nir.Exit.Return, [0], [], [constant], []));
+    } else if which == 1 {
+        vec.push(blocks, rd_block(nir.Exit.CancelReturn, [], [], [], []));
+    } else {
+        vec.push(blocks, rd_block(nir.Exit.ErrorReturn, [0], [], [constant], []));
+    }
+    vec.push(m.functions, rd_function(1, signature, true, [], blocks));
+    var state = new_emitter(m, default_options());
+    declare_runtime_types(inout state);
+    declare_source_functions(inout state);
+    emit_function(0, inout state);
+    emit_main(1, inout state);
+    return text.join(sections(state), "");
+}
+
+// ---- await cases -----------------------------------------------------------
+
+func rd_await(which usize) string throws Error {
+    var m = rd_input();
+    let unit = rd_unit(inout m);
+    let integer = rd_i32(inout m);
+    var child_task = task_type_for(inout m, unit, unit);
+    if which == 4 { child_task = rd_task(inout m, integer, unit); }
+    let parent_task = rd_task(inout m, unit, unit);
+    let child_signature = rd_fn(inout m, child_task);
+    let parent_signature = rd_fn(inout m, parent_task);
+
+    var child_blocks = vec.empty[nir.BasicBlock]();
+    if which == 3 {
+        vec.push(child_blocks, rd_block(nir.Exit.Return, [], [], [], []));
+    } else {
+        vec.push(child_blocks, rd_block(nir.Exit.Return, [0], [],
+            [rd_constant(0, integer, 42)], []));
+    }
+
+    let callee = rd_function_value(0, 0);
+    let call_node = rd_call_node(inout m, 0, child_signature);
+    let call_ins = rd_call(1, child_task, child_signature, call_node, 0, []);
+    var blocks = vec.empty[nir.BasicBlock]();
+    vec.push(blocks, nir.BasicBlock(instructions: [callee, call_ins],
+        terminator: await_terminator(1, child_task, [1, 2, 3]), parameters: []));
+    if which == 4 {
+        vec.push(blocks, rd_block(nir.Exit.Return, [], [], [],
+            [rd_parameter(2, integer)]));
+    } else {
+        vec.push(blocks, rd_block(nir.Exit.Return, [], [], [], []));
+    }
+    vec.push(blocks, rd_block(nir.Exit.Return, [], [], [], []));
+    vec.push(blocks, rd_block(nir.Exit.Return, [], [], [], []));
+    vec.push(m.functions, rd_function(0, child_signature, true, [], child_blocks));
+    vec.push(m.functions, rd_function(1, parent_signature, true, [], blocks));
+
+    var state = new_emitter(m, default_options());
+    declare_runtime_types(inout state);
+    declare_source_functions(inout state);
+    emit_function(0, inout state);
+    emit_function(1, inout state);
+    emit_main(1, inout state);
+    return text.join(sections(state), "");
+}
+
+func task_type_for(m inout nir.Module, value usize, error usize) usize throws Error {
+    return rd_task(inout m, value, error);
+}
+
+func await_terminator(future_id usize, signature usize, targets Vec[usize])
+                      nir.Terminator {
+    var t = nir.empty_terminator();
+    t.kind = nir.Exit.Await;
+    t.inputs = [future_id];
+    t.targets = targets;
+    t.signature = signature;
+    return t;
+}
+
+// ---- Vec strong-edge trace and clear ---------------------------------------
+
+func rd_vec_trace() string throws Error {
+    var m = rd_input();
+    let integer = rd_i32(inout m);
+    let inner = rd_vec(inout m, integer);
+    let outer = rd_vec(inout m, inner);
+    var state = new_emitter(m, default_options());
+    declare_runtime_types(inout state);
+    let main_index = new_function("main", Signature(result: "i32", parameters: []),
+        "", "", inout state);
+    let entry = new_block(main_index, "entry", inout state);
+    position(entry, inout state);
+    let init = runtime("lang_gc_program_init_v1", "i64", [], inout state);
+
+    var outer_args = vec.empty[Value]();
+    vec.push(outer_args, Value(type_name: "i64", reference: "0"));
+    vec.push(outer_args, Value(type_name: "i64", reference: "8"));
+    vec.push(outer_args, Value(type_name: "ptr", reference: "null"));
+    vec.push(outer_args, Value(type_name: "ptr", reference: "null"));
+    let outer_value = runtime("lang_vec_new_v1", "ptr", outer_args, inout state);
+    var inner_args = vec.empty[Value]();
+    vec.push(inner_args, Value(type_name: "i64", reference: "0"));
+    vec.push(inner_args, Value(type_name: "i64", reference: "4"));
+    vec.push(inner_args, Value(type_name: "ptr", reference: "null"));
+    vec.push(inner_args, Value(type_name: "ptr", reference: "null"));
+    let inner_value = runtime("lang_vec_new_v1", "ptr", inner_args, inout state);
+    // lang_vec_new_v1 leaves initialized=0; push copies the element and
+    // publishes initialized=1, which is the prefix the GC trace walks.
+    let element_slot = storage("ptr", inout state);
+    d_store("ptr", inner_value, element_slot, inout state);
+    var push_args = vec.empty[Value]();
+    vec.push(push_args, outer_value);
+    vec.push(push_args, element_slot);
+    let push = runtime("lang_vec_push_v1", "void", push_args, inout state);
+    gc_register_vec(outer_value, inner, inout state);
+    let finish = runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+    var release_args = vec.empty[Value]();
+    vec.push(release_args, outer_value);
+    let release = runtime("lang_vec_release_v1", "void", release_args, inout state);
+    terminate("ret i32 0", inout state);
+    return text.join(sections(state), "");
+}
+
+// ---- owning Task payload: normal, error, cancel, repeated clear ------------
+
+func weak_slot(type_id usize, parameter_index u32, identity u64) nir.Slot {
+    return nir.Slot(type_id: type_id,
+        parameter: o.Option[u32].Some(parameter_index), is_inout: false,
+        owner: o.Option[hir.OwnerRef].Some(hir.OwnerRef(
+            kind: hir.OwnerKind.Binding, identity: identity)),
+        owning_parameter: false, binding: o.Option[usize].Some(usize(identity)));
+}
+
+func rd_own(which usize) string throws Error {
+    var m = rd_input();
+    let unit = rd_unit(inout m);
+    let grandchild = rd_task(inout m, unit, unit);
+    var child = rd_task(inout m, grandchild, unit);
+    if which == 7 { child = rd_task(inout m, unit, grandchild); }
+    let child_signature = rd_fn(inout m, child);
+    let grandchild_signature = rd_fn(inout m, grandchild);
+    let canceller_signature = rd_fn_param(inout m, grandchild, grandchild);
+
+    let callee = rd_function_value(2, 2);
+    let call_node = rd_call_node(inout m, 2, grandchild_signature);
+    let call_ins = rd_call(3, grandchild, grandchild_signature, call_node, 2, []);
+    var child_blocks = vec.empty[nir.BasicBlock]();
+    if which == 8 {
+        // The child suspends on a 100 ms timer. A canceller task wakes on a
+        // 0 ms timer, cancels the suspended child and lets the real D cancel
+        // exit run, setting promise status/claimed to 3.
+        let sleep_constant = rd_constant(0, sleep_i64(inout m), 100);
+        let sleep_system = rd_system(1, grandchild, 207, [0]);
+        vec.push(child_blocks, nir.BasicBlock(
+            instructions: [sleep_constant, sleep_system],
+            terminator: await_terminator(1, grandchild, [1, 2, 3]),
+            parameters: []));
+        vec.push(child_blocks, nir.BasicBlock(instructions: [callee, call_ins],
+            terminator: block_terminator(nir.Exit.Return, [3]), parameters: []));
+        vec.push(child_blocks, rd_block(nir.Exit.Unreachable, [], [], [], []));
+        vec.push(child_blocks, rd_block(nir.Exit.CancelReturn, [], [], [], []));
+    } else {
+        var child_exit = nir.Exit.Return;
+        if which == 7 { child_exit = nir.Exit.ErrorReturn; }
+        vec.push(child_blocks, nir.BasicBlock(instructions: [callee, call_ins],
+            terminator: block_terminator(child_exit, [3]), parameters: []));
+    }
+    var grandchild_blocks = vec.empty[nir.BasicBlock]();
+    vec.push(grandchild_blocks, rd_block(nir.Exit.Return, [], [], [], []));
+    vec.push(m.functions, rd_function(0, child_signature, true, [], child_blocks));
+    vec.push(m.functions, rd_function(2, grandchild_signature, true, [],
+        grandchild_blocks));
+
+    if which == 8 {
+        var canceller_blocks = vec.empty[nir.BasicBlock]();
+        let sleep_zero = rd_constant(0, sleep_i64(inout m), 0);
+        let sleep_wait = rd_system(1, grandchild, 207, [0]);
+        vec.push(canceller_blocks, nir.BasicBlock(
+            instructions: [sleep_zero, sleep_wait],
+            terminator: await_terminator(1, grandchild, [1, 2, 3]),
+            parameters: []));
+        var load_slot = rd_instruction(nir.Op.Load, 2, grandchild);
+        load_slot.slot = 0;
+        let cancel_call = rd_system(3, unit, 205, [2]);
+        vec.push(canceller_blocks, nir.BasicBlock(
+            instructions: [load_slot, cancel_call],
+            terminator: block_terminator(nir.Exit.Return, []), parameters: []));
+        vec.push(canceller_blocks, rd_block(nir.Exit.Return, [], [], [], []));
+        vec.push(canceller_blocks, rd_block(nir.Exit.Return, [], [], [], []));
+        var canceller_slots = vec.empty[nir.Slot]();
+        vec.push(canceller_slots, weak_slot(grandchild, 0, 8));
+        vec.push(m.functions, rd_function(3, canceller_signature, true,
+            canceller_slots, canceller_blocks));
+    }
+
+    var state = new_emitter(m, default_options());
+    declare_runtime_types(inout state);
+    declare_source_functions(inout state);
+    emit_function(0, inout state);
+    emit_function(1, inout state);
+    if which == 8 { emit_function(2, inout state); }
+
+    let main_index = new_function("main", Signature(result: "i32", parameters: []),
+        "", "", inout state);
+    let entry = new_block(main_index, "entry", inout state);
+    position(entry, inout state);
+    let init = runtime("lang_gc_program_init_v1", "i64", [], inout state);
+    let target = call_target(state, 0);
+    let task = call(Signature(result: "ptr", parameters: []), target, [],
+        inout state);
+    var spawn_args = vec.empty[Value]();
+    vec.push(spawn_args, task);
+    let spawn = runtime("lang_async_spawn_v1", "void", spawn_args, inout state);
+    var canceller_task = Value(type_name: "ptr", reference: "null");
+    if which == 8 {
+        let canceller_target = call_target(state, 3);
+        var canceller_args = vec.empty[Value]();
+        vec.push(canceller_args, task);
+        canceller_task = call(Signature(result: "ptr", parameters: ["ptr"]),
+            canceller_target, canceller_args, inout state);
+        var sprawl_args = vec.empty[Value]();
+        vec.push(sprawl_args, canceller_task);
+        let sprawl = runtime("lang_async_spawn_v1", "void", sprawl_args,
+            inout state);
+    }
+    var run_args = vec.empty[Value]();
+    vec.push(run_args, task);
+    let run = runtime("lang_async_run_until_v1", "void", run_args, inout state);
+    if which == 8 {
+        var run_canceller_args = vec.empty[Value]();
+        vec.push(run_canceller_args, canceller_task);
+        let run_canceller = runtime("lang_async_run_until_v1", "void",
+            run_canceller_args, inout state);
+    }
+    let shutdown = runtime("lang_async_shutdown_v1", "void", [], inout state);
+    let finish = runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+
+    // The generated clear callback expects exactly the typed frame metadata.
+    // Child has no owner slots, so its metadata record is { ptr }.
+    let metadata_type = define_type("lang.async.frame.meta.0", "{ ptr }",
+        inout state);
+    let metadata = entry_result("ptr", "alloca " + metadata_type, inout state);
+    let promise_field = d_gep(metadata_type, metadata, 0, inout state);
+    var promise_args = vec.empty[Value]();
+    vec.push(promise_args, task);
+    let promise = runtime("lang_async_promise_v1", "ptr", promise_args, inout state);
+    d_store("ptr", promise, promise_field, inout state);
+    let clear_index = rd_find_function(state, "lang.async.frame.clear.0");
+    let clear_value = function_reference(state, clear_index);
+    var clear_args = vec.empty[Value]();
+    vec.push(clear_args, metadata);
+    let clear_one = call(Signature(result: "void", parameters: ["ptr"]),
+        clear_value, clear_args, inout state);
+    var clear_two_args = vec.empty[Value]();
+    vec.push(clear_two_args, metadata);
+    let clear_two = call(Signature(result: "void", parameters: ["ptr"]),
+        clear_value, clear_two_args, inout state);
+
+    let task_layout = promise_type(child, inout state);
+    let claimed_address = d_gep(task_layout.type_name, promise, 1, inout state);
+    let claimed = d_load("i32", claimed_address, inout state);
+    let status_address = d_gep(task_layout.type_name, promise, 0, inout state);
+    let status = d_load("i32", status_address, inout state);
+    let ten = Value(type_name: "i32", reference: "10");
+    let scaled = result("i32", "mul " + typed(claimed) + ", " + ten.reference,
+        inout state);
+    let answer = result("i32", "add " + typed(scaled) + ", " + status.reference,
+        inout state);
+
+    var release_args = vec.empty[Value]();
+    vec.push(release_args, task);
+    let release = runtime("lang_async_task_release_v1", "void", release_args,
+        inout state);
+    if which == 8 {
+        var release_canceller_args = vec.empty[Value]();
+        vec.push(release_canceller_args, canceller_task);
+        let release_canceller = runtime("lang_async_task_release_v1", "void",
+            release_canceller_args, inout state);
+    }
+    terminate("ret " + typed(answer), inout state);
+    return text.join(sections(state), "");
+}
+
+func sleep_i64(m inout nir.Module) usize throws Error {
+    var t = model.empty_type(model.TypeKind.SignedInt);
+    t.bits = 64;
+    return rd_type(inout m, t);
+}
+
+func block_terminator(kind nir.Exit, inputs Vec[usize]) nir.Terminator {
+    var t = nir.empty_terminator();
+    t.kind = kind;
+    t.inputs = inputs;
+    return t;
+}
+
+// ---- entry point -----------------------------------------------------------
+
+pub func review_d_ir(which usize) string throws Error {
+    if which == 0 || which == 1 || which == 2 { return rd_control(which); }
+    if which == 3 || which == 4 { return rd_await(which); }
+    if which == 5 { return rd_vec_trace(); }
+    return rd_own(which);
+}

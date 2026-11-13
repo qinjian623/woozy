@@ -1,0 +1,57 @@
+package nativeemit;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+pub struct EReviewCase { pub name string; pub llvm string; pub expected string; pub actual string; }
+func er_source() hir.HirSource { return hir.HirSource(node:model.NodeRef(module:0,file:0,node:0),span:model.Span(snapshot:0,begin_byte:0,end_byte:0)); }
+func er_field(symbol usize,t usize) hir.FieldDecl { return hir.FieldDecl(symbol:symbol,type_id:t,exported:true,source:er_source()); }
+func er_enum(symbol usize,params Vec[hir.GenericParam], variants Vec[hir.VariantDecl]) hir.NominalDecl {return hir.NominalDecl(symbol:symbol,kind:model.TypeKind.NominalEnum,params:params,fields:[],variants:variants,source:er_source());}
+func er_intern(c inout types.Context,v model.Type) usize throws Error { try { return types.intern(inout c,v); } catch e types.Error { switch e {case types.Error.Invalid(m):throw invalid(m);} } }
+func er_module() nativeir.Module throws Error {
+ var resolved=model.ResolvedProject(project:model.empty_project(),symbols:[],occurrences:[],deferred_members:[],self_parameters:[]);
+ var module=hir.empty_module(resolved,0,model.CheckConfig(backend:model.Backend.Native,word_bits:64));
+ var context=types.context();
+ var i32=model.empty_type(model.TypeKind.SignedInt);i32.bits=32;let int_id=er_intern(inout context,i32);
+ let str_id=er_intern(inout context,model.empty_type(model.TypeKind.String));
+ var opt=model.empty_type(model.TypeKind.NominalEnum);opt.declaration=10;opt.type_args=[str_id];let opt_id=er_intern(inout context,opt);
+ var res=model.empty_type(model.TypeKind.NominalEnum);res.declaration=20;res.type_args=[opt_id];let res_id=er_intern(inout context,res);
+ var simple=model.empty_type(model.TypeKind.NominalEnum);simple.declaration=30;simple.type_args=[int_id];let simple_id=er_intern(inout context,simple);
+ var sig=model.empty_type(model.TypeKind.Function);sig.parameters=[model.ParameterType(mode:model.ParamMode.Ordinary,type_id:str_id)];sig.result=res_id;let sig_id=er_intern(inout context,sig);
+ var cr=model.empty_type(model.TypeKind.CForeignRecord);cr.c_type=1;let rec_id=er_intern(inout context,cr);
+ let bool_id=er_intern(inout context,model.empty_type(model.TypeKind.Bool));
+ let ipc_id=er_intern(inout context,model.empty_type(model.TypeKind.IpcHandle));
+ var waitsig=model.empty_type(model.TypeKind.Function);waitsig.parameters=[model.ParameterType(mode:model.ParamMode.Ordinary,type_id:ipc_id)];waitsig.result=bool_id;let waitsig_id=er_intern(inout context,waitsig);
+ module.resolved.project.c_types=[model.CTypeDecl(id:1,bundle:0,source:er_source().span,identity:"test.Pair",module:"test",name:"Pair",c_name:"Pair",kind:model.CDeclKind.Record,fields:[model.CFieldDecl(name:"flag",type_ref:model.CTypeRef(kind:model.CTypeKind.Scalar,scalar:"bool",writable:false,args:[],named:0),offset:0,source:er_source().span),model.CFieldDecl(name:"value",type_ref:model.CTypeRef(kind:model.CTypeKind.Scalar,scalar:"i32",writable:false,args:[],named:0),offset:4,source:er_source().span)],size:8,align:4,release_symbol:"",retain_symbol:"",result:model.CTypeRef(kind:model.CTypeKind.Scalar,scalar:"Unit",writable:false,args:[],named:0),parameters:[],registration:option.Option[model.CRegistrationDecl].None)];
+ module.types=context;
+ module.nominals=[er_enum(10,[hir.GenericParam(symbol:100,trait_ref:option.Option[hir.TraitRef].None,source:er_source())],[hir.VariantDecl(symbol:11,payload:[],source:er_source()),hir.VariantDecl(symbol:12,payload:[er_field(13,str_id)],source:er_source())]),er_enum(20,[hir.GenericParam(symbol:101,trait_ref:option.Option[hir.TraitRef].None,source:er_source())],[hir.VariantDecl(symbol:21,payload:[er_field(22,opt_id)],source:er_source()),hir.VariantDecl(symbol:23,payload:[er_field(24,int_id)],source:er_source())]),er_enum(30,[hir.GenericParam(symbol:102,trait_ref:option.Option[hir.TraitRef].None,source:er_source())],[hir.VariantDecl(symbol:31,payload:[er_field(32,int_id)],source:er_source()),hir.VariantDecl(symbol:33,payload:[er_field(34,int_id)],source:er_source())])];
+ return nativeir.empty_module(module);
+}
+pub func e_review_cases() Vec[EReviewCase] throws Error {
+ let input=er_module();let cases=vec.empty[EReviewCase]();
+ var a=new_emitter(input,default_options());let simple=lower_type(5,inout a);
+ let f=new_function("result_probe",Signature(result:simple,parameters:["i64"]),"","",inout a);let b=new_block(f,"entry",inout a);position(b,inout a);
+ let arg=parameter(a,f,0);let join=e_stdlib_result_begin(5,arg,inout a);let rv=e_stdlib_finish(join,Value(type_name:"i32",reference:"7"),inout a);terminate("ret "+typed(rv),inout a);
+ vec.push(cases,EReviewCase(name:"result",llvm:text.join(sections(a),""),expected:simple,actual:rv.type_name));
+ var g=new_emitter(input,default_options());let expected=lower_type(4,inout g);let gl=new_function("getenv_probe",Signature(result:expected,parameters:["{ ptr, i64, i64, ptr }"]),"","",inout g);let gb=new_block(gl,"entry",inout g);position(gb,inout g);
+ var inst=nativeir.empty_instruction();inst.op=nativeir.Op.SystemCall;inst.type_id=4;inst.signature=6;inst.system=option.Option[u32].Some(142);
+ let argv=parameter(g,gl,0);let returned=e_process_system_call(inst,[argv],inout g);var gv=Value(type_name:"void",reference:"");switch returned {case option.Option.Some(v):gv=v;case option.Option.None:throw invalid("getenv missing");}
+ terminate("ret "+typed(gv),inout g);vec.push(cases,EReviewCase(name:"getenv",llvm:text.join(sections(g),""),expected:expected,actual:gv.type_name));
+
+ for var index u32=0;index<2;index+=1 {
+   var c=new_emitter(input,default_options());let record=c_lower_type(7,inout c);
+   var rt="i1";var tid usize=8;if index==1 {rt="i32";tid=1;}
+   let cf=new_function("field_probe",Signature(result:rt,parameters:[record]),"","",inout c);let cb=new_block(cf,"entry",inout c);position(cb,inout c);
+   var ci=nativeir.empty_instruction();ci.op=nativeir.Op.CFieldRead;ci.type_id=tid;ci.c_field=index;
+   let cv=parameter(c,cf,0);let cr=emit_c_instruction(ci,[cv],inout c);var got=Value(type_name:"void",reference:"");switch cr {case option.Option.Some(v):got=v;case option.Option.None:throw invalid("field missing");}
+   terminate("ret "+typed(got),inout c);vec.push(cases,EReviewCase(name:"field"+number(usize(index)),llvm:text.join(sections(c),""),expected:rt,actual:got.type_name));
+ }
+ var w=new_emitter(input,default_options());let wf=new_function("wait_probe",Signature(result:"i1",parameters:["ptr"]),"","",inout w);let wb=new_block(wf,"entry",inout w);position(wb,inout w);
+ var wi=nativeir.empty_instruction();wi.op=nativeir.Op.SystemCall;wi.type_id=8;wi.signature=10;wi.system=option.Option[u32].Some(185);
+ let wa=parameter(w,wf,0);let wr=e_process_system_call(wi,[wa],inout w);var wv=Value(type_name:"void",reference:"");switch wr {case option.Option.Some(v):wv=v;case option.Option.None:throw invalid("wait missing");}
+ terminate("ret "+typed(wv),inout w);vec.push(cases,EReviewCase(name:"wait",llvm:text.join(sections(w),""),expected:"i1",actual:wv.type_name));
+ return cases;
+}

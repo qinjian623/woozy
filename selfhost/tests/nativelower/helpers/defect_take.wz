@@ -1,0 +1,18 @@
+// Confirmed minimal reproduction for the shipped public-lower defect.
+//
+// take_function has no return type: it mutates state.f in place.  Treating
+// its Unit result as a nativeir.Function must therefore be rejected with
+// E_TYPE_MISMATCH by a real stage0 check.  The runner stages the four
+// production helper files plus this file; no scaffold or stand-in lower is
+// used.
+package nativelower;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+
+pub func reproduce_unit_as_function() nativeir.Function
+    throws model.SupportError {
+    var state = make_state();
+    let built = take_function(inout state);
+    return built;
+}

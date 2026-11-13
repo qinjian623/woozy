@@ -1,0 +1,877 @@
+// Native CFG verifier: module/function setup, definitions, dominance and
+// per-block dataflow precomputation.
+//
+// Direct port of the setup half of src/ir/verify.cpp.  All CFG and HIR values
+// used here are already independent copies: nativeverify.verify deep-copies
+// the CFG and asks hirverify for an isolated verified HIR before this code
+// runs, so a retained builder alias cannot change what is checked.
+package nativeverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct FunctionEntry {
+    symbol usize;
+    signature usize;
+}
+
+struct ModuleState {
+    h hir.HirModule;
+    config model.CheckConfig;
+    functions Vec[nativeir.Function];
+    symbols Vec[FunctionEntry];
+}
+
+struct RequiredCheck {
+    block usize;
+    position usize;
+    origin usize;
+    receiver usize;
+    index usize;
+    source model.Span;
+}
+
+struct Body {
+    m ModuleState;
+    f nativeir.Function;
+    signature model.Type;
+    aggregates nativelayout.AggregateTypes;
+    definitions DefinitionMap;
+    instructions InstructionMap;
+    address_roots AddressRootMap;
+    address_writes ValueCountMap;
+    address_inout_roots NodeSet;
+    predecessors Vec[BoolSet];
+    reachable BoolSet;
+    dom Vec[BoolSet];
+    facts Vec[FactSet];
+    initialized Vec[BoolSet];
+    initialized_out Vec[BoolSet];
+    constant_roots ConstantRootList;
+    system_order NodeOrderMap;
+    system_loop_sources Vec[model.Span];
+    system_in Vec[option.Option[usize]];
+    system_out Vec[option.Option[usize]];
+    required_checks Vec[RequiredCheck];
+    impossible BoolSet;
+}
+
+func function_entry_compare(left FunctionEntry, right FunctionEntry) i32 {
+    return usize_compare(left.symbol, right.symbol);
+}
+
+// std::map::emplace keeps the first entry for a duplicate symbol.
+func symbol_add(state inout Vec[FunctionEntry], symbol usize,
+                signature usize) {
+    let entry = FunctionEntry(symbol: symbol, signature: signature);
+    let at = sorted_position(state, entry, function_entry_compare);
+    if at < vec.len(state) && function_entry_compare(state[at], entry) == 0 {
+        return;
+    }
+    vec.push(state, entry);
+    for var index usize = vec.len(state) - 1; index > at; index -= 1 {
+        state[index] = state[index - 1];
+    }
+    state[at] = entry;
+}
+
+func symbol_find(state Vec[FunctionEntry], symbol usize)
+    option.Option[usize] {
+    let at = sorted_index(state, FunctionEntry(symbol: symbol, signature: 0),
+        function_entry_compare);
+    if at < vec.len(state) {
+        return option.Option[usize].Some(state[at].signature);
+    }
+    return option.Option[usize].None;
+}
+
+func hir_function_for(h hir.HirModule, symbol usize)
+    option.Option[hir.HirFunction] {
+    for function in h.functions {
+        if function.symbol == symbol {
+            return option.Option[hir.HirFunction].Some(function);
+        }
+    }
+    return option.Option[hir.HirFunction].None;
+}
+
+func backend_id(backend model.Backend) u32 {
+    switch backend {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+func type_arg(value model.Type, index usize, span model.Span) usize
+    throws VerifyError {
+    if index >= vec.len(value.type_args) {
+        throw bad("invalid TypeId", span);
+    }
+    return value.type_args[index];
+}
+
+func parameter_type(value model.Type, index usize, span model.Span)
+    model.ParameterType throws VerifyError {
+    if index >= vec.len(value.parameters) {
+        throw bad("invalid TypeId", span);
+    }
+    return value.parameters[index];
+}
+
+func value_op_produces_address(op nativeir.Op) bool {
+    return op_is(op, nativeir.Op.Address) ||
+           op_is(op, nativeir.Op.FieldAddress) ||
+           op_is(op, nativeir.Op.VecElementAddress);
+}
+
+
+// C++ Verifier::run before any function body is inspected.
+func run_module(state inout ModuleState) throws VerifyError {
+    var source = empty_span();
+    if vec.len(state.h.functions) > 0 {
+        source = state.h.functions[0].source.span;
+    }
+    need(backend_id(state.config.backend) == backend_id(model.Backend.Native) &&
+             state.config.word_bits == 64,
+         "native IR requires native64", source);
+    for function in state.h.functions {
+        symbol_add(inout state.symbols, function.symbol, function.signature);
+    }
+    need(vec.len(state.symbols) == vec.len(state.functions),
+         "native function set differs from HIR", source);
+    var seen = node_set();
+    for function in state.functions {
+        need(node_set_insert(inout seen, function.symbol),
+             "duplicate native function", function.source);
+        check_function(inout state, function);
+    }
+}
+
+func slot_require(state Body, index usize) nativeir.Slot
+    throws VerifyError {
+    if index >= vec.len(state.f.slots) {
+        throw support(model.SupportError.Invalid("invalid native slot index"));
+    }
+    return state.f.slots[index];
+}
+
+
+// C++ Verifier::function's use lambda: an undefined value or one that does
+// not dominate the use is a Bad at the consumer's span.
+func use_value(state Body, value usize, block usize, position usize,
+               span model.Span) Definition throws VerifyError {
+    let found = definition_find(state.definitions, value);
+    var definition = Definition(block: 0, position: 0, type_id: 0,
+        address: false, source: empty_span());
+    var present = false;
+    switch found {
+        case option.Option.Some(item): definition = item; present = true;
+        case option.Option.None: {}
+    }
+    need(present, "undefined value", span);
+    var dominates = false;
+    if definition.block == block {
+        dominates = definition.position < position;
+    } else {
+        dominates = bool_set_has(state.reachable, block) &&
+                    bool_set_has(state.dom[block], definition.block);
+    }
+    need(dominates, "value definition does not dominate use", span);
+    return definition;
+}
+
+func check_slots(state inout Body) throws VerifyError {
+    let span = state.f.source;
+    let signature = state.signature;
+    let found = symbol_find(state.m.symbols, state.f.symbol);
+    var signature_ok = false;
+    switch found {
+        case option.Option.Some(value):
+            signature_ok = value == state.f.signature;
+        case option.Option.None: {}
+    }
+    need(signature_ok, "function identity/signature differs from verified HIR",
+        span);
+    need(vec.len(state.f.blocks) > 0, "function has no entry block", span);
+    var parameters = bool_set(vec.len(signature.parameters));
+    let slots = state.f.slots;
+    for slot in slots {
+        require_type(state.m.h, slot.type_id, span);
+        var parameter usize = 0;
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(value): parameter = usize(value); is_parameter = true;
+            case option.Option.None: {}
+        }
+        if is_parameter {
+            need(parameter < vec.len(signature.parameters) &&
+                     bool_set_add(inout parameters, parameter),
+                 "invalid/duplicate parameter slot", span);
+            let declared = parameter_type(signature, parameter, span);
+            need(slot.type_id == declared.type_id &&
+                     slot.is_inout ==
+                         (param_mode_id(declared.mode) ==
+                             param_mode_id(model.ParamMode.Inout)),
+                 "parameter slot type/mode mismatch", span);
+        } else {
+            need(!slot.is_inout, "local slot cannot be an incoming pointer",
+                span);
+            var binding usize = 0;
+            var has_binding = false;
+            switch slot.binding {
+                case option.Option.Some(value): binding = value; has_binding = true;
+                case option.Option.None: {}
+            }
+            if has_binding {
+                let hir_function = hir_function_for(state.m.h, state.f.symbol);
+                switch hir_function {
+                    case option.Option.Some(function): {
+                        for capture in function.captures {
+                            if capture.local == binding {
+                                need(capture.type_id == slot.type_id &&
+                                         !option.is_some(slot.owner),
+                                     "capture local slot type/ownership",
+                                     span);
+                            }
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    need(bool_set_count(parameters) == vec.len(signature.parameters),
+         "missing parameter slot", span);
+    let hir_function = hir_function_for(state.m.h, state.f.symbol);
+    switch hir_function {
+        case option.Option.Some(function): {
+            for capture in function.captures {
+                var found_slot = false;
+                for slot in slots {
+                    var binding usize = 0;
+                    var has_binding = false;
+                    switch slot.binding {
+                        case option.Option.Some(value):
+                            binding = value; has_binding = true;
+                        case option.Option.None: {}
+                    }
+                    if has_binding && binding == capture.local {
+                        need(slot.type_id == capture.type_id &&
+                                 !option.is_some(slot.parameter) &&
+                                 !slot.is_inout && !option.is_some(slot.owner),
+                             "capture local slot identity", span);
+                        found_slot = true;
+                    }
+                }
+                need(found_slot, "capture local has no entry slot", span);
+            }
+        }
+        case option.Option.None: {}
+    }
+}
+
+func terminator_shape(kind nativeir.Exit, inputs usize, targets usize,
+                      distinct_targets bool) bool {
+    if exit_is(kind, nativeir.Exit.Branch) {
+        return inputs == 0 && targets == 1;
+    }
+    if exit_is(kind, nativeir.Exit.Conditional) {
+        return inputs == 1 && targets == 2;
+    }
+    if exit_is(kind, nativeir.Exit.ErrorReturn) ||
+       exit_is(kind, nativeir.Exit.Return) {
+        return inputs == 1 && targets == 0;
+    }
+    if exit_is(kind, nativeir.Exit.Unreachable) {
+        return inputs == 0 && targets == 0;
+    }
+    if exit_is(kind, nativeir.Exit.TryCall) {
+        return inputs > 0 && targets == 2 && distinct_targets;
+    }
+    if exit_is(kind, nativeir.Exit.Await) {
+        return true; // arity and distinctness checked with the Task type
+    }
+    if exit_is(kind, nativeir.Exit.CancelReturn) {
+        return inputs == 0 && targets == 0;
+    }
+    return false; // Missing
+}
+
+// Constant literal roots of this function, keyed like the C++ multimap.
+func collect_constant_roots(state inout Body) throws VerifyError {
+    for var index usize = 0; index < vec.len(state.m.h.nodes); index += 1 {
+        let node = state.m.h.nodes[index];
+        if !kind_is(hir.node_kind(node.data), hir.NodeKind.ConstantLiteral) {
+            continue;
+        }
+        if hir_scope_function(state.m.h, node.scope) != state.f.symbol {
+            continue;
+        }
+        constant_root_insert(inout state.constant_roots,
+            node.source.span.snapshot, node.source.span.begin_byte,
+            node.source.span.end_byte, node.type_id, index);
+    }
+}
+
+func collect_definitions(state inout Body) throws VerifyError {
+    let block_count = vec.len(state.f.blocks);
+    state.predecessors = vec.empty[BoolSet]();
+    vec.reserve(state.predecessors, block_count);
+    for var block usize = 0; block < block_count; block += 1 {
+        vec.push(state.predecessors, bool_set(block_count));
+    }
+    collect_constant_roots(inout state);
+    for var b usize = 0; b < block_count; b += 1 {
+        let bb = state.f.blocks[b];
+        let terminator = bb.terminator;
+        var distinct = false;
+        if vec.len(terminator.targets) == 2 {
+            distinct = terminator.targets[0] != terminator.targets[1];
+        }
+        need(terminator_shape(terminator.kind, vec.len(terminator.inputs),
+                 vec.len(terminator.targets), distinct),
+             "missing or malformed terminator", terminator.source);
+        for dest in terminator.targets {
+            need(dest < block_count && dest != 0,
+                 "invalid branch target or edge into entry", terminator.source);
+            bool_set_add(inout state.predecessors[dest], b);
+        }
+        for parameter in bb.parameters {
+            need(definition_insert(inout state.definitions, parameter.value,
+                     Definition(block: b, position: 0,
+                         type_id: parameter.type_id, address: false,
+                         source: state.f.source)),
+                 "duplicate block parameter", terminator.source);
+        }
+        for var p usize = 0; p < vec.len(bb.instructions); p += 1 {
+            let instruction = bb.instructions[p];
+            require_type(state.m.h, instruction.type_id, instruction.source);
+            need(option.is_some(instruction.result) ==
+                     op_writes_result(instruction.op),
+                 "invalid instruction result", instruction.source);
+            switch instruction.result {
+                case option.Option.Some(result): {
+                    need(definition_insert(inout state.definitions, result,
+                             Definition(block: b, position: p + 1,
+                                 type_id: instruction.type_id,
+                                 address: value_op_produces_address(
+                                     instruction.op),
+                                 source: instruction.source)),
+                         "duplicate value definition", instruction.source);
+                    instruction_insert(inout state.instructions, result,
+                        instruction);
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    // A block parameter is defined on its TryCall edge.  Use that call's real
+    // source span for the receiver/index location check rather than the
+    // parameter block's outgoing terminator.
+    for var b usize = 0; b < block_count; b += 1 {
+        if bool_set_count(state.predecessors[b]) != 1 {
+            continue;
+        }
+        let predecessor = bool_set_first(state.predecessors[b]);
+        for parameter in state.f.blocks[b].parameters {
+            definition_set_source(inout state.definitions, parameter.value,
+                state.f.blocks[predecessor].terminator.source);
+        }
+    }
+}
+
+func resolve_address(state Body, value usize)
+    option.Option[AddressRoot] throws VerifyError {
+    var visited = node_set();
+    var current = value;
+    var depth usize = 0;
+    for true {
+        need(node_set_insert(inout visited, current),
+             "Vec element address chain cycle", state.f.source);
+        let found = instruction_find(state.instructions, current);
+        var instruction = nativeir.empty_instruction();
+        var present = false;
+        switch found {
+            case option.Option.Some(item): instruction = item; present = true;
+            case option.Option.None: {}
+        }
+        if !present {
+            return option.Option[AddressRoot].None;
+        }
+        if op_is(instruction.op, nativeir.Op.VecElementAddress) {
+            return option.Option[AddressRoot].Some(AddressRoot(value: current,
+                root: current, depth: depth));
+        }
+        if !op_is(instruction.op, nativeir.Op.FieldAddress) ||
+           vec.len(instruction.inputs) != 1 {
+            return option.Option[AddressRoot].None;
+        }
+        current = instruction.inputs[0];
+        depth += 1;
+    }
+    return option.Option[AddressRoot].None;
+}
+
+func collect_address_roots(state inout Body) throws VerifyError {
+    // Iterating the value map is the C++ ascending ValueId order.
+    for entry in state.instructions.entries {
+        if !op_is(entry.instruction.op, nativeir.Op.VecElementAddress) &&
+           !op_is(entry.instruction.op, nativeir.Op.FieldAddress) {
+            continue;
+        }
+        let found = resolve_address(state, entry.value);
+        switch found {
+            case option.Option.Some(info): {
+                address_root_insert(inout state.address_roots, entry.value,
+                    info.root, info.depth);
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+func address_use(state inout Body, consumer nativeir.Instruction,
+                 value usize, operand usize, source model.Span)
+    throws VerifyError {
+    let found = address_root_find(state.address_roots, value);
+    var info = AddressRoot(value: 0, root: 0, depth: 0);
+    var present = false;
+    switch found {
+        case option.Option.Some(item): info = item; present = true;
+        case option.Option.None: {}
+    }
+    if !present {
+        return;
+    }
+    if op_is(consumer.op, nativeir.Op.FieldAddress) ||
+       op_is(consumer.op, nativeir.Op.BeginBorrow) {
+        return;
+    }
+    if op_is(consumer.op, nativeir.Op.LoadIndirect) ||
+       op_is(consumer.op, nativeir.Op.StoreIndirect) ||
+       op_is(consumer.op, nativeir.Op.ReplaceIndirect) {
+        need(info.depth > 0,
+             "Vec element address used without a field replacement", source);
+        if !op_is(consumer.op, nativeir.Op.LoadIndirect) {
+            value_count_add(inout state.address_writes, info.root);
+        }
+        return;
+    }
+    if op_is(consumer.op, nativeir.Op.Call) {
+        let signature = require_type(state.m.h, consumer.signature, source);
+        need(operand > 0 && operand - 1 < vec.len(signature.parameters) &&
+                 param_mode_id(signature.parameters[operand - 1].mode) ==
+                     param_mode_id(model.ParamMode.Inout),
+             "Vec element address escapes through an ordinary call argument",
+             source);
+        node_set_insert(inout state.address_inout_roots, info.root);
+        return;
+    }
+    need(false,
+         "Vec element address escapes its field replacement or inout argument",
+         source);
+}
+
+func check_address_usage(state inout Body) throws VerifyError {
+    for bb in state.f.blocks {
+        for instruction in bb.instructions {
+            for var operand usize = 0;
+                operand < vec.len(instruction.inputs); operand += 1 {
+                address_use(inout state, instruction,
+                    instruction.inputs[operand], operand, instruction.source);
+            }
+        }
+        let terminator = bb.terminator;
+        for var operand usize = 0; operand < vec.len(terminator.inputs);
+            operand += 1 {
+            let value = terminator.inputs[operand];
+            let found = address_root_find(state.address_roots, value);
+            var info = AddressRoot(value: 0, root: 0, depth: 0);
+            var present = false;
+            switch found {
+                case option.Option.Some(item): info = item; present = true;
+                case option.Option.None: {}
+            }
+            if !present {
+                continue;
+            }
+            need(exit_is(terminator.kind, nativeir.Exit.TryCall) && operand > 0,
+                 "Vec element address escapes through a terminator",
+                 terminator.source);
+            let signature = require_type(state.m.h, terminator.signature,
+                terminator.source);
+            need(operand - 1 < vec.len(signature.parameters) &&
+                     param_mode_id(signature.parameters[operand - 1].mode) ==
+                         param_mode_id(model.ParamMode.Inout),
+                 "Vec element address escapes through an ordinary TryCall argument",
+                 terminator.source);
+            node_set_insert(inout state.address_inout_roots, info.root);
+        }
+    }
+    for entry in state.address_roots.entries {
+        if entry.depth == 0 {
+            need(value_count_get(state.address_writes, entry.root) == 1 ||
+                     node_set_has(state.address_inout_roots, entry.root),
+                 "Vec element address does not perform exactly one field write or direct inout call",
+                 state.f.source);
+        }
+    }
+}
+
+func compute_reachability(state inout Body) throws VerifyError {
+    var stack = vec.empty[usize]();
+    vec.push(stack, 0);
+    for vec.len(stack) > 0 {
+        let popped = vec.pop(stack);
+        var block usize = 0;
+        switch popped {
+            case option.Option.Some(value): block = value;
+            case option.Option.None: {}
+        }
+        if !bool_set_add(inout state.reachable, block) {
+            continue;
+        }
+        for target in state.f.blocks[block].terminator.targets {
+            vec.push(stack, target);
+        }
+    }
+    need(bool_set_count(state.reachable) == vec.len(state.f.blocks),
+         "unreachable native block", state.f.source);
+}
+
+func compute_dominators(state inout Body) {
+    let block_count = vec.len(state.f.blocks);
+    state.dom = vec.empty[BoolSet]();
+    vec.reserve(state.dom, block_count);
+    for var block usize = 0; block < block_count; block += 1 {
+        vec.push(state.dom, bool_set_copy(state.reachable));
+    }
+    state.dom[0] = bool_set(block_count);
+    bool_set_add(inout state.dom[0], 0);
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if b == 0 || !bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = bool_set_copy(state.reachable);
+            for var p usize = 0; p < block_count; p += 1 {
+                if !bool_set_has(state.predecessors[b], p) ||
+                   !bool_set_has(state.reachable, p) {
+                    continue;
+                }
+                next = bool_set_intersect(next, state.dom[p]);
+            }
+            bool_set_add(inout next, b);
+            if !bool_set_equal(next, state.dom[b]) {
+                state.dom[b] = next;
+                changed = true;
+            }
+        }
+    }
+}
+
+func compute_facts(state inout Body) {
+    let block_count = vec.len(state.f.blocks);
+    var universe = fact_set();
+    for entry in state.instructions.entries {
+        let instruction = entry.instruction;
+        if !op_is(instruction.op, nativeir.Op.EnumTest) ||
+           vec.len(instruction.inputs) != 1 {
+            continue;
+        }
+        fact_insert(inout universe, instruction.inputs[0],
+            instruction.variant, true);
+        fact_insert(inout universe, instruction.inputs[0],
+            instruction.variant, false);
+    }
+    state.facts = fact_set_vec(block_count, universe);
+    state.facts[0] = fact_set();
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if b == 0 || !bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = fact_set_copy(universe);
+            for var p usize = 0; p < block_count; p += 1 {
+                if !bool_set_has(state.predecessors[b], p) {
+                    continue;
+                }
+                var edge = fact_set_copy(state.facts[p]);
+                let terminator = state.f.blocks[p].terminator;
+                if exit_is(terminator.kind, nativeir.Exit.Conditional) &&
+                   terminator.targets[0] != terminator.targets[1] {
+                    let found = instruction_find(state.instructions,
+                        terminator.inputs[0]);
+                    switch found {
+                        case option.Option.Some(test): {
+                            if op_is(test.op, nativeir.Op.EnumTest) &&
+                               vec.len(test.inputs) == 1 {
+                                fact_insert(inout edge, test.inputs[0],
+                                    test.variant,
+                                    terminator.targets[0] == b);
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                next = fact_set_intersect(next, edge);
+            }
+            if !fact_set_equal(next, state.facts[b]) {
+                state.facts[b] = next;
+                changed = true;
+            }
+        }
+    }
+}
+
+// C++'s lambda capture_slot: a local slot whose binding is a HIR capture.
+func capture_slot(state Body, index usize) bool {
+    if index >= vec.len(state.f.slots) {
+        return false;
+    }
+    let slot = state.f.slots[index];
+    var binding usize = 0;
+    var has_binding = false;
+    switch slot.binding {
+        case option.Option.Some(value): binding = value; has_binding = true;
+        case option.Option.None: {}
+    }
+    if !has_binding {
+        return false;
+    }
+    let hir_function = hir_function_for(state.m.h, state.f.symbol);
+    switch hir_function {
+        case option.Option.Some(function): {
+            for capture in function.captures {
+                if capture.local == binding {
+                    return true;
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    return false;
+}
+
+func compute_initialization(state inout Body) {
+    let block_count = vec.len(state.f.blocks);
+    let slot_count = vec.len(state.f.slots);
+    var all_slots = bool_set(slot_count);
+    var incoming = bool_set(slot_count);
+    for var index usize = 0; index < slot_count; index += 1 {
+        bool_set_add(inout all_slots, index);
+        if option.is_some(state.f.slots[index].parameter) ||
+           capture_slot(state, index) {
+            bool_set_add(inout incoming, index);
+        }
+    }
+    state.initialized = bool_set_vec(block_count, all_slots);
+    state.initialized_out = bool_set_vec(block_count, all_slots);
+    state.initialized[0] = bool_set_copy(incoming);
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if !bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = bool_set_copy(all_slots);
+            if b == 0 {
+                next = bool_set_copy(incoming);
+            } else {
+                for var p usize = 0; p < block_count; p += 1 {
+                    if !bool_set_has(state.predecessors[b], p) ||
+                       !bool_set_has(state.reachable, p) {
+                        continue;
+                    }
+                    next = bool_set_intersect(next, state.initialized_out[p]);
+                }
+            }
+            var written = bool_set_copy(next);
+            for instruction in state.f.blocks[b].instructions {
+                if op_is(instruction.op, nativeir.Op.Store) {
+                    bool_set_add(inout written, instruction.slot);
+                }
+            }
+            if !bool_set_equal(next, state.initialized[b]) ||
+               !bool_set_equal(written, state.initialized_out[b]) {
+                state.initialized[b] = next;
+                state.initialized_out[b] = written;
+                changed = true;
+            }
+        }
+    }
+}
+
+func hir_child(node hir.HirNode, index usize) usize throws VerifyError {
+    if index >= vec.len(node.children) {
+        throw support(model.SupportError.Invalid("invalid HIR child index"));
+    }
+    return node.children[index];
+}
+
+// Fixed operations are effects: individually valid calls may not be
+// reordered.  HIR children retain source evaluation order; the postorder walk
+// records system/C calls in the order execution reaches them.
+func compute_system_order(state inout Body) throws VerifyError {
+    let function = hir_function_for(state.m.h, state.f.symbol);
+    var body usize = 0;
+    var present = false;
+    switch function {
+        case option.Option.Some(value): body = value.body; present = true;
+        case option.Option.None: {}
+    }
+    need(present, "native function has no HIR body", state.f.source);
+    var pending_ids = vec.empty[usize]();
+    var pending_visited = vec.empty[bool]();
+    vec.push(pending_ids, body);
+    vec.push(pending_visited, false);
+    var sequence usize = 0;
+    for vec.len(pending_ids) > 0 {
+        let popped_id = vec.pop(pending_ids);
+        let popped_visited = vec.pop(pending_visited);
+        var id usize = 0;
+        var visited = false;
+        switch popped_id {
+            case option.Option.Some(value): id = value;
+            case option.Option.None: {}
+        }
+        switch popped_visited {
+            case option.Option.Some(value): visited = value;
+            case option.Option.None: {}
+        }
+        let node = hir_node(state.m.h, id);
+        if !visited {
+            vec.push(pending_ids, id);
+            vec.push(pending_visited, true);
+            if kind_is(hir.node_kind(node.data), hir.NodeKind.For) {
+                vec.push(state.system_loop_sources, node.source.span);
+                // HIR stores step before body; execution performs body first.
+                vec.push(pending_ids, hir_child(node, 2));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 3));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 1));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 0));
+                vec.push(pending_visited, false);
+            } else {
+                if kind_is(hir.node_kind(node.data), hir.NodeKind.ForIn) {
+                    vec.push(state.system_loop_sources, node.source.span);
+                }
+                for var index usize = vec.len(node.children); index > 0;
+                    index -= 1 {
+                    vec.push(pending_ids, node.children[index - 1]);
+                    vec.push(pending_visited, false);
+                }
+            }
+        } else {
+            switch node.data {
+                case hir.NodeData.Call(call): {
+                    let kind = callee_kind_id(call.kind);
+                    if kind == callee_kind_id(hir.CalleeKind.System) ||
+                       kind == callee_kind_id(hir.CalleeKind.CForeign) {
+                        node_order_insert(inout state.system_order, id,
+                            sequence);
+                        sequence += 1;
+                    }
+                }
+                default: {}
+            }
+        }
+    }
+}
+
+func backedge(state Body, from usize, to usize) bool throws VerifyError {
+    if !bool_set_has(state.dom[from], to) {
+        return false;
+    }
+    let source = state.f.blocks[from].terminator.source;
+    var matches = false;
+    for loop_span in state.system_loop_sources {
+        if same_span(loop_span, source) {
+            matches = true;
+        }
+    }
+    need(matches, "system operation loop edge has no HIR loop", source);
+    return true;
+}
+
+func compute_system_flow(state inout Body) throws VerifyError {
+    let block_count = vec.len(state.f.blocks);
+    var system_in = vec.make[option.Option[usize]](block_count,
+        option.Option[usize].None);
+    var system_out = vec.make[option.Option[usize]](block_count,
+        option.Option[usize].None);
+    if vec.len(state.system_order.entries) > 0 {
+        var changed = true;
+        for changed {
+            changed = false;
+            for var b usize = 0; b < block_count; b += 1 {
+                if !bool_set_has(state.reachable, b) {
+                    continue;
+                }
+                var previous = option.Option[usize].None;
+                for var p usize = 0; p < block_count; p += 1 {
+                    if !bool_set_has(state.predecessors[b], p) ||
+                       backedge(state, p, b) {
+                        continue;
+                    }
+                    switch system_out[p] {
+                        case option.Option.Some(value): {
+                            var replace = true;
+                            switch previous {
+                                case option.Option.Some(current):
+                                    replace = value > current;
+                                case option.Option.None: {}
+                            }
+                            if replace {
+                                previous = option.Option[usize].Some(value);
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                if compare_option(system_in[b], previous) != 0 {
+                    system_in[b] = previous;
+                    changed = true;
+                }
+                for instruction in state.f.blocks[b].instructions {
+                    if op_is(instruction.op, nativeir.Op.CleanupBegin) ||
+                       op_is(instruction.op, nativeir.Op.CleanupEnd) {
+                        previous = option.Option[usize].None;
+                    }
+                    if op_is(instruction.op, nativeir.Op.SystemCall) {
+                        switch instruction.origin {
+                            case option.Option.Some(origin): {
+                                let position = node_order_find(
+                                    state.system_order, origin);
+                                switch position {
+                                    case option.Option.Some(value):
+                                        previous =
+                                            option.Option[usize].Some(value);
+                                    case option.Option.None: {}
+                                }
+                            }
+                            case option.Option.None: {}
+                        }
+                    }
+                }
+                if compare_option(system_out[b], previous) != 0 {
+                    system_out[b] = previous;
+                    changed = true;
+                }
+            }
+        }
+    }
+    state.system_in = system_in;
+    state.system_out = system_out;
+}

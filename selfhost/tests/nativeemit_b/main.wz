@@ -1,0 +1,33 @@
+// TEST-ONLY harness entry point (never merged).
+package app;
+
+import "app/wzcc/nativeemit" as nativeemit;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+pub func main() i32 {
+    let pure = nativeemit.b_harness_pure();
+    if pure != 0 {
+        try { io.eprintln("pure-check failed: " + strconv.format_i64(i64(pure))); }
+        catch error os.Error {}
+        return pure;
+    }
+    var text = "";
+    try {
+        for section in nativeemit.b_harness_emit() {
+            text += section;
+        }
+    } catch error nativeemit.Error {
+        switch error {
+            case nativeemit.Error.Failure(code, kind, message): {
+                try { io.eprintln("nativeemit B harness emit failed: " + code + ": " + message); }
+                catch error os.Error {}
+            }
+        }
+        return 90;
+    }
+    try { io.print(text); }
+    catch error os.Error { return 91; }
+    return 0;
+}

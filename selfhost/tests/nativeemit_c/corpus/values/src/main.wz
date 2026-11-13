@@ -1,0 +1,67 @@
+package main;
+
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+struct Bag {
+    name string;
+    items Vec[i32];
+}
+
+enum Shape {
+    Empty;
+    Square(side i32);
+    Rect(width i32, height i32);
+}
+
+func area(shape Shape) i32 {
+    switch shape {
+    case Shape.Empty:
+        return 0;
+    case Shape.Square(side):
+        return side * side;
+    case Shape.Rect(width, height):
+        return width * height;
+    }
+}
+
+func total(values Vec[Bag]) i32 {
+    var sum i32 = 0;
+    for bag in values {
+        for item in bag.items {
+            sum += item;
+        }
+    }
+    return sum;
+}
+
+func main() i32 {
+    let first Vec[i32] = [1, 2, 3];
+    let second Vec[i32] = [4, 5];
+    var bags Vec[Bag] = [Bag(name: "a", items: first), Bag(name: "b", items: second)];
+    let copied = bags;
+    if total(copied) != 15 { return 1; }
+    if bags[0].name != "a" || bags[1].items[1] != 5 { return 2; }
+    if vec.len(bags) != 2 || vec.len(bags[1].items) != 2 { return 3; }
+    let view = slice.view[i32](bags[0].items, 0, 2);
+    if slice.len[i32](view) != 2 || view[1] != 2 { return 4; }
+    let tail = slice.sub[i32](view, 1, 2);
+    if tail[0] != 2 { return 5; }
+    let owned = slice.to_vec[i32](tail);
+    if vec.len(owned) != 1 || owned[0] != 2 { return 6; }
+    var shapes Vec[Shape] = [Shape.Empty, Shape.Square(side: 3), Shape.Rect(width: 2, height: 5)];
+    var sum i32 = 0;
+    for shape in shapes {
+        sum += area(shape);
+    }
+    if sum != 19 { return 7; }
+    bags[0].items[0] = 7;
+    if bags[0].items[0] != 7 { return 8; }
+    let text_value = bags[0].name + "!";
+    if text_value != "a!" { return 9; }
+    let fresh Vec[i32] = [8, 9, 10];
+    for var index usize = 0; index < 3; index += 1 {
+        if fresh[index] != i32(index) + 8 { return 10; }
+    }
+    return 0;
+}

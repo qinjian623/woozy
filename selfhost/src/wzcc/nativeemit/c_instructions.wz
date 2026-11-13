@@ -1,0 +1,644 @@
+// C: NativeIR instructions whose emission belongs to the value layer.
+//
+// Direct port of the value_ops/weak_ops/concurrency parts of
+// src/backend/native/emit.cpp::instruction.  Storage, stride, checked index,
+// vec fields/TBAA and guard belong to B; C resource calls belong to E; GC
+// registration belongs to D.  Copy/Move/Take/Destroy/Borrow/Function,
+// Vec/iterator, TraitObject/TraitCall are handled here.
+//
+// The contract fixes the return shape: ops owned by another group return
+// Option.None, and an op handled here that produces no SSA result returns
+// Some(i8 0) because language Unit is an ordinary i8 value.  B registers
+// instruction.result afterwards; C never writes frame.values.
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func c_native_slot_type(slot usize, state Emitter) usize throws Error {
+    switch state.frame.native_index {
+        case option.Option.None: {
+            throw invalid("instruction outside a source function");
+        }
+        case option.Option.Some(index): {
+            if index >= vec.len(state.input.functions) {
+                throw invalid("source function index out of range");
+            }
+            if slot >= vec.len(state.input.functions[index].slots) {
+                throw invalid("native slot index out of range");
+            }
+            return state.input.functions[index].slots[slot].type_id;
+        }
+    }
+}
+
+func c_slot_iteration_length(slot usize, state Emitter) Value throws Error {
+    let entry = c_slot_storage(slot, state);
+    switch entry.iteration_length {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("iteration slot has no length storage");
+    }
+}
+
+func c_slot_iteration_index(slot usize, state Emitter) Value throws Error {
+    let entry = c_slot_storage(slot, state);
+    switch entry.iteration_index {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("iteration slot has no index storage");
+    }
+}
+
+// The preceding verified vec_check fixed the panic location.  Reuse the
+// current Vec/Slice bounds-checking accessor for the address.
+func c_emit_vec_check(vec_value Value, index Value, source model.Span,
+                      state inout Emitter) throws Error {
+    let length = vec_field(vec_value, 1, "i64", inout state);
+    let initialized = vec_field(vec_value, 2, "i64", inout state);
+    let past_length = c_icmp("uge", "i64", index.reference, length.reference,
+        inout state);
+    let past_initialized = c_icmp("uge", "i64", index.reference,
+        initialized.reference, inout state);
+    let bad = result("i1", "or i1 " + past_length.reference + ", " +
+        past_initialized.reference, inout state);
+    guard(bad, 4, source, inout state);
+}
+
+// Constant scalars need no element cleanup or runtime evaluation.  The table is
+// copied once, then the fully initialized element count is published.
+func c_constant_vec_init(target Value, element usize, values Vec[Value],
+                         state inout Emitter) throws Error {
+    let element_type = lower_type(element, inout state);
+    let count = vec.len(values);
+    let array_type = "[" + number(count) + " x " + element_type + "]";
+    var members = vec.empty[string]();
+    for value in values {
+        vec.push(members, typed(value));
+    }
+    let name = c_unique_name("vec.constants", state);
+    let body = "private unnamed_addr constant [" + number(count) + " x " +
+        element_type + "] [" + text_join(members) + "]";
+    let data = define_global(name, body, inout state);
+    let field = vec_field(target, 5, "ptr", inout state);
+    let bytes = allocation_size(array_type);
+    c_memcpy(field, data, bytes, inout state);
+    let header = c_gep(VEC_TYPE, target, 2, inout state);
+    let suffix = vec_memory(true, inout state);
+    append("store i64 " + number(count) + ", ptr " + header.reference + suffix,
+        inout state);
+}
+
+func text_join(values Vec[string]) string {
+    var out = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index != 0 {
+            out += ", ";
+        }
+        out += values[index];
+    }
+    return out;
+}
+
+func c_constant_vec_element(type_id usize, state Emitter) bool throws Error {
+    switch type_of(state, type_id).kind {
+        case model.TypeKind.Bool: return true;
+        case model.TypeKind.SignedInt: return true;
+        case model.TypeKind.UnsignedInt: return true;
+        case model.TypeKind.Isize: return true;
+        case model.TypeKind.Usize: return true;
+        case model.TypeKind.Float: return true;
+        default: return false;
+    }
+}
+
+func c_emit_vec_init(instruction nativeir.Instruction, args Vec[Value],
+                     state inout Emitter) Value throws Error {
+    let init_type = type_of(state, instruction.type_id);
+    if vec.len(init_type.type_args) == 0 {
+        throw invalid("Vec initialization has no element type");
+    }
+    let element = init_type.type_args[0];
+    var copy_op = c_null();
+    var drop_op = c_null();
+    if owning(element, inout state) {
+        copy_op = value_op(element, true, inout state);
+        drop_op = value_op(element, false, inout state);
+    }
+    let element_stride = stride(element, inout state);
+    let object = runtime("lang_vec_new_v1", "ptr",
+        [c_int("i64", vec.len(args)), element_stride, copy_op, drop_op], inout state);
+    var constants = vec.len(args) != 0 && c_constant_vec_element(element, state);
+    var constant_values = vec.empty[Value]();
+    for var index usize = 0; index < vec.len(args); index += 1 {
+        switch constant_value(state, instruction.inputs[index]) {
+            case option.Option.Some(value): { vec.push(constant_values, value); }
+            case option.Option.None: { constants = false; }
+        }
+    }
+    if constants {
+        c_constant_vec_init(object, element, constant_values, inout state);
+        let registered = gc_register_vec(object, element, inout state);
+        return object;
+    }
+    // The constructor's storage is fresh and every argument has already been
+    // evaluated, so copy each element directly and publish the initialized
+    // prefix one element at a time.  The scratch byte for Unit and other
+    // zero-sized elements stays zero.  Ownership is already arranged by
+    // NativeIR; no extra retain or drop belongs here.
+    let data = vec_field(object, 5, "ptr", inout state);
+    // Publish the initialized prefix as one graph-stable interval.  The Vec is
+    // not registered until the prefix is complete.
+    let critical = gc_enter_critical(inout state);
+    for var index usize = 0; index < vec.len(args); index += 1 {
+        let address = element_storage(element, args[index], inout state);
+        var target = data;
+        if index != 0 {
+            let offset = c_binop("mul", "i64", element_stride.reference,
+                number(index), inout state);
+            target = result("ptr", "getelementptr i8, ptr " + data.reference +
+                ", i64 " + offset.reference, inout state);
+        }
+        c_memcpy(target, address, element_stride, inout state);
+        let header = c_gep(VEC_TYPE, object, 2, inout state);
+        let suffix = vec_memory(true, inout state);
+        append("store i64 " + number(index + 1) + ", ptr " + header.reference +
+            suffix, inout state);
+    }
+    gc_leave_critical(critical, inout state);
+    let registered = gc_register_vec(object, element, inout state);
+    return object;
+}
+
+func c_emit_vec_read(instruction nativeir.Instruction, args Vec[Value],
+                     state inout Emitter) Value throws Error {
+    let index_type = value_type(state, instruction.inputs[1]);
+    let index = checked_index(args[1], index_type, instruction.source, 4,
+        inout state);
+    let receiver_type = value_type(state, instruction.inputs[0]);
+    let receiver = type_of(state, receiver_type);
+    switch receiver.kind {
+        case model.TypeKind.String: {
+            let length = c_extract("i64", args[0], 2, inout state);
+            let bad = c_icmp("uge", "i64", index.reference, length.reference,
+                inout state);
+            guard(bad, 4, instruction.source, inout state);
+            let address = value_address(receiver_type, args[0], inout state);
+            return runtime("lang_text_at_v1", "i32", [address, index], inout state);
+        }
+        default: {}
+    }
+    if vec.len(receiver.type_args) == 0 {
+        throw invalid("Vec read has no element type");
+    }
+    let element_type = receiver.type_args[0];
+    switch receiver.kind {
+        case model.TypeKind.Slice: {
+            let slice_address = value_address(receiver_type, args[0], inout state);
+            let address = runtime("lang_slice_at_v1", "ptr",
+                [slice_address, index], inout state);
+            let element_layout = lower_type(element_type, inout state);
+            let loaded = c_load(element_layout, address, inout state);
+            if owning(element_type, inout state) {
+                return copy_value(instruction.type_id, loaded, inout state);
+            }
+            return loaded;
+        }
+        default: {}
+    }
+    if !owning(element_type, inout state) {
+        c_emit_vec_check(args[0], index, instruction.source, inout state);
+        let data = vec_field(args[0], 5, "ptr", inout state);
+        let element_type_name = lower_type(element_type, inout state);
+        let address = result("ptr", "getelementptr " + element_type_name +
+            ", ptr " + data.reference + ", i64 " + index.reference, inout state);
+        return c_load_tagged(element_type_name, address, inout state);
+    }
+    let address = runtime("lang_vec_at_v1", "ptr", [args[0], index], inout state);
+    let loaded_type = lower_type(instruction.type_id, inout state);
+    let loaded = c_load(loaded_type, address, inout state);
+    return copy_value(instruction.type_id, loaded, inout state);
+}
+
+func c_emit_vec_set(instruction nativeir.Instruction, args Vec[Value],
+                    state inout Emitter) throws Error {
+    let index_type = value_type(state, instruction.inputs[1]);
+    let index = checked_index(args[1], index_type, instruction.source, 4,
+        inout state);
+    let receiver_type = value_type(state, instruction.inputs[0]);
+    let receiver = type_of(state, receiver_type);
+    let value_type_id = value_type(state, instruction.inputs[2]);
+    if vec.len(receiver.type_args) == 0 {
+        throw invalid("Vec set has no element type");
+    }
+    let element_type = receiver.type_args[0];
+    switch receiver.kind {
+        case model.TypeKind.Slice: {
+            let slice_address = value_address(receiver_type, args[0], inout state);
+            if !owning(element_type, inout state) {
+                let target = runtime("lang_slice_at_v1", "ptr",
+                    [slice_address, index], inout state);
+                c_store(args[2], target, inout state);
+                return;
+            }
+            // Translate the relative index to the owner's absolute slot.  The
+            // verified runtime setter drops the replaced element exactly once.
+            let owner = c_extract("ptr", args[0], 0, inout state);
+            let start = c_extract("i64", args[0], 1, inout state);
+            let absolute = c_binop("add", "i64", start.reference, index.reference,
+                inout state);
+            let address = element_storage(value_type_id, args[2], inout state);
+            let ignored = runtime("lang_vec_set_v1", "void",
+                [owner, absolute, address], inout state);
+            return;
+        }
+        default: {}
+    }
+    if !owning(element_type, inout state) {
+        c_emit_vec_check(args[0], index, instruction.source, inout state);
+        let data = vec_field(args[0], 5, "ptr", inout state);
+        let element_type_name = lower_type(element_type, inout state);
+        let address = result("ptr", "getelementptr " + element_type_name +
+            ", ptr " + data.reference + ", i64 " + index.reference, inout state);
+        c_store_tagged(args[2], address, inout state);
+        return;
+    }
+    let address = element_storage(value_type_id, args[2], inout state);
+    let ignored = runtime("lang_vec_set_v1", "void", [args[0], index, address],
+        inout state);
+}
+
+func c_emit_vec_slice(instruction nativeir.Instruction, args Vec[Value],
+                      state inout Emitter) Value throws Error {
+    var position_index usize = 1;
+    var start = c_int("i64", 0);
+    if (instruction.bits & 1) != 0 {
+        let start_type = value_type(state, instruction.inputs[position_index]);
+        start = checked_index(args[position_index], start_type, instruction.source,
+            9, inout state);
+        position_index += 1;
+    }
+    let result_type = type_of(state, instruction.type_id);
+    var end = c_int("i64", 0);
+    if (instruction.bits & 2) != 0 {
+        let end_type = value_type(state, instruction.inputs[position_index]);
+        end = checked_index(args[position_index], end_type, instruction.source, 9,
+            inout state);
+    } else {
+        switch result_type.kind {
+            case model.TypeKind.String: {
+                end = c_extract("i64", args[0], 2, inout state);
+            }
+            case model.TypeKind.Slice: {
+                end = c_int("i64", 0);
+            }
+            default: {
+                end = runtime("lang_vec_length_v1", "i64", [args[0]], inout state);
+            }
+        }
+    }
+    switch result_type.kind {
+        case model.TypeKind.String: {
+            let length = c_extract("i64", args[0], 2, inout state);
+            let reversed = c_icmp("ugt", "i64", start.reference, end.reference,
+                inout state);
+            let past = c_icmp("ugt", "i64", end.reference, length.reference,
+                inout state);
+            let bad = result("i1", "or i1 " + reversed.reference + ", " +
+                past.reference, inout state);
+            guard(bad, 9, instruction.source, inout state);
+            let layout = lower_type(instruction.type_id, inout state);
+            let out = storage(layout, inout state);
+            let address = value_address(instruction.type_id, args[0], inout state);
+            let ignored = runtime("lang_text_slice_v1", "void",
+                [out, address, start, end], inout state);
+            return c_load(layout, out, inout state);
+        }
+        case model.TypeKind.Slice: {
+            let receiver_type = value_type(state, instruction.inputs[0]);
+            let source_address = value_address(receiver_type, args[0], inout state);
+            if (instruction.bits & 2) == 0 {
+                end = runtime("lang_slice_length_v1", "i64", [source_address],
+                    inout state);
+            }
+            let layout = lower_type(instruction.type_id, inout state);
+            let out = storage(layout, inout state);
+            let ignored = runtime("lang_slice_sub_v1", "void",
+                [out, source_address, start, end], inout state);
+            return c_load(layout, out, inout state);
+        }
+        default: {}
+    }
+    let sliced = runtime("lang_vec_slice_v1", "ptr", [args[0], start, end],
+        inout state);
+    if vec.len(result_type.type_args) == 0 {
+        throw invalid("Vec slice has no element type");
+    }
+    let registered = gc_register_vec(sliced, result_type.type_args[0], inout state);
+    return sliced;
+}
+
+func c_emit_iteration_begin(instruction nativeir.Instruction,
+                            state inout Emitter) throws Error {
+    let collection_type = c_native_slot_type(instruction.slot, state);
+    let entry = c_slot_storage(instruction.slot, state);
+    let length_address = c_slot_iteration_length(instruction.slot, state);
+    let index_address = c_slot_iteration_index(instruction.slot, state);
+    let collection_layout = lower_type(collection_type, inout state);
+    let collection = c_load(collection_layout, entry.address, inout state);
+    let kind = type_of(state, collection_type);
+    var length = c_int("i64", 0);
+    switch kind.kind {
+        case model.TypeKind.String: {
+            length = c_extract("i64", collection, 2, inout state);
+        }
+        case model.TypeKind.Slice: {
+            // A Slice already owns an iteration pin for its whole lifetime.
+            length = runtime("lang_slice_length_v1", "i64", [entry.address],
+                inout state);
+        }
+        default: {
+            length = runtime("lang_vec_begin_v1", "i64", [collection], inout state);
+        }
+    }
+    c_store(length, length_address, inout state);
+    c_store(c_int("i64", 0), index_address, inout state);
+}
+
+func c_emit_iteration_test(instruction nativeir.Instruction,
+                           state inout Emitter) Value throws Error {
+    let length_address = c_slot_iteration_length(instruction.slot, state);
+    let index_address = c_slot_iteration_index(instruction.slot, state);
+    let length = c_load("i64", length_address, inout state);
+    let index = c_load("i64", index_address, inout state);
+    return c_icmp("ult", "i64", index.reference, length.reference, inout state);
+}
+
+func c_emit_iteration_read(instruction nativeir.Instruction, args Vec[Value],
+                           state inout Emitter) Value throws Error {
+    let collection_type = c_native_slot_type(instruction.slot, state);
+    let entry = c_slot_storage(instruction.slot, state);
+    let index_address = c_slot_iteration_index(instruction.slot, state);
+    let index = c_load("i64", index_address, inout state);
+    let kind = type_of(state, collection_type);
+    switch kind.kind {
+        case model.TypeKind.String: {
+            return runtime("lang_text_at_v1", "i32", [entry.address, index],
+                inout state);
+        }
+        case model.TypeKind.Slice: {
+            let address = runtime("lang_slice_at_v1", "ptr",
+                [entry.address, index], inout state);
+            let element_layout = lower_type(instruction.type_id, inout state);
+            let loaded = c_load(element_layout, address, inout state);
+            return copy_value(instruction.type_id, loaded, inout state);
+        }
+        default: {}
+    }
+    let collection = c_load("ptr", entry.address, inout state);
+    let address = runtime("lang_vec_at_v1", "ptr", [collection, index], inout state);
+    let loaded_type = lower_type(instruction.type_id, inout state);
+    let loaded = c_load(loaded_type, address, inout state);
+    return copy_value(instruction.type_id, loaded, inout state);
+}
+
+func c_emit_trait_object(instruction nativeir.Instruction, args Vec[Value],
+                         state inout Emitter) Value throws Error {
+    let concrete = value_type(state, instruction.inputs[0]);
+    let concrete_type = type_of(state, concrete);
+    switch concrete_type.kind {
+        case model.TypeKind.TraitObject: {
+            throw invalid("trait object constructor received another trait object");
+        }
+        default: {}
+    }
+    var copy_op = c_null();
+    var drop_op = c_null();
+    if owning(concrete, inout state) {
+        copy_op = value_op(concrete, true, inout state);
+        drop_op = value_op(concrete, false, inout state);
+    }
+    let element_stride = stride(concrete, inout state);
+    let object = runtime("lang_vec_new_v1", "ptr",
+        [c_int("i64", 1), element_stride, copy_op, drop_op], inout state);
+    let address = element_storage(concrete, args[0], inout state);
+    let initialized = runtime("lang_vec_init_v1", "void", [object, address],
+        inout state);
+    if owning(concrete, inout state) {
+        let element = runtime("lang_vec_at_v1", "ptr",
+            [object, c_int("i64", 0)], inout state);
+        let copy_operation = value_op(concrete, true, inout state);
+        let copied = c_call(copy_operation, [element], "void", inout state);
+    }
+    let registered = gc_register_vec(object, concrete, inout state);
+    let data = runtime("lang_vec_at_v1", "ptr", [object, c_int("i64", 0)],
+        inout state);
+    let table = trait_vtable(instruction.type_id, concrete, instruction.methods,
+        inout state);
+    let fat = Value(type_name: DYN_TYPE, reference: "undef");
+    let with_data = c_insert(DYN_TYPE, fat, data, 0, inout state);
+    return c_insert(DYN_TYPE, with_data, table, 1, inout state);
+}
+
+func c_emit_trait_call(instruction nativeir.Instruction, args Vec[Value],
+                       state inout Emitter) Value throws Error {
+    let receiver_type = value_type(state, instruction.inputs[0]);
+    let receiver = type_of(state, receiver_type);
+    switch receiver.kind {
+        case model.TypeKind.TraitObject: {}
+        default: throw invalid("trait call receiver is not a trait object");
+    }
+    let data = c_extract("ptr", args[0], 0, inout state);
+    let table = c_extract("ptr", args[0], 1, inout state);
+    let offset = instruction.bits + 2;
+    let slot = result("ptr", "getelementptr ptr, ptr " + table.reference +
+        ", i64 " + number(usize(offset)), inout state);
+    let code = c_load("ptr", slot, inout state);
+    let abi = type_of(state, instruction.signature);
+    var abi_invalid = false;
+    switch abi.kind {
+        case model.TypeKind.Function: {}
+        default: { abi_invalid = true; }
+    }
+    switch abi.throws_type {
+        case option.Option.Some(throws_type): { abi_invalid = true; }
+        case option.Option.None: {}
+    }
+    if abi_invalid {
+        throw invalid("trait call ABI is not a nonthrowing function");
+    }
+    var actual = vec.empty[Value]();
+    vec.push(actual, data);
+    for var index usize = 1; index < vec.len(args); index += 1 {
+        vec.push(actual, args[index]);
+    }
+    let result_type = lower_type(abi.result, inout state);
+    return c_call(code, actual, result_type, inout state);
+}
+
+func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
+                            state inout Emitter) option.Option[Value] throws Error {
+    switch instruction.op {
+        case nativeir.Op.Copy: {
+            let value = c_argument(args, 0);
+            return option.Option[Value].Some(
+                copy_value(instruction.type_id, value, inout state));
+        }
+        case nativeir.Op.Borrow: {
+            return option.Option[Value].Some(c_argument(args, 0));
+        }
+        case nativeir.Op.Move: {
+            let entry = c_slot_storage(instruction.slot, state);
+            let layout = lower_type(instruction.type_id, inout state);
+            let value = c_load(layout, entry.address, inout state);
+            switch entry.active {
+                case option.Option.Some(active): {
+                    c_store(c_false(), active, inout state);
+                }
+                case option.Option.None: {}
+            }
+            return option.Option[Value].Some(value);
+        }
+        case nativeir.Op.Take: {
+            let entry = c_slot_storage(instruction.slot, state);
+            switch entry.active {
+                case option.Option.Some(active): {
+                    c_store(c_false(), active, inout state);
+                }
+                case option.Option.None: {
+                    throw invalid("take of a slot without an active flag");
+                }
+            }
+            return c_none_result();
+        }
+        case nativeir.Op.Destroy: {
+            let slot_type = c_native_slot_type(instruction.slot, state);
+            destroy_slot(instruction.slot, slot_type, inout state);
+            return c_none_result();
+        }
+        case nativeir.Op.Function: {
+            return option.Option[Value].Some(
+                function_value(instruction, args, inout state));
+        }
+        case nativeir.Op.VecInit: {
+            return option.Option[Value].Some(
+                c_emit_vec_init(instruction, args, inout state));
+        }
+        case nativeir.Op.VecLength: {
+            let receiver_type = value_type(state, instruction.inputs[0]);
+            let receiver = type_of(state, receiver_type);
+            switch receiver.kind {
+                case model.TypeKind.String: {
+                    let length = c_extract("i64", c_argument(args, 0), 2,
+                        inout state);
+                    return option.Option[Value].Some(length);
+                }
+                default: {
+                    let length = vec_field(c_argument(args, 0), 1, "i64",
+                        inout state);
+                    return option.Option[Value].Some(length);
+                }
+            }
+        }
+        case nativeir.Op.VecCheck: {
+            let index_type = value_type(state, instruction.inputs[1]);
+            let index = checked_index(c_argument(args, 1), index_type,
+                instruction.source, 4, inout state);
+            let receiver_type = value_type(state, instruction.inputs[0]);
+            let receiver = type_of(state, receiver_type);
+            switch receiver.kind {
+                case model.TypeKind.Slice: {
+                    let address = value_address(receiver_type, c_argument(args, 0),
+                        inout state);
+                    let length = runtime("lang_slice_length_v1", "i64", [address],
+                        inout state);
+                    let bad = c_icmp("uge", "i64", index.reference,
+                        length.reference, inout state);
+                    guard(bad, 4, instruction.source, inout state);
+                }
+                default: {
+                    c_emit_vec_check(c_argument(args, 0), index,
+                        instruction.source, inout state);
+                }
+            }
+            return c_none_result();
+        }
+        case nativeir.Op.VecRead: {
+            return option.Option[Value].Some(
+                c_emit_vec_read(instruction, args, inout state));
+        }
+        case nativeir.Op.VecSet: {
+            c_emit_vec_set(instruction, args, inout state);
+            return c_none_result();
+        }
+        case nativeir.Op.VecSlice: {
+            return option.Option[Value].Some(
+                c_emit_vec_slice(instruction, args, inout state));
+        }
+        case nativeir.Op.VecElementAddress: {
+            let index_type = value_type(state, instruction.inputs[1]);
+            let index = checked_index(c_argument(args, 1), index_type,
+                instruction.source, 4, inout state);
+            let receiver_type = value_type(state, instruction.inputs[0]);
+            let receiver = type_of(state, receiver_type);
+            switch receiver.kind {
+                case model.TypeKind.Slice: {
+                    let address = value_address(receiver_type, c_argument(args, 0),
+                        inout state);
+                    let element = runtime("lang_slice_at_v1", "ptr",
+                        [address, index], inout state);
+                    return option.Option[Value].Some(element);
+                }
+                default: {
+                    let element = runtime("lang_vec_at_v1", "ptr",
+                        [c_argument(args, 0), index], inout state);
+                    return option.Option[Value].Some(element);
+                }
+            }
+        }
+        case nativeir.Op.IterationBegin: {
+            c_emit_iteration_begin(instruction, inout state);
+            return c_none_result();
+        }
+        case nativeir.Op.IterationEnd: {
+            let collection_type = c_native_slot_type(instruction.slot, state);
+            let entry = c_slot_storage(instruction.slot, state);
+            let kind = type_of(state, collection_type);
+            switch kind.kind {
+                case model.TypeKind.Vec: {
+                    let collection = c_load("ptr", entry.address, inout state);
+                    let ignored = runtime("lang_vec_end_v1", "void", [collection],
+                        inout state);
+                }
+                // A Slice already owns an iteration pin for its whole lifetime;
+                // the loop adds no second pin and has nothing to end here.
+                default: {}
+            }
+            return c_none_result();
+        }
+        case nativeir.Op.IterationTest: {
+            let more = c_emit_iteration_test(instruction, inout state);
+            return option.Option[Value].Some(more);
+        }
+        case nativeir.Op.IterationNext: {
+            let index_address = c_slot_iteration_index(instruction.slot, state);
+            let index = c_load("i64", index_address, inout state);
+            let next = c_binop("add", "i64", index.reference, "1", inout state);
+            c_store(next, index_address, inout state);
+            return c_none_result();
+        }
+        case nativeir.Op.IterationRead: {
+            return option.Option[Value].Some(
+                c_emit_iteration_read(instruction, args, inout state));
+        }
+        case nativeir.Op.TraitObject: {
+            return option.Option[Value].Some(
+                c_emit_trait_object(instruction, args, inout state));
+        }
+        case nativeir.Op.TraitCall: {
+            return option.Option[Value].Some(
+                c_emit_trait_call(instruction, args, inout state));
+        }
+        default: return option.Option[Value].None;
+    }
+}

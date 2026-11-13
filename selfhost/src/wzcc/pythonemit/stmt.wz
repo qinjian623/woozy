@@ -1,0 +1,812 @@
+// Statement, loop and cleanup emission plus expression outlining.
+//
+// Direct migration of Emitter::statement_inner, block, loop_body, outline and
+// captures from src/backend/python/emitter.cpp.  The private Statement tree
+// mirrors the C++ structured tree; no source text becomes Python code.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func structural(node hir.HirNode) bool {
+    let kind = node_kind_id_of(node);
+    return kind == 15 || kind == 17 || kind == 18 || kind == 38 ||
+           kind == 28 || kind == 30;
+}
+
+func statement(state inout EmitState, id usize,
+               suite inout Vec[Statement]) throws Failure {
+    if state.outlining && structural(node_at(state, id)) {
+        outline(inout state, id, inout suite, false);
+        return;
+    }
+    statement_inner(inout state, id, inout suite);
+}
+
+func block(state inout EmitState, node hir.HirNode,
+           suite inout Vec[Statement]) throws Failure {
+    let registrations = vec.empty[usize]();
+    for id in node.children {
+        if node_kind_id_of(node_at(state, id)) == 31 {
+            vec.push(registrations, id);
+        }
+    }
+    var has_locals = false;
+    for lifetime in state.module.ownership.locals {
+        if lifetime.scope == node.scope && mode_id(lifetime.mode) == 2 &&
+           owned(state, lifetime.type_id) && !lifetime.read_only_capture &&
+           !ordered_contains(state.capture_locals, u64(lifetime.symbol)) {
+            has_locals = true;
+        }
+    }
+    if vec.len(registrations) == 0 && !has_locals {
+        for id in node.children {
+            statement(inout state, id, inout suite);
+        }
+        exits(state, node, true);
+        return;
+    }
+    // Direct registrations in a lexical block execute in source order, so
+    // their active set is a prefix.  Nested blocks own separate counters.
+    // This records only reachability, never copies a referenced source value.
+    let registered = save(inout state, inout suite, "0", node);
+    var body = vec.empty[Statement]();
+    var ordinal usize = 0;
+    for id in node.children {
+        if node_kind_id_of(node_at(state, id)) == 31 {
+            vec.push(state.active_defers, id);
+            ordinal += 1;
+            line_hir(inout body, registered + " = " + usize_text(ordinal),
+                node_at(state, id));
+        } else {
+            statement(inout state, id, inout body);
+        }
+    }
+    exits(state, node, true);
+    var cleanup = vec.empty[Statement]();
+    var index = vec.len(registrations);
+    for index > 0 {
+        index -= 1;
+        let last = vec.pop(state.active_defers);
+        switch last {
+            case option.Option.Some(_): {}
+            case option.Option.None:
+                throw internal("verified defer registration changed");
+        }
+        let defer_node = node_at(state, registrations[index]);
+        let threshold = ordinal;
+        ordinal -= 1;
+        let condition = "if " + registered + " >= " + usize_text(threshold);
+        var branch = stmt_suite(condition, true, defer_node.source.span, []);
+        statement(inout state, defer_node.children[0], inout branch.body);
+        vec.push(cleanup, branch);
+    }
+    local_drops(inout state, node.scope, inout cleanup, node);
+    // A Panic in a cleanup aborts its siblings and skips enclosing cleanups.
+    guarded(inout state, body, cleanup, inout suite, node);
+}
+
+func loop_body(state inout EmitState, body Vec[Statement], loop Loop,
+               node hir.HirNode, suite inout Vec[Statement]) throws Failure {
+    if !loop.crosses_helper {
+        append_suite(inout suite, body);
+        return;
+    }
+    vec.push(suite, stmt_suite("try", true, node.source.span, body));
+    let handlers = vec.empty[Statement]();
+    let raise_body = vec.empty[Statement]();
+    vec.push(raise_body, stmt_at("raise", node.source.span));
+    vec.push(handlers, stmt_suite_else(
+        "if _jump.target != " + usize_text(loop.id), true, node.source.span,
+        raise_body, []));
+    let continue_body = vec.empty[Statement]();
+    vec.push(continue_body, stmt_at("continue", node.source.span));
+    vec.push(handlers, stmt_suite("if _jump.continuing", true, node.source.span,
+        continue_body));
+    vec.push(handlers, stmt_at("break", node.source.span));
+    vec.push(suite, stmt_suite("except _LangLoopJump as _jump", true,
+        node.source.span, handlers));
+}
+
+func assign_statement(state inout EmitState, node hir.HirNode, id usize,
+                      assign hir.Assign,
+                      suite inout Vec[Statement]) throws Failure {
+    let place_node = node_at(state, node.children[0]);
+    var foreign_place u32 = 99;
+    var foreign_read = hir.ForeignRead(binding: 0,
+        access: option.Option[hir.ForeignAccessKind].None,
+        start: option.Option[usize].None, end: option.Option[usize].None);
+    switch place_node.data {
+        case hir.NodeData.ForeignRead(value): {
+            foreign_read = value;
+            switch value.access {
+                case option.Option.Some(kind):
+                    foreign_place = foreign_access_id(kind);
+                case option.Option.None: {}
+            }
+        }
+        default: {}
+    }
+    if foreign_place == 1 || foreign_place == 3 || foreign_place == 5 {
+        let declaration = foreign_declaration(state.module,
+            foreign_read.binding);
+        let location = foreign_location_text(state, place_node, declaration);
+        var call = "";
+        if foreign_place == 1 {
+            let property = binding_property(declaration);
+            if vec.len(property.setter) == 0 {
+                throw internal("verified read-only property write");
+            }
+            let base = expression(inout state, place_node.children[0], inout suite);
+            let value = take_value(state, node.children[1],
+                expression(inout state, node.children[1], inout suite));
+            call = "_lang_host_set(" + base + ", " +
+                path_tuple(property.setter) + ", " + value + ", " +
+                location + ")";
+        } else if foreign_place == 3 {
+            let base = expression(inout state, place_node.children[0], inout suite);
+            let index = expression(inout state, place_node.children[1], inout suite);
+            let value = take_value(state, node.children[1],
+                expression(inout state, node.children[1], inout suite));
+            call = "_lang_host_setitem(" + base + ", " + index + ", " + value +
+                ", " + location + ")";
+        } else {
+            let base = expression(inout state, place_node.children[0], inout suite);
+            var start = "None";
+            switch foreign_read.start {
+                case option.Option.Some(child):
+                    start = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            var finish = "None";
+            switch foreign_read.end {
+                case option.Option.Some(child):
+                    finish = expression(inout state, child, inout suite);
+                case option.Option.None: {}
+            }
+            let value = take_value(state, node.children[1],
+                expression(inout state, node.children[1], inout suite));
+            call = "_lang_host_setitem(" + base + ", slice(" + start + ", " +
+                finish + "), " + value + ", " + location + ")";
+        }
+        host_access_invoke(inout state, node.children[0], place_node, call, true,
+            inout suite);
+        full(inout state, id, inout suite);
+        return;
+    }
+    var place = expression(inout state, node.children[0], inout suite);
+    let place_type = node_at(state, node.children[0]).type_id;
+    // Capture the old value before evaluating a potentially mutating RHS.
+    var before = "";
+    if option.is_some(assign.compound) {
+        before = save(inout state, inout suite, place + ".value", node);
+    }
+    let value = expression(inout state, node.children[1], inout suite);
+    var combined = value;
+    if option.is_some(assign.compound) {
+        var op = hir.BinaryOp.Add;
+        switch assign.compound {
+            case option.Option.Some(item): op = item;
+            case option.Option.None: {}
+        }
+        let operation = binary_text(state, op, before, value, place_type);
+        combined = save(inout state, inout suite, operation, node);
+    }
+    var installed = take_value(state, node.children[1], combined);
+    if option.is_some(assign.compound) &&
+       kind_is(type_of(state.module, place_type).kind, model.TypeKind.String) {
+        installed = combined;
+    }
+    if owned(state, place_type) {
+        // The place may be a real Owner slot, a Cell, a Field path or an Index
+        // element: an inout parameter is bound to the caller's genuine place
+        // object.  The runtime helper publishes the new value first and then
+        // releases exactly the replaced one.
+        line_hir(inout suite, "_rt.replace_place(" + place + ", " +
+            type_ops_name(place_type) + ", " + installed + ")", node);
+        full(inout state, id, inout suite);
+        return;
+    }
+    line_hir(inout suite, place + ".value = " + installed, node);
+    full(inout state, id, inout suite);
+}
+
+func switch_statement(state inout EmitState, node hir.HirNode, id usize,
+                      payload hir.Switch,
+                      suite inout Vec[Statement]) throws Failure {
+    let subject = node.children[0];
+    let computed_owning = owned(state,
+        node_at(state, subject).type_id) &&
+        node_kind_id_of(node_at(state, subject)) != 5;
+    let value = expression(inout state, subject, inout suite);
+    if computed_owning {
+        full(inout state, id, inout suite);
+    }
+    let arms = payload.arms;
+    var branches = vec.empty[Statement]();
+    vec.push(state.break_targets, id);
+    if computed_owning {
+        vec.push(state.held_subjects, subject);
+    }
+    var index = vec.len(arms);
+    for index > 0 {
+        index -= 1;
+        let arm = arms[index];
+        let saved_available = state.available;
+        var branch = stmt_suite(
+            "if " + pattern_test(state, arm.pattern, value, 0), true,
+            arm.pattern.source.span, []);
+        pattern_bind(inout state, arm.pattern, value, inout branch.body, 0);
+        if !computed_owning {
+            full(inout state, id, inout branch.body);
+        }
+        statement(inout state, arm.body, inout branch.body);
+        branch.otherwise = branches;
+        branches = vec.empty[Statement]();
+        vec.push(branches, branch);
+        state.available = saved_available;
+    }
+    let popped = vec.pop(state.break_targets);
+    switch popped {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified break target is not the enclosing loop/switch");
+    }
+    if computed_owning {
+        // The subject result is released by this structured finally after the
+        // selected arm's defer/local drops and before enclosing scopes.
+        let allow = save(inout state, inout suite, "True", node);
+        vec.push(suite, stmt_suite("try", true, node.source.span, branches));
+        let break_handlers = vec.empty[Statement]();
+        let rethrow_body = vec.empty[Statement]();
+        vec.push(rethrow_body, stmt_at("raise", node.source.span));
+        vec.push(break_handlers, stmt_suite_else(
+            "if _jump.target != " + usize_text(id), true, node.source.span,
+            rethrow_body, []));
+        vec.push(suite, stmt_suite("except _rt.SwitchBreak as _jump", true,
+            node.source.span, break_handlers));
+        let panic_handlers = vec.empty[Statement]();
+        vec.push(panic_handlers, stmt_at(allow + " = False", node.source.span));
+        vec.push(panic_handlers, stmt_at("raise", node.source.span));
+        vec.push(suite, stmt_suite("except _rt.Panic", true, node.source.span,
+            panic_handlers));
+        var cleanup = vec.empty[Statement]();
+        line_hir(inout cleanup, "_frame.drop(" +
+            owner_key(hir.OwnerKind.Temporary, u64(subject)) + ")", node);
+        let finally_body = vec.empty[Statement]();
+        vec.push(finally_body, stmt_suite("if " + allow, true,
+            node.source.span, cleanup));
+        vec.push(suite, stmt_suite("finally", true, node.source.span,
+            finally_body));
+        let held = vec.pop(state.held_subjects);
+        switch held {
+            case option.Option.Some(_): {}
+            case option.Option.None:
+                throw internal("verified switch subject bookkeeping changed");
+        }
+    } else {
+        vec.push(suite, stmt_suite("try", true, node.source.span, branches));
+        let break_handlers = vec.empty[Statement]();
+        let rethrow_body = vec.empty[Statement]();
+        vec.push(rethrow_body, stmt_at("raise", node.source.span));
+        vec.push(break_handlers, stmt_suite_else(
+            "if _jump.target != " + usize_text(id), true, node.source.span,
+            rethrow_body, []));
+        vec.push(suite, stmt_suite("except _rt.SwitchBreak as _jump", true,
+            node.source.span, break_handlers));
+    }
+}
+
+func try_statement(state inout EmitState, node hir.HirNode, id usize,
+                   payload hir.Try,
+                   suite inout Vec[Statement]) throws Failure {
+    var body = stmt_suite("try", true, node.source.span, []);
+    statement(inout state, node.children[0], inout body.body);
+    vec.push(suite, body);
+    let error = "_error" + usize_text(state.current) + "_" +
+        u64_text(state.serial);
+    state.serial += 1;
+    var handlers = vec.empty[Statement]();
+    vec.push(handlers, stmt_at("raise", node.source.span));
+    let catches = payload.catches;
+    var index = vec.len(catches);
+    for index > 0 {
+        index -= 1;
+        let catch_clause = catches[index];
+        let saved_available = state.available;
+        let condition = "if " + error + ".type_key == " +
+            python_string_literal(type_key(state.module,
+                catch_clause.error_type, true));
+        var branch = stmt_suite_else(condition, true, catch_clause.source.span,
+            [], handlers);
+        if owned(state, catch_clause.error_type) {
+            vec.push(branch.body, stmt_at(
+                symbol_name(catch_clause.binding) + " = _frame.slot(" +
+                    owner_key(hir.OwnerKind.Binding,
+                        u64(catch_clause.binding)) + ", " +
+                    type_ops_name(catch_clause.error_type) + ")",
+                catch_clause.source.span));
+            vec.push(branch.body, stmt_at(
+                symbol_name(catch_clause.binding) + ".install(" + error +
+                    ".take())", catch_clause.source.span));
+        } else {
+            vec.push(branch.body, stmt_at(
+                symbol_name(catch_clause.binding) + " = " + error + ".take()",
+                catch_clause.source.span));
+        }
+        ordered_insert(inout state.available, u64(catch_clause.binding));
+        statement(inout state, catch_clause.body, inout branch.body);
+        handlers = vec.empty[Statement]();
+        vec.push(handlers, branch);
+        state.available = saved_available;
+    }
+    vec.push(suite, stmt_suite("except _rt.TypedError as " + error, true,
+        node.source.span, handlers));
+}
+
+func for_statement(state inout EmitState, node hir.HirNode, id usize,
+                   suite inout Vec[Statement]) throws Failure {
+    var for_scope = vec.empty[Statement]();
+    statement(inout state, node.children[0], inout for_scope);
+    var loop = stmt_suite("while True", true, node.source.span, []);
+    if node_kind_id_of(node_at(state, node.children[2])) != 19 {
+        // A native continue runs body cleanup before reaching the next step.
+        let first = save(inout state, inout for_scope, "True", node);
+        let step_body = vec.empty[Statement]();
+        vec.push(step_body, stmt_at(first + " = False", node.source.span));
+        var step = stmt_suite("if " + first, true, node.source.span, step_body);
+        statement(inout state, node.children[2], inout step.otherwise);
+        vec.push(loop.body, step);
+    }
+    let condition = expression(inout state, node.children[1], inout loop.body);
+    full(inout state, node.children[1], inout loop.body);
+    let break_body = vec.empty[Statement]();
+    vec.push(break_body, stmt_at("break", node.source.span));
+    vec.push(loop.body, stmt_suite("if not " + condition, true,
+        node.source.span, break_body));
+    vec.push(state.loops, Loop(id: id, code_scope: state.code_scope,
+        crosses_helper: false));
+    vec.push(state.break_targets, id);
+    var body = vec.empty[Statement]();
+    statement(inout state, node.children[3], inout body);
+    let completed_index = vec.len(state.loops) - 1;
+    let completed = state.loops[completed_index];
+    let popped_target = vec.pop(state.break_targets);
+    switch popped_target {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified break target is not the enclosing loop/switch");
+    }
+    let popped_loop = vec.pop(state.loops);
+    switch popped_loop {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified continue target is not the enclosing loop");
+    }
+    loop_body(inout state, body, completed, node, inout loop.body);
+    // Safe point at the iteration header, before the step, condition or body.
+    insert_at(inout loop.body, 0, stmt_at("_rt._gc_poll()", node.source.span));
+    vec.push(for_scope, loop);
+    scope_wrap(inout state, node.scope, for_scope, inout suite, node);
+}
+
+func for_in_statement(state inout EmitState, node hir.HirNode, id usize,
+                      payload hir.ForIn,
+                      suite inout Vec[Statement]) throws Failure {
+    switch payload.iterator {
+        case option.Option.Some(iterator):
+            iterator_for_statement(inout state, node, id, payload, iterator, inout suite);
+            return;
+        case option.Option.None: {}
+    }
+    let collection = expression(inout state, node.children[0], inout suite);
+    let collection_type = node_at(state, node.children[0]).type_id;
+    let iteration_key = owner_key(hir.OwnerKind.Iteration, u64(id));
+    line_hir(inout suite, "_frame.put(" + iteration_key + ", " +
+        type_ops_name(collection_type) + ", " +
+        take_value(state, node.children[0], collection) + ")", node);
+    full(inout state, id, inout suite);
+    let text_collection = kind_is(
+        type_of(state.module, collection_type).kind, model.TypeKind.String);
+    let slice_collection = kind_is(
+        type_of(state.module, collection_type).kind, model.TypeKind.Slice);
+    var length_value = collection + ".begin()";
+    if text_collection {
+        length_value = "len(" + collection + ")";
+    } else if slice_collection {
+        length_value = collection + ".len()";
+    }
+    let length = save(inout state, inout suite, length_value, node);
+    let index = save(inout state, inout suite, "0", node);
+    let first = save(inout state, inout suite, "True", node);
+    var loop = stmt_suite("while True", true, node.source.span, []);
+    let step_body = vec.empty[Statement]();
+    vec.push(step_body, stmt_at(first + " = False", node.source.span));
+    let advance = vec.empty[Statement]();
+    vec.push(advance, stmt_at(index + " += 1", node.source.span));
+    vec.push(loop.body, stmt_suite_else("if " + first, true, node.source.span,
+        step_body, advance));
+    let break_body = vec.empty[Statement]();
+    vec.push(break_body, stmt_at("break", node.source.span));
+    vec.push(loop.body, stmt_suite(
+        "if " + index + " >= " + length, true, node.source.span, break_body));
+    var element_type usize = 0;
+    if text_collection {
+        for lifetime in state.module.ownership.locals {
+            if lifetime.symbol == payload.element {
+                element_type = lifetime.type_id;
+            }
+        }
+    } else {
+        element_type = type_of(state.module, collection_type).type_args[0];
+    }
+    if owned(state, element_type) {
+        vec.push(loop.body, stmt_at(
+            symbol_name(payload.element) + " = _frame.slot(" +
+                owner_key(hir.OwnerKind.Binding, u64(payload.element)) + ", " +
+                type_ops_name(element_type) + ")", node.source.span));
+        vec.push(loop.body, stmt_at(
+            symbol_name(payload.element) + ".install(" +
+                type_ops_name(element_type) + ".copy(" + collection + ".get(" +
+                index + ")))", node.source.span));
+    } else {
+        var element_value = collection + ".get(" + index + ")";
+        if text_collection {
+            element_value = "_rt.text_at(" + collection + ", " + index + ")";
+        }
+        vec.push(loop.body, stmt_at(
+            symbol_name(payload.element) + " = " + element_value,
+            node.source.span));
+    }
+    ordered_insert(inout state.available, u64(payload.element));
+    vec.push(state.loops, Loop(id: id, code_scope: state.code_scope,
+        crosses_helper: false));
+    vec.push(state.break_targets, id);
+    var body = vec.empty[Statement]();
+    statement(inout state, payload.body, inout body);
+    let completed_index = vec.len(state.loops) - 1;
+    let completed = state.loops[completed_index];
+    let popped_target = vec.pop(state.break_targets);
+    switch popped_target {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified break target is not the enclosing loop/switch");
+    }
+    let popped_loop = vec.pop(state.loops);
+    switch popped_loop {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified continue target is not the enclosing loop");
+    }
+    loop_body(inout state, body, completed, node, inout loop.body);
+    var cleanup = vec.empty[Statement]();
+    if !text_collection && !slice_collection {
+        line_hir(inout cleanup, collection + ".end()", node);
+    }
+    line_hir(inout cleanup, "_frame.drop(" + iteration_key + ")", node);
+    insert_at(inout loop.body, 0, stmt_at("_rt._gc_poll()", node.source.span));
+    let single = vec.empty[Statement]();
+    vec.push(single, loop);
+    guarded(inout state, single, cleanup, inout suite, node);
+}
+
+func iterator_for_statement(state inout EmitState, node hir.HirNode, id usize,
+                            payload hir.ForIn, iterator hir.IteratorFor,
+                            suite inout Vec[Statement]) throws Failure {
+    let collection = expression(inout state, node.children[0], inout suite);
+    if owned(state, iterator.iterator) {
+        line_hir(inout suite, symbol_name(iterator.cursor) + " = _frame.slot(" +
+            owner_key(hir.OwnerKind.Binding, u64(iterator.cursor)) + ", " +
+            type_ops_name(iterator.iterator) + ")", node);
+        line_hir(inout suite, symbol_name(iterator.cursor) + ".install(" +
+            take_value(state, node.children[0], collection) + ")", node);
+    } else {
+        line_hir(inout suite, symbol_name(iterator.cursor) + " = _rt.Cell(" +
+            take_value(state, node.children[0], collection) + ")", node);
+    }
+    full(inout state, id, inout suite);
+    let owning_option = owned(state, node_at(state, iterator.next).type_id);
+    var option_value = symbol_name(iterator.option);
+    if owning_option {
+        option_value = symbol_name(iterator.option) + ".value";
+        line_hir(inout suite, symbol_name(iterator.option) + " = _frame.slot(" +
+            owner_key(hir.OwnerKind.Binding, u64(iterator.option)) + ", " +
+            type_ops_name(node_at(state, iterator.next).type_id) + ")", node);
+    }
+    var loop = stmt_suite("while True", true, node.source.span, []);
+    line_hir(inout loop.body, "_rt._gc_poll()", node);
+    let next = expression(inout state, iterator.next, inout loop.body);
+    if owning_option {
+        line_hir(inout loop.body, symbol_name(iterator.option) + ".install(" +
+            take_value(state, iterator.next, next) + ")", node);
+    } else {
+        line_hir(inout loop.body, symbol_name(iterator.option) + " = " +
+            take_value(state, iterator.next, next), node);
+    }
+    full(inout state, iterator.next, inout loop.body);
+    var none_branch = vec.empty[Statement]();
+    if owning_option {
+        line_hir(inout none_branch, "_frame.drop(" +
+            owner_key(hir.OwnerKind.Binding, u64(iterator.option)) + ")", node);
+    }
+    line_hir(inout none_branch, "break", node);
+    vec.push(loop.body, stmt_suite("if " + option_value + "[0] == " +
+        usize_text(iterator.none), true, node.source.span, none_branch));
+    let owning_element = owned(state, iterator.element);
+    if owning_element {
+        line_hir(inout loop.body, symbol_name(payload.element) + " = _frame.slot(" +
+            owner_key(hir.OwnerKind.Binding, u64(payload.element)) + ", " +
+            type_ops_name(iterator.element) + ")", node);
+        line_hir(inout loop.body, symbol_name(payload.element) + ".install(" +
+            type_ops_name(iterator.element) + ".copy(" + option_value +
+            "[1][0]))", node);
+    } else {
+        line_hir(inout loop.body, symbol_name(payload.element) + " = " +
+            option_value + "[1][0]", node);
+    }
+    ordered_insert(inout state.available, u64(payload.element));
+    vec.push(state.loops, Loop(id: id, code_scope: state.code_scope,
+        crosses_helper: false));
+    vec.push(state.break_targets, id);
+    var body = vec.empty[Statement]();
+    statement(inout state, payload.body, inout body);
+    let completed_index = vec.len(state.loops) - 1;
+    let completed = state.loops[completed_index];
+    let popped_loop = vec.pop(state.loops);
+    switch popped_loop {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified continue target is not the enclosing loop");
+    }
+    let popped_target = vec.pop(state.break_targets);
+    switch popped_target {
+        case option.Option.Some(_): {}
+        case option.Option.None:
+            throw internal("verified break target is not the enclosing loop/switch");
+    }
+    loop_body(inout state, body, completed, node, inout loop.body);
+    let single = vec.empty[Statement]();
+    vec.push(single, loop);
+    scope_wrap(inout state, node.scope, single, inout suite, node);
+}
+
+func statement_inner(state inout EmitState, id usize,
+                     suite inout Vec[Statement]) throws Failure {
+    let node = node_at(state, id);
+    exits(state, node, false);
+    switch node.data {
+        case hir.NodeData.Block(payload):
+            block(inout state, node, inout suite);
+        case hir.NodeData.Binding(payload): {
+            let value = expression(inout state, node.children[0], inout suite);
+            if owned(state, node_at(state, node.children[0]).type_id) {
+                line_hir(inout suite, symbol_name(payload.symbol) + " = _frame.slot(" +
+                    owner_key(hir.OwnerKind.Binding, u64(payload.symbol)) + ", " +
+                    type_ops_name(node_at(state, node.children[0]).type_id) +
+                    ")", node);
+                line_hir(inout suite, symbol_name(payload.symbol) + ".install(" +
+                    take_value(state, node.children[0], value) + ")", node);
+            } else {
+                var initial = value;
+                if payload.writable {
+                    initial = "_rt.Cell(" + value + ")";
+                }
+                line_hir(inout suite, symbol_name(payload.symbol) + " = " + initial,
+                    node);
+            }
+            full(inout state, id, inout suite);
+            ordered_insert(inout state.available, u64(payload.symbol));
+        }
+        case hir.NodeData.Assign(payload):
+            assign_statement(inout state, node, id, payload, inout suite);
+        case hir.NodeData.ExpressionStatement(payload):
+            let value = expression(inout state, node.children[0], inout suite);
+            full(inout state, id, inout suite);
+        case hir.NodeData.If(payload): {
+            let condition = expression(inout state, node.children[0], inout suite);
+            full(inout state, node.children[0], inout suite);
+            var branch = stmt_suite("if " + condition, true, node.source.span,
+                []);
+            statement(inout state, node.children[1], inout branch.body);
+            if vec.len(node.children) == 3 {
+                statement(inout state, node.children[2], inout branch.otherwise);
+                // Preserve an empty else block as a suite too.
+                if vec.len(branch.otherwise) == 0 {
+                    line_hir(inout branch.otherwise, "pass", node);
+                }
+            }
+            vec.push(suite, branch);
+        }
+        case hir.NodeData.For(payload):
+            for_statement(inout state, node, id, inout suite);
+        case hir.NodeData.ForIn(payload):
+            for_in_statement(inout state, node, id, payload, inout suite);
+        case hir.NodeData.Switch(payload):
+            switch_statement(inout state, node, id, payload, inout suite);
+        case hir.NodeData.Return(payload): {
+            var value = "None";
+            if vec.len(node.children) > 0 {
+                value = expression(inout state, node.children[0], inout suite);
+                let transferred = take_value(state, node.children[0], value);
+                value = save(inout state, inout suite, transferred, node);
+            }
+            full(inout state, id, inout suite);
+            if state.outlining {
+                line_hir(inout suite, "raise _LangReturn(" +
+                    usize_text(state.current) + ", " + value + ")", node);
+            } else {
+                line_hir(inout suite, "return " + value, node);
+            }
+        }
+        case hir.NodeData.Throw(payload): {
+            var value = expression(inout state, node.children[0], inout suite);
+            let transferred = take_value(state, node.children[0], value);
+            value = save(inout state, inout suite, transferred, node);
+            full(inout state, id, inout suite);
+            let error_type = node_at(state, node.children[0]).type_id;
+            line_hir(inout suite, "raise _rt.TypedError(" +
+                python_string_literal(type_key(state.module, error_type, true)) +
+                ", " + value + ", " + type_ops_name(error_type) + ")", node);
+        }
+        case hir.NodeData.Try(payload):
+            try_statement(inout state, node, id, payload, inout suite);
+        case hir.NodeData.Break(payload): {
+            let target = payload.loop;
+            if vec.len(state.break_targets) == 0 ||
+               state.break_targets[vec.len(state.break_targets) - 1] != target {
+                throw internal(
+                    "verified break target is not the enclosing loop/switch");
+            }
+            if node_kind_id_of(node_at(state, target)) == 28 {
+                line_hir(inout suite, "raise _rt.SwitchBreak(" + usize_text(target) +
+                    ")", node);
+            } else if vec.len(state.loops) == 0 {
+                throw internal(
+                    "verified break target is not the enclosing loop/switch");
+            } else if state.loops[vec.len(state.loops) - 1].code_scope !=
+                      state.code_scope {
+                let last = vec.len(state.loops) - 1;
+                state.loops[last].crosses_helper = true;
+                line_hir(inout suite, "raise _LangLoopJump(" + usize_text(target) +
+                    ", False)", node);
+            } else {
+                line_hir(inout suite, "break", node);
+            }
+        }
+        case hir.NodeData.Continue(payload): {
+            if vec.len(state.loops) == 0 {
+                throw internal(
+                    "verified continue target is not the enclosing loop");
+            }
+            let last = vec.len(state.loops) - 1;
+            if state.loops[last].id != payload.loop {
+                throw internal(
+                    "verified continue target is not the enclosing loop");
+            }
+            if state.loops[last].code_scope != state.code_scope {
+                state.loops[last].crosses_helper = true;
+                line_hir(inout suite, "raise _LangLoopJump(" +
+                    usize_text(state.loops[last].id) + ", True)", node);
+            } else {
+                line_hir(inout suite, "continue", node);
+            }
+        }
+        case hir.NodeData.Noop(payload): {}
+        default:
+            throw internal("non-statement in verified statement position");
+    }
+}
+
+func captures(state inout EmitState, root usize) Vec[usize] throws Failure {
+    var used = vec.empty[u64]();
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    for vec.len(pending) > 0 {
+        state.capture_work += 1;
+        if state.capture_work > 2000000 {
+            throw rejected_reason(
+                "Python outlining exceeds its source traversal budget", true,
+                node_at(state, root).source.span, RejectReason.Resources);
+        }
+        let popped = vec.pop(pending);
+        var id usize = 0;
+        switch popped {
+            case option.Option.Some(value): id = value;
+            case option.Option.None:
+                throw internal("outlining traversal lost a pending node");
+        }
+        let node = node_at(state, id);
+        switch node.data {
+            case hir.NodeData.Read(payload):
+                ordered_insert(inout used, u64(payload.symbol));
+            case hir.NodeData.Place(payload):
+                ordered_insert(inout used, u64(payload.symbol));
+            case hir.NodeData.Move(payload):
+                switch payload.binding {
+                    case option.Option.Some(symbol):
+                        ordered_insert(inout used, u64(symbol));
+                    case option.Option.None: {}
+                }
+            case hir.NodeData.Defer(payload):
+                for reference in payload.references {
+                    ordered_insert(inout used, u64(reference));
+                }
+            default: {}
+        }
+        for child in node.children {
+            vec.push(pending, child);
+        }
+    }
+    let result = vec.empty[usize]();
+    for symbol in used {
+        if ordered_contains(state.available, symbol) {
+            vec.push(result, usize(symbol));
+        }
+    }
+    return result;
+}
+
+func outline(state inout EmitState, id usize, suite inout Vec[Statement],
+             expression_body bool) string throws Failure {
+    state.helper_count += 1;
+    if state.helper_count > 200000 {
+        throw rejected_reason("Python outlining exceeds its helper budget",
+            true, node_at(state, id).source.span, RejectReason.Resources);
+    }
+    let captured = captures(inout state, id);
+    let arguments = vec.empty[string]();
+    vec.push(arguments, "_frame");
+    for symbol in captured {
+        vec.push(arguments, symbol_name(symbol));
+    }
+    let helper = "_outline_" + usize_text(state.current) + "_" +
+        u64_text(state.helper_count);
+    // Raw Cells/Owners cross code objects by reference.  HIR identities select
+    // captures; evaluating read(symbol) here would copy an owning value or
+    // lose the storage required by an inout place.
+    let saved_available = state.available;
+    let saved_scope = state.code_scope;
+    let saved_depth = state.expression_depth;
+    let available_now = vec.empty[u64]();
+    for symbol in captured {
+        vec.push(available_now, u64(symbol));
+    }
+    state.available = available_now;
+    state.next_scope += 1;
+    state.code_scope = state.next_scope;
+    state.expression_depth = 0;
+    var body = vec.empty[Statement]();
+    try {
+        if expression_body {
+            let value = expression_inner(inout state, id, inout body);
+            line_hir(inout body, "return " + value, node_at(state, id));
+        } else {
+            statement_inner(inout state, id, inout body);
+        }
+    } catch error Failure {
+        state.available = saved_available;
+        state.code_scope = saved_scope;
+        state.expression_depth = saved_depth;
+        throw error;
+    }
+    state.available = saved_available;
+    state.code_scope = saved_scope;
+    state.expression_depth = saved_depth;
+    vec.push(state.helpers, stmt_suite(
+        "def " + helper + "(" + join_text(arguments) + ")", true,
+        node_at(state, id).source.span, body));
+    let call = helper + "(" + join_text(arguments) + ")";
+    let node = node_at(state, id);
+    if expression_body {
+        return save(inout state, inout suite, call, node);
+    }
+    line_hir(inout suite, call, node);
+    return "";
+}
+
+func outlined_expression(state inout EmitState, id usize,
+                         suite inout Vec[Statement]) string throws Failure {
+    return outline(inout state, id, inout suite, true);
+}

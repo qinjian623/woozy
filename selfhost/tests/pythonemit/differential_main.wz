@@ -1,0 +1,29 @@
+// Test-only driver for the internal Python-emitter differential fixture.
+//
+// Every generated case is printed as either NAME=OK|<literal> or
+// NAME=FAIL|<failure text>.  A failing case makes the process exit non-zero,
+// but the Python runner also rejects FAIL lines so a caught error can never be
+// counted as successful generation.
+package app;
+
+import "app/wzcc/pythonemit" as pythonemit;
+import "app/wzcc/model" as model;
+import "std/io" as io;
+import "std/os" as os;
+import "std/text" as text;
+
+func main() i32 throws os.Error {
+    var failed i32 = 0;
+    try {
+        for line in pythonemit.independent_checks() {
+            io.println(line);
+            if text.contains(line, "=FAIL|") {
+                failed += 1;
+            }
+        }
+    } catch error model.SupportError {
+        io.println("fixture failed");
+        return 2;
+    }
+    return failed;
+}

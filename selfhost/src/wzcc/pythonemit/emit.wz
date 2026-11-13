@@ -1,0 +1,444 @@
+// Pure-Python backend entry point (selfhost/1).
+//
+// Completes the migration of src/backend/python/emitter.cpp: the public emit
+// result, its shared capability gate, the program skeleton and the controlled
+// retry that outlines functions exceeding CPython's static limits.  The input
+// type is the verifier-owned hirverify.VerifiedHirModule; this package never
+// constructs one and never reads files or starts Python.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func backend_diagnostic(code string, message string, has_source bool,
+                        span model.Span) model.Diagnostic {
+    return model.Diagnostic(code: code, phase: "codegen", severity: "error",
+        message: message, has_primary: has_source, primary: span,
+        related: [], fixits: [], notes: [],
+        has_expected_type: false, expected_type: "",
+        has_actual_type: false, actual_type: "");
+}
+
+func finish_failure(result inout EmitResult, error Failure) {
+    result.state = model.PhaseState.Failed;
+    result.value = option.Option[Output].None;
+    switch error {
+        case Failure.Rejected(message, has_source, source, reason):
+            result.failure = model.FailureKind.Unsupported;
+            vec.push(result.diagnostics,
+                backend_diagnostic("E_CAPABILITY_UNAVAILABLE", message,
+                    has_source, source));
+        case Failure.Internal(message):
+            result.failure = model.FailureKind.Internal;
+            vec.push(result.diagnostics,
+                backend_diagnostic("E_IR_INVALID", message, false,
+                    zero_span()));
+    }
+}
+
+func unit_success(result model.UnitResult) bool {
+    if phase_id(result.state) != 0 || !result.has_value {
+        return false;
+    }
+    for diagnostic in result.diagnostics {
+        if diagnostic.severity == "error" {
+            return false;
+        }
+    }
+    return true;
+}
+
+func cleanup_guard_class() Statement {
+    let init_body = vec.empty[Statement]();
+    vec.push(init_body, stmt("self.cleanup = cleanup"));
+    let enter_body = vec.empty[Statement]();
+    vec.push(enter_body, stmt("return None"));
+    let exit_body = vec.empty[Statement]();
+    let cleanup_body = vec.empty[Statement]();
+    vec.push(cleanup_body, stmt("self.cleanup()"));
+    vec.push(exit_body, stmt_suite("if not isinstance(error, _rt.Panic)",
+        true, zero_span(), cleanup_body));
+    vec.push(exit_body, stmt("return False"));
+    let body = vec.empty[Statement]();
+    vec.push(body, stmt_suite("def __init__(self, cleanup)", true,
+        zero_span(), init_body));
+    vec.push(body, stmt_suite("def __enter__(self)", true, zero_span(),
+        enter_body));
+    vec.push(body, stmt_suite("def __exit__(self, _type, error, _traceback)",
+        true, zero_span(), exit_body));
+    return stmt_suite("class _LangCleanup", true, zero_span(), body);
+}
+
+func lang_return_class() Statement {
+    let init_body = vec.empty[Statement]();
+    vec.push(init_body, stmt("self.target = target"));
+    vec.push(init_body, stmt("self.value = value"));
+    let take_body = vec.empty[Statement]();
+    vec.push(take_body, stmt("value, self.value = self.value, None"));
+    vec.push(take_body, stmt("return value"));
+    let body = vec.empty[Statement]();
+    vec.push(body, stmt_suite("def __init__(self, target, value)", true,
+        zero_span(), init_body));
+    vec.push(body, stmt_suite("def take(self)", true, zero_span(), take_body));
+    return stmt_suite("class _LangReturn(BaseException)", true, zero_span(),
+        body);
+}
+
+func lang_loop_jump_class() Statement {
+    let init_body = vec.empty[Statement]();
+    vec.push(init_body, stmt("self.target = target"));
+    vec.push(init_body, stmt("self.continuing = continuing"));
+    let body = vec.empty[Statement]();
+    vec.push(body, stmt_suite("def __init__(self, target, continuing)", true,
+        zero_span(), init_body));
+    return stmt_suite("class _LangLoopJump(BaseException)", true, zero_span(),
+        body);
+}
+
+func function_tree(state inout EmitState, function hir.HirFunction,
+                   use_outlining bool) Statement throws Failure {
+    state.current = function.symbol;
+    state.serial = 0;
+    state.outlining = use_outlining;
+    state.next_scope += 1;
+    state.code_scope = state.next_scope;
+    state.expression_depth = 0;
+    state.available = vec.empty[u64]();
+    for parameter in function.parameters {
+        ordered_insert(inout state.available, u64(parameter.symbol));
+    }
+    for capture in function.captures {
+        ordered_insert(inout state.capture_locals, u64(capture.local));
+        ordered_insert(inout state.named, u64(capture.local));
+        ordered_insert(inout state.available, u64(capture.local));
+    }
+    let parameters = vec.empty[string]();
+    // A lambda with captures receives the environment record row as its first
+    // argument.  The original immutable function has no environment.
+    if vec.len(function.captures) > 0 {
+        vec.push(parameters, "_env");
+    }
+    for parameter in function.parameters {
+        vec.push(parameters, symbol_name(parameter.symbol));
+    }
+    var result = stmt_suite("def " + function_symbol_name(function.symbol) +
+        "(" + join_text(parameters) + ")", true, function.source.span, []);
+    let body_node = node_at(state, function.body);
+    // Source function entry is a safe point.  It is deliberately not added to
+    // expression-outlining helpers or generated copy/drop snippets.
+    line_hir(inout result.body, "_rt._gc_poll()", body_node);
+    line_hir(inout result.body, "_frame = _rt.Frame()", body_node);
+    if vec.len(function.captures) > 0 {
+        // One row holds every capture in creation order.  Loading it is a pure
+        // borrow of environment storage: the entry never copies a field and
+        // never drops one on exit.
+        line_hir(inout result.body, "_row = _env.get(0)", body_node);
+        for var index usize = 0; index < vec.len(function.captures);
+            index += 1 {
+            line_hir(inout result.body,
+                symbol_name(function.captures[index].local) + " = _row[" +
+                    usize_text(index) + "]", body_node);
+        }
+    }
+    let signature = type_of(state.module, function.signature);
+    for var index usize = 0; index < vec.len(function.parameters); index += 1 {
+        if index >= vec.len(signature.parameters) {
+            throw internal("verified function parameter arity changed");
+        }
+        let parameter = function.parameters[index];
+        let parameter_type = signature.parameters[index];
+        if mode_id(parameter_type.mode) == 2 &&
+           owned(state, parameter_type.type_id) {
+            line_hir(inout result.body, "_frame.put(" +
+                owner_key(hir.OwnerKind.Binding, u64(parameter.symbol)) + ", " +
+                type_ops_name(parameter_type.type_id) + ", " +
+                symbol_name(parameter.symbol) + ")", body_node);
+            line_hir(inout result.body, symbol_name(parameter.symbol) +
+                " = _frame.slot(" +
+                owner_key(hir.OwnerKind.Binding, u64(parameter.symbol)) + ", " +
+                type_ops_name(parameter_type.type_id) + ")", body_node);
+        }
+    }
+    statement(inout state, function.body, inout result.body);
+    if use_outlining {
+        let original = result.body;
+        let replacement = vec.empty[Statement]();
+        vec.push(replacement, stmt_suite("try", true, function.source.span,
+            original));
+        let handlers = vec.empty[Statement]();
+        let raise_body = vec.empty[Statement]();
+        vec.push(raise_body, stmt_at("raise", function.source.span));
+        vec.push(handlers, stmt_suite_else(
+            "if _returned.target != " + usize_text(function.symbol), true,
+            function.source.span, raise_body, []));
+        vec.push(handlers, stmt_at("return _returned.take()",
+            function.source.span));
+        vec.push(replacement, stmt_suite("except _LangReturn as _returned",
+            true, function.source.span, handlers));
+        result.body = replacement;
+    }
+    return result;
+}
+
+func generate_once(module hir.HirModule, entry usize, options Options,
+                   runtime string, fallback bool) Output throws Failure {
+    var state = new_emitter(module, fallback);
+    if backend_id(module.config.backend) != 1 ||
+       module.config.word_bits != 64 {
+        throw rejected("Python value emitter requires a Python/64 verified profile");
+    }
+    var found i64 = -1;
+    for var index usize = 0; index < vec.len(module.functions); index += 1 {
+        if module.functions[index].symbol == entry {
+            found = i64(index);
+            break;
+        }
+    }
+    if found < 0 {
+        throw internal("entry SymbolId is not a verified function");
+    }
+    let entry_function = module.functions[usize(found)];
+    let entry_signature = type_of(module, entry_function.signature);
+    let entry_result = type_of(module, entry_signature.result);
+    if vec.len(entry_signature.parameters) != 0 ||
+       !(kind_is(entry_result.kind, model.TypeKind.Unit) ||
+         (kind_is(entry_result.kind, model.TypeKind.SignedInt) &&
+          entry_result.bits == 32)) {
+        throw rejected_at(
+            "Python entry must have no parameters and return Unit or i32",
+            entry_function.source.span);
+    }
+    for temporary in module.ownership.temporaries {
+        ordered_insert(inout state.temporary_ids, u64(temporary.producer));
+    }
+    // Every lambda capture local is a read-only environment alias.  It is
+    // registered before owned_bindings so it can never become an Owner slot.
+    for function in module.functions {
+        for capture in function.captures {
+            ordered_insert(inout state.capture_locals, u64(capture.local));
+            ordered_insert(inout state.named, u64(capture.local));
+        }
+    }
+    for lifetime in module.ownership.locals {
+        if mode_id(lifetime.mode) == 2 && owned(state, lifetime.type_id) &&
+           !lifetime.read_only_capture &&
+           !ordered_contains(state.capture_locals, u64(lifetime.symbol)) {
+            ordered_insert(inout state.owned_bindings, u64(lifetime.symbol));
+        }
+    }
+    for function in module.functions {
+        check_signature(state, function.signature, function.source.span);
+        let signature = type_of(module, function.signature);
+        collect_type(inout state, signature.result);
+        switch signature.throws_type {
+            case option.Option.Some(error_type):
+                // A declared error is an error position even when the body has
+                // no throw/catch for it.
+                type_key(module, error_type, true);
+                collect_type(inout state, error_type);
+            case option.Option.None: {}
+        }
+        for parameter in signature.parameters {
+            collect_type(inout state, parameter.type_id);
+        }
+        vec.push(state.symbols, SymbolName(symbol: function.symbol,
+            name: function_symbol_name(function.symbol)));
+        for var index usize = 0; index < vec.len(function.parameters);
+            index += 1 {
+            let symbol = function.parameters[index].symbol;
+            ordered_insert(inout state.named, u64(symbol));
+            var inout_parameter = false;
+            if index < vec.len(signature.parameters) {
+                inout_parameter = mode_id(signature.parameters[index].mode) == 1;
+            }
+            if inout_parameter {
+                ordered_insert(inout state.cells, u64(symbol));
+            }
+        }
+        // The arena also owns non-executable template bodies.  Only concrete
+        // functions and their body trees contribute types, locals and Cells.
+        let pending = vec.empty[usize]();
+        vec.push(pending, function.body);
+        for vec.len(pending) > 0 {
+            let popped = vec.pop(pending);
+            var id usize = 0;
+            switch popped {
+                case option.Option.Some(value): id = value;
+                case option.Option.None:
+                    throw internal("function walk lost a pending node");
+            }
+            let node = node_at(state, id);
+            collect_type(inout state, node.type_id);
+            switch node.data {
+                case hir.NodeData.ForIn(for_in): {
+                    ordered_insert(inout state.named, u64(for_in.element));
+                    switch for_in.iterator {
+                        case option.Option.Some(iterator):
+                            ordered_insert(inout state.named, u64(iterator.cursor));
+                            ordered_insert(inout state.named, u64(iterator.option));
+                        case option.Option.None: {}
+                    }
+                }
+                case hir.NodeData.Call(call):
+                    check_signature(state, call.signature, node.source.span);
+                case hir.NodeData.Switch(switch_node):
+                    for arm in switch_node.arms {
+                        pattern_names(inout state, arm.pattern);
+                    }
+                case hir.NodeData.Try(try_node):
+                    for catch_clause in try_node.catches {
+                        ordered_insert(inout state.named, u64(catch_clause.binding));
+                    }
+                case hir.NodeData.Binding(binding):
+                    ordered_insert(inout state.named, u64(binding.symbol));
+                    if binding.writable {
+                        ordered_insert(inout state.cells, u64(binding.symbol));
+                    }
+                default: {}
+            }
+            if node_kind_id_of(node) == 23 {
+                throw rejected_at(
+                    "Unsupported operation in Python value profile",
+                    node.source.span);
+            }
+            switch node.data {
+                case hir.NodeData.ForeignRead(read):
+                    if option.is_some(read.access) {
+                        state.uses_foreign_access = true;
+                    }
+                default: {}
+            }
+            for child in node.children {
+                vec.push(pending, child);
+            }
+        }
+    }
+    for symbol in state.named {
+        vec.push(state.symbols, SymbolName(symbol: usize(symbol),
+            name: symbol_name(usize(symbol))));
+    }
+    var program = vec.empty[Statement]();
+    vec.push(program, stmt(
+        "# Generated from verified HIR; compiler-dev/1; Python/64"));
+    vec.push(program, stmt("import langrt as _rt"));
+    let version_body = vec.empty[Statement]();
+    vec.push(version_body, stmt(
+        "raise RuntimeError('incompatible langrt version')"));
+    vec.push(program, stmt_suite(
+        "if _rt.RUNTIME_VERSION != '" + RUNTIME_VERSION + "'", true,
+        zero_span(), version_body));
+    vec.push(program, stmt("_LANG_BINDING_INFO = " + binding_info(module)));
+    if state.uses_foreign_access {
+        emit_foreign_access_helpers(inout program);
+    }
+    var emitted_types = vec.empty[u64]();
+    for type_id in state.value_types {
+        emit_type(inout state, usize(type_id), inout program, inout emitted_types);
+    }
+    for function in module.functions {
+        var tree = function_tree(inout state, function, false);
+        if state.fallback {
+            // A fresh emitter retries only functions whose unchanged private
+            // generation tree exceeds CPython's static limits.  Checking emits
+            // no text or SourceMap entries; ordinary functions keep their
+            // bytes.
+            state.printer.checking_only = true;
+            var needs_outlining = false;
+            let single = vec.empty[Statement]();
+            vec.push(single, tree);
+            try {
+                print_suite(inout state.printer, single, 0, 0);
+            } catch error Failure {
+                state.printer.checking_only = false;
+                switch error {
+                    case Failure.Rejected(message, has_source, source, reason):
+                        let reason_value = reject_reason_id(reason);
+                        if reason_value == 1 || reason_value == 2 {
+                            needs_outlining = true;
+                        } else {
+                            throw error;
+                        }
+                    case Failure.Internal(message): throw error;
+                }
+            }
+            state.printer.checking_only = false;
+            if needs_outlining {
+                tree = function_tree(inout state, function, true);
+            }
+        }
+        vec.push(program, tree);
+    }
+    if state.uses_cleanup_guard {
+        // __exit__ receives this scope's actual exception, even when its
+        // caller is handling another Panic.  Cleanup callbacks cannot escape
+        // by return.
+        insert_at(inout program, 3, cleanup_guard_class());
+    }
+    append_suite(inout program, state.adapters);
+    if vec.len(state.helpers) > 0 {
+        vec.push(program, lang_return_class());
+        vec.push(program, lang_loop_jump_class());
+        append_suite(inout program, state.helpers);
+    }
+    if options.entrypoint {
+        let runner = vec.empty[Statement]();
+        vec.push(runner, stmt("_rt.run(" +
+            function_symbol_name(entry) + ")"));
+        vec.push(program, stmt_suite("if __name__ == '__main__'", true,
+            zero_span(), runner));
+    }
+    print_suite(inout state.printer, program, 0, 0);
+    return Output(code: state.printer.code, runtime: runtime,
+        source_map: state.printer.source_map, symbols: state.symbols);
+}
+
+pub func emit(input hirverify.VerifiedHirModule, entry usize, options Options,
+              runtime string) EmitResult {
+    var result = EmitResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, diagnostics: [],
+        value: option.Option[Output].None);
+    // Both the verifier's defensive clone and the capability gate can fail.
+    // The public result stays non-throwing; a failed snapshot publishes no
+    // Output and is reported like any other internal emission failure.
+    try {
+        let module = hirverify.snapshot(input);
+        let checked = hirverify.check_backend_capabilities(module);
+        let supported = unit_success(checked);
+        result.state = checked.state;
+        result.failure = checked.failure;
+        result.diagnostics = checked.diagnostics;
+        if !supported {
+            return result;
+        }
+        try {
+            let generated = generate_once(module, entry, options, runtime, false);
+            result.value = option.Option[Output].Some(generated);
+            result.state = model.PhaseState.Complete;
+        } catch error Failure {
+            switch error {
+                case Failure.Rejected(message, has_source, source, reason):
+                    let reason_value = reject_reason_id(reason);
+                    if reason_value == 1 || reason_value == 2 {
+                        try {
+                            let retried = generate_once(module, entry, options,
+                                runtime, true);
+                            result.value = option.Option[Output].Some(retried);
+                            result.state = model.PhaseState.Complete;
+                        } catch retry Failure {
+                            finish_failure(inout result, retry);
+                        }
+                    } else {
+                        finish_failure(inout result, error);
+                    }
+                case Failure.Internal(message):
+                    finish_failure(inout result, error);
+            }
+        }
+    } catch error model.SupportError {
+        finish_failure(inout result, support_failure(error));
+    }
+    return result;
+}

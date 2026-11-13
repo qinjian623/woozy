@@ -1,0 +1,451 @@
+// Test-only package-internal self test for nativeverify.
+//
+// This file is copied into the staged nativeverify package by
+// packagecheck/run.py; it is not part of the compiler source tree.  It uses
+// the real package-private helpers (no stubs) to check:
+//   * the ordered map/set replacements keep the std::map/std::set key order,
+//   * obligation keys/counts compare exactly like the C++ tuples,
+//   * the deep copies isolate every CFG Vec and diagnostic array in both
+//     directions,
+//   * append_error keeps the C++ E_IR_INVALID shape (span for Bad,
+//     no primary span for a shared-algorithm error).
+package nativeverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func check(label string, condition bool, failures inout usize)
+    throws os.Error {
+    if !condition {
+        failures += 1;
+        io.eprintln("FAIL " + label);
+    }
+}
+
+func definition(value usize) Definition {
+    return Definition(block: value, position: value + 1, type_id: value + 2,
+        address: false, source: empty_span());
+}
+
+func test_sorted_maps(failures inout usize) throws os.Error {
+    var definitions = definition_map();
+    check("insert 5", definition_insert(inout definitions, 5, definition(5)),
+        inout failures);
+    check("insert 1", definition_insert(inout definitions, 1, definition(1)),
+        inout failures);
+    check("insert 9", definition_insert(inout definitions, 9, definition(9)),
+        inout failures);
+    check("insert 3", definition_insert(inout definitions, 3, definition(3)),
+        inout failures);
+    check("duplicate 3 rejected",
+        !definition_insert(inout definitions, 3, definition(3)),
+        inout failures);
+    check("insert 7", definition_insert(inout definitions, 7, definition(7)),
+        inout failures);
+    check("definitions ascending",
+        vec.len(definitions.entries) == 5 &&
+        definitions.entries[0].value == 1 &&
+        definitions.entries[1].value == 3 &&
+        definitions.entries[2].value == 5 &&
+        definitions.entries[3].value == 7 &&
+        definitions.entries[4].value == 9, inout failures);
+    let found = definition_find(definitions, 7);
+    var value = Definition(block: 0, position: 0, type_id: 0, address: false,
+        source: empty_span());
+    var present = false;
+    switch found {
+        case option.Option.Some(item): value = item; present = true;
+        case option.Option.None: {}
+    }
+    check("definition_find 7", present && value.block == 7 &&
+        value.type_id == 9, inout failures);
+    var nodes = node_set();
+    node_set_insert(inout nodes, 4);
+    node_set_insert(inout nodes, 2);
+    node_set_insert(inout nodes, 6);
+    check("node duplicate rejected", !node_set_insert(inout nodes, 4),
+        inout failures);
+    check("node order", vec.len(nodes.values) == 3 && nodes.values[0] == 2 &&
+        nodes.values[1] == 4 && nodes.values[2] == 6, inout failures);
+    check("node remove", node_set_remove(inout nodes, 4) &&
+        !node_set_has(nodes, 4) && node_set_has(nodes, 2), inout failures);
+    var facts = fact_set();
+    fact_insert(inout facts, 2, 7, true);
+    fact_insert(inout facts, 1, 3, false);
+    check("fact duplicate rejected", !fact_insert(inout facts, 2, 7, true),
+        inout failures);
+    check("fact order", vec.len(facts.values) == 2 &&
+        facts.values[0].value == 1 && facts.values[1].value == 2,
+        inout failures);
+    var other_facts = fact_set();
+    fact_insert(inout other_facts, 2, 7, true);
+    fact_insert(inout other_facts, 1, 3, true);
+    let common = fact_set_intersect(facts, other_facts);
+    check("fact intersect", vec.len(common.values) == 1 &&
+        common.values[0].value == 2, inout failures);
+    check("compare_option None<Some0",
+        compare_option(option.Option[usize].None,
+            option.Option[usize].Some(0)) < 0 &&
+        compare_option(option.Option[usize].Some(0),
+            option.Option[usize].Some(3)) < 0 &&
+        compare_option(option.Option[usize].Some(3),
+            option.Option[usize].Some(3)) == 0, inout failures);
+    var bits = bool_set(8);
+    bool_set_add(inout bits, 0);
+    bool_set_add(inout bits, 2);
+    bool_set_add(inout bits, 5);
+    check("bool duplicate rejected", !bool_set_add(inout bits, 2),
+        inout failures);
+    check("bool remove", bool_set_remove(inout bits, 2) &&
+        !bool_set_has(bits, 2) && bool_set_has(bits, 5), inout failures);
+    var mask = bool_set(8);
+    bool_set_add(inout mask, 0);
+    bool_set_add(inout mask, 5);
+    bool_set_add(inout mask, 7);
+    let both = bool_set_intersect(bits, mask);
+    check("bool intersect", bool_set_has(both, 0) && bool_set_has(both, 5) &&
+        !bool_set_has(both, 7) && bool_set_count(both) == 2, inout failures);
+    check("bool single", bool_set_is_single(both, 0) == false &&
+        bool_set_count(both) == 2, inout failures);
+    var one = bool_set(4);
+    bool_set_add(inout one, 3);
+    var first_index usize = 99;
+    try {
+        first_index = bool_set_first(one);
+    } catch error VerifyError {
+        failures += 1;
+    }
+    check("bool single positive", bool_set_is_single(one, 3) &&
+        first_index == 3, inout failures);
+}
+
+func test_obligations(failures inout usize) throws os.Error {
+    var actual = obligations();
+    let empty = vec.empty[ContextEntry]();
+    let first = vec.empty[ContextEntry]();
+    vec.push(first, ContextEntry(origin: 1, kind: hir.ExitKind.Return,
+        error_type: option.Option[usize].None, defer_node: 2));
+    let second = vec.empty[ContextEntry]();
+    vec.push(second, ContextEntry(origin: 2, kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(4), defer_node: 3));
+    // Insert out of order; the map must still compare by tuple key.
+    obligation_add_exit(inout actual, second, 9, hir.ExitKind.Error,
+        option.Option[usize].Some(4));
+    obligation_add_exit(inout actual, first, 5, hir.ExitKind.Return,
+        option.Option[usize].None);
+    obligation_add_exit(inout actual, first, 5, hir.ExitKind.Return,
+        option.Option[usize].None);
+    obligation_add_call(inout actual, empty, 7);
+    obligation_add_call(inout actual, first, 7);
+    let wanted_exits = vec.empty[ExitObligation]();
+    vec.push(wanted_exits, ExitObligation(key: ExitKey(context: first,
+        origin: 5, kind: hir.ExitKind.Return,
+        error_type: option.Option[usize].None), count: 2));
+    vec.push(wanted_exits, ExitObligation(key: ExitKey(context: second,
+        origin: 9, kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(4)), count: 1));
+    check("exit obligation order/count",
+        obligations_equal_exits(actual.exits, wanted_exits), inout failures);
+    check("exit obligation order strict",
+        exit_obligation_compare(actual.exits[0], actual.exits[1]) < 0,
+        inout failures);
+    let wanted_calls = vec.empty[CallObligation]();
+    vec.push(wanted_calls, CallObligation(key: CallKey(context: empty,
+        origin: 7), count: 1));
+    vec.push(wanted_calls, CallObligation(key: CallKey(context: first,
+        origin: 7), count: 1));
+    check("call obligation order/count",
+        obligations_equal_calls(actual.calls, wanted_calls), inout failures);
+    check("context order", context_compare(first, second) < 0 &&
+        context_compare(empty, first) < 0, inout failures);
+    check("context entry order", context_entry_compare(first[0], second[0]) < 0,
+        inout failures);
+}
+
+func parameter_value(value usize) nativeir.BlockParameter {
+    return nativeir.BlockParameter(value: value, type_id: value + 1,
+        call: value + 2, error: false);
+}
+
+func test_more_maps(failures inout usize) throws os.Error {
+    var parameters = parameter_map();
+    parameter_insert(inout parameters, 5, parameter_value(5));
+    parameter_insert(inout parameters, 1, parameter_value(1));
+    parameter_insert(inout parameters, 3, parameter_value(3));
+    check("parameter order", vec.len(parameters.entries) == 3 &&
+        parameters.entries[0].value == 1 &&
+        parameters.entries[1].value == 3 &&
+        parameters.entries[2].value == 5, inout failures);
+    let found = parameter_find(parameters, 3);
+    var parameter = nativeir.BlockParameter(value: 0, type_id: 0, call: 0,
+        error: false);
+    var present = false;
+    switch found {
+        case option.Option.Some(item): parameter = item; present = true;
+        case option.Option.None: {}
+    }
+    check("parameter find", present && parameter.type_id == 4,
+        inout failures);
+    var roots = element_root_map();
+    element_root_insert(inout roots, 4, 40);
+    element_root_insert(inout roots, 2, 20);
+    element_root_insert(inout roots, 3, 30);
+    check("element root order", vec.len(roots.entries) == 3 &&
+        roots.entries[0].value == 2 && roots.entries[1].value == 3 &&
+        roots.entries[2].value == 4, inout failures);
+    var counts = value_count_map();
+    value_count_add(inout counts, 7);
+    value_count_add(inout counts, 7);
+    value_count_add(inout counts, 2);
+    check("value count", value_count_get(counts, 7) == 2 &&
+        value_count_get(counts, 2) == 1 &&
+        value_count_get(counts, 9) == 0, inout failures);
+    var owners = value_owner_map(8);
+    value_owner_add(inout owners, 4, 6);
+    value_owner_add(inout owners, 4, 2);
+    value_owner_add(inout owners, 1, 3);
+    check("value owner order", vec.len(owners.entries) == 2 &&
+        owners.entries[0].value == 1 && owners.entries[1].value == 4,
+        inout failures);
+    let owner = value_owner_find(owners, 4);
+    var owner_set = bool_set(8);
+    switch owner {
+        case option.Option.Some(item): owner_set = item;
+        case option.Option.None: {}
+    }
+    check("value owner membership", bool_set_has(owner_set, 6) &&
+        bool_set_has(owner_set, 2) && bool_set_count(owner_set) == 2,
+        inout failures);
+    var temporaries = slot_temporary_map();
+    check("temporary insert", slot_temporary_insert(inout temporaries, 3, 9),
+        inout failures);
+    check("temporary duplicate", !slot_temporary_insert(inout temporaries, 3, 8),
+        inout failures);
+    var temporary_value usize = 0;
+    try {
+        temporary_value = slot_temporary_require(temporaries, 3);
+    } catch error VerifyError {
+        failures += 1;
+    }
+    check("temporary require", temporary_value == 9, inout failures);
+    var orders = node_order_map();
+    node_order_insert(inout orders, 6, 60);
+    node_order_insert(inout orders, 2, 20);
+    check("node order sorted", vec.len(orders.entries) == 2 &&
+        orders.entries[0].node == 2 && orders.entries[1].node == 6,
+        inout failures);
+    let order = node_order_find(orders, 6);
+    var order_value usize = 0;
+    switch order {
+        case option.Option.Some(item): order_value = item;
+        case option.Option.None: {}
+    }
+    check("node order find", order_value == 60, inout failures);
+    var handlers = handler_map();
+    handler_insert(inout handlers, 2, 1, 5, default_handler());
+    handler_insert(inout handlers, 1, 9, 3, default_handler());
+    handler_insert(inout handlers, 1, 2, 4, default_handler());
+    check("handler tuple order", vec.len(handlers.entries) == 3 &&
+        handlers.entries[0].key.try_node == 1 &&
+        handlers.entries[0].key.index == 2 &&
+        handlers.entries[1].key.index == 9 &&
+        handlers.entries[2].key.try_node == 2, inout failures);
+    check("handler duplicate rejected",
+        !handler_insert(inout handlers, 2, 1, 5, default_handler()),
+        inout failures);
+    var instances = instance_set();
+    instance_set_insert(inout instances, 3, 1, 7);
+    instance_set_insert(inout instances, 1, 2, 4);
+    check("instance order", vec.len(instances.values) == 2 &&
+        instances.values[0].try_node == 1 &&
+        instances.values[1].try_node == 3, inout failures);
+    var catches = catch_set();
+    catch_set_insert(inout catches, CatchKey(try_node: 4, index: 2));
+    catch_set_insert(inout catches, CatchKey(try_node: 1, index: 7));
+    check("catch order", vec.len(catches.values) == 2 &&
+        catches.values[0].try_node == 1, inout failures);
+    check("catch remove", catch_set_remove(inout catches,
+        CatchKey(try_node: 4, index: 2)) && vec.len(catches.values) == 1,
+        inout failures);
+    var symbols = vec.empty[FunctionEntry]();
+    symbol_add(inout symbols, 9, 90);
+    symbol_add(inout symbols, 2, 20);
+    symbol_add(inout symbols, 5, 50);
+    check("symbol order", vec.len(symbols) == 3 && symbols[0].symbol == 2 &&
+        symbols[1].symbol == 5 && symbols[2].symbol == 9, inout failures);
+    let symbol_signature = symbol_find(symbols, 5);
+    var signature usize = 0;
+    switch symbol_signature {
+        case option.Option.Some(item): signature = item;
+        case option.Option.None: {}
+    }
+    check("symbol find", signature == 50, inout failures);
+    var flags = value_flag_map();
+    value_flag_insert(inout flags, 4, 1);
+    value_flag_insert(inout flags, 2, 1);
+    value_flag_set(inout flags, 4, 2);
+    var flag_value u32 = 0;
+    try {
+        flag_value = value_flag_require(flags, 4);
+    } catch error VerifyError {
+        failures += 1;
+    }
+    check("value flag order/update", vec.len(flags.entries) == 2 &&
+        flags.entries[0].value == 2 && flag_value == 2, inout failures);
+    var definitions = definition_map();
+    definition_insert(inout definitions, 3, Definition(block: 3,
+        position: 1, type_id: 8, address: false, source: empty_span()));
+    definition_set_source(inout definitions, 3, model.Span(snapshot: 9,
+        begin_byte: 1, end_byte: 2));
+    var updated_source = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    try {
+        updated_source = definition_require(definitions, 3).source;
+    } catch error VerifyError {
+        failures += 1;
+    }
+    check("definition source update", updated_source.snapshot == 9,
+        inout failures);
+}
+
+func sample_function() nativeir.Function {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Binary;
+    instruction.result = option.Option[usize].Some(3);
+    instruction.type_id = 2;
+    instruction.inputs = [10, 11];
+    instruction.methods = [20];
+    instruction.utf8 = "bytes";
+    let instructions = vec.empty[nativeir.Instruction]();
+    vec.push(instructions, instruction);
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Return;
+    terminator.inputs = [3];
+    terminator.targets = [1];
+    let parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(parameters, nativeir.BlockParameter(value: 3, type_id: 2,
+        call: 1, error: false));
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    vec.push(blocks, nativeir.BasicBlock(instructions: instructions,
+        terminator: terminator, parameters: parameters));
+    let slots = vec.empty[nativeir.Slot]();
+    vec.push(slots, nativeir.Slot(type_id: 2,
+        parameter: option.Option[u32].Some(0), is_inout: false,
+        owner: option.Option[hir.OwnerRef].Some(hir.OwnerRef(
+            kind: hir.OwnerKind.Binding, identity: 6)),
+        owning_parameter: true, binding: option.Option[usize].Some(8)));
+    let handlers = vec.empty[nativeir.Handler]();
+    vec.push(handlers, nativeir.Handler(target: hir.CatchTarget(try_node: 4,
+        index: 2), block: 1, slot: 0, protected_entry: 0));
+    return nativeir.Function(symbol: 1, signature: 2, is_async: false,
+        slots: slots, blocks: blocks, source: empty_span(),
+        handlers: handlers);
+}
+
+func test_copies(failures inout usize) throws os.Error {
+    let original = sample_function();
+    let copied = copy_function(original);
+    // Mutate the original's shared Vecs; the copy must keep its arrays.
+    vec.push(original.blocks[0].instructions[0].inputs, 12);
+    vec.push(original.blocks[0].instructions[0].methods, 21);
+    vec.push(original.blocks[0].terminator.inputs, 4);
+    vec.push(original.blocks[0].terminator.targets, 2);
+    vec.push(original.blocks[0].parameters, nativeir.BlockParameter(
+        value: 30, type_id: 2, call: 1, error: true));
+    vec.push(original.slots, nativeir.Slot(type_id: 2,
+        parameter: option.Option[u32].None, is_inout: false,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: option.Option[usize].None));
+    vec.push(original.handlers, nativeir.Handler(target: hir.CatchTarget(
+        try_node: 4, index: 2), block: 0, slot: 0, protected_entry: 0));
+    check("copy instruction inputs isolated",
+        vec.len(copied.blocks[0].instructions[0].inputs) == 2, inout failures);
+    check("copy methods isolated",
+        vec.len(copied.blocks[0].instructions[0].methods) == 1,
+        inout failures);
+    check("copy terminator isolated",
+        vec.len(copied.blocks[0].terminator.inputs) == 1 &&
+        vec.len(copied.blocks[0].terminator.targets) == 1, inout failures);
+    check("copy parameters isolated",
+        vec.len(copied.blocks[0].parameters) == 1, inout failures);
+    check("copy slots/handlers isolated",
+        vec.len(copied.slots) == 1 && vec.len(copied.handlers) == 1,
+        inout failures);
+    // Mutate the copy; the original's already-extended arrays must not change
+    // again through the copy.
+    let original_inputs = vec.len(original.blocks[0].instructions[0].inputs);
+    vec.push(copied.blocks[0].instructions[0].inputs, 99);
+    check("copy does not alias original",
+        vec.len(original.blocks[0].instructions[0].inputs) == original_inputs,
+        inout failures);
+    check("function identity copied", copied.symbol == 1 &&
+        copied.signature == 2, inout failures);
+    let list = vec.empty[nativeir.Function]();
+    vec.push(list, original);
+    let list_copy = copy_functions(list);
+    vec.push(list, sample_function());
+    check("copy_functions length", vec.len(list_copy) == 1, inout failures);
+    var diagnostic = model.Diagnostic(code: "E_IR_INVALID", phase: "lowering",
+        severity: "error", message: "x", has_primary: false,
+        primary: empty_span(), related: [], fixits: [], notes: [],
+        has_expected_type: false, expected_type: "",
+        has_actual_type: false, actual_type: "");
+    vec.push(diagnostic.related, model.Related(span: empty_span(),
+        message: "related"));
+    let diagnostic_copy = copy_diagnostic(diagnostic);
+    vec.push(diagnostic.notes, "note");
+    check("diagnostic related isolated",
+        vec.len(diagnostic_copy.related) == 1, inout failures);
+    check("diagnostic notes isolated",
+        vec.len(diagnostic_copy.notes) == 0, inout failures);
+}
+
+func test_errors(failures inout usize) throws os.Error {
+    var diagnostics = vec.empty[model.Diagnostic]();
+    append_error(inout diagnostics, bad("boom", model.Span(snapshot: 3,
+        begin_byte: 4, end_byte: 5)));
+    check("bad diagnostic", vec.len(diagnostics) == 1 &&
+        diagnostics[0].code == "E_IR_INVALID" &&
+        diagnostics[0].message == "boom" && diagnostics[0].has_primary &&
+        diagnostics[0].primary.snapshot == 3, inout failures);
+    diagnostics = vec.empty[model.Diagnostic]();
+    append_error(inout diagnostics,
+        support(model.SupportError.Invalid("support text")));
+    check("support diagnostic", vec.len(diagnostics) == 1 &&
+        diagnostics[0].message == "support text" &&
+        !diagnostics[0].has_primary, inout failures);
+    let converted = support_from_type_error(types.Error.Invalid("typed text"));
+    check("type error text preserved",
+        support_message(converted) == "typed text", inout failures);
+}
+
+func support_message(value model.SupportError) string {
+    switch value {
+        case model.SupportError.Invalid(text): return text;
+        case model.SupportError.Limit(text): return text;
+    }
+}
+
+pub func selftest() i32 throws os.Error {
+    var failures usize = 0;
+    test_sorted_maps(inout failures);
+    test_more_maps(inout failures);
+    test_obligations(inout failures);
+    test_copies(inout failures);
+    test_errors(inout failures);
+    io.println("selftest failures=" + num(failures));
+    if failures > 0 {
+        return 1;
+    }
+    return 0;
+}

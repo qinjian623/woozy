@@ -1,0 +1,72 @@
+// Public Native CFG lowering entry point.
+//
+// This is the pure-Wz counterpart of lang::ir::lower in src/ir/lower.cpp.  It
+// consumes a VerifiedHirModule, re-snapshots it, re-checks the backend
+// capabilities, enforces Native/64, lowers every function and finally calls
+// nativeverify.verify.  It never constructs a VerifiedModule and never trusts
+// a caller-provided "verified" flag; the only verified value in the result is
+// the one nativeverify publishes on success.
+//
+// The frozen hirverify.snapshot signature throws model.SupportError even
+// though lower itself returns a VerifyResult and must not declare throws.
+// Snapshot acquisition and every later read therefore happen inside one try
+// block; a snapshot failure becomes the same E_IR_INVALID/internal result as
+// an internal lowering failure, exactly like the C++ catch in lower.cpp.
+package nativelower;
+
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify" as nativeverify;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func lower(input hirverify.VerifiedHirModule) nativeverify.VerifyResult {
+    try {
+        let module = hirverify.snapshot(input);
+        let capabilities = hirverify.check_backend_capabilities(module);
+        if !unit_success(capabilities) {
+            return nativeverify.VerifyResult(state: capabilities.state,
+                failure: capabilities.failure,
+                diagnostics: capabilities.diagnostics,
+                value: option.Option[nativeverify.VerifiedModule].None);
+        }
+        let config = hirverify.config(input);
+        var is_native = false;
+        switch config.backend {
+            case model.Backend.Native: is_native = true;
+            default: {}
+        }
+        if !is_native || config.word_bits != 64 {
+            var diagnostics = vec.empty[model.Diagnostic]();
+            vec.push(diagnostics, lower_diagnostic("E_CAPABILITY_UNAVAILABLE",
+                "native scalars require native/64 HIR"));
+            return nativeverify.VerifyResult(state: model.PhaseState.Failed,
+                failure: model.FailureKind.Unsupported,
+                diagnostics: diagnostics,
+                value: option.Option[nativeverify.VerifiedModule].None);
+        }
+        var output = nativeir.empty_module(module);
+        for function in module.functions {
+            var function_state = new_lower(module, function);
+            // take_function has no return value; it rewrites state.f in place
+            // (dead block/slot removal and id renumbering) exactly like the
+            // C++ Lower::take() mutation of f.
+            take_function(inout function_state);
+            vec.push(output.functions, function_state.f);
+        }
+        return nativeverify.verify(output);
+    } catch error model.SupportError {
+        var message = "";
+        switch error {
+            case model.SupportError.Invalid(text): message = text;
+            case model.SupportError.Limit(text): message = text;
+        }
+        var diagnostics = vec.empty[model.Diagnostic]();
+        vec.push(diagnostics, lower_diagnostic("E_IR_INVALID", message));
+        return nativeverify.VerifyResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal,
+            diagnostics: diagnostics,
+            value: option.Option[nativeverify.VerifiedModule].None);
+    }
+}

@@ -1,0 +1,325 @@
+// Required exit/call obligations derived solely from the immutable HIR
+// control tree.  Direct port of src/ir/obligations.hpp.
+//
+// This is not machine lowering: there is no native block, value, slot or
+// marker input.  Calls remain possibly successful/failing and conditionals
+// retain both edges, just as the unoptimized native CFG does (including
+// literal conditions).  The context records which exit and defer caused each
+// surrounding expansion, so a count cannot be satisfied by moving an
+// obligation to another inline copy of the same source body.
+package nativeverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/pattern" as pattern;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func context_copy(values Vec[ContextEntry]) Vec[ContextEntry] {
+    let result = vec.empty[ContextEntry]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, value);
+    }
+    return result;
+}
+
+struct Flow {
+    falls bool;
+    breaks NodeSet;
+    continues NodeSet;
+    catches CatchSet;
+}
+
+func empty_flow() Flow {
+    return Flow(falls: true, breaks: node_set(), continues: node_set(),
+        catches: catch_set());
+}
+
+func flow_merge(target inout Flow, other Flow) {
+    for value in other.breaks.values {
+        node_set_insert(inout target.breaks, value);
+    }
+    for value in other.continues.values {
+        node_set_insert(inout target.continues, value);
+    }
+    for value in other.catches.values {
+        catch_set_insert(inout target.catches, value);
+    }
+}
+
+struct Required {
+    h hir.HirModule;
+    obligations Obligations;
+    context Vec[ContextEntry];
+}
+
+// The HIR node of a plan/exit; C++ uses nodes.at, i.e. an out-of-range id is
+// an internal data error, never a silent skip.
+func required_node(state Required, id usize) hir.HirNode throws VerifyError {
+    return hir_node(state.h, id);
+}
+
+func required_exit(state inout Required, id usize, kind hir.ExitKind,
+                   error_type option.Option[usize]) Flow throws VerifyError {
+    let node = required_node(state, id);
+    var flow = empty_flow();
+    for plan in node.exits {
+        if exit_kind_id(plan.kind) != exit_kind_id(kind) ||
+           compare_option(plan.error_type, error_type) != 0 {
+            continue;
+        }
+        obligation_add_exit(inout state.obligations,
+            context_copy(state.context), id, kind, error_type);
+        let defers = plan.defers;
+        for defer_node in defers {
+            vec.push(state.context, ContextEntry(origin: id, kind: kind,
+                error_type: error_type, defer_node: defer_node));
+            let defer_body = required_node(state, defer_node);
+            let body = required_stmt(inout state, defer_body.children[0]);
+            flow_merge(inout flow, body);
+            let popped = vec.pop(state.context);
+            switch popped {
+                case option.Option.Some(item): {}
+                case option.Option.None: {}
+            }
+        }
+        switch plan.target {
+            case hir.ExitTarget.CatchTarget(target): {
+                catch_set_insert(inout flow.catches,
+                    CatchKey(try_node: target.try_node, index: target.index));
+            }
+            default: {}
+        }
+    }
+    return flow;
+}
+
+func required_expr(state inout Required, id usize) Flow throws VerifyError {
+    let node = required_node(state, id);
+    var flow = empty_flow();
+    for child in node.children {
+        let child_flow = required_expr(inout state, child);
+        flow_merge(inout flow, child_flow);
+    }
+    switch node.data {
+        case hir.NodeData.Call(call): {
+            obligation_add_call(inout state.obligations,
+                context_copy(state.context), id);
+            let signature = require_type(state.h, call.signature,
+                node.source.span);
+            switch signature.throws_type {
+                case option.Option.Some(error_type): {
+                    let exit_flow = required_exit(inout state, id,
+                        hir.ExitKind.Error, option.Option[usize].Some(error_type));
+                    flow_merge(inout flow, exit_flow);
+                }
+                case option.Option.None: {}
+            }
+        }
+        default: {}
+    }
+    if kind_is(hir.node_kind(node.data), hir.NodeKind.Await) {
+        let child = required_node(state, node.children[0]);
+        let task = require_type(state.h, child.type_id, node.source.span);
+        if !type_is(task.kind, model.TypeKind.Task) ||
+           vec.len(task.type_args) != 2 {
+            throw support(model.SupportError.Invalid(
+                "await child is not a Task"));
+        }
+        let error_type = task.type_args[1];
+        let error = require_type(state.h, error_type, node.source.span);
+        if !type_is(error.kind, model.TypeKind.Unit) {
+            let error_flow = required_exit(inout state, id, hir.ExitKind.Error,
+                option.Option[usize].Some(error_type));
+            flow_merge(inout flow, error_flow);
+        }
+        let cancel_flow = required_exit(inout state, id, hir.ExitKind.Cancel,
+            option.Option[usize].None);
+        flow_merge(inout flow, cancel_flow);
+    }
+    return flow;
+}
+
+func required_stmt(state inout Required, id usize) Flow throws VerifyError {
+    let node = required_node(state, id);
+    var flow = empty_flow();
+    switch node.data {
+        case hir.NodeData.Defer(payload): return flow;
+        case hir.NodeData.Noop(payload): return flow;
+        case hir.NodeData.Block(payload): {
+            for child in node.children {
+                if !flow.falls {
+                    break;
+                }
+                let next = required_stmt(inout state, child);
+                flow_merge(inout flow, next);
+                flow.falls = next.falls;
+            }
+            if flow.falls {
+                let exit_flow = required_exit(inout state, id,
+                    hir.ExitKind.Normal, option.Option[usize].None);
+                flow_merge(inout flow, exit_flow);
+            }
+            return flow;
+        }
+        case hir.NodeData.Return(payload): {
+            if vec.len(node.children) > 0 {
+                let value_flow = required_expr(inout state, node.children[0]);
+                flow_merge(inout flow, value_flow);
+            }
+            let exit_flow = required_exit(inout state, id,
+                hir.ExitKind.Return, option.Option[usize].None);
+            flow_merge(inout flow, exit_flow);
+            flow.falls = false;
+            return flow;
+        }
+        case hir.NodeData.Throw(payload): {
+            let value_flow = required_expr(inout state, node.children[0]);
+            flow_merge(inout flow, value_flow);
+            let value = required_node(state, node.children[0]);
+            let exit_flow = required_exit(inout state, id, hir.ExitKind.Error,
+                option.Option[usize].Some(value.type_id));
+            flow_merge(inout flow, exit_flow);
+            flow.falls = false;
+            return flow;
+        }
+        case hir.NodeData.Break(payload): {
+            let exit_flow = required_exit(inout state, id, hir.ExitKind.Break,
+                option.Option[usize].None);
+            flow_merge(inout flow, exit_flow);
+            node_set_insert(inout flow.breaks, payload.loop);
+            flow.falls = false;
+            return flow;
+        }
+        case hir.NodeData.Continue(payload): {
+            let exit_flow = required_exit(inout state, id,
+                hir.ExitKind.Continue, option.Option[usize].None);
+            flow_merge(inout flow, exit_flow);
+            node_set_insert(inout flow.continues, payload.loop);
+            flow.falls = false;
+            return flow;
+        }
+        case hir.NodeData.If(payload): {
+            let condition_flow = required_expr(inout state, node.children[0]);
+            flow_merge(inout flow, condition_flow);
+            let yes = required_stmt(inout state, node.children[1]);
+            var no = empty_flow();
+            if vec.len(node.children) == 3 {
+                no = required_stmt(inout state, node.children[2]);
+            }
+            flow_merge(inout flow, yes);
+            flow_merge(inout flow, no);
+            flow.falls = yes.falls || no.falls;
+            return flow;
+        }
+        case hir.NodeData.ForIn(payload): {
+            let iterable_flow = required_expr(inout state, node.children[0]);
+            flow_merge(inout flow, iterable_flow);
+            switch payload.iterator {
+                case option.Option.Some(iterator): {
+                    let next_flow = required_expr(inout state, iterator.next);
+                    flow_merge(inout flow, next_flow);
+                }
+                case option.Option.None: {}
+            }
+            let body = required_stmt(inout state, payload.body);
+            flow_merge(inout flow, body);
+            node_set_remove(inout flow.breaks, id);
+            node_set_remove(inout flow.continues, id);
+            let exit_flow = required_exit(inout state, id,
+                hir.ExitKind.Normal, option.Option[usize].None);
+            flow_merge(inout flow, exit_flow);
+            flow.falls = true;
+            return flow;
+        }
+        case hir.NodeData.For(payload): {
+            flow = required_stmt(inout state, node.children[0]);
+            if !flow.falls {
+                return flow;
+            }
+            let condition_flow = required_expr(inout state, node.children[1]);
+            flow_merge(inout flow, condition_flow);
+            let body = required_stmt(inout state, node.children[3]);
+            // HIR stores step before body; execution performs body first.
+            if body.falls || node_set_has(body.continues, id) {
+                let step = required_stmt(inout state, node.children[2]);
+                flow_merge(inout flow, step);
+            }
+            flow_merge(inout flow, body);
+            node_set_remove(inout flow.breaks, id);
+            node_set_remove(inout flow.continues, id);
+            let exit_flow = required_exit(inout state, id,
+                hir.ExitKind.Normal, option.Option[usize].None);
+            flow_merge(inout flow, exit_flow);
+            flow.falls = true;
+            return flow;
+        }
+        case hir.NodeData.Switch(payload): {
+            let scrutinee_flow = required_expr(inout state, node.children[0]);
+            flow_merge(inout flow, scrutinee_flow);
+            flow.falls = false;
+            // C++ copies the module TypeContext once per switch; substitution
+            // inside the pattern package appends only to that private copy.
+            // The lookup closure shares the same private entry array through
+            // the Vec handle, so ids stay consistent across lookups.
+            let module = state.h;
+            let scratch = types.clone_context(state.h.types);
+            let lookup = func(type_id usize) pattern.Domain
+                throws model.SupportError {
+                var context = scratch;
+                return pattern.pattern_domain(module, type_id, inout context);
+            };
+            let scrutinee = required_node(state, node.children[0]);
+            var coverage = pattern.coverage(scrutinee.type_id, lookup, 100000);
+            for arm in payload.arms {
+                var useful = false;
+                try {
+                    useful = pattern.add(inout coverage, arm.pattern);
+                } catch error model.SupportError {
+                    throw support(error);
+                }
+                // Recompute nested arm reachability with the same
+                // constructor-column analysis as semantic checking and HIR
+                // verification.  A flat outer-variant set cannot decide when
+                // the same outer variant has several payload combinations.
+                if !useful {
+                    break;
+                }
+                let branch = required_stmt(inout state, arm.body);
+                flow_merge(inout flow, branch);
+                flow.falls = flow.falls || branch.falls;
+            }
+            if node_set_remove(inout flow.breaks, id) {
+                flow.falls = true;
+            }
+            return flow;
+        }
+        case hir.NodeData.Try(payload): {
+            flow = required_stmt(inout state, node.children[0]);
+            let catches = payload.catches;
+            for var index usize = 0; index < vec.len(catches); index += 1 {
+                let key = CatchKey(try_node: id, index: u32(index));
+                if catch_set_remove(inout flow.catches, key) {
+                    let handler = required_stmt(inout state,
+                        catches[index].body);
+                    flow_merge(inout flow, handler);
+                    flow.falls = flow.falls || handler.falls;
+                }
+            }
+            return flow;
+        }
+        default: {
+            return required_expr(inout state, id);
+        }
+    }
+}
+
+func required_exits(h hir.HirModule, function hir.HirFunction) Obligations
+    throws VerifyError {
+    var state = Required(h: h, obligations: obligations(),
+        context: vec.empty[ContextEntry]());
+    let flow = required_stmt(inout state, function.body);
+    return state.obligations;
+}

@@ -1,0 +1,127 @@
+// Per-function Native CFG construction.
+//
+// Direct port of the Lower constructor in src/ir/lower.cpp: type-table scan
+// for Unit/Bool, function/signature metadata, parameter and capture slots,
+// the entry block, the whole function body and the implicit final return.
+// Owning parameter slots, inout flags and owning_parameter classification are
+// the same as C++, and every LocalSlotId is created in the same order.
+package nativelower;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+// PhaseResult::success: complete, has a value and no error-severity diagnostic.
+func phase_complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+// PhaseResult::success: complete, has a value and no error-severity diagnostic.
+func unit_success(result model.UnitResult) bool {
+    if !phase_complete(result.state) || !result.has_value {
+        return false;
+    }
+    for diagnostic in result.diagnostics {
+        if diagnostic.severity == "error" {
+            return false;
+        }
+    }
+    return true;
+}
+
+// C++ lowering diagnostics carry no primary span and no type text.
+func lower_diagnostic(code string, message string) model.Diagnostic {
+    return model.Diagnostic(code: code, phase: "lowering", severity: "error",
+        message: message, has_primary: false,
+        primary: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0),
+        related: [], fixits: [], notes: [], has_expected_type: false,
+        expected_type: "", has_actual_type: false, actual_type: "");
+}
+
+func new_lower(module hir.HirModule,
+               function hir.HirFunction) Lower throws model.SupportError {
+    var unit usize = 0;
+    var boolean usize = 0;
+    for var id usize = 1; id <= types.size(module.types); id += 1 {
+        let value = module_type(module, id);
+        switch value.kind {
+            case model.TypeKind.Unit: unit = id;
+            case model.TypeKind.Bool: boolean = id;
+            default: {}
+        }
+    }
+    var state = Lower(h: module,
+        aggregates: nativelayout.aggregate_types(module),
+        f: nativeir.Function(symbol: function.symbol,
+            signature: function.signature, is_async: function.is_async,
+            slots: [], blocks: [], source: function.source.span, handlers: []),
+        current: 0, next_value: 0, slots: [], loops: [], unit: unit,
+        boolean: boolean, temporaries: [], iterations: [], handlers: []);
+    let signature = module_type(module, function.signature);
+    for var index usize = 0; index < vec.len(function.parameters);
+        index += 1 {
+        let parameter_type = signature.parameters[index];
+        let local = slot_new(inout state, parameter_type.type_id);
+        state.f.slots[local].parameter = option.Option[u32].Some(u32(index));
+        state.f.slots[local].binding =
+            option.Option[usize].Some(function.parameters[index].symbol);
+        state.f.slots[local].is_inout = param_mode_id(parameter_type.mode) == 1;
+        if owning(state, parameter_type.type_id) {
+            state.f.slots[local].owner = option.Option[hir.OwnerRef].Some(
+                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                    identity: u64(function.parameters[index].symbol)));
+            state.f.slots[local].owning_parameter =
+                param_mode_id(parameter_type.mode) == 2;
+        }
+        // Discard labels do not affect position or SymbolId identity.
+        slot_emplace(inout state, function.parameters[index].symbol, local);
+    }
+    // Capture locals are initialized by the entry prologue from the single
+    // environment row. They are borrowed slots: no owner and no drop.
+    for capture in function.captures {
+        let local = slot_new(inout state, capture.type_id);
+        state.f.slots[local].binding =
+            option.Option[usize].Some(capture.local);
+        slot_emplace(inout state, capture.local, local);
+    }
+    state.current = block(inout state);
+    stmt(inout state, function.body);
+    if live(state) {
+        // The implicit final return produces the Task payload for an async
+        // function, not the Task handle itself.
+        var result = signature.result;
+        if function.is_async {
+            let task_type = module_type(module, result);
+            if vec.len(task_type.type_args) == 0 {
+                throw model.SupportError.Invalid(
+                    "async result is not a Task type");
+            }
+            result = task_type.type_args[0];
+        }
+        var is_unit = false;
+        switch module_type(module, result).kind {
+            case model.TypeKind.Unit: is_unit = true;
+            default: {}
+        }
+        if is_unit {
+            let unit_type = state.unit;
+            let unit_value = constant(inout state, unit_type, 0,
+                function.source.span);
+            var values = vec.empty[usize]();
+            vec.push(values, unit_value);
+            end(inout state, nativeir.Exit.Return, values, [],
+                function.source.span);
+        } else {
+            end(inout state, nativeir.Exit.Unreachable, [], [],
+                function.source.span);
+        }
+    }
+    return state;
+}

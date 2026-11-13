@@ -1,0 +1,1010 @@
+// Pure text construction and type identity for the Python backend.
+//
+// This file is a direct migration of the private helpers in
+// src/backend/python/emitter.cpp that do not depend on the verified-module
+// gate: the private Statement tree, its CPython block accounting, Python
+// literal escaping, symbol spelling, ordered sets and the stable logical type
+// keys used for typed-error dispatch.  Nothing here reads files or starts a
+// process.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/system" as system;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Frozen SystemOperation ordinals used by the emitter's special cases.
+const OPERATION_TEXT_BYTES u32 = 33;
+const OPERATION_VEC_EMPTY u32 = 34;
+const OPERATION_VEC_MAKE u32 = 35;
+const OPERATION_UNICODE_BOUNDARIES u32 = 190;
+const OPERATION_SLICE_VIEW u32 = 197;
+const OPERATION_SLICE_LEN u32 = 198;
+const OPERATION_SLICE_SUB u32 = 199;
+const OPERATION_SLICE_TO_VEC u32 = 200;
+const OPERATION_WEAK_EMPTY u32 = 201;
+const OPERATION_WEAK_DOWNGRADE u32 = 202;
+const OPERATION_WEAK_UPGRADE u32 = 203;
+
+// CPython 3.12.15's CO_MAXBLOCKS is 21.  The compiler pushes one fblock for a
+// while body, one for a try/except body, two for an except handler body, one
+// for a try/finally body and one for the exceptional copy of a finally body.
+const PYTHON_CONTROL_BLOCK_LIMIT u32 = 21;
+const INDENTATION_LIMIT u32 = 80;
+
+enum RejectReason {
+    Other;
+    ControlDepth;
+    Indentation;
+    Resources;
+}
+
+// A well-typed program that this backend cannot express, or an internal
+// invariant violation of already generated records.  No success value is ever
+// fabricated from either.
+enum Failure {
+    Rejected(message string, has_source bool, source model.Span, reason RejectReason);
+    Internal(message string);
+}
+
+func zero_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func rejected(message string) Failure {
+    return Failure.Rejected(message: message, has_source: false,
+        source: zero_span(), reason: RejectReason.Other);
+}
+
+func rejected_at(message string, span model.Span) Failure {
+    return Failure.Rejected(message: message, has_source: true, source: span,
+        reason: RejectReason.Other);
+}
+
+func rejected_reason(message string, has_source bool, span model.Span,
+                     reason RejectReason) Failure {
+    return Failure.Rejected(message: message, has_source: has_source,
+        source: span, reason: reason);
+}
+
+func reject_reason_id(reason RejectReason) u32 {
+    switch reason {
+        case RejectReason.Other: return 0;
+        case RejectReason.ControlDepth: return 1;
+        case RejectReason.Indentation: return 2;
+        case RejectReason.Resources: return 3;
+    }
+}
+
+func internal(message string) Failure {
+    return Failure.Internal(message: message);
+}
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u32_text(value u32) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u64_text(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func owner_kind_id(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func symbol_kind_is(kind model.SymbolKind, expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
+}
+
+// ---------------------------------------------------------------------------
+// Ordered sets and vectors
+//
+// The C++ emitter keeps std::set<SymbolId>/std::set<uint64_t> and iterates
+// them in ascending identity order.  These helpers reproduce that order with
+// one sorted Vec; insertion never depends on the hash layout of std/set.
+
+func ordered_contains(values Vec[u64], value u64) bool {
+    var low usize = 0;
+    var high usize = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if values[middle] == value {
+            return true;
+        }
+        if values[middle] < value {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return false;
+}
+
+func ordered_insert(values inout Vec[u64], value u64) bool {
+    var low usize = 0;
+    var high usize = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if values[middle] == value {
+            return false;
+        }
+        if values[middle] < value {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    vec.push(values, value);
+    var index = vec.len(values) - 1;
+    for index > low {
+        values[index] = values[index - 1];
+        index -= 1;
+    }
+    values[low] = value;
+    return true;
+}
+
+func id_index(values Vec[usize], value usize) i64 {
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] == value {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func id_contains(values Vec[usize], value usize) bool {
+    return id_index(values, value) >= 0;
+}
+
+func id_vectors_equal(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func insert_at(values inout Vec[Statement], index usize, value Statement) {
+    vec.push(values, value);
+    var cursor = vec.len(values) - 1;
+    for cursor > index {
+        values[cursor] = values[cursor - 1];
+        cursor -= 1;
+    }
+    values[index] = value;
+}
+
+// ---------------------------------------------------------------------------
+// Private code-generation tree
+
+struct Statement {
+    text string;
+    has_source bool;
+    source model.Span;
+    suite bool;
+    body Vec[Statement];
+    otherwise Vec[Statement];
+}
+
+func stmt(text_value string) Statement {
+    return Statement(text: text_value, has_source: false, source: zero_span(),
+        suite: false, body: [], otherwise: []);
+}
+
+func stmt_at(text_value string, span model.Span) Statement {
+    return Statement(text: text_value, has_source: true, source: span,
+        suite: false, body: [], otherwise: []);
+}
+
+func stmt_suite(text_value string, has_source bool, span model.Span,
+                body Vec[Statement]) Statement {
+    return Statement(text: text_value, has_source: has_source, source: span,
+        suite: true, body: body, otherwise: []);
+}
+
+func stmt_suite_else(text_value string, has_source bool, span model.Span,
+                     body Vec[Statement],
+                     otherwise Vec[Statement]) Statement {
+    return Statement(text: text_value, has_source: has_source, source: span,
+        suite: true, body: body, otherwise: otherwise);
+}
+
+func line_hir(suite inout Vec[Statement], text_value string,
+              node hir.HirNode) {
+    vec.push(suite, stmt_at(text_value, node.source.span));
+}
+
+// ---------------------------------------------------------------------------
+// Python spelling
+
+const HEX_DIGITS string = "0123456789abcdef";
+
+func hex_digit(value u8) string {
+    let index = usize(value);
+    return HEX_DIGITS[index:index + 1];
+}
+
+// Escape bytes into a Python bytes literal, then decode UTF-8 as text once.
+// Escaping each byte as a Unicode character would corrupt non-ASCII text.
+func python_string_literal(utf8 string) string {
+    let bytes = text.bytes(utf8);
+    var result = "b'";
+    for byte in bytes {
+        result += "\\x";
+        result += hex_digit(byte >> 4);
+        result += hex_digit(byte & 15);
+    }
+    return result + "'.decode('utf-8')";
+}
+
+// C++ join() skips the separator whenever the accumulated text is empty, so an
+// empty first element yields no leading separator.  Reproduce that exactly.
+func join_text(values Vec[string]) string {
+    var result = "";
+    for value in values {
+        if text.len(result) > 0 {
+            result += ", ";
+        }
+        result += value;
+    }
+    return result;
+}
+
+func join_ordered(values Vec[string], separator string) string {
+    var result = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index > 0 {
+            result += separator;
+        }
+        result += values[index];
+    }
+    return result;
+}
+
+func tuple_text(values Vec[string]) string {
+    if vec.len(values) == 0 {
+        return "()";
+    }
+    return "(" + join_text(values) + ",)";
+}
+
+func operation_text(op hir.BinaryOp) string {
+    switch op {
+        case hir.BinaryOp.Add: return "add";
+        case hir.BinaryOp.Subtract: return "sub";
+        case hir.BinaryOp.Multiply: return "mul";
+        case hir.BinaryOp.Divide: return "div";
+        case hir.BinaryOp.Remainder: return "rem";
+        case hir.BinaryOp.ShiftLeft: return "shl";
+        case hir.BinaryOp.ShiftRight: return "shr";
+        case hir.BinaryOp.BitAnd: return "and";
+        case hir.BinaryOp.BitOr: return "or";
+        case hir.BinaryOp.BitXor: return "xor";
+        case hir.BinaryOp.Equal: return "eq";
+        case hir.BinaryOp.NotEqual: return "ne";
+        case hir.BinaryOp.Less: return "lt";
+        case hir.BinaryOp.LessEqual: return "le";
+        case hir.BinaryOp.Greater: return "gt";
+        case hir.BinaryOp.GreaterEqual: return "ge";
+    }
+}
+
+func symbol_name(symbol usize) string {
+    return "_s" + usize_text(symbol);
+}
+
+func function_symbol_name(symbol usize) string {
+    return "_f" + usize_text(symbol);
+}
+
+func type_ops_name(id usize) string {
+    return "_v" + usize_text(id);
+}
+
+func owner_key_text(kind hir.OwnerKind, identity u64) string {
+    return "(" + u32_text(owner_kind_id(kind)) + ", " + u64_text(identity) + ")";
+}
+
+func substring_from(value string, start usize) string {
+    if start >= text.len(value) {
+        return "";
+    }
+    return value[start:text.len(value)];
+}
+
+// ---------------------------------------------------------------------------
+// Module access.  Every malformed reference is an internal failure; the C++
+// emitter throws std::logic_error/out_of_range for the same situations.
+
+func hir_node(module hir.HirModule, id usize) hir.HirNode throws Failure {
+    if id >= vec.len(module.nodes) {
+        throw internal("node index out of range");
+    }
+    return module.nodes[id];
+}
+
+func type_of(module hir.HirModule, id usize) model.Type throws Failure {
+    let found = types.find(module.types, id);
+    switch found {
+        case option.Option.Some(value): return value;
+        case option.Option.None:
+            throw internal("missing canonical type " + usize_text(id));
+    }
+}
+
+func project_module(module hir.HirModule, id usize) model.Module throws Failure {
+    if id >= vec.len(module.resolved.project.modules) {
+        throw internal("module index out of range");
+    }
+    return module.resolved.project.modules[id];
+}
+
+func project_symbol(module hir.HirModule, id usize) model.Symbol throws Failure {
+    if id >= vec.len(module.resolved.symbols) {
+        throw internal("symbol index out of range");
+    }
+    return module.resolved.symbols[id];
+}
+
+func foreign_declaration(module hir.HirModule,
+                         id usize) model.ForeignDeclaration throws Failure {
+    if id >= vec.len(module.resolved.project.foreign_bindings) {
+        throw internal("foreign binding index out of range");
+    }
+    return module.resolved.project.foreign_bindings[id];
+}
+
+func binding_callable(declaration model.ForeignDeclaration) model.BindingCallable throws Failure {
+    switch declaration.detail {
+        case model.ForeignDetail.Callable(value): return value;
+        default: throw internal("foreign declaration is not callable");
+    }
+}
+
+func binding_type(declaration model.ForeignDeclaration) model.BindingType throws Failure {
+    switch declaration.detail {
+        case model.ForeignDetail.Type(value): return value;
+        default: throw internal("foreign type declaration is invalid");
+    }
+}
+
+func source_path(module hir.HirModule, source hir.HirSource) string throws Failure {
+    let owner = project_module(module, source.node.module);
+    if source.node.file >= vec.len(owner.files) {
+        throw internal("foreign source file index is invalid");
+    }
+    let file_index = owner.files[source.node.file];
+    let project = module.resolved.project;
+    if file_index >= vec.len(project.files) {
+        throw internal("source file index is invalid");
+    }
+    return project.files[file_index].lexed.source.path;
+}
+
+func host_module_name(module hir.HirModule, logical string) string throws Failure {
+    let project = module.resolved.project;
+    for owner in project.modules {
+        if owner.logical_path == logical {
+            switch owner.binding {
+                case option.Option.Some(reference):
+                    if reference.bundle >= vec.len(project.bindings) {
+                        throw internal("binding bundle index is out of range");
+                    }
+                    let bundle = project.bindings[reference.bundle];
+                    if reference.index >= vec.len(bundle.modules) {
+                        throw internal("binding module index is out of range");
+                    }
+                    return bundle.modules[reference.index].host_module;
+                case option.Option.None: {}
+            }
+        }
+    }
+    throw internal("foreign module is not loaded: " + logical);
+}
+
+// Stable identity for typed-error dispatch.  A foreign type in error position
+// must itself be a declared runtime_error; a source nominal's type arguments
+// are payload identity, where an ordinary host reference is legal and fully
+// preserved.  Ordinary host identities are length-framed and start with '@',
+// which cannot start a source key or identifier.
+func foreign_type_key(identity string) string {
+    return "@" + usize_text(text.byte_len(identity)) + ":" + identity;
+}
+
+func nominal_type_key(module hir.HirModule,
+                       type_value model.Type) string throws Failure {
+    let symbol = project_symbol(module, type_value.declaration);
+    let owner = project_module(module, symbol.module);
+    var key = owner.logical_path + "." + symbol.name;
+    if vec.len(type_value.type_args) > 0 {
+        let parts = vec.empty[string]();
+        for argument in type_value.type_args {
+            vec.push(parts, type_key(module, argument, false));
+        }
+        key += "[" + join_ordered(parts, ",") + "]";
+    }
+    return key;
+}
+
+func type_key(module hir.HirModule, id usize,
+              error_position bool) string throws Failure {
+    let type_value = type_of(module, id);
+    switch type_value.kind {
+        case model.TypeKind.Unit: return "Unit";
+        case model.TypeKind.Bool: return "bool";
+        case model.TypeKind.String: return "string";
+        case model.TypeKind.Isize: return "isize";
+        case model.TypeKind.Usize: return "usize";
+        case model.TypeKind.SignedInt:
+            return "i" + u32_text(type_value.bits);
+        case model.TypeKind.UnsignedInt:
+            return "u" + u32_text(type_value.bits);
+        case model.TypeKind.Float:
+            return "f" + u32_text(type_value.bits);
+        case model.TypeKind.NominalStruct:
+            return nominal_type_key(module, type_value);
+        case model.TypeKind.NominalEnum:
+            return nominal_type_key(module, type_value);
+        case model.TypeKind.Vec:
+            return "Vec[" +
+                type_key(module, type_value.type_args[0], error_position) + "]";
+        case model.TypeKind.Slice:
+            return "Slice[" +
+                type_key(module, type_value.type_args[0], error_position) + "]";
+        case model.TypeKind.TraitObject: {
+            let symbol = project_symbol(module, type_value.declaration);
+            let owner = project_module(module, symbol.module);
+            var key = "dyn " + owner.logical_path + "." + symbol.name;
+            if vec.len(type_value.type_args) > 0 {
+                let parts = vec.empty[string]();
+                for argument in type_value.type_args {
+                    vec.push(parts, type_key(module, argument, false));
+                }
+                key += "[" + join_ordered(parts, ",") + "]";
+            }
+            return key;
+        }
+        case model.TypeKind.ForeignOpaque: {
+            let declaration = foreign_declaration(module, type_value.binding);
+            let binding = binding_type(declaration);
+            if error_position && binding.kind != "runtime_error" {
+                throw rejected_at(
+                    "Python foreign error payload requires a runtime_error declaration",
+                    declaration.source);
+            }
+            if binding.kind == "runtime_error" {
+                return declaration.identity;
+            }
+            return foreign_type_key(declaration.identity);
+        }
+        case model.TypeKind.Function: {
+            var key = "func(";
+            let parameters = vec.empty[string]();
+            for parameter in type_value.parameters {
+                var part = "";
+                if mode_id(parameter.mode) == 1 {
+                    part += "inout ";
+                }
+                if mode_id(parameter.mode) == 2 {
+                    part += "move ";
+                }
+                part += type_key(module, parameter.type_id, error_position);
+                vec.push(parameters, part);
+            }
+            key += join_ordered(parameters, ",");
+            key += ")->(" +
+                type_key(module, type_value.result, error_position) + ")";
+            switch type_value.throws_type {
+                case option.Option.Some(error_type):
+                    key += " throws(" +
+                        type_key(module, error_type, true) + ")";
+                case option.Option.None: {}
+            }
+            return key;
+        }
+        default:
+            throw internal("non-concrete Python error type identity");
+    }
+}
+
+// Weak target projection is selected by the verified canonical declaration,
+// not by layout or a type-key spelling.
+func canonical_nominal(module hir.HirModule, id usize, path string, name string,
+                       arity usize) bool throws Failure {
+    let type_value = type_of(module, id);
+    if !kind_is(type_value.kind, model.TypeKind.NominalStruct) ||
+       vec.len(type_value.type_args) != arity ||
+       type_value.declaration >= vec.len(module.resolved.symbols) {
+        return false;
+    }
+    let symbol = module.resolved.symbols[type_value.declaration];
+    if !symbol_kind_is(symbol.kind, model.SymbolKind.Type) || !symbol.exported ||
+       !option.is_some(symbol.definition) || option.is_some(symbol.foreign) ||
+       symbol.name != name {
+        return false;
+    }
+    let owner = project_module(module, symbol.module);
+    if option.is_some(owner.binding) || owner.logical_path != path {
+        return false;
+    }
+    return true;
+}
+
+func nominal_weak_box(module hir.HirModule, nominal hir.NominalDecl,
+                      id usize) bool throws Failure {
+    if !kind_is(nominal.kind, model.TypeKind.NominalStruct) ||
+       vec.len(nominal.params) != 1 || vec.len(nominal.fields) != 1 ||
+       vec.len(nominal.variants) != 0 {
+        return false;
+    }
+    let field = nominal.fields[0];
+    if field.exported || field.symbol >= vec.len(module.resolved.symbols) {
+        return false;
+    }
+    if module.resolved.symbols[field.symbol].name != "cell" {
+        return false;
+    }
+    let found = types.find(module.types, field.type_id);
+    switch found {
+        case option.Option.None: return false;
+        case option.Option.Some(field_type):
+            if !kind_is(field_type.kind, model.TypeKind.Vec) ||
+               vec.len(field_type.type_args) != 1 {
+                return false;
+            }
+            let element = types.find(module.types, field_type.type_args[0]);
+            switch element {
+                case option.Option.None: return false;
+                case option.Option.Some(found_element):
+                    return kind_is(found_element.kind,
+                            model.TypeKind.TypeParameter) &&
+                        found_element.declaration == nominal.params[0].symbol;
+            }
+    }
+}
+
+func canonical_weak_box(module hir.HirModule, id usize) bool throws Failure {
+    if !canonical_nominal(module, id, "std/box", "Box", 1) {
+        return false;
+    }
+    let declaration = type_of(module, id).declaration;
+    for nominal in module.nominals {
+        if nominal.symbol == declaration {
+            return nominal_weak_box(module, nominal, id);
+        }
+    }
+    return false;
+}
+
+func canonical_weak_target(module hir.HirModule, id usize) bool throws Failure {
+    let type_value = type_of(module, id);
+    if kind_is(type_value.kind, model.TypeKind.Vec) ||
+       kind_is(type_value.kind, model.TypeKind.Function) {
+        return true;
+    }
+    if canonical_weak_box(module, id) {
+        return true;
+    }
+    return canonical_nominal(module, id, "std/thread", "Thread", 0) ||
+           canonical_nominal(module, id, "std/sync", "Mutex", 0) ||
+           canonical_nominal(module, id, "std/sync", "Condvar", 0) ||
+           canonical_nominal(module, id, "std/sync", "AtomicI64", 0) ||
+           canonical_nominal(module, id, "std/ipc", "Memory", 0);
+}
+
+func weak_target_type(module hir.HirModule, operation u32,
+                      node hir.HirNode) usize throws Failure {
+    if operation == OPERATION_WEAK_UPGRADE {
+        let option_type = type_of(module, node.type_id);
+        if !kind_is(option_type.kind, model.TypeKind.NominalEnum) ||
+           vec.len(option_type.type_args) != 1 {
+            throw internal("verified weak.upgrade lost its Option target");
+        }
+        return option_type.type_args[0];
+    }
+    let weak = type_of(module, node.type_id);
+    if !kind_is(weak.kind, model.TypeKind.Weak) ||
+       vec.len(weak.type_args) != 1 {
+        throw internal("verified weak operation lost its target");
+    }
+    return weak.type_args[0];
+}
+
+// ---------------------------------------------------------------------------
+// Output metadata
+
+func binding_info(module hir.HirModule) string throws Failure {
+    let project = module.resolved.project;
+    let bundles = vec.empty[string]();
+    for bundle in project.bindings {
+        let modules = vec.empty[string]();
+        for owner in bundle.modules {
+            vec.push(modules, "{'logical_path': " +
+                python_string_literal(owner.logical_path) +
+                ", 'host_module': " + python_string_literal(owner.host_module) +
+                ", 'provider': " + python_string_literal(owner.provider) + "}");
+        }
+        let requirements = vec.empty[string]();
+        for requirement in bundle.package_requirements {
+            vec.push(requirements, "{'package': " +
+                python_string_literal(requirement.package_name) +
+                ", 'version_policy': " +
+                python_string_literal(requirement.version_policy) + "}");
+        }
+        let allowed = vec.empty[string]();
+        for backend in bundle.allowed_backends {
+            vec.push(allowed, python_string_literal(backend));
+        }
+        vec.push(bundles, "{'path': " + python_string_literal(bundle.path) +
+            ", 'sha256': " + python_string_literal(bundle.sha256) +
+            ", 'contract': " + python_string_literal(bundle.contract) +
+            ", 'review_status': " + python_string_literal(bundle.review_status) +
+            ", 'allowed_backends': [" + join_text(allowed) + "]" +
+            ", 'package_requirements': [" + join_text(requirements) + "]" +
+            ", 'modules': [" + join_text(modules) + "]}");
+    }
+    return "{'runtime_version': " + python_string_literal(RUNTIME_VERSION) +
+        ", 'bundles': [" + join_text(bundles) + "]}";
+}
+
+func foreign_location(module hir.HirModule, node hir.HirNode,
+                      declaration model.ForeignDeclaration) string throws Failure {
+    return python_string_literal(source_path(module, node.source)) + ", " +
+        u64_text(node.source.span.begin_byte) + ", " +
+        u64_text(node.source.span.end_byte) + ", " +
+        python_string_literal(declaration.identity);
+}
+
+// Target width, never host sizeof.  A types.Error keeps its original text and
+// becomes an internal emission failure, never a fabricated success.
+func numeric_text(module hir.HirModule, id usize) string throws Failure {
+    let type_value = type_of(module, id);
+    // Boolean not/equality return before the runtime's width-dependent code.
+    if kind_is(type_value.kind, model.TypeKind.Bool) {
+        return "0, False";
+    }
+    var width u32 = 0;
+    try {
+        width = types.bit_width(type_value, module.config);
+    } catch error types.Error {
+        var message = "";
+        switch error {
+            case types.Error.Invalid(text_value): message = text_value;
+        }
+        throw internal(message);
+    }
+    let signed = kind_is(type_value.kind, model.TypeKind.SignedInt) ||
+                 kind_is(type_value.kind, model.TypeKind.Isize);
+    var sign_text = "False";
+    if signed {
+        sign_text = "True";
+    }
+    return u32_text(width) + ", " + sign_text;
+}
+
+// The shared operations table is read once per emission and searched by the
+// frozen numeric operation value, matching system_operation_spec().
+func operation_spec(specs Vec[system.OperationSpec],
+                    operation u32) system.OperationSpec throws Failure {
+    for spec in specs {
+        if spec.operation == operation {
+            return spec;
+        }
+    }
+    throw internal("unknown system operation");
+}
+
+func emit_foreign_access_helpers(program inout Vec[Statement]) {
+    let error_body = vec.empty[Statement]();
+    vec.push(error_body, stmt(
+        "return _rt.TypedError(_rt.ERROR_TYPE_KEY, _rt.Error(exc, file, begin_byte, end_byte, operation), _rt.ERROR_OPS)"));
+    vec.push(program, stmt_suite(
+        "def _lang_host_error(exc, file, begin_byte, end_byte, operation)",
+        true, zero_span(), error_body));
+
+    let get_body = vec.empty[Statement]();
+    let get_try = vec.empty[Statement]();
+    vec.push(get_try, stmt("value = base"));
+    let get_loop = vec.empty[Statement]();
+    vec.push(get_loop, stmt("value = getattr(value, attribute)"));
+    vec.push(get_try, stmt_suite("for attribute in path", true, zero_span(),
+        get_loop));
+    vec.push(get_try, stmt(
+        "return _rt._host_text(value) if returns_text else value"));
+    let get_handlers = vec.empty[Statement]();
+    vec.push(get_handlers, stmt_suite("try", true, zero_span(), get_try));
+    let rethrow = vec.empty[Statement]();
+    vec.push(rethrow, stmt("raise"));
+    vec.push(get_handlers, stmt_suite("except _rt.TypedError", true,
+        zero_span(), rethrow));
+    let convert = vec.empty[Statement]();
+    vec.push(convert, stmt(
+        "raise _lang_host_error(exc, file, begin_byte, end_byte, operation) from exc"));
+    vec.push(get_handlers, stmt_suite("except Exception as exc", true,
+        zero_span(), convert));
+    vec.push(program, stmt_suite(
+        "def _lang_host_get(base, path, file, begin_byte, end_byte, operation, returns_text)",
+        true, zero_span(), get_handlers));
+
+    let set_body = vec.empty[Statement]();
+    let set_try = vec.empty[Statement]();
+    vec.push(set_try, stmt("target = base"));
+    let set_loop = vec.empty[Statement]();
+    vec.push(set_loop, stmt("target = getattr(target, attribute)"));
+    vec.push(set_try, stmt_suite("for attribute in path[:-1]", true,
+        zero_span(), set_loop));
+    vec.push(set_try, stmt("setattr(target, path[-1], value)"));
+    let set_handlers = vec.empty[Statement]();
+    vec.push(set_handlers, stmt_suite("try", true, zero_span(), set_try));
+    let set_rethrow = vec.empty[Statement]();
+    vec.push(set_rethrow, stmt("raise"));
+    vec.push(set_handlers, stmt_suite("except _rt.TypedError", true,
+        zero_span(), set_rethrow));
+    let set_convert = vec.empty[Statement]();
+    vec.push(set_convert, stmt(
+        "raise _lang_host_error(exc, file, begin_byte, end_byte, operation) from exc"));
+    vec.push(set_handlers, stmt_suite("except Exception as exc", true,
+        zero_span(), set_convert));
+    vec.push(program, stmt_suite(
+        "def _lang_host_set(base, path, value, file, begin_byte, end_byte, operation)",
+        true, zero_span(), set_handlers));
+
+    let item_body = vec.empty[Statement]();
+    let item_try = vec.empty[Statement]();
+    vec.push(item_try, stmt("value = base[key]"));
+    vec.push(item_try, stmt(
+        "return _rt._host_text(value) if returns_text else value"));
+    vec.push(item_body, stmt_suite("try", true, zero_span(), item_try));
+    let item_rethrow = vec.empty[Statement]();
+    vec.push(item_rethrow, stmt("raise"));
+    vec.push(item_body, stmt_suite("except _rt.TypedError", true, zero_span(),
+        item_rethrow));
+    let item_convert = vec.empty[Statement]();
+    vec.push(item_convert, stmt(
+        "raise _lang_host_error(exc, file, begin_byte, end_byte, operation) from exc"));
+    vec.push(item_body, stmt_suite("except Exception as exc", true,
+        zero_span(), item_convert));
+    vec.push(program, stmt_suite(
+        "def _lang_host_getitem(base, key, file, begin_byte, end_byte, operation, returns_text)",
+        true, zero_span(), item_body));
+
+    let put_body = vec.empty[Statement]();
+    let put_try = vec.empty[Statement]();
+    vec.push(put_try, stmt("base[key] = value"));
+    vec.push(put_body, stmt_suite("try", true, zero_span(), put_try));
+    let put_rethrow = vec.empty[Statement]();
+    vec.push(put_rethrow, stmt("raise"));
+    vec.push(put_body, stmt_suite("except _rt.TypedError", true, zero_span(),
+        put_rethrow));
+    let put_convert = vec.empty[Statement]();
+    vec.push(put_convert, stmt(
+        "raise _lang_host_error(exc, file, begin_byte, end_byte, operation) from exc"));
+    vec.push(put_body, stmt_suite("except Exception as exc", true, zero_span(),
+        put_convert));
+    vec.push(program, stmt_suite(
+        "def _lang_host_setitem(base, key, value, file, begin_byte, end_byte, operation)",
+        true, zero_span(), put_body));
+}
+
+// ---------------------------------------------------------------------------
+// Printing
+
+struct Printer {
+    code string;
+    source_map Vec[LineSource];
+    checking_only bool;
+    printed_lines u64;
+}
+
+func printer() Printer {
+    return Printer(code: "", source_map: [], checking_only: false,
+        printed_lines: 0);
+}
+
+func padding(indent u32) string {
+    return text.repeat(" ", usize(indent * 4));
+}
+
+func check_control_depth(depth u32, has_source bool,
+                         source model.Span) throws Failure {
+    if depth > PYTHON_CONTROL_BLOCK_LIMIT {
+        throw rejected_reason(
+            "generated Python control blocks exceed the CPython 3.12 static limit (21)",
+            has_source, source, RejectReason.ControlDepth);
+    }
+}
+
+func print_line(state inout Printer, text_value string, indent u32,
+                has_source bool, source model.Span) throws Failure {
+    if indent > INDENTATION_LIMIT {
+        throw rejected_reason(
+            "generated Python indentation exceeds the supported profile (80)",
+            has_source, source, RejectReason.Indentation);
+    }
+    if state.checking_only {
+        return;
+    }
+    state.code = state.code + padding(indent) + text_value + "\n";
+    state.printed_lines += 1;
+    if has_source {
+        vec.push(state.source_map, LineSource(line: state.printed_lines,
+            source: source));
+    }
+}
+
+func starts_with(value string, prefix string) bool {
+    return text.starts_with(value, prefix);
+}
+
+func print_if_chain(state inout Printer, value Statement, indent u32,
+                    control_depth u32, as_elif bool) throws Failure {
+    if !value.suite || !starts_with(value.text, "if ") {
+        throw internal("invalid generated if-chain");
+    }
+    var text_value = value.text;
+    if as_elif {
+        text_value = "elif " + substring_from(value.text, 3);
+    }
+    print_line(inout state, text_value + ":", indent, value.has_source,
+        value.source);
+    // An `if` does not create a CPython static control block; keep the same
+    // depth accounting as the normal print body.
+    check_control_depth(control_depth, value.has_source, value.source);
+    print_suite(inout state, value.body, indent + 1, control_depth);
+    if vec.len(value.otherwise) == 0 {
+        return;
+    }
+    if vec.len(value.otherwise) == 1 && value.otherwise[0].suite &&
+       starts_with(value.otherwise[0].text, "if ") {
+        print_if_chain(inout state, value.otherwise[0], indent,
+            control_depth, true);
+        return;
+    }
+    print_line(inout state, "else:", indent, value.has_source, value.source);
+    check_control_depth(control_depth, value.has_source, value.source);
+    print_suite(inout state, value.otherwise, indent + 1, control_depth);
+}
+
+func print_suite(state inout Printer, suite Vec[Statement], indent u32,
+                 control_depth u32) throws Failure {
+    if vec.len(suite) == 0 {
+        print_line(inout state, "pass", indent, false, zero_span());
+        return;
+    }
+    var index usize = 0;
+    for index < vec.len(suite) {
+        let value = suite[index];
+        if value.text == "try" {
+            // The emitter writes a try and its except/finally siblings as one
+            // contiguous group and accounts for the fblocks CPython pushes.
+            var next = index + 1;
+            let handlers = vec.empty[Statement]();
+            var has_finalizer = false;
+            var finalizer = stmt("");
+            for next < vec.len(suite) {
+                let part = suite[next];
+                if part.text == "finally" {
+                    has_finalizer = true;
+                    finalizer = part;
+                    next += 1;
+                    break;
+                }
+                if !starts_with(part.text, "except ") {
+                    break;
+                }
+                vec.push(handlers, part);
+                next += 1;
+            }
+            var finally_cost u32 = 0;
+            if has_finalizer {
+                finally_cost = 1;
+            }
+            var body_depth = control_depth + finally_cost;
+            if vec.len(handlers) > 0 {
+                body_depth += 1;
+            }
+            check_control_depth(body_depth, value.has_source, value.source);
+            print_line(inout state, "try:", indent, value.has_source,
+                value.source);
+            print_suite(inout state, value.body, indent + 1, body_depth);
+            // Any handler body has EXCEPTION_HANDLER and HANDLER_CLEANUP active.
+            let handler_depth = control_depth + finally_cost + 2;
+            for handler in handlers {
+                check_control_depth(handler_depth, handler.has_source,
+                    handler.source);
+                print_line(inout state, handler.text + ":", indent,
+                    handler.has_source, handler.source);
+                print_suite(inout state, handler.body, indent + 1,
+                    handler_depth);
+            }
+            if has_finalizer {
+                // CPython compiles the finally body on the normal path after
+                // FINALLY_TRY is popped, then again with FINALLY_END active.
+                let finally_depth = control_depth + 1;
+                check_control_depth(finally_depth, finalizer.has_source,
+                    finalizer.source);
+                print_line(inout state, "finally:", indent,
+                    finalizer.has_source, finalizer.source);
+                print_suite(inout state, finalizer.body, indent + 1,
+                    finally_depth);
+            }
+            index = next;
+        } else {
+            var text_value = value.text;
+            if value.suite {
+                text_value += ":";
+            }
+            print_line(inout state, text_value, indent, value.has_source,
+                value.source);
+            if value.suite {
+                var depth = control_depth;
+                if starts_with(value.text, "def ") {
+                    // Each generated function is a separate Python code object.
+                    depth = 0;
+                } else if starts_with(value.text, "while ") ||
+                          starts_with(value.text, "with ") {
+                    depth += 1;
+                }
+                check_control_depth(depth, value.has_source, value.source);
+                print_suite(inout state, value.body, indent + 1, depth);
+            }
+            if vec.len(value.otherwise) > 0 {
+                if vec.len(value.otherwise) == 1 && value.otherwise[0].suite &&
+                   starts_with(value.otherwise[0].text, "if ") {
+                    print_if_chain(inout state, value.otherwise[0], indent,
+                        control_depth, true);
+                } else {
+                    print_line(inout state, "else:", indent, value.has_source,
+                        value.source);
+                    check_control_depth(control_depth, value.has_source,
+                        value.source);
+                    print_suite(inout state, value.otherwise, indent + 1,
+                        control_depth);
+                }
+            }
+            index += 1;
+        }
+    }
+}

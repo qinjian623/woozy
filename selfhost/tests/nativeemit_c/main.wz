@@ -1,0 +1,37 @@
+// Entry for the C-layer driver.  run.py copies ./driver.wz and
+// ./branch_driver.wz into the nativeemit package directory; everything they
+// check lives there.  With no arguments this prints the cache/Vec/Take module;
+// `program <branch> <0|2>` prints one real C emission branch at the requested
+// optimization setting.
+package app;
+
+import "app/wzcc/nativeemit" as nativeemit;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    var text = "";
+    try {
+        if vec.len(arguments) == 1 {
+            text = nativeemit.c_driver_module_text();
+        } else {
+            var optimization u32 = 0;
+            if vec.len(arguments) > 2 && arguments[2] == "2" {
+                optimization = 2;
+            }
+            text = nativeemit.c_branch_module(arguments[1], optimization);
+        }
+    } catch error nativeemit.Error {
+        switch error {
+            case nativeemit.Error.Failure(code, kind, message): {
+                io.eprintln(code + ": " + message);
+            }
+        }
+        return 3;
+    }
+    io.print(text);
+    return 0;
+}

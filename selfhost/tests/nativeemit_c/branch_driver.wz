@@ -1,0 +1,1006 @@
+// Test-only Wz emission branches for the C layer.
+//
+// This file is copied into the nativeemit package by run.py.  It builds the
+// smallest raw HIR/NativeIR fixture that reaches C's function/environment,
+// Weak, dyn-trait and thread bridge code, then emits a complete module with a
+// real `main`.  The generated module is verified with opt, compiled with llc
+// and linked against the published native runtime by run.py.  Nothing here
+// constructs a VerifiedModule or calls a classifier/verifier stub.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Fixed fixture identities.  Zero is the placeholder symbol.
+const B_RECEIVER  usize = 100;
+const B_FIELD     usize = 101;
+const B_OPTION    usize = 110;
+const B_NONE      usize = 111;
+const B_SOME      usize = 112;
+const B_PAYLOAD   usize = 113;
+const B_TRAIT     usize = 120;
+const B_METHOD    usize = 121;
+
+const B_FN        usize = 200;
+const B_ORD       usize = 201;
+const B_MOVE      usize = 202;
+const B_DYN       usize = 203;
+const B_ENTRY     usize = 204;
+const B_CAPTURE   usize = 205;
+
+struct BranchFixture {
+    module nativeir.Module;
+    unit usize;
+    i32_type usize;
+    i64_type usize;
+    fn_type usize;
+    receiver_type usize;
+    method_type usize;
+    move_method_type usize;
+    dyn_fn_type usize;
+    entry_type usize;
+    option_type usize;
+    weak_type usize;
+    dyn_type usize;
+    thread_type usize;
+    spawn_type usize;
+}
+
+func branch_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func branch_source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: branch_span());
+}
+
+func branch_symbol(id usize, name string, kind model.SymbolKind,
+                   module usize) model.Symbol {
+    return model.Symbol(id: id, name: name, kind: kind, module: module,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: true,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+}
+
+func branch_placeholder() model.Symbol {
+    return model.Symbol(id: 0, name: "", kind: model.SymbolKind.Module,
+        module: 0, definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: false,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+}
+
+func branch_module(id usize, path string, name string) model.Module {
+    return model.Module(id: id, logical_path: path, identity: path,
+        package_name: name, files: [], imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+}
+
+func branch_param(mode model.ParamMode, type_id usize) model.ParameterType {
+    return model.ParameterType(mode: mode, type_id: type_id);
+}
+
+func branch_intern(value model.Type, ctx inout types.Context) usize throws Error {
+    try { return types.intern(inout ctx, value); }
+    catch error types.Error { throw c_driver_bad("branch type interning failed"); }
+}
+
+func branch_function_type(parameters Vec[model.ParameterType], result usize,
+                          ctx inout types.Context) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Function);
+    value.parameters = parameters;
+    value.result = result;
+    return branch_intern(value, inout ctx);
+}
+
+func branch_setup() BranchFixture throws Error {
+    var project = model.empty_project();
+    project.package_name = "nativeemit_c_branch";
+    project.modules = [
+        branch_module(0, "test", "nativeemit_c_branch"),
+        branch_module(1, "std/option", "std"),
+    ];
+    var symbols = vec.empty[model.Symbol]();
+    for var index usize = 0; index < 260; index += 1 {
+        vec.push(symbols, branch_placeholder());
+    }
+    symbols[B_RECEIVER] = branch_symbol(B_RECEIVER, "Receiver",
+        model.SymbolKind.Type, 0);
+    symbols[B_FIELD] = branch_symbol(B_FIELD, "f",
+        model.SymbolKind.Field, 0);
+    symbols[B_OPTION] = branch_symbol(B_OPTION, "Option",
+        model.SymbolKind.Type, 1);
+    symbols[B_NONE] = branch_symbol(B_NONE, "None",
+        model.SymbolKind.Variant, 1);
+    symbols[B_SOME] = branch_symbol(B_SOME, "Some",
+        model.SymbolKind.Variant, 1);
+    symbols[B_PAYLOAD] = branch_symbol(B_PAYLOAD, "value",
+        model.SymbolKind.Field, 1);
+    symbols[B_TRAIT] = branch_symbol(B_TRAIT, "Callable",
+        model.SymbolKind.Trait, 0);
+    symbols[B_METHOD] = branch_symbol(B_METHOD, "call",
+        model.SymbolKind.Trait, 0);
+    for symbol in [B_FN, B_ORD, B_MOVE, B_DYN, B_ENTRY, B_CAPTURE] {
+        symbols[symbol] = branch_symbol(symbol, "test" + number(symbol),
+            model.SymbolKind.Function, 0);
+    }
+    let resolved = model.ResolvedProject(project: project, symbols: symbols,
+        occurrences: [], deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    var ctx = module.types;
+    let unit = branch_intern(model.empty_type(model.TypeKind.Unit), inout ctx);
+    var integer = model.empty_type(model.TypeKind.SignedInt);
+    integer.bits = 32;
+    let i32_type = branch_intern(integer, inout ctx);
+    integer.bits = 64;
+    let i64_type = branch_intern(integer, inout ctx);
+    let fn_type = branch_function_type(
+        [branch_param(model.ParamMode.Ordinary, i32_type)], i32_type,
+        inout ctx);
+    var receiver = model.empty_type(model.TypeKind.NominalStruct);
+    receiver.declaration = B_RECEIVER;
+    let receiver_type = branch_intern(receiver, inout ctx);
+    let method_type = branch_function_type([
+        branch_param(model.ParamMode.Ordinary, receiver_type),
+        branch_param(model.ParamMode.Ordinary, i32_type)], i32_type,
+        inout ctx);
+    let move_method_type = branch_function_type([
+        branch_param(model.ParamMode.Move, receiver_type),
+        branch_param(model.ParamMode.Ordinary, i32_type)], i32_type,
+        inout ctx);
+    let dyn_fn_type = branch_function_type([
+        branch_param(model.ParamMode.Ordinary, i32_type),
+        branch_param(model.ParamMode.Ordinary, i32_type)], i32_type,
+        inout ctx);
+    let entry_type = branch_function_type(
+        [branch_param(model.ParamMode.Ordinary, receiver_type)], i64_type,
+        inout ctx);
+    var option_value = model.empty_type(model.TypeKind.NominalEnum);
+    option_value.declaration = B_OPTION;
+    option_value.type_args = [fn_type];
+    let option_type = branch_intern(option_value, inout ctx);
+    var weak_value = model.empty_type(model.TypeKind.Weak);
+    weak_value.type_args = [fn_type];
+    let weak_type = branch_intern(weak_value, inout ctx);
+    var dyn_value = model.empty_type(model.TypeKind.TraitObject);
+    dyn_value.declaration = B_TRAIT;
+    let dyn_type = branch_intern(dyn_value, inout ctx);
+    let thread_type = branch_intern(
+        model.empty_type(model.TypeKind.ThreadHandle), inout ctx);
+    let spawn_type = branch_function_type([
+        branch_param(model.ParamMode.Ordinary, entry_type),
+        branch_param(model.ParamMode.Ordinary, receiver_type)], thread_type,
+        inout ctx);
+    module.types = ctx;
+    module.nominals = [
+        hir.NominalDecl(symbol: B_RECEIVER,
+            kind: model.TypeKind.NominalStruct, params: [],
+            fields: [hir.FieldDecl(symbol: B_FIELD, type_id: fn_type,
+                exported: false, source: branch_source())],
+            variants: [], source: branch_source()),
+        hir.NominalDecl(symbol: B_OPTION,
+            kind: model.TypeKind.NominalEnum, params: [], fields: [],
+            variants: [
+                hir.VariantDecl(symbol: B_NONE, payload: [],
+                    source: branch_source()),
+                hir.VariantDecl(symbol: B_SOME,
+                    payload: [hir.FieldDecl(symbol: B_PAYLOAD,
+                        type_id: fn_type, exported: false,
+                        source: branch_source())], source: branch_source()),
+            ], source: branch_source()),
+    ];
+    module.traits = [hir.TraitDecl(symbol: B_TRAIT, self: 0, params: [],
+        methods: [hir.MethodPrototype(symbol: B_METHOD,
+            signature: dyn_fn_type, parameters: [], source: branch_source())],
+        source: branch_source())];
+    module.functions = [
+        hir.HirFunction(symbol: B_FN, signature: fn_type, parameters: [],
+            body: 0, scope: 0, source: branch_source(), captures: [],
+            is_async: false),
+        hir.HirFunction(symbol: B_ORD, signature: method_type, parameters: [],
+            body: 0, scope: 0, source: branch_source(), captures: [],
+            is_async: false),
+        hir.HirFunction(symbol: B_MOVE, signature: move_method_type,
+            parameters: [], body: 0, scope: 0, source: branch_source(),
+            captures: [], is_async: false),
+        hir.HirFunction(symbol: B_DYN, signature: dyn_fn_type, parameters: [],
+            body: 0, scope: 0, source: branch_source(), captures: [],
+            is_async: false),
+        hir.HirFunction(symbol: B_ENTRY, signature: entry_type, parameters: [],
+            body: 0, scope: 0, source: branch_source(), captures: [],
+            is_async: false),
+        hir.HirFunction(symbol: B_CAPTURE, signature: fn_type, parameters: [],
+            body: 0, scope: 0, source: branch_source(),
+            captures: [hir.CaptureBinding(origin: 900, local: 901,
+                type_id: fn_type)], is_async: false),
+    ];
+    module.nodes = [
+        hir.HirNode(type_id: fn_type, source: branch_source(), scope: 0,
+            children: [], data: hir.NodeData.FunctionValue(
+                hir.FunctionValue(symbol: B_CAPTURE, type_args: [],
+                    captures: [hir.CaptureSource(origin: 900, source: 0,
+                        type_id: fn_type, is_move: false)],
+                    move_capture: false,
+                    bound: option.Option[hir.BoundReceiver].None)),
+            errors: [], exits: []),
+        hir.HirNode(type_id: method_type, source: branch_source(), scope: 0,
+            children: [], data: hir.NodeData.FunctionValue(
+                hir.FunctionValue(symbol: B_ORD, type_args: [], captures: [],
+                    move_capture: false,
+                    bound: option.Option[hir.BoundReceiver].Some(
+                        hir.BoundReceiver(type_id: receiver_type,
+                            mode: model.ParamMode.Ordinary)))),
+            errors: [], exits: []),
+        hir.HirNode(type_id: move_method_type, source: branch_source(),
+            scope: 0, children: [], data: hir.NodeData.FunctionValue(
+                hir.FunctionValue(symbol: B_MOVE, type_args: [], captures: [],
+                    move_capture: false,
+                    bound: option.Option[hir.BoundReceiver].Some(
+                        hir.BoundReceiver(type_id: receiver_type,
+                            mode: model.ParamMode.Move)))),
+            errors: [], exits: []),
+    ];
+    return BranchFixture(module: nativeir.Module(hir: module, functions: []),
+        unit: unit, i32_type: i32_type, i64_type: i64_type, fn_type: fn_type,
+        receiver_type: receiver_type, method_type: method_type,
+        move_method_type: move_method_type, dyn_fn_type: dyn_fn_type,
+        entry_type: entry_type,
+        option_type: option_type, weak_type: weak_type, dyn_type: dyn_type,
+        thread_type: thread_type, spawn_type: spawn_type);
+}
+
+func branch_empty(op nativeir.Op, type_id usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.type_id = type_id;
+    return instruction;
+}
+
+func branch_source_record(state inout Emitter, symbol usize,
+                          signature_id usize, text_index usize,
+                          code Value) {
+    vec.push(state.b.source_functions, SourceFunction(symbol: symbol,
+        signature: signature_id, native_index: 0, text_index: text_index,
+        hir_index: option.Option[usize].None, code: code));
+}
+
+// Emit the source functions the C helpers call.  They are real LLVM bodies,
+// not declarations that only satisfy a type check.
+func branch_emit_sources(fixture BranchFixture, state inout Emitter) throws Error {
+    let receiver_layout = lower_type(fixture.receiver_type, inout state);
+    var source = new_function("lang.test.fn.200",
+        Signature(result: "i32", parameters: ["i32"]), "internal", "",
+        inout state);
+    var code = function_reference(state, source);
+    var entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    let argument = parameter(state, source, 0);
+    let sum = result("i32", "add i32 " + argument.reference + ", 1",
+        inout state);
+    terminate("ret i32 " + sum.reference, inout state);
+    branch_source_record(inout state, B_FN, fixture.fn_type, source, code);
+
+    source = new_function("lang.test.fn.201",
+        Signature(result: "i32", parameters: [receiver_layout, "i32"]),
+        "internal", "", inout state);
+    code = function_reference(state, source);
+    entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    let ordinary_argument = parameter(state, source, 1);
+    let ordinary_sum = result("i32", "add i32 " + ordinary_argument.reference +
+        ", 1", inout state);
+    terminate("ret i32 " + ordinary_sum.reference, inout state);
+    branch_source_record(inout state, B_ORD, fixture.method_type, source, code);
+
+    source = new_function("lang.test.fn.202",
+        Signature(result: "i32", parameters: [receiver_layout, "i32"]),
+        "internal", "", inout state);
+    code = function_reference(state, source);
+    entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    let move_receiver = parameter(state, source, 0);
+    let move_argument = parameter(state, source, 1);
+    let move_slot = storage(receiver_layout, inout state);
+    c_store(move_receiver, move_slot, inout state);
+    let move_drop = value_op(fixture.receiver_type, false, inout state);
+    let ignored_move = c_call(move_drop, [move_slot], "void", inout state);
+    let move_sum = result("i32", "add i32 " + move_argument.reference + ", 2",
+        inout state);
+    terminate("ret i32 " + move_sum.reference, inout state);
+    branch_source_record(inout state, B_MOVE, fixture.move_method_type, source,
+        code);
+
+    source = new_function("lang.test.fn.203",
+        Signature(result: "i32", parameters: ["i32", "i32"]), "internal", "",
+        inout state);
+    code = function_reference(state, source);
+    entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    let dyn_receiver = parameter(state, source, 0);
+    let dyn_argument = parameter(state, source, 1);
+    let dyn_sum = result("i32", "add i32 " + dyn_receiver.reference + ", " +
+        dyn_argument.reference, inout state);
+    terminate("ret i32 " + dyn_sum.reference, inout state);
+    branch_source_record(inout state, B_DYN, fixture.dyn_fn_type, source, code);
+
+    source = new_function("lang.test.fn.204",
+        Signature(result: "i64", parameters: [receiver_layout]), "internal", "",
+        inout state);
+    code = function_reference(state, source);
+    entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    terminate("ret i64 42", inout state);
+    branch_source_record(inout state, B_ENTRY, fixture.entry_type, source, code);
+
+    // Dynamic-capture entry: env-first ABI, ignores the captured payload and
+    // returns argument + 3.  The environment construction itself is the real
+    // C function_value/make_environment path exercised below.
+    source = new_function("lang.test.fn.205",
+        Signature(result: "i32", parameters: ["ptr", "i32"]), "internal", "",
+        inout state);
+    code = function_reference(state, source);
+    entry = new_block(source, "entry", inout state);
+    position(entry, inout state);
+    let capture_argument = parameter(state, source, 1);
+    let capture_sum = result("i32", "add i32 " + capture_argument.reference +
+        ", 3", inout state);
+    terminate("ret i32 " + capture_sum.reference, inout state);
+    branch_source_record(inout state, B_CAPTURE, fixture.fn_type, source, code);
+}
+
+func branch_main(state inout Emitter) throws Error {
+    let index = new_function("main", Signature(result: "i32", parameters: []),
+        "", "", inout state);
+    let entry = new_block(index, "entry", inout state);
+    position(entry, inout state);
+}
+
+func branch_expect(value Value, expected usize, failure i32,
+                   state inout Emitter) throws Error {
+    let origin = here(state);
+    let function_index = origin.function_index;
+    let ok = new_block(function_index, "check.ok", inout state);
+    let bad = new_block(function_index, "check.bad", inout state);
+    let same = c_icmp("eq", value.type_name, value.reference, number(expected),
+        inout state);
+    c_cond_branch(same, ok, bad, inout state);
+    position(bad, inout state);
+    c_ret(c_int("i32", usize(failure)), inout state);
+    position(ok, inout state);
+}
+
+func branch_vec_refs(value Value, state inout Emitter) Value throws Error {
+    let address = c_gep(VEC_TYPE, value, 0, inout state);
+    return c_load("i64", address, inout state);
+}
+
+func branch_make_env(fields Vec[usize], children Vec[Value],
+                     state inout Emitter) Value throws Error {
+    if vec.len(fields) != vec.len(children) {
+        throw invalid("branch environment child count");
+    }
+    let layout = env_record_type(fields, inout state);
+    let row = storage(layout, inout state);
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        let address = c_gep(layout, row, index, inout state);
+        c_store(children[index], address, inout state);
+    }
+    let bytes = allocation_size(layout);
+    let empty = c_icmp("eq", "i64", bytes.reference, "0", inout state);
+    let stride = result("i64", "select i1 " + empty.reference +
+        ", i64 1, i64 " + bytes.reference, inout state);
+    let copy_op = env_record_op(fields, true, inout state);
+    let drop_op = env_record_op(fields, false, inout state);
+    let environment = runtime("lang_vec_new_v1", "ptr",
+        [c_int("i64", 1), stride, copy_op, drop_op], inout state);
+    let data_address = c_gep(VEC_TYPE, environment, 5, inout state);
+    let data = c_load("ptr", data_address, inout state);
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        let field_type = lower_type(fields[index], inout state);
+        let source_address = c_gep(layout, row, index, inout state);
+        let loaded = c_load(field_type, source_address, inout state);
+        let target_address = c_gep(layout, data, index, inout state);
+        c_store(loaded, target_address, inout state);
+    }
+    let initialized_address = c_gep(VEC_TYPE, environment, 2, inout state);
+    c_store(c_int("i64", 1), initialized_address, inout state);
+    return environment;
+}
+
+func branch_store_fn(fn_value Value, type_name string,
+                     state inout Emitter) Value throws Error {
+    let slot = storage(type_name, inout state);
+    c_store(fn_value, slot, inout state);
+    return slot;
+}
+
+func branch_bind(value_id usize, type_id usize, item Value,
+                 state inout Emitter) {
+    vec.push(state.frame.values, ValueBinding(value_id: value_id,
+        type_id: type_id, value: item));
+}
+
+func branch_receiver_value(fn_value Value, receiver_type usize,
+                           state inout Emitter) Value throws Error {
+    let layout = lower_type(receiver_type, inout state);
+    let row = storage(layout, inout state);
+    let field = c_gep(layout, row, 0, inout state);
+    c_store(fn_value, field, inout state);
+    return c_load(layout, row, inout state);
+}
+
+// ---- function/environment branch -------------------------------------------
+
+func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
+    branch_emit_sources(fixture, inout state);
+    branch_main(inout state);
+    let thunk = function_thunk(B_FN, inout state);
+    let called = c_call(thunk, [c_null(), c_int("i32", 41)], "i32",
+        inout state);
+    branch_expect(called, 42, 10, inout state);
+
+    // Noncapturing FunctionValue: the result id is recorded and the value has
+    // the cached thunk with a null environment.
+    var instruction = branch_empty(nativeir.Op.Function, fixture.fn_type);
+    instruction.function = B_FN;
+    instruction.result = option.Option[usize].Some(1);
+    let function_value_result = function_value(instruction, [], inout state);
+    switch function_value_info(state, 1) {
+        case option.Option.Some(info): {
+            if info.symbol != B_FN || info.dynamic {
+                throw c_driver_bad("function value info is wrong");
+            }
+        }
+        case option.Option.None: throw c_driver_bad("missing function value info");
+    }
+    let fn_code = c_extract("ptr", function_value_result, 0, inout state);
+    let fn_environment = c_extract("ptr", function_value_result, 1, inout state);
+    let via_value = c_call(fn_code, [c_null(), c_int("i32", 41)], "i32",
+        inout state);
+    branch_expect(via_value, 42, 11, inout state);
+    let null_env = c_icmp("eq", "ptr", fn_environment.reference, "null",
+        inout state);
+    branch_expect(null_env, 1, 12, inout state);
+
+    // A real environment row: captured i32, then a Fn field that owns a second
+    // environment.  Copy/drop must retain/release the nested environment.
+    let nested = branch_make_env([fixture.i32_type], [c_int("i32", 7)],
+        inout state);
+    let fn_with_env = c_function_value_of(thunk, nested, inout state);
+    let fn_copy = value_op(fixture.fn_type, true, inout state);
+    let fn_drop = value_op(fixture.fn_type, false, inout state);
+    let fn_slot = branch_store_fn(fn_with_env, FN_TYPE, inout state);
+    let ignored_copy = c_call(fn_copy, [fn_slot], "void", inout state);
+    let vec_refs_1 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_1, 2, 13, inout state);
+    let ignored_drop = c_call(fn_drop, [fn_slot], "void", inout state);
+    let vec_refs_2 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_2, 1, 14, inout state);
+
+    let environment = branch_make_env([fixture.fn_type], [fn_with_env],
+        inout state);
+    let env_layout = env_record_type([fixture.fn_type], inout state);
+    let env_row = storage(env_layout, inout state);
+    let env_row_value = c_gep(env_layout, env_row, 0, inout state);
+    c_store(fn_with_env, env_row_value, inout state);
+    let env_copy = env_record_op([fixture.fn_type], true, inout state);
+    let env_drop = env_record_op([fixture.fn_type], false, inout state);
+    let ignored_env_copy = c_call(env_copy, [env_row], "void", inout state);
+    let vec_refs_3 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_3, 2, 15, inout state);
+    let ignored_env_drop = c_call(env_drop, [env_row], "void", inout state);
+    let vec_refs_4 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_4, 1, 16, inout state);
+
+    // Bound ordinary and move-Self adapters share one receiver row.  The move
+    // path copies the owning receiver per call; the source method drops that
+    // copy, so two calls keep the receiver environment at its original count.
+    // A separate environment keeps this ownership independent of the Fn value
+    // tests above.
+    let receiver_env = branch_make_env([fixture.i32_type], [c_int("i32", 8)],
+        inout state);
+    let receiver_fn = c_function_value_of(thunk, receiver_env, inout state);
+    let receiver_layout = lower_type(fixture.receiver_type, inout state);
+    let receiver_row = storage(receiver_layout, inout state);
+    let receiver_field = c_gep(receiver_layout, receiver_row, 0, inout state);
+    c_store(receiver_fn, receiver_field, inout state);
+    let receiver_value = c_load(receiver_layout, receiver_row, inout state);
+    let bound_env = branch_make_env([fixture.receiver_type], [receiver_value],
+        inout state);
+    let ordinary_schema = hir.FunctionValue(symbol: B_ORD, type_args: [],
+        captures: [], move_capture: false,
+        bound: option.Option[hir.BoundReceiver].Some(
+            hir.BoundReceiver(type_id: fixture.receiver_type,
+                mode: model.ParamMode.Ordinary)));
+    let move_schema = hir.FunctionValue(symbol: B_MOVE, type_args: [],
+        captures: [], move_capture: false,
+        bound: option.Option[hir.BoundReceiver].Some(
+            hir.BoundReceiver(type_id: fixture.receiver_type,
+                mode: model.ParamMode.Move)));
+    let ordinary_adapter = bound_adapter(ordinary_schema, inout state);
+    let move_adapter = bound_adapter(move_schema, inout state);
+    var bound_result = c_call(ordinary_adapter, [bound_env, c_int("i32", 5)],
+        "i32", inout state);
+    branch_expect(bound_result, 6, 17, inout state);
+    bound_result = c_call(ordinary_adapter, [bound_env, c_int("i32", 6)],
+        "i32", inout state);
+    branch_expect(bound_result, 7, 18, inout state);
+    let vec_refs_5 = branch_vec_refs(receiver_env, inout state);
+    branch_expect(vec_refs_5, 1, 19, inout state);
+    bound_result = c_call(move_adapter, [bound_env, c_int("i32", 5)], "i32",
+        inout state);
+    branch_expect(bound_result, 7, 20, inout state);
+    bound_result = c_call(move_adapter, [bound_env, c_int("i32", 6)], "i32",
+        inout state);
+    branch_expect(bound_result, 8, 21, inout state);
+    let vec_refs_6 = branch_vec_refs(receiver_env, inout state);
+    branch_expect(vec_refs_6, 1, 22, inout state);
+
+    // Formal dynamic FunctionValue: a real HIR origin/capture schema, the
+    // consistency checks in function_value, then make_environment's memcpy,
+    // vec_memory and gc_register_fields.  The captured Fn owns a real
+    // environment whose release is observed after dropping the closure.
+    let capture_env = branch_make_env([fixture.i32_type], [c_int("i32", 11)],
+        inout state);
+    let captured_fn = c_function_value_of(thunk, capture_env, inout state);
+    branch_bind(1000, fixture.fn_type, captured_fn, inout state);
+    var capture_instruction = branch_empty(nativeir.Op.Function,
+        fixture.fn_type);
+    capture_instruction.function = B_CAPTURE;
+    capture_instruction.inputs = [1000];
+    capture_instruction.origin = option.Option[usize].Some(0);
+    capture_instruction.result = option.Option[usize].Some(1001);
+    let ignored_capture = emit_instruction(capture_instruction, inout state);
+    switch function_value_info(state, 1001) {
+        case option.Option.Some(info): {
+            if info.symbol != B_CAPTURE || !info.dynamic {
+                throw c_driver_bad("dynamic capture info is wrong");
+            }
+        }
+        case option.Option.None: throw c_driver_bad("missing dynamic capture info");
+    }
+    let dynamic_fn = value(state, 1001);
+    let dynamic_code = c_extract("ptr", dynamic_fn, 0, inout state);
+    let dynamic_env = c_extract("ptr", dynamic_fn, 1, inout state);
+    let dynamic_called = c_call(dynamic_code, [dynamic_env, c_int("i32", 41)],
+        "i32", inout state);
+    branch_expect(dynamic_called, 44, 23, inout state);
+    let vec_refs_7 = branch_vec_refs(capture_env, inout state);
+    branch_expect(vec_refs_7, 1, 24, inout state);
+    let dynamic_slot = branch_store_fn(dynamic_fn, FN_TYPE, inout state);
+    let dynamic_drop = value_op(fixture.fn_type, false, inout state);
+    let ignored_dynamic = c_call(dynamic_drop, [dynamic_slot], "void",
+        inout state);
+
+    // Formal bound FunctionValue for ordinary and move Self.  Each uses a
+    // distinct receiver environment; function_value calls bound_adapter and
+    // make_environment, and two calls per adapter check the repeated-call
+    // control.
+    let ordinary_env = branch_make_env([fixture.i32_type], [c_int("i32", 12)],
+        inout state);
+    let ordinary_fn = c_function_value_of(thunk, ordinary_env, inout state);
+    let ordinary_receiver = branch_receiver_value(ordinary_fn,
+        fixture.receiver_type, inout state);
+    branch_bind(1100, fixture.receiver_type, ordinary_receiver, inout state);
+    var ordinary_instruction = branch_empty(nativeir.Op.Function,
+        fixture.method_type);
+    ordinary_instruction.function = B_ORD;
+    ordinary_instruction.inputs = [1100];
+    ordinary_instruction.origin = option.Option[usize].Some(1);
+    ordinary_instruction.result = option.Option[usize].Some(1101);
+    let ignored_ordinary = emit_instruction(ordinary_instruction, inout state);
+    let ordinary_value = value(state, 1101);
+    let ordinary_code = c_extract("ptr", ordinary_value, 0, inout state);
+    let ordinary_environment = c_extract("ptr", ordinary_value, 1, inout state);
+    var formal_bound = c_call(ordinary_code,
+        [ordinary_environment, c_int("i32", 5)], "i32", inout state);
+    branch_expect(formal_bound, 6, 25, inout state);
+    formal_bound = c_call(ordinary_code,
+        [ordinary_environment, c_int("i32", 6)], "i32", inout state);
+    branch_expect(formal_bound, 7, 26, inout state);
+    let vec_refs_8 = branch_vec_refs(ordinary_env, inout state);
+    branch_expect(vec_refs_8, 1, 27, inout state);
+    let ordinary_slot = branch_store_fn(ordinary_value, FN_TYPE, inout state);
+    let ordinary_function_drop = value_op(fixture.fn_type, false, inout state);
+    let ignored_ordinary_drop = c_call(ordinary_function_drop, [ordinary_slot],
+        "void", inout state);
+
+    let move_env = branch_make_env([fixture.i32_type], [c_int("i32", 13)],
+        inout state);
+    let move_fn = c_function_value_of(thunk, move_env, inout state);
+    let move_receiver = branch_receiver_value(move_fn, fixture.receiver_type,
+        inout state);
+    branch_bind(1200, fixture.receiver_type, move_receiver, inout state);
+    var move_instruction = branch_empty(nativeir.Op.Function,
+        fixture.move_method_type);
+    move_instruction.function = B_MOVE;
+    move_instruction.inputs = [1200];
+    move_instruction.origin = option.Option[usize].Some(2);
+    move_instruction.result = option.Option[usize].Some(1201);
+    let ignored_move = emit_instruction(move_instruction, inout state);
+    let move_value = value(state, 1201);
+    let move_code = c_extract("ptr", move_value, 0, inout state);
+    let move_environment = c_extract("ptr", move_value, 1, inout state);
+    formal_bound = c_call(move_code, [move_environment, c_int("i32", 5)],
+        "i32", inout state);
+    branch_expect(formal_bound, 7, 28, inout state);
+    formal_bound = c_call(move_code, [move_environment, c_int("i32", 6)],
+        "i32", inout state);
+    branch_expect(formal_bound, 8, 29, inout state);
+    let vec_refs_9 = branch_vec_refs(move_env, inout state);
+    branch_expect(vec_refs_9, 1, 30, inout state);
+    let move_slot = branch_store_fn(move_value, FN_TYPE, inout state);
+    let move_function_drop = value_op(fixture.fn_type, false, inout state);
+    let ignored_move_drop = c_call(move_function_drop, [move_slot], "void",
+        inout state);
+
+    let ignored_bound = runtime("lang_vec_release_v1", "void", [bound_env],
+        inout state);
+    let ignored_environment = runtime("lang_vec_release_v1", "void",
+        [environment], inout state);
+    c_ret(c_int("i32", 0), inout state);
+}
+
+// ---- Weak branch ------------------------------------------------------------
+
+func branch_option_tag(option_type usize, value Value,
+                       state inout Emitter) Value throws Error {
+    let layout = lower_type(option_type, inout state);
+    let slot = storage(layout, inout state);
+    c_store(value, slot, inout state);
+    let tag_address = c_gep(layout, slot, 0, inout state);
+    return c_load("i32", tag_address, inout state);
+}
+
+func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
+    branch_emit_sources(fixture, inout state);
+    branch_main(inout state);
+    let empty_signature = branch_fn_type_for_weak(fixture, 0, inout state);
+    var empty = branch_empty(nativeir.Op.SystemCall, fixture.weak_type);
+    empty.signature = empty_signature;
+    empty.system = option.Option[u32].Some(201);
+    var empty_result = c_unit();
+    switch weak_system_call(empty, [], inout state) {
+        case option.Option.Some(value): { empty_result = value; }
+        case option.Option.None: throw c_driver_bad("weak empty was not handled");
+    }
+    let upgrade_signature = branch_fn_type_for_weak(fixture, 2, inout state);
+    var upgrade = branch_empty(nativeir.Op.SystemCall, fixture.option_type);
+    upgrade.signature = upgrade_signature;
+    upgrade.system = option.Option[u32].Some(203);
+    var upgraded = c_unit();
+    switch weak_system_call(upgrade, [empty_result], inout state) {
+        case option.Option.Some(value): { upgraded = value; }
+        case option.Option.None: throw c_driver_bad("weak empty upgrade was not handled");
+    }
+    let option_tag_1 = branch_option_tag(fixture.option_type, upgraded, inout state);
+    branch_expect(option_tag_1, 0, 30, inout state);
+
+    // Immortal function: {null, code} upgrades to Some without an environment.
+    let thunk = function_thunk(B_FN, inout state);
+    let immortal = c_weak_value(c_null(), thunk, inout state);
+    switch weak_system_call(upgrade, [immortal], inout state) {
+        case option.Option.Some(value): { upgraded = value; }
+        case option.Option.None: throw c_driver_bad("immortal weak upgrade was not handled");
+    }
+    let option_tag_2 = branch_option_tag(fixture.option_type, upgraded, inout state);
+    branch_expect(option_tag_2, 1, 31, inout state);
+
+    // Live then dead: downgrade a real environment, upgrade while alive, drop
+    // the upgraded function, release the strong target, then upgrade again.
+    let environment = branch_make_env([fixture.i32_type], [c_int("i32", 9)],
+        inout state);
+    let live_function = c_function_value_of(thunk, environment, inout state);
+    var downgrade = branch_empty(nativeir.Op.SystemCall, fixture.weak_type);
+    downgrade.signature = branch_fn_type_for_weak(fixture, 1, inout state);
+    downgrade.system = option.Option[u32].Some(202);
+    var weak_live = c_unit();
+    switch weak_system_call(downgrade, [live_function], inout state) {
+        case option.Option.Some(value): { weak_live = value; }
+        case option.Option.None: throw c_driver_bad("weak downgrade was not handled");
+    }
+    switch weak_system_call(upgrade, [weak_live], inout state) {
+        case option.Option.Some(value): { upgraded = value; }
+        case option.Option.None: throw c_driver_bad("live weak upgrade was not handled");
+    }
+    let option_tag_3 = branch_option_tag(fixture.option_type, upgraded, inout state);
+    branch_expect(option_tag_3, 1, 32, inout state);
+    let vec_refs_7 = branch_vec_refs(environment, inout state);
+    branch_expect(vec_refs_7, 2, 33, inout state);
+    let upgraded_payload = c_extract("{ " + FN_TYPE + " }", upgraded, 2,
+        inout state);
+    let upgraded_function = c_extract(FN_TYPE, upgraded_payload, 0,
+        inout state);
+    let dropped_function = branch_store_fn(upgraded_function, FN_TYPE,
+        inout state);
+    let function_drop = value_op(fixture.fn_type, false, inout state);
+    let ignored_function = c_call(function_drop, [dropped_function], "void",
+        inout state);
+    let vec_refs_8 = branch_vec_refs(environment, inout state);
+    branch_expect(vec_refs_8, 1, 34, inout state);
+    let ignored_strong = runtime("lang_vec_release_v1", "void", [environment],
+        inout state);
+    switch weak_system_call(upgrade, [weak_live], inout state) {
+        case option.Option.Some(value): { upgraded = value; }
+        case option.Option.None: throw c_driver_bad("dead weak upgrade was not handled");
+    }
+    let option_tag_4 = branch_option_tag(fixture.option_type, upgraded, inout state);
+    branch_expect(option_tag_4, 0, 35, inout state);
+    let weak_drop = value_op(fixture.weak_type, false, inout state);
+    let weak_layout = lower_type(fixture.weak_type, inout state);
+    let weak_slot = storage(weak_layout, inout state);
+    c_store(weak_live, weak_slot, inout state);
+    let ignored_weak = c_call(weak_drop, [weak_slot], "void", inout state);
+    c_ret(c_int("i32", 0), inout state);
+}
+
+// Weak empty/downgrade signatures are synthesized here from the fixture types.
+func branch_fn_type_for_weak(fixture BranchFixture, kind u32,
+                             state inout Emitter) usize throws Error {
+    // kind 0: empty() -> Weak[Fn], 1: downgrade(Fn) -> Weak[Fn],
+    // 2: upgrade(Weak[Fn]) -> Option[Fn].
+    var context = state.storage_types;
+    var value = model.empty_type(model.TypeKind.Function);
+    value.result = fixture.weak_type;
+    if kind == 1 {
+        value.parameters = [branch_param(model.ParamMode.Ordinary,
+            fixture.fn_type)];
+    } else if kind == 2 {
+        value.result = fixture.option_type;
+        value.parameters = [branch_param(model.ParamMode.Ordinary,
+            fixture.weak_type)];
+    }
+    let result = branch_intern(value, inout context);
+    state.storage_types = context;
+    return result;
+}
+
+// ---- dyn trait branch -------------------------------------------------------
+
+func branch_dyn_main(fixture BranchFixture, state inout Emitter) throws Error {
+    branch_emit_sources(fixture, inout state);
+    branch_main(inout state);
+    let table = trait_vtable(fixture.dyn_type, fixture.i32_type, [B_DYN],
+        inout state);
+    let box = runtime("lang_vec_new_v1", "ptr",
+        [c_int("i64", 1), c_int("i64", 4), c_null(), c_null()], inout state);
+    let data_address = c_gep(VEC_TYPE, box, 5, inout state);
+    let data = c_load("ptr", data_address, inout state);
+    c_store(c_int("i32", 7), data, inout state);
+    let initialized = c_gep(VEC_TYPE, box, 2, inout state);
+    c_store(c_int("i64", 1), initialized, inout state);
+    let vec_refs_9 = branch_vec_refs(box, inout state);
+    branch_expect(vec_refs_9, 1, 40, inout state);
+
+    // vtable slot 2 is the method thunk; slot 0/1 are drop/clone wrappers.
+    let method_slot = result("ptr", "getelementptr ptr, ptr " + table.reference +
+        ", i32 2", inout state);
+    let method = c_load("ptr", method_slot, inout state);
+    let dispatched = c_call(method, [data, c_int("i32", 5)], "i32",
+        inout state);
+    branch_expect(dispatched, 12, 41, inout state);
+
+    var fat = Value(type_name: DYN_TYPE, reference: "zeroinitializer");
+    fat = c_insert(DYN_TYPE, fat, data, 0, inout state);
+    fat = c_insert(DYN_TYPE, fat, table, 1, inout state);
+    let slot = storage(DYN_TYPE, inout state);
+    c_store(fat, slot, inout state);
+    let clone = value_op(fixture.dyn_type, true, inout state);
+    let drop = value_op(fixture.dyn_type, false, inout state);
+    let ignored_clone = c_call(clone, [slot], "void", inout state);
+    let vec_refs_10 = branch_vec_refs(box, inout state);
+    branch_expect(vec_refs_10, 2, 42, inout state);
+    let ignored_drop_one = c_call(drop, [slot], "void", inout state);
+    let vec_refs_11 = branch_vec_refs(box, inout state);
+    branch_expect(vec_refs_11, 1, 43, inout state);
+    let ignored_drop_two = c_call(drop, [slot], "void", inout state);
+    c_ret(c_int("i32", 0), inout state);
+}
+
+// ---- thread branch ----------------------------------------------------------
+
+func branch_thread_main(fixture BranchFixture, state inout Emitter) throws Error {
+    branch_emit_sources(fixture, inout state);
+    branch_main(inout state);
+    let bridge = thread_bridge(fixture.entry_type, inout state);
+    let thunk = function_thunk(B_ENTRY, inout state);
+    let entry_value = c_function_value_of(thunk, c_null(), inout state);
+    let nested = branch_make_env([fixture.i32_type], [c_int("i32", 1)],
+        inout state);
+    let inner_function = c_function_value_of(thunk, nested, inout state);
+    let receiver_layout = lower_type(fixture.receiver_type, inout state);
+    let receiver_slot = storage(receiver_layout, inout state);
+    let thread_receiver_field = c_gep(receiver_layout, receiver_slot, 0,
+        inout state);
+    c_store(inner_function, thread_receiver_field, inout state);
+    let receiver_value = c_load(receiver_layout, receiver_slot, inout state);
+    let vec_refs_12 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_12, 1, 50, inout state);
+
+    var spawn = branch_empty(nativeir.Op.Call, fixture.thread_type);
+    spawn.signature = fixture.spawn_type;
+    let handle = thread_spawn(spawn, [entry_value, receiver_value], inout state);
+    let waited = runtime("lang_thread_wait_v1", "i64", [handle], inout state);
+    branch_expect(waited, 0, 51, inout state);
+    let result_value = runtime("lang_thread_result_v1", "i64", [handle],
+        inout state);
+    branch_expect(result_value, 42, 52, inout state);
+    let ignored_handle = runtime("lang_handle_release_v1", "void", [handle],
+        inout state);
+    // The runtime copied and then dropped the context.  Only the caller's
+    // receiver value still owns the nested environment.
+    let vec_refs_13 = branch_vec_refs(nested, inout state);
+    branch_expect(vec_refs_13, 1, 53, inout state);
+    let receiver_drop = value_op(fixture.receiver_type, false, inout state);
+    c_store(receiver_value, receiver_slot, inout state);
+    let ignored_receiver = c_call(receiver_drop, [receiver_slot], "void",
+        inout state);
+    c_ret(c_int("i32", 0), inout state);
+}
+
+// ---- formal NativeIR instruction loop --------------------------------------
+
+// This branch goes through B's real `emit_instruction` group dispatch.  C owns
+// TraitObject/TraitCall; E owns SystemCall and forwards Weak and ThreadSpawn.
+func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
+    branch_emit_sources(fixture, inout state);
+    branch_main(inout state);
+
+    branch_bind(2000, fixture.i32_type, c_int("i32", 7), inout state);
+    var trait_object = branch_empty(nativeir.Op.TraitObject, fixture.dyn_type);
+    trait_object.inputs = [2000];
+    trait_object.methods = [B_DYN];
+    trait_object.result = option.Option[usize].Some(2001);
+    let ignored_object = emit_instruction(trait_object, inout state);
+    let dynamic_value = value(state, 2001);
+
+    branch_bind(2002, fixture.i32_type, c_int("i32", 5), inout state);
+    var trait_call = branch_empty(nativeir.Op.TraitCall, fixture.i32_type);
+    trait_call.inputs = [2001, 2002];
+    trait_call.signature = fixture.dyn_fn_type;
+    trait_call.bits = 0;
+    trait_call.result = option.Option[usize].Some(2003);
+    let ignored_call = emit_instruction(trait_call, inout state);
+    let dispatched = value(state, 2003);
+    branch_expect(dispatched, 12, 60, inout state);
+    let dynamic_slot = storage(DYN_TYPE, inout state);
+    c_store(dynamic_value, dynamic_slot, inout state);
+    let dynamic_drop = value_op(fixture.dyn_type, false, inout state);
+    let ignored_dynamic_drop = c_call(dynamic_drop, [dynamic_slot], "void",
+        inout state);
+
+    // Weak empty/upgrade and live/dead through the formal SystemCall group.
+    var weak_empty = branch_empty(nativeir.Op.SystemCall, fixture.weak_type);
+    weak_empty.signature = branch_fn_type_for_weak(fixture, 0, inout state);
+    weak_empty.system = option.Option[u32].Some(201);
+    weak_empty.result = option.Option[usize].Some(2010);
+    let ignored_weak_empty = emit_instruction(weak_empty, inout state);
+    let empty_weak = value(state, 2010);
+    var weak_upgrade = branch_empty(nativeir.Op.SystemCall,
+        fixture.option_type);
+    weak_upgrade.signature = branch_fn_type_for_weak(fixture, 2, inout state);
+    weak_upgrade.system = option.Option[u32].Some(203);
+    weak_upgrade.inputs = [2010];
+    weak_upgrade.result = option.Option[usize].Some(2011);
+    let ignored_empty_upgrade = emit_instruction(weak_upgrade, inout state);
+    let empty_option = value(state, 2011);
+    let empty_tag = branch_option_tag(fixture.option_type, empty_option,
+        inout state);
+    branch_expect(empty_tag, 0, 61, inout state);
+
+    let weak_env = branch_make_env([fixture.i32_type], [c_int("i32", 9)],
+        inout state);
+    let weak_entry = function_thunk(B_FN, inout state);
+    let weak_fn = c_function_value_of(weak_entry, weak_env, inout state);
+    branch_bind(2020, fixture.fn_type, weak_fn, inout state);
+    var weak_downgrade = branch_empty(nativeir.Op.SystemCall,
+        fixture.weak_type);
+    weak_downgrade.signature = branch_fn_type_for_weak(fixture, 1, inout state);
+    weak_downgrade.system = option.Option[u32].Some(202);
+    weak_downgrade.inputs = [2020];
+    weak_downgrade.result = option.Option[usize].Some(2021);
+    let ignored_downgrade = emit_instruction(weak_downgrade, inout state);
+    weak_upgrade.inputs = [2021];
+    weak_upgrade.result = option.Option[usize].Some(2022);
+    let ignored_live_upgrade = emit_instruction(weak_upgrade, inout state);
+    let live_option = value(state, 2022);
+    let live_tag = branch_option_tag(fixture.option_type, live_option,
+        inout state);
+    branch_expect(live_tag, 1, 62, inout state);
+    let live_payload = c_extract("{ " + FN_TYPE + " }", live_option, 2,
+        inout state);
+    let live_function = c_extract(FN_TYPE, live_payload, 0, inout state);
+    let live_slot = branch_store_fn(live_function, FN_TYPE, inout state);
+    let live_drop = value_op(fixture.fn_type, false, inout state);
+    let ignored_live_drop = c_call(live_drop, [live_slot], "void", inout state);
+    let weak_refs = branch_vec_refs(weak_env, inout state);
+    branch_expect(weak_refs, 1, 63, inout state);
+    let ignored_weak_strong = runtime("lang_vec_release_v1", "void", [weak_env],
+        inout state);
+    weak_upgrade.inputs = [2021];
+    weak_upgrade.result = option.Option[usize].Some(2023);
+    let ignored_dead_upgrade = emit_instruction(weak_upgrade, inout state);
+    let dead_option = value(state, 2023);
+    let dead_tag = branch_option_tag(fixture.option_type, dead_option,
+        inout state);
+    branch_expect(dead_tag, 0, 64, inout state);
+    let weak_layout = lower_type(fixture.weak_type, inout state);
+    let weak_slot = storage(weak_layout, inout state);
+    let weak_value = value(state, 2021);
+    c_store(weak_value, weak_slot, inout state);
+    let weak_drop = value_op(fixture.weak_type, false, inout state);
+    let ignored_weak_drop = c_call(weak_drop, [weak_slot], "void", inout state);
+
+    // ThreadSpawn through the formal SystemCall group.
+    let thread_entry_code = function_thunk(B_ENTRY, inout state);
+    let entry_value = c_function_value_of(thread_entry_code, c_null(),
+        inout state);
+    let thread_env = branch_make_env([fixture.i32_type], [c_int("i32", 1)],
+        inout state);
+    let inner_fn = c_function_value_of(thread_entry_code, thread_env,
+        inout state);
+    let receiver_value = branch_receiver_value(inner_fn, fixture.receiver_type,
+        inout state);
+    branch_bind(2030, fixture.fn_type, entry_value, inout state);
+    branch_bind(2031, fixture.receiver_type, receiver_value, inout state);
+    var spawn = branch_empty(nativeir.Op.SystemCall, fixture.thread_type);
+    spawn.signature = fixture.spawn_type;
+    spawn.system = option.Option[u32].Some(13);
+    spawn.inputs = [2030, 2031];
+    spawn.result = option.Option[usize].Some(2032);
+    let ignored_spawn = emit_instruction(spawn, inout state);
+    let handle = value(state, 2032);
+    let waited = runtime("lang_thread_wait_v1", "i64", [handle], inout state);
+    branch_expect(waited, 0, 65, inout state);
+    let thread_result = runtime("lang_thread_result_v1", "i64", [handle],
+        inout state);
+    branch_expect(thread_result, 42, 66, inout state);
+    let ignored_handle = runtime("lang_handle_release_v1", "void", [handle],
+        inout state);
+    let thread_refs = branch_vec_refs(thread_env, inout state);
+    branch_expect(thread_refs, 1, 67, inout state);
+    let receiver_layout = lower_type(fixture.receiver_type, inout state);
+    let receiver_slot = storage(receiver_layout, inout state);
+    c_store(receiver_value, receiver_slot, inout state);
+    let receiver_drop = value_op(fixture.receiver_type, false, inout state);
+    let ignored_receiver = c_call(receiver_drop, [receiver_slot], "void",
+        inout state);
+    c_ret(c_int("i32", 0), inout state);
+}
+
+// ---- public test entry ------------------------------------------------------
+
+func branch_build(name string, optimization u32) string throws Error {
+    let fixture = branch_setup();
+    var options = default_options();
+    options.optimization = optimization;
+    var state = new_emitter(fixture.module, options);
+    declare_runtime_types(inout state);
+    if name == "fn" {
+        branch_fn_main(fixture, inout state);
+    } else if name == "weak" {
+        branch_weak_main(fixture, inout state);
+    } else if name == "dyn" {
+        branch_dyn_main(fixture, inout state);
+    } else if name == "thread" {
+        branch_thread_main(fixture, inout state);
+    } else if name == "ops" {
+        branch_ops_main(fixture, inout state);
+    } else {
+        throw c_driver_bad("unknown branch fixture " + name);
+    }
+    return c_driver_join(sections(state));
+}
+
+pub func c_branch_module(name string, optimization u32) string throws Error {
+    return branch_build(name, optimization);
+}

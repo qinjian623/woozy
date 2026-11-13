@@ -1,0 +1,408 @@
+// Reusable Native CFG verifier driver.
+//
+// Runs the real self-hosted pipeline on one project manifest:
+//   project.load -> resolve -> sema.check_project(Backend) -> nativelower.lower
+// and then exercises the published nativeverify API on the lowered CFG:
+//   * an unmodified snapshot must verify (VerifyResult Complete with a value),
+//   * each metadata/owner/error-edge/slot/await mutation of a fresh snapshot
+//     must be rejected with E_IR_INVALID,
+//   * mutating a returned snapshot must not change a later snapshot of the
+//     published VerifiedModule (deep-copy isolation).
+//
+// This driver never constructs a VerifiedHirModule or VerifiedModule itself and
+// never runs the old compiler.  When hirverify/nativelower/sema are absent the
+// run.py stage reports not_run instead of faking a result.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeirdump" as nativeirdump;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_id(kind model.FailureKind) u32 {
+    switch kind {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func print_diagnostics(values Vec[model.Diagnostic]) throws os.Error {
+    for value in values {
+        io.eprintln(value.code + " " + value.phase + " " + value.severity +
+            ": " + value.message);
+    }
+}
+
+func span(snapshot u64, begin_byte u64, end_byte u64) model.Span {
+    return model.Span(snapshot: snapshot, begin_byte: begin_byte,
+        end_byte: end_byte);
+}
+
+func first_diagnostic_code(values Vec[model.Diagnostic]) string {
+    if vec.len(values) == 0 {
+        return "";
+    }
+    return values[0].code;
+}
+
+func expect_reject(label string, result nativeverify.VerifyResult,
+                   failures inout usize) throws os.Error {
+    if option.is_some(result.value) ||
+       phase_id(result.state) != phase_id(model.PhaseState.Failed) ||
+       first_diagnostic_code(result.diagnostics) != "E_IR_INVALID" {
+        failures += 1;
+        io.eprintln("FAIL mutation " + label + ": state=" +
+            num(usize(phase_id(result.state))) + " value=" +
+            flag(option.is_some(result.value)) + " code=" +
+            first_diagnostic_code(result.diagnostics));
+        return;
+    }
+    io.println("mutation " + label + " rejected");
+}
+
+func expect_skip(label string) throws os.Error {
+    io.println("mutation " + label + " skipped");
+}
+
+// Locate the first instruction that yields a value.
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 2 {
+        io.eprintln("usage: nativeverify-driver MANIFEST [STDLIB_ROOT]");
+        return 2;
+    }
+    let manifest = args[1];
+    var std_root = option.Option[string].None;
+    if vec.len(args) >= 3 {
+        std_root = option.Option[string].Some(args[2]);
+    }
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: manifest,
+        std_source_root: std_root,
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value {
+        print_diagnostics(loaded.diagnostics);
+        io.eprintln("project load failed");
+        return 1;
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value {
+        print_diagnostics(resolved.diagnostics);
+        io.eprintln("resolve failed");
+        return 1;
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None,
+        hirverify.VerifyMode.Backend);
+    switch checked.value {
+        case option.Option.None: {
+            print_diagnostics(checked.diagnostics);
+            io.eprintln("HIR verification did not publish a value");
+            return 1;
+        }
+        case option.Option.Some(verified): {
+            let lowered = nativelower.lower(verified);
+            switch lowered.value {
+                case option.Option.None: {
+                    print_diagnostics(lowered.diagnostics);
+                    io.eprintln("lowering did not verify");
+                    return 1;
+                }
+                case option.Option.Some(built): {
+                    return run_built(built);
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+func run_built(built nativeverify.VerifiedModule) i32 throws os.Error {
+    var failures usize = 0;
+
+    // The unmodified lowered CFG must verify again through nativeverify.
+    // nativeverify.snapshot / hirverify.snapshot may throw SupportError; that
+    // is a failure of the integration, never a claimed success.
+    try {
+        let accepted = nativeverify.verify(nativeverify.snapshot(built));
+        if !option.is_some(accepted.value) ||
+           phase_id(accepted.state) != phase_id(model.PhaseState.Complete) {
+            failures += 1;
+            io.eprintln("FAIL unmodified snapshot did not verify");
+            print_diagnostics(accepted.diagnostics);
+        } else {
+            io.println("unmodified snapshot verified");
+        }
+    } catch error model.SupportError {
+        failures += 1;
+        io.eprintln("FAIL snapshot of the lowered module threw");
+    }
+
+    // Deep-copy isolation: a snapshot mutation must not reach the published
+    // module; two pristine dumps stay equal.
+    var pristine = nativeir.empty_module(empty_hir());
+    try {
+        pristine = nativeverify.snapshot(built);
+    } catch error model.SupportError {
+        failures += 1;
+        io.eprintln("FAIL snapshot threw");
+        return 1;
+    }
+    var pristine_text = "";
+    try {
+        pristine_text = nativeirdump.dump(pristine);
+    } catch error model.SupportError {
+        failures += 1;
+        io.eprintln("FAIL dump threw");
+        return 1;
+    }
+    if vec.len(pristine.functions) > 0 &&
+       vec.len(pristine.functions[0].blocks) > 0 {
+        pristine.functions[0].blocks[0].terminator.source = span(7, 1, 2);
+        pristine.functions[0].blocks[0].terminator.inputs = [0];
+    }
+    var after_text = "";
+    try {
+        after_text = nativeirdump.dump(nativeverify.snapshot(built));
+    } catch error model.SupportError {
+        failures += 1;
+        io.eprintln("FAIL second dump threw");
+        return 1;
+    }
+    if pristine_text != after_text {
+        failures += 1;
+        io.eprintln("FAIL snapshot isolation: published dump changed");
+    } else {
+        io.println("snapshot isolation ok");
+    }
+
+    if vec.len(pristine.functions) == 0 ||
+       vec.len(pristine.functions[0].blocks) == 0 {
+        expect_skip("all: no lowered functions/blocks");
+    } else {
+        // 1. Unreachable appended block.
+        var mutated = nativeverify.snapshot(built);
+        let extra = nativeir.BasicBlock(instructions: [],
+            terminator: nativeir.Terminator(kind: nativeir.Exit.Unreachable,
+                inputs: [], targets: [], source: span(1, 0, 0),
+                signature: 0, exit: option.Option[nativeir.ExitSite].None,
+                origin: option.Option[usize].None),
+            parameters: []);
+        vec.push(mutated.functions[0].blocks, extra);
+        expect_reject("unreachable-block", nativeverify.verify(mutated),
+            inout failures);
+
+        // 2. Missing terminator in the entry block.
+        mutated = nativeverify.snapshot(built);
+        mutated.functions[0].blocks[0].terminator =
+            nativeir.empty_terminator();
+        expect_reject("missing-terminator", nativeverify.verify(mutated),
+            inout failures);
+
+        // 3. Invalid slot type.
+        if vec.len(pristine.functions[0].slots) == 0 {
+            expect_skip("invalid-slot: no slots");
+        } else {
+            mutated = nativeverify.snapshot(built);
+            mutated.functions[0].slots[0].type_id = 0;
+            expect_reject("invalid-slot", nativeverify.verify(mutated),
+                inout failures);
+        }
+
+        // 4. Owning slot identity changes; the frozen HIR cannot confirm it.
+        var owner_ready = false;
+        for slot in pristine.functions[0].slots {
+            if option.is_some(slot.owner) {
+                owner_ready = true;
+            }
+        }
+        if !owner_ready {
+            expect_skip("owner-identity: no owning slot");
+        } else {
+            mutated = nativeverify.snapshot(built);
+            var owner_changed = false;
+            for var index usize = 0;
+                index < vec.len(mutated.functions[0].slots); index += 1 {
+                if owner_changed {
+                    continue;
+                }
+                switch mutated.functions[0].slots[index].owner {
+                    case option.Option.Some(owner): {
+                        var changed = owner;
+                        changed.identity = changed.identity + 1;
+                        mutated.functions[0].slots[index].owner =
+                            option.Option[hir.OwnerRef].Some(changed);
+                        owner_changed = true;
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            expect_reject("owner-identity", nativeverify.verify(mutated),
+                inout failures);
+        }
+
+        // 5. Flip an error-channel block parameter.
+        var parameter_ready = false;
+        for block in pristine.functions[0].blocks {
+            for parameter in block.parameters {
+                parameter_ready = true;
+            }
+        }
+        if !parameter_ready {
+            expect_skip("error-parameter: no block parameters");
+        } else {
+            mutated = nativeverify.snapshot(built);
+            for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
+                b += 1 {
+                if vec.len(mutated.functions[0].blocks[b].parameters) == 0 {
+                    continue;
+                }
+                mutated.functions[0].blocks[b].parameters[0].error =
+                    !mutated.functions[0].blocks[b].parameters[0].error;
+                break;
+            }
+            expect_reject("error-parameter", nativeverify.verify(mutated),
+                inout failures);
+        }
+
+        // 6. Duplicate an SSA definition.
+        let pair = first_value_pair(pristine.functions[0]);
+        switch pair {
+            case option.Option.None: expect_skip("duplicate-value");
+            case option.Option.Some(value): {
+                mutated = nativeverify.snapshot(built);
+                mutated.functions[0].blocks[value.left / 100000]
+                    .instructions[value.left % 100000].result =
+                    option.Option[usize].Some(value.right);
+                expect_reject("duplicate-value", nativeverify.verify(mutated),
+                    inout failures);
+            }
+        }
+
+        // 7. Await cancel edge, when this program contains an await.
+        var await_ready = false;
+        for block in pristine.functions[0].blocks {
+            if nativeir.exit_id(block.terminator.kind) ==
+               nativeir.exit_id(nativeir.Exit.Await) {
+                await_ready = true;
+            }
+        }
+        if !await_ready {
+            expect_skip("await-edge: no await");
+        } else {
+            mutated = nativeverify.snapshot(built);
+            for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
+                b += 1 {
+                let terminator = mutated.functions[0].blocks[b].terminator;
+                if nativeir.exit_id(terminator.kind) !=
+                   nativeir.exit_id(nativeir.Exit.Await) {
+                    continue;
+                }
+                mutated.functions[0].blocks[b].terminator.targets[2] =
+                    terminator.targets[0];
+                break;
+            }
+            expect_reject("await-edge", nativeverify.verify(mutated),
+                inout failures);
+        }
+    }
+
+    io.println("functions=" + num(vec.len(pristine.functions)) +
+        " failures=" + num(failures));
+    if failures > 0 {
+        return 1;
+    }
+    return 0;
+}
+
+struct ValuePair {
+    left usize;
+    right usize;
+}
+
+// Two distinct instruction results for the duplicate-definition mutation.
+func first_value_pair(value nativeir.Function) option.Option[ValuePair] {
+    var first_value usize = 0;
+    var have_first = false;
+    var first_block usize = 0;
+    var first_position usize = 0;
+    for var block usize = 0; block < vec.len(value.blocks); block += 1 {
+        for var position usize = 0;
+            position < vec.len(value.blocks[block].instructions);
+            position += 1 {
+            let instruction = value.blocks[block].instructions[position];
+            var result = 0;
+            var has_result = false;
+            switch instruction.result {
+                case option.Option.Some(item): result = item;
+                    has_result = true;
+                case option.Option.None: {}
+            }
+            if !has_result {
+                continue;
+            }
+            if have_first && result != first_value {
+                return option.Option[ValuePair].Some(ValuePair(
+                    left: block * 100000 + position,
+                    right: first_value));
+            }
+            if !have_first {
+                have_first = true;
+                first_value = result;
+                first_block = block;
+                first_position = position;
+            }
+        }
+    }
+    return option.Option[ValuePair].None;
+}
+
+
+
+
+
+func empty_hir() hir.HirModule {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    return hir.empty_module(resolved, 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}

@@ -1,0 +1,44 @@
+// Published records of the pure-Python emission backend (selfhost/1).
+//
+// These mirror include/lang/backend/python.hpp: the same runtime version, the
+// same Output fields and one-based generated line mapping.  The emitter never
+// reads files or starts a process; the caller supplies the runtime text.
+package pythonemit;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+// include/lang/backend/python.hpp: runtime_version.
+pub const RUNTIME_VERSION string = "compiler-dev/1-python-values/10";
+
+pub struct Options {
+    // Without a runner, the output can be imported by an explicit test harness.
+    pub entrypoint bool;
+}
+
+pub struct LineSource {
+    // One-based generated Python line.
+    pub line u64;
+    pub source model.Span;
+}
+
+pub struct SymbolName {
+    pub symbol usize;
+    pub name string;
+}
+
+pub struct Output {
+    // Write as program.py (or another Python module name).
+    pub code string;
+    // Write alongside it as langrt.py; returned unchanged from the argument.
+    pub runtime string;
+    pub source_map Vec[LineSource];
+    pub symbols Vec[SymbolName];
+}
+
+pub struct EmitResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub value option.Option[Output];
+}

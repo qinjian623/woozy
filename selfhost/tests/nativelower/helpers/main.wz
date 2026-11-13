@@ -1,0 +1,44 @@
+package app;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as n;
+import "app/wzcc/nativeirdump" as dump;
+import "app/wzcc/nativelower" as lower;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as o;
+import "std/vec" as vec;
+func module() n.Module {
+    let resolved = model.ResolvedProject(project: model.empty_project(), symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    return n.empty_module(hir.empty_module(resolved, 0, model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+}
+func special() n.Module {
+    var m = module();
+    let mx usize = 18446744073709551615;
+    let z = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    var f = n.Function(symbol: mx, signature: 9223372036854775808, is_async: true, slots: [], blocks: [], source: z, handlers: []);
+    vec.push(f.slots, n.Slot(type_id: 0, parameter: o.Option[u32].Some(0), is_inout: true, owner: o.Option[hir.OwnerRef].None, owning_parameter: false, binding: o.Option[usize].None));
+    vec.push(f.slots, n.Slot(type_id: mx, parameter: o.Option[u32].None, is_inout: true, owner: o.Option[hir.OwnerRef].None, owning_parameter: false, binding: o.Option[usize].None));
+    vec.push(f.slots, n.Slot(type_id: 7, parameter: o.Option[u32].Some(4294967295), is_inout: false, owner: o.Option[hir.OwnerRef].None, owning_parameter: false, binding: o.Option[usize].None));
+    vec.push(f.handlers, n.Handler(target: hir.CatchTarget(try_node: 0, index: 4294967295), block: mx, slot: mx, protected_entry: 0));
+    var b = n.BasicBlock(instructions: [], parameters: [n.BlockParameter(value: 0, type_id: mx, call: 0, error: true)], terminator: n.empty_terminator());
+    var i = n.empty_instruction(); i.result = o.Option[usize].Some(0); i.bits = 18446744073709551615;
+    i.c_callable = o.Option[u32].Some(0); i.c_type = 4294967295; i.system = o.Option[u32].Some(0); i.origin = o.Option[usize].Some(0);
+    i.exit = o.Option[n.ExitSite].Some(n.ExitSite(origin: 0, kind: hir.ExitKind.Cancel, error_type: o.Option[usize].Some(0)));
+    i.cleanup = o.Option[usize].Some(0); i.inputs = [0, mx]; i.source = model.Span(snapshot: 18446744073709551615, begin_byte: 9223372036854775808, end_byte: 18446744073709551615);
+    vec.push(b.instructions, i);
+    i = n.empty_instruction(); i.op = n.Op.StringLiteral; i.utf8 = "\0😀é\t\"\\"; vec.push(b.instructions, i);
+    i = n.empty_instruction(); i.op = n.Op.CFieldRead; i.c_field = 4294967295; i.c_callable = o.Option[u32].Some(0); vec.push(b.instructions, i);
+    i = n.empty_instruction(); i.op = n.Op.EnumPayload; i.variant = mx; vec.push(b.instructions, i);
+    i = n.empty_instruction(); i.op = n.Op.Unary; i.unary = hir.UnaryOp.BitNot; vec.push(b.instructions, i);
+    i = n.empty_instruction(); i.op = n.Op.Binary; i.binary = hir.BinaryOp.GreaterEqual; vec.push(b.instructions, i);
+    b.terminator.kind = n.Exit.TryCall; b.terminator.signature = mx; b.terminator.origin = o.Option[usize].Some(0); b.terminator.inputs = [mx, 0]; b.terminator.targets = [0, mx];
+    vec.push(f.blocks, b); vec.push(m.functions, f); return m;
+}
+func main() i32 throws os.Error {
+    try {
+        io.eprint(lower.review_helpers());
+        io.print("== empty\n" + dump.dump(module()) + "== special\n" + dump.dump(special()));
+    } catch error model.SupportError { switch error { case model.SupportError.Invalid(message): io.eprintln(message); case model.SupportError.Limit(message): io.eprintln(message); } return 3; }
+    return 0;
+}

@@ -1,0 +1,512 @@
+// C11 adapter source generation.
+//
+// This is the Wz replacement for src/backend/native/c_ffi.cpp.  It only writes
+// C source text for Clang; it never invokes the C++ binding generator or the
+// old native helper/backend.
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub func e_adapter_symbol(callable u32) string {
+    return "lang_c_adapter_v1_" + number(usize(callable));
+}
+pub func e_release_symbol(c_type u32) string {
+    return "lang_c_release_v1_" + number(usize(c_type));
+}
+pub func e_retain_symbol(c_type u32) string {
+    return "lang_c_retain_v1_" + number(usize(c_type));
+}
+pub func e_callback_bridge_symbol(function usize, c_type u32) string {
+    return "lang_c_callback_bridge_v1_" + number(function) + "_" +
+        number(usize(c_type));
+}
+pub func e_callback_trampoline_symbol(function usize, c_type u32) string {
+    return "lang_c_callback_trampoline_v1_" + number(function) + "_" +
+        number(usize(c_type));
+}
+pub func e_registration_callback_trampoline_symbol(c_type u32, userdata usize) string {
+    return "lang_c_registration_trampoline_v1_" + number(usize(c_type)) + "_" +
+        number(userdata);
+}
+pub func e_registration_callback_dispatch_symbol(c_type u32, userdata usize) string {
+    return "lang_c_registration_dispatch_v1_" + number(usize(c_type)) + "_" +
+        number(userdata);
+}
+pub func e_registration_unregister_symbol(c_type u32) string {
+    return "lang_c_registration_unregister_v1_" + number(usize(c_type));
+}
+
+func e_c_scalar(name string, unit_void bool) string throws Error {
+    if name == "Unit" {
+        if unit_void { return "void"; }
+        return "uint8_t";
+    }
+    if name == "bool" { return "_Bool"; }
+    if name == "i8" { return "int8_t"; }
+    if name == "i16" { return "int16_t"; }
+    if name == "i32" { return "int32_t"; }
+    if name == "i64" { return "int64_t"; }
+    if name == "u8" { return "uint8_t"; }
+    if name == "u16" { return "uint16_t"; }
+    if name == "u32" { return "uint32_t"; }
+    if name == "u64" { return "uint64_t"; }
+    if name == "isize" { return "intptr_t"; }
+    if name == "usize" { return "size_t"; }
+    if name == "f32" { return "float"; }
+    if name == "f64" { return "double"; }
+    throw invalid("unknown C scalar spelling");
+}
+
+func e_c_buffer_name(ref model.CTypeRef) string throws Error {
+    if !e_c_type_kind_is(ref.kind, model.CTypeKind.Buffer) || vec.len(ref.args) != 1 ||
+       !e_c_type_kind_is(ref.args[0].kind, model.CTypeKind.Scalar) {
+        throw invalid("invalid C buffer type");
+    }
+    var mutability = "ro_";
+    if ref.writable { mutability = "mut_"; }
+    return "wf_buf_" + mutability + ref.args[0].scalar;
+}
+
+func e_unit_pointer(ref model.CTypeRef) bool {
+    return e_c_type_kind_is(ref.kind, model.CTypeKind.Pointer) && ref.writable &&
+        vec.len(ref.args) == 1 && e_c_type_kind_is(ref.args[0].kind, model.CTypeKind.Scalar) &&
+        ref.args[0].scalar == "Unit";
+}
+
+func e_c_spelling(project model.Project, ref model.CTypeRef,
+                  pointer_target bool) string throws Error {
+    switch ref.kind {
+        case model.CTypeKind.Scalar: {
+            if ref.scalar == "Unit" && pointer_target { return "void"; }
+            return e_c_scalar(ref.scalar, true);
+        }
+        case model.CTypeKind.Pointer: {
+            if vec.len(ref.args) != 1 { throw invalid("invalid C pointer type"); }
+            let target = ref.args[0];
+            if e_c_type_kind_is(target.kind, model.CTypeKind.Scalar) && target.scalar == "Unit" {
+                if ref.writable { return "void *"; }
+                return "const void *";
+            }
+            let base = e_c_spelling(project, target, true);
+            var prefix = "const ";
+            if ref.writable { prefix = ""; }
+            return prefix + base + " *";
+        }
+        case model.CTypeKind.Buffer:
+            return e_c_buffer_name(ref);
+        case model.CTypeKind.Named: {
+            let declaration = e_c_type(project, ref.named);
+            switch declaration.kind {
+                case model.CDeclKind.Record: return "wf_rec_" + number(usize(declaration.id));
+                case model.CDeclKind.Resource: return "void *";
+                case model.CDeclKind.Callback: return "wf_cb_" + number(usize(declaration.id));
+                case model.CDeclKind.Opaque: return "void";
+            }
+        }
+    }
+}
+
+func e_c_remove_u32(values inout Vec[u32], value u32) {
+    var out Vec[u32] = [];
+    for item in values { if item != value { vec.push(out, item); } }
+    values = out;
+}
+
+func e_c_collect(project model.Project, ref model.CTypeRef,
+                 records inout Vec[u32], callbacks inout Vec[u32]) throws Error {
+    switch ref.kind {
+        case model.CTypeKind.Scalar: {}
+        case model.CTypeKind.Buffer: {}
+        case model.CTypeKind.Pointer: {
+            if vec.len(ref.args) != 1 { throw invalid("invalid C pointer type"); }
+            e_c_collect(project, ref.args[0], inout records, inout callbacks);
+        }
+        case model.CTypeKind.Named: {
+            let declaration = e_c_type(project, ref.named);
+            switch declaration.kind {
+                case model.CDeclKind.Record: {
+                    if e_has_u32(records, declaration.id) { return; }
+                    e_add_u32_sorted(inout records, declaration.id);
+                    for field in declaration.fields {
+                        e_c_collect(project, field.type_ref, inout records,
+                            inout callbacks);
+                    }
+                }
+                case model.CDeclKind.Callback: {
+                    if e_has_u32(callbacks, declaration.id) { return; }
+                    e_add_u32_sorted(inout callbacks, declaration.id);
+                    e_c_collect(project, declaration.result, inout records,
+                        inout callbacks);
+                    for parameter in declaration.parameters {
+                        e_c_collect(project, parameter.type_ref, inout records,
+                            inout callbacks);
+                    }
+                }
+                case model.CDeclKind.Resource: {}
+                case model.CDeclKind.Opaque: {}
+            }
+        }
+    }
+}
+
+func e_c_record_definition(project model.Project, id u32,
+                           active inout Vec[u32], defined inout Vec[u32],
+                           state inout Emitter) throws Error {
+    if e_has_u32(defined, id) { return; }
+    if e_has_u32(active, id) { throw invalid("recursive C record by value"); }
+    e_add_u32_sorted(inout active, id);
+    let declaration = e_c_type(project, id);
+    for field in declaration.fields {
+        if e_c_type_kind_is(field.type_ref.kind, model.CTypeKind.Named) {
+            let target = e_c_type(project, field.type_ref.named);
+            if e_c_decl_kind_is(target.kind, model.CDeclKind.Record) {
+                e_c_record_definition(project, target.id, inout active,
+                    inout defined, inout state);
+            }
+        }
+    }
+    state.e.adapter_source = state.e.adapter_source + "struct wf_rec_" +
+        number(usize(id)) + " {\n";
+    for field in declaration.fields {
+        let spelling = e_c_spelling(project, field.type_ref, false);
+        state.e.adapter_source = state.e.adapter_source + "  " + spelling + " " +
+            field.name + ";\n";
+    }
+    state.e.adapter_source = state.e.adapter_source + "};\n";
+    state.e.adapter_source = state.e.adapter_source + "_Static_assert(sizeof(struct wf_rec_" +
+        number(usize(id)) + ") == " + number(usize(declaration.size)) +
+        ", \"record size\");\n";
+    state.e.adapter_source = state.e.adapter_source + "_Static_assert(_Alignof(struct wf_rec_" +
+        number(usize(id)) + ") == " + number(usize(declaration.align)) +
+        ", \"record align\");\n";
+    for field in declaration.fields {
+        state.e.adapter_source = state.e.adapter_source + "_Static_assert(offsetof(struct wf_rec_" +
+            number(usize(id)) + ", " + field.name + ") == " +
+            number(usize(field.offset)) + ", \"record field offset\");\n";
+    }
+    e_c_remove_u32(inout active, id);
+    e_add_u32_sorted(inout defined, id);
+}
+
+func e_c_emit_callback_trampoline(project model.Project, function usize,
+                                  c_type u32, state inout Emitter) throws Error {
+    let declaration = e_c_type(project, c_type);
+    let unit = e_c_type_kind_is(declaration.result.kind, model.CTypeKind.Scalar) &&
+        declaration.result.scalar == "Unit";
+    var result = "void";
+    if !unit { result = e_c_spelling(project, declaration.result, false); }
+    let bridge = e_callback_bridge_symbol(function, c_type);
+    state.e.adapter_source = state.e.adapter_source + "extern void " + bridge +
+        "(void *out, void *const *args);\n";
+    state.e.adapter_source = state.e.adapter_source + result + " " +
+        e_callback_trampoline_symbol(function, c_type) + "(";
+    for var index usize = 0; index < vec.len(declaration.parameters); index += 1 {
+        if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+        let spelling = e_c_spelling(project,
+            declaration.parameters[index].type_ref, false);
+        state.e.adapter_source = state.e.adapter_source + spelling + " p" +
+            number(index);
+    }
+    if vec.len(declaration.parameters) == 0 {
+        state.e.adapter_source = state.e.adapter_source + "void";
+    }
+    state.e.adapter_source = state.e.adapter_source + ") {\n";
+    if vec.len(declaration.parameters) == 0 {
+        state.e.adapter_source = state.e.adapter_source + "  void *args[1] = {0};\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  void *args[" +
+            number(vec.len(declaration.parameters)) + "] = {";
+        for var index usize = 0; index < vec.len(declaration.parameters); index += 1 {
+            if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+            state.e.adapter_source = state.e.adapter_source + "&p" + number(index);
+        }
+        state.e.adapter_source = state.e.adapter_source + "};\n";
+    }
+    if unit {
+        state.e.adapter_source = state.e.adapter_source + "  " + bridge +
+            "(0, args);\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  " + result +
+            " result;\n";
+        state.e.adapter_source = state.e.adapter_source + "  " + bridge +
+            "(&result, args);\n";
+        state.e.adapter_source = state.e.adapter_source + "  return result;\n";
+    }
+    state.e.adapter_source = state.e.adapter_source + "}\n";
+}
+
+func e_c_emit_registration_trampoline(project model.Project, c_type u32,
+                                      userdata usize,
+                                      state inout Emitter) throws Error {
+    let declaration = e_c_type(project, c_type);
+    let unit = e_c_type_kind_is(declaration.result.kind, model.CTypeKind.Scalar) &&
+        declaration.result.scalar == "Unit";
+    var result = "void";
+    if !unit { result = e_c_spelling(project, declaration.result, false); }
+    let dispatch = e_registration_callback_dispatch_symbol(c_type, userdata);
+    state.e.adapter_source = state.e.adapter_source + "extern void " + dispatch +
+        "(void *context, void *out, void *const *args);\n";
+    state.e.adapter_source = state.e.adapter_source + result + " " +
+        e_registration_callback_trampoline_symbol(c_type, userdata) + "(";
+    for var index usize = 0; index < vec.len(declaration.parameters); index += 1 {
+        if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+        let spelling = e_c_spelling(project,
+            declaration.parameters[index].type_ref, false);
+        state.e.adapter_source = state.e.adapter_source + spelling + " p" +
+            number(index);
+    }
+    if vec.len(declaration.parameters) == 0 {
+        state.e.adapter_source = state.e.adapter_source + "void";
+    }
+    state.e.adapter_source = state.e.adapter_source + ") {\n";
+    var packed = vec.len(declaration.parameters);
+    if userdata < vec.len(declaration.parameters) { packed -= 1; }
+    if packed == 0 {
+        state.e.adapter_source = state.e.adapter_source + "  void *args[1] = {0};\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  void *args[" +
+            number(packed) + "] = {";
+        var emitted = 0;
+        for var index usize = 0; index < vec.len(declaration.parameters); index += 1 {
+            if index == userdata { continue; }
+            if emitted != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+            state.e.adapter_source = state.e.adapter_source + "&p" + number(index);
+            emitted += 1;
+        }
+        state.e.adapter_source = state.e.adapter_source + "};\n";
+    }
+    if unit {
+        state.e.adapter_source = state.e.adapter_source + "  " + dispatch +
+            "(p" + number(userdata) + ", 0, args);\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  " + result +
+            " result;\n";
+        state.e.adapter_source = state.e.adapter_source + "  " + dispatch +
+            "(p" + number(userdata) + ", &result, args);\n";
+        state.e.adapter_source = state.e.adapter_source + "  return result;\n";
+    }
+    state.e.adapter_source = state.e.adapter_source + "}\n";
+}
+
+func e_c_emit_callable(project model.Project, id u32,
+                       state inout Emitter) throws Error {
+    let declaration = e_c_callable(project, id);
+    let close = registration_close(project, declaration);
+    var parameter_types Vec[string] = [];
+    for parameter in declaration.parameters {
+        let spelling = e_c_spelling(project, parameter.type_ref, false);
+        if spelling == "void" {
+            throw invalid("Unit is not a C value parameter");
+        }
+        vec.push(parameter_types, spelling);
+    }
+    let result = e_c_spelling(project, declaration.result.type_ref, false);
+    if close {
+        state.e.adapter_source = state.e.adapter_source +
+            "extern void lang_c_registration_close_v1(void *);\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "extern " + result +
+            " " + declaration.symbol + "(";
+        if vec.len(parameter_types) == 0 {
+            state.e.adapter_source = state.e.adapter_source + "void";
+        } else {
+            for var index usize = 0; index < vec.len(parameter_types); index += 1 {
+                if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+                state.e.adapter_source = state.e.adapter_source + parameter_types[index];
+            }
+        }
+        state.e.adapter_source = state.e.adapter_source + ");\n";
+    }
+    state.e.adapter_source = state.e.adapter_source + "void " +
+        e_adapter_symbol(id) + "(void *out";
+    for var index usize = 0; index < vec.len(parameter_types); index += 1 {
+        state.e.adapter_source = state.e.adapter_source + ", const void *a" +
+            number(index);
+    }
+    state.e.adapter_source = state.e.adapter_source + ") {\n";
+    for var index usize = 0; index < vec.len(parameter_types); index += 1 {
+        state.e.adapter_source = state.e.adapter_source + "  " +
+            parameter_types[index] + " v" + number(index) + ";\n";
+        state.e.adapter_source = state.e.adapter_source + "  memcpy(&v" +
+            number(index) + ", a" + number(index) + ", sizeof v" +
+            number(index) + ");\n";
+    }
+    var callee = declaration.symbol;
+    if close { callee = "lang_c_registration_close_v1"; }
+    if result != "void" {
+        state.e.adapter_source = state.e.adapter_source + "  " + result +
+            " result = ";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  ";
+    }
+    state.e.adapter_source = state.e.adapter_source + callee + "(";
+    for var index usize = 0; index < vec.len(parameter_types); index += 1 {
+        if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+        state.e.adapter_source = state.e.adapter_source + "v" + number(index);
+    }
+    state.e.adapter_source = state.e.adapter_source + ");\n";
+    if result != "void" {
+        state.e.adapter_source = state.e.adapter_source +
+            "  memcpy(out, &result, sizeof result);\n";
+    } else {
+        state.e.adapter_source = state.e.adapter_source + "  (void)out;\n";
+    }
+    state.e.adapter_source = state.e.adapter_source + "}\n";
+}
+
+pub struct ERegistrationMapping {
+    pub c_type u32;
+    pub userdata usize;
+}
+
+func e_adapter_add_mapping(values inout Vec[ERegistrationMapping],
+                           c_type u32, userdata usize) {
+    var out Vec[ERegistrationMapping] = [];
+    var inserted = false;
+    for item in values {
+        if item.c_type == c_type && item.userdata == userdata { return; }
+        if !inserted && (c_type < item.c_type ||
+            (c_type == item.c_type && userdata < item.userdata)) {
+            vec.push(out, ERegistrationMapping(c_type: c_type, userdata: userdata));
+            inserted = true;
+        }
+        vec.push(out, item);
+    }
+    if !inserted {
+        vec.push(out, ERegistrationMapping(c_type: c_type, userdata: userdata));
+    }
+    values = out;
+}
+
+pub func finalize_c_adapter(state inout Emitter) throws Error {
+    if vec.len(state.e.used_callables) == 0 {
+        state.e.adapter_source = "";
+        return;
+    }
+    let project = state.input.hir.resolved.project;
+    let used_callables = state.e.used_callables;
+    let used_resources = state.e.used_resources;
+    let used_callbacks = state.e.used_callbacks;
+    var mappings Vec[ERegistrationMapping] = [];
+    var registration_resources Vec[u32] = [];
+    for id in used_callables {
+        let callable = e_c_callable(project, id);
+        switch e_registration_callback_checked(project, callable) {
+            case option.Option.Some(mapping): {
+                e_adapter_add_mapping(inout mappings, mapping.callback_type,
+                    mapping.callback_userdata_parameter);
+                e_add_u32_sorted(inout registration_resources, mapping.resource_type);
+                let ignored = registration_dispatcher(mapping.callback_type,
+                    mapping.callback_userdata_parameter, inout state);
+            }
+            case option.Option.None: {}
+        }
+    }
+    var records Vec[u32] = [];
+    var callbacks Vec[u32] = [];
+    for id in used_callables {
+        let callable = e_c_callable(project, id);
+        for parameter in callable.parameters {
+            e_c_collect(project, parameter.type_ref, inout records,
+                inout callbacks);
+        }
+        e_c_collect(project, callable.result.type_ref, inout records,
+            inout callbacks);
+    }
+    for id in used_resources {
+        let declaration = e_c_type(project, id);
+        if !e_c_decl_kind_is(declaration.kind, model.CDeclKind.Resource) {
+            throw invalid("unknown C resource type");
+        }
+    }
+    state.e.adapter_source = "#include <stddef.h>\n#include <stdint.h>\n#include <string.h>\n\n";
+    var scalars Vec[string] = ["i8", "i16", "i32", "i64", "u8", "u16", "u32",
+        "u64", "isize", "usize", "f32", "f64", "bool"];
+    for scalar in scalars {
+        let spelling = e_c_scalar(scalar, true);
+        state.e.adapter_source = state.e.adapter_source + "typedef struct { const " +
+            spelling + " *data; uint64_t len; } wf_buf_ro_" + scalar + ";\n";
+        state.e.adapter_source = state.e.adapter_source + "typedef struct { " +
+            spelling + " *data; uint64_t len; } wf_buf_mut_" + scalar + ";\n";
+    }
+    for id in records {
+        state.e.adapter_source = state.e.adapter_source + "typedef struct wf_rec_" +
+            number(usize(id)) + " wf_rec_" + number(usize(id)) + ";\n";
+    }
+    var active Vec[u32] = [];
+    var defined Vec[u32] = [];
+    for id in records {
+        e_c_record_definition(project, id, inout active, inout defined,
+            inout state);
+    }
+    for id in callbacks {
+        let declaration = e_c_type(project, id);
+        let result = e_c_spelling(project, declaration.result, false);
+        state.e.adapter_source = state.e.adapter_source + "typedef " + result +
+            " (*wf_cb_" + number(usize(id)) + ")(";
+        if vec.len(declaration.parameters) == 0 {
+            state.e.adapter_source = state.e.adapter_source + "void";
+        } else {
+            for var index usize = 0; index < vec.len(declaration.parameters); index += 1 {
+                if index != 0 { state.e.adapter_source = state.e.adapter_source + ", "; }
+                let spelling = e_c_spelling(project,
+                    declaration.parameters[index].type_ref, false);
+                state.e.adapter_source = state.e.adapter_source + spelling;
+            }
+        }
+        state.e.adapter_source = state.e.adapter_source + ");\n";
+    }
+    for item in used_callbacks {
+        e_c_emit_callback_trampoline(project, item.symbol, item.c_type,
+            inout state);
+    }
+    for mapping in mappings {
+        e_c_emit_registration_trampoline(project, mapping.c_type,
+            mapping.userdata, inout state);
+    }
+    for id in used_resources {
+        let declaration = e_c_type(project, id);
+        switch declaration.registration {
+            case option.Option.Some(registration): {
+                state.e.adapter_source = state.e.adapter_source +
+                    "extern void lang_c_registration_release_v1(void *);\n";
+                state.e.adapter_source = state.e.adapter_source + "void " +
+                    e_release_symbol(id) + "(void *p) { if (p) " +
+                    "lang_c_registration_release_v1(p); }\n";
+            }
+            case option.Option.None: {
+                state.e.adapter_source = state.e.adapter_source + "extern void " +
+                    declaration.release_symbol + "(void *);\n";
+                state.e.adapter_source = state.e.adapter_source + "void " +
+                    e_release_symbol(id) + "(void *p) { if (p) " +
+                    declaration.release_symbol + "(p); }\n";
+                if declaration.retain_symbol != "" {
+                    state.e.adapter_source = state.e.adapter_source + "extern void " +
+                        declaration.retain_symbol + "(void *);\n";
+                    state.e.adapter_source = state.e.adapter_source + "void " +
+                        e_retain_symbol(id) + "(void *p) { if (p) " +
+                        declaration.retain_symbol + "(p); }\n";
+                }
+            }
+        }
+    }
+    for id in registration_resources {
+        let declaration = e_c_type(project, id);
+        switch declaration.registration {
+            case option.Option.Some(registration): {
+                state.e.adapter_source = state.e.adapter_source + "extern void " +
+                    registration.unregister_symbol + "(void *);\n";
+                state.e.adapter_source = state.e.adapter_source + "void " +
+                    e_registration_unregister_symbol(id) + "(void *p) { if (p) " +
+                    registration.unregister_symbol + "(p); }\n";
+            }
+            case option.Option.None: {}
+        }
+    }
+    for id in used_callables {
+        e_c_emit_callable(project, id, inout state);
+    }
+}

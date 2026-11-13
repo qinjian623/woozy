@@ -1,0 +1,66 @@
+package main;
+
+import "std/vec" as vec;
+
+struct Counter {
+    value i32;
+    items Vec[i32];
+}
+
+impl Counter {
+    func base(self Self) i32 { return self.value; }
+    func consume(self move Self) i32 {
+        var total = self.value;
+        for item in self.items {
+            total += item;
+        }
+        return total;
+    }
+}
+
+struct Holder {
+    callback func(i32) i32;
+    many Vec[func(i32) i32];
+}
+
+func apply(callback func(i32) i32, value i32) i32 { return callback(value); }
+func twice(value i32) i32 { return value * 2; }
+func relay(callback func(i32) i32) (func(i32) i32) { return callback; }
+
+func main() i32 {
+    // noncapturing function value: one env-ignoring thunk, null environment
+    let plain func(i32) i32 = twice;
+    if plain(3) != 6 { return 1; }
+    if apply(twice, 4) != 8 { return 2; }
+    let alias = relay(plain);
+    if alias(5) != 10 { return 3; }
+
+    // capturing closure: an environment record holding an owning Vec
+    let bias Vec[i32] = [2];
+    let base i32 = 10;
+    let shift = func(value i32) i32 { return value + base + bias[0]; };
+    let shift_copy = shift;
+    if shift(1) != 13 || shift_copy(1) != 13 { return 4; }
+
+    // bound receiver: ordinary Self copies per call
+    let counter = Counter(value: 7, items: [1, 2]);
+    let base_ref = counter.base;
+    if base_ref() != 7 { return 5; }
+
+    // bound receiver: move Self must copy the receiver once per call
+    let consumed = counter.consume;
+    if consumed() != 10 { return 6; }
+    if consumed() != 10 { return 7; }
+
+    // function values stored in aggregates and Vecs own their environments
+    let holders Vec[Holder] = [Holder(callback: shift, many: [plain, shift])];
+    if vec.len(holders) != 1 { return 8; }
+    if holders[0].callback(1) != 13 { return 9; }
+    if vec.len(holders[0].many) != 2 { return 10; }
+    if holders[0].many[0](6) != 12 || holders[0].many[1](0) != 12 { return 11; }
+
+    // indirect callee cleanup through a local function value
+    let local = func(value i32) i32 { return value + 1; };
+    if local(41) != 42 { return 12; }
+    return 0;
+}

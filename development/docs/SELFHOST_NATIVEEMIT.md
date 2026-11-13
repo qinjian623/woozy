@@ -66,14 +66,14 @@ EmitResult { state model.PhaseState, failure model.FailureKind,
              diagnostics Vec[model.Diagnostic], value Option[Output] }
 ```
 
-Output/EmitResult 记录已在 state.wz。emit 入口只接 nativeverify 的私有 VerifiedModule；先 snapshot 取得单独副本，纯组装器在内部使用 raw nativeir.Module。失败返回 value=None。成功仅表示文本组装完成，`llvm_sections` 是**优化前** IR；不声称 LLVM 或对象生成已通过。has_async 为输入任意一个可执行 NativeIR 函数的 is_async，供 Root 选择 O0 的 coroutine pipeline。入口不读文件、不调用子进程、不跑 opt/llc、不链接，也不发布最终文件。Root 驱动验证 LLVM 并完成全部后续步骤后才发布输出。
+Output/EmitResult 记录已在 state.wz。emit 入口只接 nativeverify 的私有 VerifiedModule；先 snapshot 取得单独副本，纯组装器在内部使用 raw nativeir.Module。失败返回 value=None。成功仅表示文本组装完成，`llvm_sections` 是**优化前** IR；不声称 LLVM 或对象生成已通过。has_async 为输入任意一个可执行 NativeIR 函数的 is_async，供 Root 选择 O0 的 coroutine pipeline。组装器在发射任何源函数前必须设置 `state.gc_entry_symbol = Some(entry)`，与 C++ 相同；不能等 `emit_main` 才设置，否则会漏掉主函数循环出口的回收调用。入口不读文件、不调用子进程、不跑 opt/llc、不链接，也不发布最终文件。Root 驱动验证 LLVM 并完成全部后续步骤后才发布输出。
 
 ## 缓存唯一写入者
 
 | 所有者 | 写入位置 |
 | --- | --- |
 | Root | 顶层 type_definitions/declarations/globals/metadata/functions/cursor/data_layout；只能经 text 函数改。storage_types 的创建/克隆也由 Root 做 |
-| B | storage_types 后续 intern；b.layouts/source_functions/TBAA；frame.native_index/values/constants/slots/blocks/try_outputs/incoming；gc_entry_symbol。SourceFunction.text_index 是 LLVM 函数容器下标，native_index 是输入 NativeIR 函数下标，两者不能混用 |
+| B | storage_types 后续 intern；b.layouts/source_functions/TBAA；frame.native_index/values/constants/slots/blocks/try_outputs/incoming。Root 先选择 gc_entry_symbol，B 的 emit_main 可确认同一入口。SourceFunction.text_index 是 LLVM 函数容器下标，native_index 是输入 NativeIR 函数下标，两者不能混用 |
 | C | c 的 value_ops/thunks/environment_types/environment_ops/bound_adapters/trait_vtables/trait_drop/trait_clone/thread_bridges/vec RC helpers；frame.function_values |
 | D | d 的 async_symbols/promises/trace_vecs/trace_fields/ops_vecs/ops_fields/gc_ops_type/gc_invalidate 和三个 flags；frame.async_state |
 | E | e 的 C record/callback/dispatcher 缓存、used ID 集合、adapter_source。C 需要 C resource retain/release 时调用 E 的 resource_operation，不直接改 e.used_resources |

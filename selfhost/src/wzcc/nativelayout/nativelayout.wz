@@ -1,0 +1,185 @@
+// Native aggregate layout view.
+//
+// Direct port of src/ir/layout.hpp.  Substitution may intern storage-only
+// types in the private Context copy owned by AggregateTypes; such IDs never
+// enter the public HirModule type table.  A function field is a leaf,
+// irrespective of its result.
+//
+// The C++ class holds `const hir::HirModule &module` and a by-value
+// `hir::TypeContext types`.  Woozy has no reference fields, so this record
+// keeps an independent HirModule value: the package only reads it, and every
+// returned declaration/field array is an independent copy so a caller cannot
+// mutate the module's nominals through an alias either.
+package nativelayout;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct AggregateTypes {
+    pub module hir.HirModule;
+    pub context types.Context;
+}
+
+func support_from_type_error(error types.Error) model.SupportError {
+    switch error {
+        case types.Error.Invalid(message):
+            return model.SupportError.Invalid(message);
+    }
+}
+
+func copy_params(values Vec[hir.GenericParam]) Vec[hir.GenericParam] {
+    let result = vec.empty[hir.GenericParam]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        var copied = value;
+        switch value.trait_ref {
+            case option.Option.Some(trait_ref): {
+                var trait_copy = trait_ref;
+                let args = vec.empty[usize]();
+                vec.reserve(args, vec.len(trait_ref.args));
+                for arg in trait_ref.args {
+                    vec.push(args, arg);
+                }
+                trait_copy.args = args;
+                copied.trait_ref = option.Option[hir.TraitRef].Some(trait_copy);
+            }
+            case option.Option.None: {}
+        }
+        vec.push(result, copied);
+    }
+    return result;
+}
+
+func copy_fields(values Vec[hir.FieldDecl]) Vec[hir.FieldDecl] {
+    let result = vec.empty[hir.FieldDecl]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, value);
+    }
+    return result;
+}
+
+func copy_variants(values Vec[hir.VariantDecl]) Vec[hir.VariantDecl] {
+    let result = vec.empty[hir.VariantDecl]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, hir.VariantDecl(symbol: value.symbol,
+            payload: copy_fields(value.payload), source: value.source));
+    }
+    return result;
+}
+
+// The C++ declaration() returns a const reference.  This returns an
+// independent value with deep-copied arrays so no caller can rewrite the
+// frozen declaration through a shared Vec handle.
+func copy_declaration(value hir.NominalDecl) hir.NominalDecl {
+    return hir.NominalDecl(symbol: value.symbol, kind: value.kind,
+        params: copy_params(value.params), fields: copy_fields(value.fields),
+        variants: copy_variants(value.variants), source: value.source);
+}
+
+// The C++ constructor copies the caller's TypeContext.  clone_context makes
+// the private copy independent, so substitution here cannot append to or
+// rewrite the public module type table.
+pub func aggregate_types(module hir.HirModule) AggregateTypes {
+    return AggregateTypes(module: module,
+        context: types.clone_context(module.types));
+}
+
+// types.find is followed by a scan of module.nominals, exactly like C++.  An
+// absent type or declaration is the C++ logic_error text.
+pub func declaration(state AggregateTypes, id usize) hir.NominalDecl
+    throws model.SupportError {
+    let found = types.find(state.context, id);
+    var value = model.empty_type(model.TypeKind.Error);
+    switch found {
+        case option.Option.Some(item): value = item;
+        case option.Option.None:
+            throw model.SupportError.Invalid("unknown aggregate declaration");
+    }
+    for nominal in state.module.nominals {
+        if nominal.symbol == value.declaration {
+            return copy_declaration(nominal);
+        }
+    }
+    throw model.SupportError.Invalid("unknown aggregate declaration");
+}
+
+// Substituted declaration or variant fields.  Field types come from the
+// private context copy; the returned array is independent of the declaration.
+pub func fields(state inout AggregateTypes, id usize,
+                variant option.Option[usize]) Vec[hir.FieldDecl]
+    throws model.SupportError {
+    let found = types.find(state.context, id);
+    var value = model.empty_type(model.TypeKind.Error);
+    switch found {
+        case option.Option.Some(item): value = item;
+        case option.Option.None:
+            throw model.SupportError.Invalid("unknown aggregate declaration");
+    }
+    let declared = declaration(state, id);
+    var result = copy_fields(declared.fields);
+    switch variant {
+        case option.Option.Some(selected): {
+            var matched = false;
+            for candidate in declared.variants {
+                if candidate.symbol == selected {
+                    result = copy_fields(candidate.payload);
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                throw model.SupportError.Invalid("unknown enum variant");
+            }
+        }
+        case option.Option.None: {}
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(declared.params); index += 1 {
+        // C++ uses type_args.at(p); a short argument list is an error rather
+        // than a silently truncated substitution.
+        if index >= vec.len(value.type_args) {
+            throw model.SupportError.Invalid(
+                "aggregate type argument count");
+        }
+        vec.push(substitutions, model.Substitution(
+            symbol: declared.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    for var index usize = 0; index < vec.len(result); index += 1 {
+        try {
+            result[index].type_id = types.substitute(result[index].type_id,
+                substitutions, inout state.context);
+        } catch error types.Error {
+            throw support_from_type_error(error);
+        }
+    }
+    return result;
+}
+
+pub func field_index(state inout AggregateTypes, id usize, field usize,
+                     variant option.Option[usize]) usize
+    throws model.SupportError {
+    let values = fields(inout state, id, variant);
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index].symbol == field {
+            return index;
+        }
+    }
+    throw model.SupportError.Invalid("unknown aggregate field");
+}
+
+pub func variant_index(state AggregateTypes, id usize, variant usize) usize
+    throws model.SupportError {
+    let declared = declaration(state, id);
+    for var index usize = 0; index < vec.len(declared.variants); index += 1 {
+        if declared.variants[index].symbol == variant {
+            return index;
+        }
+    }
+    throw model.SupportError.Invalid("unknown enum variant");
+}

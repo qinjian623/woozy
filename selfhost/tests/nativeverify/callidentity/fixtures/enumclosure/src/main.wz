@@ -1,0 +1,44 @@
+package app;
+
+enum Op {
+    Add(delta i32);
+    Mul(factor i32);
+    Stop;
+}
+
+func base() i32 {
+    return 5;
+}
+
+func make(op Op) (func(i32) i32) {
+    switch op {
+        case Op.Add(delta):
+            return func(value i32) i32 {
+                return value + delta + base();
+            };
+        case Op.Mul(factor):
+            return func(value i32) i32 {
+                return value * factor;
+            };
+        case Op.Stop:
+            return func(value i32) i32 {
+                return value;
+            };
+    }
+}
+
+func main() i32 {
+    let add = make(Op.Add(3));
+    let mul = make(Op.Mul(4));
+    let stop = make(Op.Stop);
+    if add(2) != 10 {
+        return 1;
+    }
+    if mul(2) != 8 {
+        return 2;
+    }
+    if stop(7) != 7 {
+        return 3;
+    }
+    return 0;
+}

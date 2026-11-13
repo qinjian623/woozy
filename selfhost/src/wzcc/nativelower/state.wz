@@ -1,0 +1,941 @@
+// Native CFG lowering state and shared primitives.
+//
+// This file is the pure-Wz counterpart of the anonymous lang::ir::Lower class
+// helpers in src/ir/lower.cpp (src/ir/lower.cpp:1-400).  The mutable builder
+// module is never verified here: nativelower.lower finishes by calling
+// nativeverify.verify, and only that package may publish a VerifiedModule.
+//
+// The C++ helper maps are std::map keyed by SymbolId/HirNodeId/(node,index).
+// Their order is never observed by lowering, only their lookup semantics, so
+// they are kept as ordered insertion vectors with the same emplace/assignment/
+// at/missing behaviour.  Owner slots, temporaries, iterations and handlers
+// therefore keep exactly the C++ identity mapping and insertion order.
+package nativelower;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+// SymbolId -> LocalSlotId insertion order (std::map<SymbolId, LocalSlotId>).
+struct SlotEntry {
+    symbol usize;
+    slot usize;
+}
+
+// HirNodeId -> (break target, continue target) (std::map<HirNodeId, pair>).
+struct LoopEntry {
+    node usize;
+    breaks usize;
+    continues usize;
+}
+
+// HirNodeId -> LocalSlotId for owning temporaries.
+struct TemporaryEntry {
+    node usize;
+    slot usize;
+}
+
+// HirNodeId -> LocalSlotId for lowered iteration cursors.
+struct IterationEntry {
+    node usize;
+    slot usize;
+}
+
+// (try node, catch index) -> Handler.
+struct HandlerEntry {
+    try_node usize;
+    index u32;
+    handler nativeir.Handler;
+}
+
+// Extracted pattern payload values.  C++ keys its std::map by the address of
+// the nested hir::Pattern; a value tree has no stable address, so this port
+// uses the payload-index path from the arm root, which identifies the same
+// object and keeps the first-insert behaviour.
+struct ExtractedValue {
+    path Vec[usize];
+    value usize;
+}
+
+struct Lower {
+    h hir.HirModule;
+    aggregates nativelayout.AggregateTypes;
+    f nativeir.Function;
+    current usize;
+    next_value usize;
+    slots Vec[SlotEntry];
+    loops Vec[LoopEntry];
+    unit usize;
+    boolean usize;
+    temporaries Vec[TemporaryEntry];
+    iterations Vec[IterationEntry];
+    handlers Vec[HandlerEntry];
+}
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u64_text(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func vector_copy[T](values Vec[T]) Vec[T] {
+    var out = vec.empty[T]();
+    for value in values {
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func vector_erase[T](values Vec[T], index usize) {
+    if index >= vec.len(values) {
+        return;
+    }
+    var position = index;
+    for position + 1 < vec.len(values) {
+        values[position] = values[position + 1];
+        position += 1;
+    }
+    vec.pop(values);
+}
+
+func option_require[T](value option.Option[T]) T throws model.SupportError {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: {
+            throw model.SupportError.Invalid("missing native lowering value");
+        }
+    }
+}
+
+func option_id_equal(left option.Option[usize], right option.Option[usize]) bool {
+    switch left {
+        case option.Option.None: {
+            switch right {
+                case option.Option.None: return true;
+                case option.Option.Some(value): return false;
+            }
+        }
+        case option.Option.Some(left_value): {
+            switch right {
+                case option.Option.None: return false;
+                case option.Option.Some(right_value): return left_value == right_value;
+            }
+        }
+    }
+}
+
+// h.nodes.at(id) is an internal consistency error, not a source diagnostic.
+func node(state Lower, id usize) hir.HirNode throws model.SupportError {
+    if id >= vec.len(state.h.nodes) {
+        throw model.SupportError.Invalid("invalid HIR node reference");
+    }
+    return state.h.nodes[id];
+}
+
+func node_kind_of(state Lower, id usize) hir.NodeKind throws model.SupportError {
+    return hir.node_kind(node(state, id).data);
+}
+
+func module_type(module hir.HirModule, id usize) model.Type throws model.SupportError {
+    switch types.find(module.types, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw model.SupportError.Invalid("invalid type reference");
+        }
+    }
+}
+
+func type_of(state Lower, id usize) model.Type throws model.SupportError {
+    return module_type(state.h, id);
+}
+
+func owning(state Lower, type_id usize) bool throws model.SupportError {
+    return valueops.classify_value(state.h, type_id).needs_drop;
+}
+
+func live(state Lower) bool {
+    return nativeir.exit_id(state.f.blocks[state.current].terminator.kind) == 0;
+}
+
+// ---- SymbolId -> LocalSlotId -------------------------------------------------
+
+func slot_find(state Lower, symbol usize) option.Option[usize] {
+    for entry in state.slots {
+        if entry.symbol == symbol {
+            return option.Option[usize].Some(entry.slot);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func slot_contains(state Lower, symbol usize) bool {
+    switch slot_find(state, symbol) {
+        case option.Option.Some(value): return true;
+        case option.Option.None: return false;
+    }
+}
+
+// std::map::at on a missing key.
+func slot_require(state Lower, symbol usize) usize throws model.SupportError {
+    switch slot_find(state, symbol) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw model.SupportError.Invalid("map::at");
+        }
+    }
+}
+
+// std::map::emplace: the first definition wins.
+func slot_emplace(state inout Lower, symbol usize, slot_id usize) {
+    switch slot_find(state, symbol) {
+        case option.Option.Some(value): {}
+        case option.Option.None: {
+            vec.push(state.slots, SlotEntry(symbol: symbol, slot: slot_id));
+        }
+    }
+}
+
+// std::map::operator[]: assignment replaces an existing mapping.
+func slot_set(state inout Lower, symbol usize, slot_id usize) {
+    for var index usize = 0; index < vec.len(state.slots); index += 1 {
+        if state.slots[index].symbol == symbol {
+            state.slots[index].slot = slot_id;
+            return;
+        }
+    }
+    vec.push(state.slots, SlotEntry(symbol: symbol, slot: slot_id));
+}
+
+// ---- HirNodeId -> loop targets ----------------------------------------------
+
+func loop_emplace(state inout Lower, id usize, breaks usize, continues usize) {
+    for entry in state.loops {
+        if entry.node == id {
+            return;
+        }
+    }
+    vec.push(state.loops, LoopEntry(node: id, breaks: breaks, continues: continues));
+}
+
+func loop_erase(state inout Lower, id usize) {
+    for var index usize = 0; index < vec.len(state.loops); index += 1 {
+        if state.loops[index].node == id {
+            vector_erase(state.loops, index);
+            return;
+        }
+    }
+}
+
+func loop_require(state Lower, id usize) LoopEntry throws model.SupportError {
+    for entry in state.loops {
+        if entry.node == id {
+            return entry;
+        }
+    }
+    throw model.SupportError.Invalid("map::at");
+}
+
+// ---- temporary / iteration owner slots --------------------------------------
+
+func temporary_find(state Lower, id usize) option.Option[usize] {
+    for entry in state.temporaries {
+        if entry.node == id {
+            return option.Option[usize].Some(entry.slot);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func temporary_require(state Lower, id usize) usize throws model.SupportError {
+    switch temporary_find(state, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw model.SupportError.Invalid("missing temporary owner slot " +
+                usize_text(id));
+        }
+    }
+}
+
+func temporary_set(state inout Lower, id usize, slot_id usize) {
+    for var index usize = 0; index < vec.len(state.temporaries); index += 1 {
+        if state.temporaries[index].node == id {
+            state.temporaries[index].slot = slot_id;
+            return;
+        }
+    }
+    vec.push(state.temporaries, TemporaryEntry(node: id, slot: slot_id));
+}
+
+func iteration_find(state Lower, id usize) option.Option[usize] {
+    for entry in state.iterations {
+        if entry.node == id {
+            return option.Option[usize].Some(entry.slot);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func iteration_set(state inout Lower, id usize, slot_id usize) {
+    for var index usize = 0; index < vec.len(state.iterations); index += 1 {
+        if state.iterations[index].node == id {
+            state.iterations[index].slot = slot_id;
+            return;
+        }
+    }
+    vec.push(state.iterations, IterationEntry(node: id, slot: slot_id));
+}
+
+func handler_emplace(state inout Lower, try_node usize, index u32,
+                     handler nativeir.Handler) {
+    for entry in state.handlers {
+        if entry.try_node == try_node && entry.index == index {
+            return;
+        }
+    }
+    vec.push(state.handlers,
+        HandlerEntry(try_node: try_node, index: index, handler: handler));
+}
+
+func handler_require(state Lower, try_node usize,
+                     index u32) nativeir.Handler throws model.SupportError {
+    for entry in state.handlers {
+        if entry.try_node == try_node && entry.index == index {
+            return entry.handler;
+        }
+    }
+    throw model.SupportError.Invalid("map::at");
+}
+
+// ---- copy of package-shared mutable maps ------------------------------------
+
+func copy_slots(state Lower) Vec[SlotEntry] {
+    return vector_copy(state.slots);
+}
+
+func copy_loops(state Lower) Vec[LoopEntry] {
+    return vector_copy(state.loops);
+}
+
+func copy_temporaries(state Lower) Vec[TemporaryEntry] {
+    return vector_copy(state.temporaries);
+}
+
+func copy_iterations(state Lower) Vec[IterationEntry] {
+    return vector_copy(state.iterations);
+}
+
+func copy_handlers(state Lower) Vec[HandlerEntry] {
+    return vector_copy(state.handlers);
+}
+
+// ---- instruction helpers ----------------------------------------------------
+
+func push_instruction(state inout Lower, instruction nativeir.Instruction) {
+    vec.push(state.f.blocks[state.current].instructions, instruction);
+}
+
+func block(state inout Lower) usize {
+    let id = vec.len(state.f.blocks);
+    vec.push(state.f.blocks, nativeir.BasicBlock(instructions: [],
+        terminator: nativeir.empty_terminator(), parameters: []));
+    return id;
+}
+
+func end(state inout Lower, kind nativeir.Exit, values Vec[usize],
+         targets Vec[usize], source model.Span) {
+    state.f.blocks[state.current].terminator = nativeir.Terminator(kind: kind,
+        inputs: values, targets: targets, source: source, signature: 0,
+        exit: option.Option[nativeir.ExitSite].None,
+        origin: option.Option[usize].None);
+}
+
+func jump(state inout Lower, target usize, source model.Span) {
+    var targets = vec.empty[usize]();
+    vec.push(targets, target);
+    end(inout state, nativeir.Exit.Branch, [], targets, source);
+}
+
+func emit(state inout Lower, instruction nativeir.Instruction) usize {
+    let id = state.next_value;
+    state.next_value += 1;
+    var result = instruction;
+    result.result = option.Option[usize].Some(id);
+    push_instruction(inout state, result);
+    return id;
+}
+
+func constant(state inout Lower, type_id usize, bits u64, source model.Span) usize {
+    var instruction = nativeir.empty_instruction();
+    instruction.type_id = type_id;
+    instruction.bits = bits;
+    instruction.source = source;
+    return emit(inout state, instruction);
+}
+
+func slot_new(state inout Lower, type_id usize) usize {
+    let id = vec.len(state.f.slots);
+    vec.push(state.f.slots, nativeir.Slot(type_id: type_id,
+        parameter: option.Option[u32].None, is_inout: false,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: option.Option[usize].None));
+    return id;
+}
+
+func store(state inout Lower, to usize, value usize, source model.Span) {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Store;
+    instruction.type_id = state.unit;
+    instruction.slot = to;
+    vec.push(instruction.inputs, value);
+    instruction.source = source;
+    push_instruction(inout state, instruction);
+}
+
+func access(state inout Lower, op nativeir.Op, slot_id usize,
+            source model.Span) usize {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.type_id = state.f.slots[slot_id].type_id;
+    instruction.slot = slot_id;
+    instruction.source = source;
+    return emit(inout state, instruction);
+}
+
+func indirect(state inout Lower, address usize, type_id usize,
+              source model.Span) usize {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.LoadIndirect;
+    instruction.type_id = type_id;
+    vec.push(instruction.inputs, address);
+    instruction.source = source;
+    return emit(inout state, instruction);
+}
+
+func effect(state inout Lower, op nativeir.Op, slot_id usize,
+            source model.Span, inputs Vec[usize],
+            owner option.Option[hir.OwnerRef],
+            origin option.Option[usize]) {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.type_id = state.unit;
+    instruction.slot = slot_id;
+    instruction.inputs = inputs;
+    instruction.source = source;
+    instruction.owner = owner;
+    instruction.origin = origin;
+    push_instruction(inout state, instruction);
+}
+
+func owner_slot(state Lower, owner hir.OwnerRef) usize throws model.SupportError {
+    switch owner.kind {
+        case hir.OwnerKind.Binding: {
+            switch slot_find(state, usize(owner.identity)) {
+                case option.Option.Some(value): return value;
+                case option.Option.None: {
+                    throw model.SupportError.Invalid(
+                        "missing binding owner slot " + u64_text(owner.identity));
+                }
+            }
+        }
+        case hir.OwnerKind.Iteration: {
+            switch iteration_find(state, usize(owner.identity)) {
+                case option.Option.Some(value): return value;
+                case option.Option.None: {
+                    throw model.SupportError.Invalid(
+                        "missing iteration owner slot " + u64_text(owner.identity));
+                }
+            }
+        }
+        default: {
+            switch temporary_find(state, usize(owner.identity)) {
+                case option.Option.Some(value): return value;
+                case option.Option.None: {
+                    throw model.SupportError.Invalid(
+                        "missing temporary owner slot " + u64_text(owner.identity));
+                }
+            }
+        }
+    }
+}
+
+func begin_borrow(state inout Lower, owner hir.OwnerRef, value usize,
+                  source model.Span) throws model.SupportError {
+    let slot_id = owner_slot(state, owner);
+    var inputs = vec.empty[usize]();
+    vec.push(inputs, value);
+    effect(inout state, nativeir.Op.BeginBorrow, slot_id, source, inputs,
+        option.Option[hir.OwnerRef].Some(owner), option.Option[usize].None);
+}
+
+func take_temporary(state inout Lower, id usize) throws model.SupportError {
+    switch temporary_find(state, id) {
+        case option.Option.Some(slot_id): {
+            let span = node(state, id).source.span;
+            effect(inout state, nativeir.Op.Take, slot_id, span,
+                [], option.Option[hir.OwnerRef].None,
+                option.Option[usize].None);
+        }
+        case option.Option.None: {}
+    }
+}
+
+// ---- exit plans and cleanup -------------------------------------------------
+
+// Hir ExitKind has no shared ordinal helper; the lowering only needs the
+// equality that C++ operator== provides, and Woozy enums are compared by id.
+func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func plan(state Lower, site nativeir.ExitSite) option.Option[hir.ExitPlan] throws model.SupportError {
+    let origin = node(state, site.origin);
+    for exit_plan in origin.exits {
+        if exit_kind_id(exit_plan.kind) == exit_kind_id(site.kind) &&
+           option_id_equal(exit_plan.error_type, site.error_type) {
+            return option.Option[hir.ExitPlan].Some(exit_plan);
+        }
+    }
+    return option.Option[hir.ExitPlan].None;
+}
+
+func marker(state inout Lower, op nativeir.Op,
+            site option.Option[nativeir.ExitSite],
+            cleanup option.Option[usize],
+            inputs Vec[usize]) throws model.SupportError {
+    var origin_id usize = 0;
+    switch site {
+        case option.Option.Some(value): origin_id = value.origin;
+        case option.Option.None: {
+            switch cleanup {
+                case option.Option.Some(value): origin_id = value;
+                case option.Option.None: {
+                    throw model.SupportError.Invalid(
+                        "missing exit site or defer identity");
+                }
+            }
+        }
+    }
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.type_id = state.unit;
+    instruction.exit = site;
+    instruction.cleanup = cleanup;
+    instruction.inputs = inputs;
+    instruction.source = node(state, origin_id).source.span;
+    push_instruction(inout state, instruction);
+}
+
+// std::map::at for the concrete Try instance handlers.
+func error_exit(state inout Lower, id usize, error_type usize,
+                value usize) throws model.SupportError {
+    let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(error_type));
+    var target = option.Option[hir.ExitTarget].None;
+    switch plan(state, site) {
+        case option.Option.Some(value_plan): {
+            target = option.Option[hir.ExitTarget].Some(value_plan.target);
+        }
+        case option.Option.None: {}
+    }
+    switch target {
+        case option.Option.None: {
+            throw model.SupportError.Invalid("missing verified error exit");
+        }
+        case option.Option.Some(exit_target): {
+            let source = node(state, id).source.span;
+            clean(inout state, site, option.Option[usize].Some(value));
+            switch exit_target {
+                case hir.ExitTarget.CatchTarget(catch_target): {
+                    let handler = handler_require(state, catch_target.try_node,
+                        catch_target.index);
+                    store(inout state, handler.slot, value, source);
+                    jump(inout state, handler.block, source);
+                }
+                default: {
+                    var values = vec.empty[usize]();
+                    vec.push(values, value);
+                    end(inout state, nativeir.Exit.ErrorReturn, values, [], source);
+                }
+            }
+            finish(inout state, site);
+        }
+    }
+}
+
+func finish(state inout Lower, site nativeir.ExitSite) throws model.SupportError {
+    state.f.blocks[state.current].terminator.origin =
+        option.Option[usize].Some(site.origin);
+    switch plan(state, site) {
+        case option.Option.Some(value): {
+            state.f.blocks[state.current].terminator.exit =
+                option.Option[nativeir.ExitSite].Some(site);
+        }
+        case option.Option.None: {}
+    }
+}
+
+func actions(state inout Lower, steps Vec[hir.CleanupStep], source model.Span,
+             saved option.Option[usize]) throws model.SupportError {
+    for step in steps {
+        if !live(state) {
+            break;
+        }
+        switch step.kind {
+            case hir.CleanupKind.Defer: {
+                let defer_node = usize(step.owner.identity);
+                marker(inout state, nativeir.Op.CleanupBegin,
+                    option.Option[nativeir.ExitSite].None,
+                    option.Option[usize].Some(defer_node), []);
+                // The defer body has its own scope: lower it against private
+                // copies of the maps, then restore the enclosing maps exactly
+                // like the C++ move-in/move-out.
+                let outer_slots = copy_slots(state);
+                let outer_loops = copy_loops(state);
+                let outer_handlers = copy_handlers(state);
+                let outer_temporaries = copy_temporaries(state);
+                let outer_iterations = copy_iterations(state);
+                let defer_child = node(state, defer_node).children[0];
+                stmt(inout state, defer_child);
+                state.slots = outer_slots;
+                state.loops = outer_loops;
+                state.handlers = outer_handlers;
+                state.temporaries = outer_temporaries;
+                state.iterations = outer_iterations;
+                if live(state) {
+                    marker(inout state, nativeir.Op.CleanupEnd,
+                        option.Option[nativeir.ExitSite].None,
+                        option.Option[usize].Some(defer_node), []);
+                }
+            }
+            case hir.CleanupKind.DestroyIfLive: {
+                let slot_id = owner_slot(state, step.owner);
+                effect(inout state, nativeir.Op.Destroy, slot_id, source, [],
+                    option.Option[hir.OwnerRef].Some(step.owner),
+                    option.Option[usize].None);
+            }
+            case hir.CleanupKind.EndIteration: {
+                let slot_id = owner_slot(state, step.owner);
+                effect(inout state, nativeir.Op.IterationEnd, slot_id, source, [],
+                    option.Option[hir.OwnerRef].Some(step.owner),
+                    option.Option[usize].None);
+            }
+            case hir.CleanupKind.EndBorrow: {
+                effect(inout state, nativeir.Op.EndBorrow, 0, source, [],
+                    option.Option[hir.OwnerRef].Some(step.owner),
+                    option.Option[usize].None);
+            }
+            case hir.CleanupKind.SaveOutput: {
+                var inputs = vec.empty[usize]();
+                vec.push(inputs, option_require(saved));
+                effect(inout state, nativeir.Op.SaveOutput, 0, source, inputs,
+                    option.Option[hir.OwnerRef].Some(step.owner),
+                    option.Option[usize].None);
+            }
+        }
+    }
+}
+
+func batch(state inout Lower, id usize, kind u64,
+           steps Vec[hir.CleanupStep]) throws model.SupportError {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.OwnershipBegin;
+    instruction.type_id = state.unit;
+    instruction.origin = option.Option[usize].Some(id);
+    instruction.bits = kind;
+    instruction.source = node(state, id).source.span;
+    push_instruction(inout state, instruction);
+    actions(inout state, steps, instruction.source, option.Option[usize].None);
+    instruction.op = nativeir.Op.OwnershipEnd;
+    push_instruction(inout state, instruction);
+}
+
+func full(state inout Lower, id usize) throws model.SupportError {
+    var found = false;
+    var index usize = 0;
+    for var position usize = 0;
+        position < vec.len(state.h.ownership.full_expressions);
+        position += 1 {
+        if state.h.ownership.full_expressions[position].node == id {
+            found = true;
+            index = position;
+            break;
+        }
+    }
+    if found {
+        let steps = vector_copy(state.h.ownership.full_expressions[index].actions);
+        batch(inout state, id, 0, steps);
+    }
+}
+
+func call_end(state inout Lower, id usize) throws model.SupportError {
+    var found = false;
+    var index usize = 0;
+    for var position usize = 0;
+        position < vec.len(state.h.ownership.calls);
+        position += 1 {
+        if state.h.ownership.calls[position].node == id {
+            found = true;
+            index = position;
+            break;
+        }
+    }
+    if found {
+        let steps = vector_copy(state.h.ownership.calls[index].on_return);
+        batch(inout state, id, 1, steps);
+    }
+}
+
+func clean(state inout Lower, site nativeir.ExitSite,
+           saved option.Option[usize]) throws model.SupportError {
+    var found = false;
+    var actions_copy = vec.empty[hir.CleanupStep]();
+    var deferred = vec.empty[usize]();
+    switch plan(state, site) {
+        case option.Option.Some(value_plan): {
+            found = true;
+            actions_copy = vector_copy(value_plan.actions);
+            for value in value_plan.defers {
+                vec.push(deferred, value);
+            }
+        }
+        case option.Option.None: {}
+    }
+    if !found {
+        return;
+    }
+    var inputs = vec.empty[usize]();
+    switch saved {
+        case option.Option.Some(value): vec.push(inputs, value);
+        case option.Option.None: {}
+    }
+    marker(inout state, nativeir.Op.ExitBegin,
+        option.Option[nativeir.ExitSite].Some(site),
+        option.Option[usize].None, inputs);
+    let source = node(state, site.origin).source.span;
+    if vec.len(actions_copy) != 0 {
+        actions(inout state, actions_copy, source, saved);
+    } else {
+        var defers = vec.empty[hir.CleanupStep]();
+        for defer_node in deferred {
+            vec.push(defers, hir.CleanupStep(kind: hir.CleanupKind.Defer,
+                owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary,
+                    identity: u64(defer_node)), type_id: 0));
+        }
+        actions(inout state, defers, source, saved);
+    }
+}
+
+// ---- patterns ---------------------------------------------------------------
+
+func path_copy(path Vec[usize]) Vec[usize] {
+    return vector_copy(path);
+}
+
+func path_equal(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func extracted_find(extracted Vec[ExtractedValue],
+                    path Vec[usize]) option.Option[usize] {
+    for entry in extracted {
+        if path_equal(entry.path, path) {
+            return option.Option[usize].Some(entry.value);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func match_pattern(state inout Lower, pattern hir.Pattern, value usize,
+                   failure usize, path Vec[usize],
+                   extracted Vec[ExtractedValue]) throws model.SupportError {
+    switch pattern.literal {
+        case option.Option.None: {}
+        case option.Option.Some(literal): {
+            var expected usize = 0;
+            switch literal {
+                case hir.PatternLiteral.StringLiteral(item): {
+                    var instruction = nativeir.empty_instruction();
+                    instruction.op = nativeir.Op.StringLiteral;
+                    instruction.type_id = pattern.type_id;
+                    instruction.utf8 = item.utf8;
+                    instruction.source = pattern.source.span;
+                    expected = emit(inout state, instruction);
+                }
+                case hir.PatternLiteral.BoolLiteral(item): {
+                    var bits u64 = 0;
+                    if item.value {
+                        bits = 1;
+                    }
+                    expected = constant(inout state, pattern.type_id, bits,
+                        pattern.source.span);
+                }
+                case hir.PatternLiteral.IntegerLiteral(item): {
+                    expected = constant(inout state, pattern.type_id, item.bits,
+                        pattern.source.span);
+                }
+                case hir.PatternLiteral.FloatLiteral(item): {
+                    expected = constant(inout state, pattern.type_id, item.bits,
+                        pattern.source.span);
+                }
+            }
+            let matched = block(inout state);
+            var test = nativeir.empty_instruction();
+            test.op = nativeir.Op.Binary;
+            test.binary = hir.BinaryOp.Equal;
+            test.type_id = state.boolean;
+            vec.push(test.inputs, value);
+            vec.push(test.inputs, expected);
+            test.source = pattern.source.span;
+            let test_value = emit(inout state, test);
+            var targets = vec.empty[usize]();
+            vec.push(targets, matched);
+            vec.push(targets, failure);
+            end(inout state, nativeir.Exit.Conditional, [test_value], targets,
+                pattern.source.span);
+            state.current = matched;
+            return;
+        }
+    }
+    var has_variant = false;
+    var variant usize = 0;
+    switch pattern.variant {
+        case option.Option.Some(item): {
+            has_variant = true;
+            variant = item;
+        }
+        case option.Option.None: {}
+    }
+    if !has_variant {
+        return;
+    }
+    let matched = block(inout state);
+    var test = nativeir.empty_instruction();
+    test.op = nativeir.Op.EnumTest;
+    test.type_id = state.boolean;
+    test.variant = variant;
+    vec.push(test.inputs, value);
+    test.source = pattern.source.span;
+    let test_value = emit(inout state, test);
+    var targets = vec.empty[usize]();
+    vec.push(targets, matched);
+    vec.push(targets, failure);
+    end(inout state, nativeir.Exit.Conditional, [test_value], targets,
+        pattern.source.span);
+    state.current = matched;
+    let fields = nativelayout.fields(inout state.aggregates, pattern.type_id,
+        pattern.variant);
+    for var index usize = 0; index < vec.len(pattern.payload); index += 1 {
+        let child = pattern.payload[index];
+        // A wildcard payload with no descendant test or binding needs no
+        // active read. A literal must be tested, so it is not skipped.
+        if !option_some(child.variant) && !option_some(child.binding) &&
+           !option_some(child.literal) {
+            continue;
+        }
+        var payload = nativeir.empty_instruction();
+        payload.op = nativeir.Op.EnumPayload;
+        payload.type_id = child.type_id;
+        payload.variant = variant;
+        payload.field = fields[index].symbol;
+        vec.push(payload.inputs, value);
+        payload.source = child.source.span;
+        let child_value = emit(inout state, payload);
+        var child_path = path_copy(path);
+        vec.push(child_path, index);
+        vec.push(extracted, ExtractedValue(path: child_path,
+            value: child_value));
+        match_pattern(inout state, child, child_value, failure, child_path, extracted);
+    }
+}
+
+func option_some[T](value option.Option[T]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func bind_pattern(state inout Lower, pattern hir.Pattern, value usize,
+                  path Vec[usize],
+                  extracted Vec[ExtractedValue]) throws model.SupportError {
+    var has_binding = false;
+    var binding usize = 0;
+    switch pattern.binding {
+        case option.Option.Some(item): {
+            has_binding = true;
+            binding = item;
+        }
+        case option.Option.None: {}
+    }
+    if has_binding {
+        let local = slot_new(inout state, pattern.type_id);
+        slot_emplace(inout state, binding, local);
+        state.f.slots[local].binding = option.Option[usize].Some(binding);
+        var current_value = value;
+        if owning(state, pattern.type_id) {
+            state.f.slots[local].owner = option.Option[hir.OwnerRef].Some(
+                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                    identity: u64(binding)));
+            var copy = nativeir.empty_instruction();
+            copy.op = nativeir.Op.Copy;
+            copy.type_id = pattern.type_id;
+            vec.push(copy.inputs, current_value);
+            copy.source = pattern.source.span;
+            current_value = emit(inout state, copy);
+        }
+        store(inout state, local, current_value, pattern.source.span);
+    }
+    var has_variant = false;
+    switch pattern.variant {
+        case option.Option.Some(item): has_variant = true;
+        case option.Option.None: {}
+    }
+    if !has_variant {
+        return;
+    }
+    for var index usize = 0; index < vec.len(pattern.payload); index += 1 {
+        let child = pattern.payload[index];
+        // A wildcard payload needs no deeper read. A binding, nested variant,
+        // or literal uses the exact active-payload value already tested by
+        // match_pattern; re-reading here would create a different SSA value
+        // without the matching-variant fact required by the verifier.
+        if !option_some(child.variant) && !option_some(child.binding) &&
+           !option_some(child.literal) {
+            continue;
+        }
+        var child_path = path_copy(path);
+        vec.push(child_path, index);
+        switch extracted_find(extracted, child_path) {
+            case option.Option.Some(found): {
+                bind_pattern(inout state, child, found, child_path, extracted);
+            }
+            case option.Option.None: {
+                throw model.SupportError.Invalid(
+                    "pattern payload was not extracted");
+            }
+        }
+    }
+}

@@ -124,6 +124,36 @@ func is_kind(name string, directory bool) bool throws Stop {
         throw Stop.Io(io_failure("status",name,problem));
     }
 }
+// Join a canonical directory string and one raw directory-entry name without
+// decoding the entry. The spelling matches paths.join, including the root case.
+func entry_path_bytes(directory string, entry fs.DirEntry) Vec[u8] {
+    let out=text.bytes(directory);
+    if vec.len(out)==0||out[vec.len(out)-1]!=47 {vec.push(out,47);}
+    for byte in entry.name {vec.push(out,byte);}
+    return out;
+}
+func entry_name_option(entry fs.DirEntry) option.Option[string] {
+    try {return option.Option[string].Some(fs.name_text(entry));}
+    catch problem os.Error {return option.Option[string].None;}
+}
+// DT_LNK and DT_UNKNOWN have no cached type. Follow the link through the same
+// stat rule as the C++ directory_entry, using the entry's original bytes, and
+// keep ENOENT/ENOTDIR as the existing false cases. A failure for a decodable
+// name keeps the C++ filesystem_error wording; otherwise the code-only message
+// is used so no invalid UTF-8 spelling is fabricated.
+func is_file_entry(directory string, entry fs.DirEntry) bool throws Stop {
+    try {return fs.is_file(os.stat_bytes(entry_path_bytes(directory,entry)));}
+    catch problem os.Error {
+        switch problem {
+            case os.Error.System(code,completed): {if code==2||code==20 {return false;}}
+            default:{}
+        }
+        switch entry_name_option(entry) {
+            case option.Option.Some(filename):throw Stop.Io(io_failure("status",paths.join(directory,filename),problem));
+            case option.Option.None:throw Stop.Io(io_failure("","",problem));
+        }
+    }
+}
 func configuration(state inout Loader, manager inout source.Manager,
                    manifest_path string) model.ManifestConfig throws Stop {
     let canonical=canonical_path(manifest_path);
@@ -338,14 +368,18 @@ func resolve(state inout Loader,manager inout source.Manager,name string,
     let id=new_module(inout state,name,identity,"");
     let files=vec.empty[string]();
     for entry in read_directory(directory) {
-        // directory_entry uses the cached kind, following links when needed.
+        // DT_REG uses the cached kind. DT_LNK and DT_UNKNOWN must query the
+        // followed target before decoding: a non-.wz link is ignored only after
+        // its status is known, while ELOOP and similar failures still surface.
         let size=vec.len(entry.name);
         let possible=size>3&&entry.name[size-3]==46&&entry.name[size-2]==119&&entry.name[size-1]==122;
-        if entry.kind!=0&&entry.kind!=10 {
-            if entry.kind!=8||!possible {continue;}
-        }
+        if entry.kind==8 {
+            if !possible {continue;}
+        } else if entry.kind==0||entry.kind==10 {
+            if !is_file_entry(directory,entry)||!possible {continue;}
+        } else {continue;}
         let filename=entry_name(entry);let filename_path=paths.join(directory,filename);
-        if (entry.kind==8||is_kind(filename_path,false))&&path.extension(filename)==".wz" {vec.push(files,filename_path);}
+        vec.push(files,filename_path);
     }
     sorted(files);
     if vec.len(files)==0 {

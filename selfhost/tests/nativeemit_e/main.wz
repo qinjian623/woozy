@@ -1,0 +1,162 @@
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as n;
+import "app/wzcc/nativeir" as nativeir;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+func scalar(name string) model.CTypeRef {
+    return model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: name,
+        writable: false, args: [], named: 0);
+}
+func named(id u32) model.CTypeRef {
+    return model.CTypeRef(kind: model.CTypeKind.Named, scalar: "",
+        writable: false, args: [], named: id);
+}
+func unit_pointer() model.CTypeRef {
+    var args Vec[model.CTypeRef] = [scalar("Unit")];
+    return model.CTypeRef(kind: model.CTypeKind.Pointer, scalar: "",
+        writable: true, args: args, named: 0);
+}
+func unit_return() model.CReturnDecl {
+    return model.CReturnDecl(type_ref: scalar("Unit"), ownership: "unit",
+        release_symbol: "", retain_symbol: "", source: span());
+}
+func record_type() model.CTypeDecl {
+    var fields Vec[model.CFieldDecl] = [];
+    vec.push(fields, model.CFieldDecl(name: "x", type_ref: scalar("i32"),
+        offset: 0, source: span()));
+    return model.CTypeDecl(id: 1, bundle: 0, source: span(), identity: "t.rec",
+        module: "fixture", name: "Rec", c_name: "wf_rec_1",
+        kind: model.CDeclKind.Record, fields: fields, size: 4, align: 4,
+        release_symbol: "", retain_symbol: "", result: scalar("Unit"),
+        parameters: [], registration: option.Option[model.CRegistrationDecl].None);
+}
+func resource_type() model.CTypeDecl {
+    return model.CTypeDecl(id: 2, bundle: 0, source: span(), identity: "t.res",
+        module: "fixture", name: "Res", c_name: "wf_res",
+        kind: model.CDeclKind.Resource, fields: [], size: 0, align: 0,
+        release_symbol: "res_release", retain_symbol: "res_retain",
+        result: scalar("Unit"), parameters: [],
+        registration: option.Option[model.CRegistrationDecl].None);
+}
+func callback_type() model.CTypeDecl {
+    var parameters Vec[model.CParameterDecl] = [];
+    vec.push(parameters, model.CParameterDecl(name: "userdata",
+        type_ref: unit_pointer(), source: span()));
+    vec.push(parameters, model.CParameterDecl(name: "value",
+        type_ref: scalar("i32"), source: span()));
+    return model.CTypeDecl(id: 3, bundle: 0, source: span(), identity: "t.cb",
+        module: "fixture", name: "Callback", c_name: "wf_cb",
+        kind: model.CDeclKind.Callback, fields: [], size: 0, align: 0,
+        release_symbol: "", retain_symbol: "", result: scalar("Unit"),
+        parameters: parameters,
+        registration: option.Option[model.CRegistrationDecl].None);
+}
+func registration_type() model.CTypeDecl {
+    return model.CTypeDecl(id: 4, bundle: 0, source: span(), identity: "t.reg",
+        module: "fixture", name: "Registration", c_name: "wf_reg",
+        kind: model.CDeclKind.Resource, fields: [], size: 0, align: 0,
+        release_symbol: "reg_unregister", retain_symbol: "",
+        result: scalar("Unit"), parameters: [],
+        registration: option.Option[model.CRegistrationDecl].Some(
+            model.CRegistrationDecl(callback_type: 3,
+                unregister_symbol: "reg_unregister")));
+}
+func add_callable() model.CCallableDecl {
+    var parameters Vec[model.CParameterDecl] = [];
+    vec.push(parameters, model.CParameterDecl(name: "lhs",
+        type_ref: scalar("i32"), source: span()));
+    vec.push(parameters, model.CParameterDecl(name: "rhs",
+        type_ref: scalar("i32"), source: span()));
+    vec.push(parameters, model.CParameterDecl(name: "item",
+        type_ref: named(1), source: span()));
+    return model.CCallableDecl(id: 1, bundle: 0, source: span(),
+        identity: "c.add", module: "fixture", name: "add",
+        symbol: "fixture_add", parameters: parameters,
+        result: model.CReturnDecl(type_ref: scalar("i32"), ownership: "value",
+            release_symbol: "", retain_symbol: "", source: span()),
+        stable_identity: "c.add", registers:
+            option.Option[model.CRegistrationCall].None);
+}
+func subscribe_callable() model.CCallableDecl {
+    var parameters Vec[model.CParameterDecl] = [];
+    vec.push(parameters, model.CParameterDecl(name: "callback",
+        type_ref: named(3), source: span()));
+    vec.push(parameters, model.CParameterDecl(name: "userdata",
+        type_ref: unit_pointer(), source: span()));
+    return model.CCallableDecl(id: 2, bundle: 0, source: span(),
+        identity: "c.subscribe", module: "fixture", name: "subscribe",
+        symbol: "fixture_subscribe", parameters: parameters,
+        result: model.CReturnDecl(type_ref: named(4), ownership: "owned",
+            release_symbol: "reg_unregister", retain_symbol: "",
+            source: span()),
+        stable_identity: "c.subscribe",
+        registers: option.Option[model.CRegistrationCall].Some(
+            model.CRegistrationCall(callback_parameter: 0,
+                userdata_parameter: 1, callback_userdata_parameter: 0)));
+}
+func unregister_callable() model.CCallableDecl {
+    var parameters Vec[model.CParameterDecl] = [];
+    vec.push(parameters, model.CParameterDecl(name: "registration",
+        type_ref: named(4), source: span()));
+    return model.CCallableDecl(id: 3, bundle: 0, source: span(),
+        identity: "c.unregister", module: "fixture", name: "unregister",
+        symbol: "reg_unregister", parameters: parameters,
+        result: unit_return(), stable_identity: "c.unregister",
+        registers: option.Option[model.CRegistrationCall].None);
+}
+func fixture_project() model.Project {
+    var types Vec[model.CTypeDecl] = [];
+    vec.push(types, record_type());
+    vec.push(types, resource_type());
+    vec.push(types, callback_type());
+    vec.push(types, registration_type());
+    var callables Vec[model.CCallableDecl] = [];
+    vec.push(callables, add_callable());
+    vec.push(callables, subscribe_callable());
+    vec.push(callables, unregister_callable());
+    return model.Project(root: "", package_name: "nativeemit_e",
+        backend: "native", word_bits: 64, hosted: false, entry: 0,
+        files: [], modules: [], bindings: [], foreign_bindings: [],
+        c_bindings: [], c_types: types, c_callables: callables,
+        c_libraries: [], c_library_dirs: []);
+}
+func adapter_source() string throws n.Error {
+    let resolved = model.ResolvedProject(project: fixture_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    let input = nativeir.empty_module(hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+    var state = n.new_emitter(input, n.default_options());
+    vec.push(state.e.used_callables, u32(1));
+    vec.push(state.e.used_callables, u32(2));
+    vec.push(state.e.used_callables, u32(3));
+    vec.push(state.e.used_resources, u32(2));
+    vec.push(state.e.used_resources, u32(4));
+    vec.push(state.e.used_callbacks,
+        n.UsedCallback(symbol: 7, c_type: 3));
+    n.finalize_c_adapter(inout state);
+    return state.e.adapter_source;
+}
+func main() i32 throws os.Error {
+    try {
+        let source = adapter_source();
+        if source == "" { return 2; }
+        io.print(source);
+    } catch error n.Error {
+        switch error {
+            case n.Error.Failure(code, kind, message): {
+                io.eprintln(code + ": " + message);
+            }
+        }
+        return 1;
+    }
+    return 0;
+}

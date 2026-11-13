@@ -1,0 +1,71 @@
+package nativeemit;
+
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify" as nativeverify;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func emit_failure(code string, kind model.FailureKind, message string) EmitResult {
+    var diagnostic = model.diagnostic(code, "codegen", message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return EmitResult(state: model.PhaseState.Failed, failure: kind,
+        diagnostics: [diagnostic], value: option.Option[Output].None);
+}
+
+func emit_assembly(input nativeir.Module, entry usize, options Options)
+    Output throws Error {
+    var state = new_emitter(input, options);
+    declare_runtime_types(inout state);
+    scan_c_resource_flags(inout state);
+    declare_source_functions(inout state);
+    state.gc_entry_symbol = option.Option[usize].Some(entry);
+    var has_async = false;
+    for var index usize = 0; index < vec.len(input.functions); index += 1 {
+        if input.functions[index].is_async { has_async = true; }
+        emit_function(index, inout state);
+    }
+    emit_main(entry, inout state);
+    finalize_c_adapter(inout state);
+    let output = sections(state);
+    return Output(llvm_sections: output, c_adapter_source: state.e.adapter_source,
+        triple: options.triple, data_layout: state.data_layout, has_async: has_async);
+}
+
+pub func emit(input nativeverify.VerifiedModule, entry usize,
+              options Options) EmitResult {
+    try {
+        let module = nativeverify.snapshot(input);
+        let capabilities = hirverify.check_backend_capabilities(module.hir);
+        if !capabilities.has_value {
+            return EmitResult(state: capabilities.state, failure: capabilities.failure,
+                diagnostics: capabilities.diagnostics, value: option.Option[Output].None);
+        }
+        switch module.hir.config.backend {
+            case model.Backend.Native: {}
+            case model.Backend.Python:
+                return emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+                    "native scalars require native/64 HIR");
+        }
+        if module.hir.config.word_bits != 64 {
+            return emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+                "native scalars require native/64 HIR");
+        }
+        let output = emit_assembly(module, entry, options);
+        return EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source,
+            diagnostics: [], value: option.Option[Output].Some(output));
+    } catch error Error {
+        switch error {
+            case Error.Failure(code, kind, message): return emit_failure(code, kind, message);
+        }
+    } catch error model.SupportError {
+        switch error {
+            case model.SupportError.Invalid(message):
+                return emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message);
+            case model.SupportError.Limit(message):
+                return emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message);
+        }
+    }
+}

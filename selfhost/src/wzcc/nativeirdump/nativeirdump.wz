@@ -1,0 +1,340 @@
+// Stable textual dump of the Native CFG module.
+//
+// This is the pure-Wz counterpart of lang::ir::dump at the end of
+// src/ir/verify.cpp.  The text is byte-for-byte the C++ text: the fixed
+// "native-scalars compiler-dev/1 native64" header, function/slot/handler
+// lines, block labels with parameters, every one of the 53 Op names, all 9
+// Exit names, decimal enum ordinals, lowercase hex UTF-8 bytes, both origin
+// spellings (instruction origin and exit-site origin), defer identity and the
+// exact SourceSpan triple.  Nothing is summarised and no field is invented;
+// the record values come straight from the mutable nativeir.Module.
+package nativeirdump;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u32_text(value u32) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u64_text(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func bool_text(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func unary_op_id(op hir.UnaryOp) u32 {
+    switch op {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+func binary_op_id(op hir.BinaryOp) u32 {
+    switch op {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+// ExitSite.kind is hir::ExitKind; C++ prints static_cast<int> of the ordinal.
+func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func op_name(op nativeir.Op) string {
+    switch op {
+        case nativeir.Op.Constant: return "constant";
+        case nativeir.Op.Function: return "function";
+        case nativeir.Op.Load: return "load";
+        case nativeir.Op.Address: return "address";
+        case nativeir.Op.Store: return "store";
+        case nativeir.Op.Unary: return "unary";
+        case nativeir.Op.Binary: return "binary";
+        case nativeir.Op.Convert: return "convert";
+        case nativeir.Op.Call: return "call";
+        case nativeir.Op.StructInit: return "struct_init";
+        case nativeir.Op.EnumInit: return "enum_init";
+        case nativeir.Op.FieldRead: return "field_read";
+        case nativeir.Op.FieldAddress: return "field_address";
+        case nativeir.Op.LoadIndirect: return "load_indirect";
+        case nativeir.Op.StoreIndirect: return "store_indirect";
+        case nativeir.Op.EnumTest: return "enum_test";
+        case nativeir.Op.EnumPayload: return "enum_payload";
+        case nativeir.Op.StringLiteral: return "string_literal";
+        case nativeir.Op.ExitBegin: return "exit_begin";
+        case nativeir.Op.CleanupBegin: return "cleanup_begin";
+        case nativeir.Op.CleanupEnd: return "cleanup_end";
+        case nativeir.Op.Copy: return "copy";
+        case nativeir.Op.Move: return "move";
+        case nativeir.Op.Take: return "take";
+        case nativeir.Op.Destroy: return "destroy";
+        case nativeir.Op.Borrow: return "borrow";
+        case nativeir.Op.EndBorrow: return "end_borrow";
+        case nativeir.Op.SaveOutput: return "save_output";
+        case nativeir.Op.VecInit: return "vec_init";
+        case nativeir.Op.VecRead: return "vec_read";
+        case nativeir.Op.VecSet: return "vec_set";
+        case nativeir.Op.VecSlice: return "vec_slice";
+        case nativeir.Op.IterationBegin: return "iteration_begin";
+        case nativeir.Op.IterationEnd: return "iteration_end";
+        case nativeir.Op.VecLength: return "vec_length";
+        case nativeir.Op.IterationTest: return "iteration_test";
+        case nativeir.Op.IterationRead: return "iteration_read";
+        case nativeir.Op.IterationNext: return "iteration_next";
+        case nativeir.Op.OwnershipBegin: return "ownership_begin";
+        case nativeir.Op.OwnershipEnd: return "ownership_end";
+        case nativeir.Op.ReplaceIndirect: return "replace_indirect";
+        case nativeir.Op.BeginBorrow: return "begin_borrow";
+        case nativeir.Op.VecCheck: return "vec_check";
+        case nativeir.Op.VecElementAddress: return "vec_element_address";
+        case nativeir.Op.SystemCall: return "system_call";
+        case nativeir.Op.ForeignCall: return "foreign_call";
+        case nativeir.Op.CFieldRead: return "c_field_read";
+        case nativeir.Op.CPtrRead: return "c_ptr_read";
+        case nativeir.Op.CPtrWrite: return "c_ptr_write";
+        case nativeir.Op.CBufferRead: return "c_buffer_read";
+        case nativeir.Op.CBufferWrite: return "c_buffer_write";
+        case nativeir.Op.TraitObject: return "trait_object";
+        case nativeir.Op.TraitCall: return "trait_call";
+    }
+}
+
+func exit_name(kind nativeir.Exit) string {
+    switch kind {
+        case nativeir.Exit.Missing: return "missing";
+        case nativeir.Exit.Branch: return "branch";
+        case nativeir.Exit.Conditional: return "conditional";
+        case nativeir.Exit.Return: return "return";
+        case nativeir.Exit.Unreachable: return "unreachable";
+        case nativeir.Exit.TryCall: return "try_call";
+        case nativeir.Exit.ErrorReturn: return "error_return";
+        case nativeir.Exit.Await: return "await";
+        case nativeir.Exit.CancelReturn: return "cancel_return";
+    }
+}
+
+func hex_digit(value u8) string {
+    let digits = "0123456789abcdef";
+    let index = usize(value);
+    return digits[index:index + 1];
+}
+
+func dump_instruction(instruction nativeir.Instruction) string {
+    var out = "  ";
+    switch instruction.result {
+        case option.Option.Some(value): {
+            out += "%" + usize_text(value) + " = ";
+        }
+        case option.Option.None: {}
+    }
+    out += op_name(instruction.op) + " type=" + usize_text(instruction.type_id);
+    // Woozy has no scalar == on payloadless enums; one switch both prints the
+    // op-specific field and records the independent tail flags below.
+    var is_c_field = false;
+    var is_field = false;
+    var is_variant = false;
+    switch instruction.op {
+        case nativeir.Op.Constant: {
+            out += " bits=" + u64_text(instruction.bits);
+        }
+        case nativeir.Op.StringLiteral: {
+            let data = text.bytes(instruction.utf8);
+            out += " bytes=" + usize_text(vec.len(data)) + " utf8=";
+            for byte in data {
+                out += hex_digit(byte >> 4) + hex_digit(byte & 15);
+            }
+        }
+        case nativeir.Op.Function: {
+            out += " @" + usize_text(instruction.function);
+        }
+        case nativeir.Op.Load: {
+            out += " $" + usize_text(instruction.slot);
+        }
+        case nativeir.Op.Store: {
+            out += " $" + usize_text(instruction.slot);
+        }
+        case nativeir.Op.Address: {
+            out += " $" + usize_text(instruction.slot);
+        }
+        case nativeir.Op.Unary: {
+            out += " op=" + u32_text(unary_op_id(instruction.unary));
+        }
+        case nativeir.Op.Binary: {
+            out += " op=" + u32_text(binary_op_id(instruction.binary));
+        }
+        case nativeir.Op.Call: {
+            out += " signature=" + usize_text(instruction.signature);
+        }
+        case nativeir.Op.SystemCall: {
+            out += " signature=" + usize_text(instruction.signature);
+        }
+        case nativeir.Op.ForeignCall: {
+            out += " signature=" + usize_text(instruction.signature);
+        }
+        case nativeir.Op.CFieldRead: is_c_field = true;
+        case nativeir.Op.FieldRead: is_field = true;
+        case nativeir.Op.FieldAddress: is_field = true;
+        case nativeir.Op.EnumPayload: {
+            is_field = true;
+            is_variant = true;
+        }
+        case nativeir.Op.EnumInit: is_variant = true;
+        case nativeir.Op.EnumTest: is_variant = true;
+        default: {}
+    }
+    switch instruction.c_callable {
+        case option.Option.Some(value): {
+            out += " c_callable=" + u32_text(value);
+        }
+        case option.Option.None: {}
+    }
+    if instruction.c_type != 0 {
+        out += " c_type=" + u32_text(instruction.c_type);
+    }
+    if is_c_field {
+        out += " c_field=" + u32_text(instruction.c_field);
+    }
+    switch instruction.system {
+        case option.Option.Some(value): {
+            out += " system=" + u32_text(value);
+        }
+        case option.Option.None: {}
+    }
+    if is_field {
+        out += " field=@" + usize_text(instruction.field);
+    }
+    if is_variant {
+        out += " variant=@" + usize_text(instruction.variant);
+    }
+    switch instruction.origin {
+        case option.Option.Some(value): {
+            out += " origin=" + usize_text(value);
+        }
+        case option.Option.None: {}
+    }
+    switch instruction.exit {
+        case option.Option.Some(site): {
+            out += " origin=" + usize_text(site.origin) + " exit=" +
+                u32_text(exit_kind_id(site.kind));
+        }
+        case option.Option.None: {}
+    }
+    switch instruction.cleanup {
+        case option.Option.Some(value): {
+            out += " defer=" + usize_text(value);
+        }
+        case option.Option.None: {}
+    }
+    for input in instruction.inputs {
+        out += " %" + usize_text(input);
+    }
+    out += " source=" + u64_text(instruction.source.snapshot) + ":" +
+        u64_text(instruction.source.begin_byte) + "-" +
+        u64_text(instruction.source.end_byte) + "\n";
+    return out;
+}
+
+func dump_function(function nativeir.Function) string {
+    var out = "function @" + usize_text(function.symbol) + " type=" +
+        usize_text(function.signature) + "\n";
+    // Slot ids are positional; C++ prints the vector index, not a stored id.
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        let slot = function.slots[index];
+        out += " slot $" + usize_text(index) + " type=" +
+            usize_text(slot.type_id);
+        switch slot.parameter {
+            case option.Option.Some(value): {
+                out += " parameter=" + u32_text(value) + " inout=" +
+                    bool_text(slot.is_inout);
+            }
+            case option.Option.None: {}
+        }
+        out += "\n";
+    }
+    for handler in function.handlers {
+        out += " handler try=" + usize_text(handler.target.try_node) + ":" +
+            u32_text(handler.target.index) + " entry=b" +
+            usize_text(handler.protected_entry) + " block=b" +
+            usize_text(handler.block) + " slot=$" + usize_text(handler.slot) +
+            "\n";
+    }
+    for var index usize = 0; index < vec.len(function.blocks); index += 1 {
+        let basic = function.blocks[index];
+        out += " b" + usize_text(index) + ":";
+        for parameter in basic.parameters {
+            out += " %" + usize_text(parameter.value) + ":" +
+                usize_text(parameter.type_id);
+        }
+        out += "\n";
+        for instruction in basic.instructions {
+            out += dump_instruction(instruction);
+        }
+        let terminator = basic.terminator;
+        out += "  " + exit_name(terminator.kind);
+        var is_try_call = false;
+        switch terminator.kind {
+            case nativeir.Exit.TryCall: is_try_call = true;
+            default: {}
+        }
+        if is_try_call {
+            out += " signature=" + usize_text(terminator.signature);
+        }
+        switch terminator.origin {
+            case option.Option.Some(value): {
+                out += " origin=" + usize_text(value);
+            }
+            case option.Option.None: {}
+        }
+        for input in terminator.inputs {
+            out += " %" + usize_text(input);
+        }
+        for target in terminator.targets {
+            out += " b" + usize_text(target);
+        }
+        out += "\n";
+    }
+    return out;
+}
+
+pub func dump(input nativeir.Module) string throws model.SupportError {
+    var out = "native-scalars compiler-dev/1 native64\n";
+    for function in input.functions {
+        out += dump_function(function);
+    }
+    return out;
+}

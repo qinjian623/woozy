@@ -1,0 +1,160 @@
+// Reusable D-only checks.  They exercise the real promise/signature helpers
+// and the pure loop-safepoint walk without depending on an emitter entry.
+package app;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as n;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func input() nativeir.Module {
+    let resolved = model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return nativeir.empty_module(hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+}
+
+func internal_error(message string) n.Error {
+    return n.Error.Failure("E_IR_INVALID", model.FailureKind.Internal, message);
+}
+
+func seed(state inout n.Emitter) Vec[usize] throws n.Error {
+    var ids = vec.empty[usize]();
+    try {
+        vec.push(ids, types.intern(inout state.storage_types, model.empty_type(model.TypeKind.Unit)));
+        var integer = model.empty_type(model.TypeKind.SignedInt);
+        integer.bits = 32;
+        vec.push(ids, types.intern(inout state.storage_types, integer));
+        var task = model.empty_type(model.TypeKind.Task);
+        task.type_args = [ids[1], ids[0]];
+        vec.push(ids, types.intern(inout state.storage_types, task));
+        var function = model.empty_type(model.TypeKind.Function);
+        function.parameters = [model.ParameterType(mode: model.ParamMode.Ordinary, type_id: ids[1])];
+        function.result = ids[2];
+        vec.push(ids, types.intern(inout state.storage_types, function));
+    } catch error types.Error {
+        throw internal_error("test type interning failed");
+    }
+    return ids;
+}
+
+func same_id(values Vec[usize], expected usize) bool {
+    for value in values { if value == expected { return true; } }
+    return false;
+}
+
+func terminator(kind nativeir.Exit, targets Vec[usize]) nativeir.Terminator {
+    var result = nativeir.empty_terminator();
+    result.kind = kind;
+    result.targets = targets;
+    return result;
+}
+
+func block(kind nativeir.Exit, targets Vec[usize]) nativeir.BasicBlock {
+    return nativeir.BasicBlock(instructions: [],
+        terminator: terminator(kind, targets), parameters: []);
+}
+
+func native_function(blocks Vec[nativeir.BasicBlock]) nativeir.Function {
+    return nativeir.Function(symbol: 1, signature: 0, is_async: false, slots: [],
+        blocks: blocks, source: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0),
+        handlers: []);
+}
+
+func checks() Vec[string] throws n.Error {
+    var failures = vec.empty[string]();
+    var state = n.new_emitter(input(), n.default_options());
+    let ids = seed(inout state);
+    let promise = n.promise_type(ids[2], inout state);
+    var result_slot_ok = false;
+    switch promise.result_slot {
+        case option.Option.Some(value): result_slot_ok = value == 2;
+        case option.Option.None: {}
+    }
+    if !result_slot_ok { vec.push(failures, "promise result slot"); }
+    switch promise.error_slot {
+        case option.Option.Some(value): vec.push(failures, "promise error slot present");
+        case option.Option.None: {}
+    }
+    if !text.contains(promise.type_name, "lang.promise.") {
+        vec.push(failures, "promise type name");
+    }
+    let coroutine = n.coroutine_signature(ids[3], inout state);
+    if coroutine.result != "void" || vec.len(coroutine.parameters) != 2 ||
+       coroutine.parameters[0] != "i32" || coroutine.parameters[1] != "ptr" {
+        vec.push(failures, "coroutine signature");
+    }
+    if n.type_owns_c_resource(ids[1], inout state) {
+        vec.push(failures, "scalar owns C resource");
+    }
+    if n.has_strong_edge(ids[1], inout state) {
+        vec.push(failures, "scalar has strong edge");
+    }
+    if !n.has_strong_edge(ids[2], inout state) {
+        vec.push(failures, "Task is missing strong edge");
+    }
+    n.scan_c_resource_flags(inout state);
+    if state.d.closure_owns_c_resource || state.d.trait_box_owns_c_resource {
+        vec.push(failures, "empty module raised C resource flags");
+    }
+
+    let simple = n.gc_loop_safepoints(native_function([
+        block(nativeir.Exit.Branch, [1]),
+        block(nativeir.Exit.Conditional, [1, 2]),
+        block(nativeir.Exit.Return, [])]));
+    if !same_id(simple.headers, 1) || !same_id(simple.exits, 2) ||
+       same_id(simple.headers, 0) || same_id(simple.exits, 0) {
+        vec.push(failures, "simple loop safepoints");
+    }
+    let nested = n.gc_loop_safepoints(native_function([
+        block(nativeir.Exit.Branch, [1]),
+        block(nativeir.Exit.Conditional, [2, 4]),
+        block(nativeir.Exit.Conditional, [2, 3]),
+        block(nativeir.Exit.Branch, [1]),
+        block(nativeir.Exit.Return, [])]));
+    if !same_id(nested.headers, 1) || !same_id(nested.headers, 2) ||
+       !same_id(nested.exits, 4) {
+        vec.push(failures, "nested loop safepoints");
+    }
+    let empty = n.gc_loop_safepoints(native_function([]));
+    if vec.len(empty.headers) != 0 || vec.len(empty.exits) != 0 {
+        vec.push(failures, "empty CFG safepoints");
+    }
+
+    let function_index = n.new_function("d.test.function",
+        n.Signature(result: "i32", parameters: []), "internal", "", inout state);
+    let entry = n.new_block(function_index, "entry", inout state);
+    n.position(entry, inout state);
+    let term = nativeir.empty_terminator();
+    if n.emit_async_terminator(term, 0, inout state) {
+        vec.push(failures, "non-async terminator claimed");
+    }
+    let token = n.gc_enter_critical(inout state);
+    if token.type_name != "i32" { vec.push(failures, "critical token type"); }
+    n.gc_leave_critical(token, inout state);
+    let safe = n.gc_enter_safe(inout state);
+    n.gc_leave_safe(safe, inout state);
+    n.gc_poll(inout state);
+    n.gc_collect_loop_exit(inout state);
+    n.terminate("ret i32 0", inout state);
+    return failures;
+}
+
+func main() i32 throws os.Error {
+    try {
+        let failures = checks();
+        if vec.len(failures) != 0 {
+            for failure in failures { io.eprintln("nativeemit_d: " + failure); }
+            return 7;
+        }
+    } catch error n.Error {
+        switch error { case n.Error.Failure(code, kind, message): io.eprintln(code + ": " + message); }
+        return 3;
+    }
+    return 0;
+}

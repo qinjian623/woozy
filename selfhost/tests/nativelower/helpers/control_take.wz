@@ -1,0 +1,15 @@
+// Control for the take_function reproduction: the fixed call form must pass
+// the real stage0 check and execute.  take_function still has no return type;
+// the lowered Function is read from state.f afterwards, exactly as the public
+// nativelower.lower does.
+package nativelower;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+
+pub func fixed_unit_as_function() nativeir.Function
+    throws model.SupportError {
+    var state = make_state();
+    take_function(inout state);
+    return state.f;
+}

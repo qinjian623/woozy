@@ -1,0 +1,84 @@
+// Published Native CFG verifier entry points.
+//
+// `verify` first makes an independent copy of every CFG record and asks the
+// HIR verifier for a freshly deep-copied, verified HIR (Backend mode).  It then
+// re-checks the complete CFG and ownership/exit rules against that verified
+// HIR, and only after success publishes a VerifiedModule holding separate
+// copies.  The raw builder records, including any shared Vec handles the
+// caller still owns, are never trusted.
+//
+// The C++ VerifiedModule keeps a shared_ptr to an immutable Module; here the
+// verified record owns deep-copied Vecs, and snapshot() copies again so no
+// caller can reach the published state through an alias.  There is no
+// settable verified flag and no way to construct VerifiedModule outside this
+// package.
+package nativeverify;
+
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct VerifyResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub value option.Option[VerifiedModule];
+}
+
+// Fields are private: only verify() may construct a VerifiedModule.
+pub struct VerifiedModule {
+    hir hirverify.VerifiedHirModule;
+    functions Vec[nativeir.Function];
+}
+
+// Deep-copy the CFG, verify the raw HIR independently, then run the full CFG
+// and ownership verifier over the resulting verified HIR copy.
+pub func verify(input nativeir.Module) VerifyResult {
+    let functions = copy_functions(input.functions);
+    let checked = hirverify.verify(input.hir, hirverify.VerifyMode.Backend);
+    var result = VerifyResult(state: checked.state, failure: checked.failure,
+        diagnostics: copy_diagnostics(checked.diagnostics),
+        value: option.Option[VerifiedModule].None);
+    switch checked.value {
+        case option.Option.Some(verified): {
+            // hirverify.snapshot/config still belong to the HIR verifier; a
+            // snapshot failure is the same invalid-IR classification as any
+            // other shared-algorithm error (original text, no primary span).
+            try {
+                let verified_hir = hirverify.snapshot(verified);
+                let config = hirverify.config(verified);
+                var state = ModuleState(h: verified_hir, config: config,
+                    functions: functions, symbols: vec.empty[FunctionEntry]());
+                run_module(inout state);
+                result.state = model.PhaseState.Complete;
+                result.failure = model.FailureKind.Internal;
+                result.diagnostics = vec.empty[model.Diagnostic]();
+                result.value = option.Option[VerifiedModule].Some(
+                    VerifiedModule(hir: verified,
+                        functions: copy_functions(state.functions)));
+            } catch error VerifyError {
+                result.state = model.PhaseState.Failed;
+                result.failure = model.FailureKind.Internal;
+                result.diagnostics = vec.empty[model.Diagnostic]();
+                append_error(inout result.diagnostics, error);
+            } catch error model.SupportError {
+                result.state = model.PhaseState.Failed;
+                result.failure = model.FailureKind.Internal;
+                result.diagnostics = vec.empty[model.Diagnostic]();
+                append_error(inout result.diagnostics, support(error));
+            }
+        }
+        case option.Option.None: {}
+    }
+    return result;
+}
+
+// Independent snapshot of the published CFG.  The HIR snapshot comes from the
+// HIR verifier (which also copies) and every native Vec is copied here again.
+pub func snapshot(input VerifiedModule) nativeir.Module
+    throws model.SupportError {
+    return nativeir.Module(hir: hirverify.snapshot(input.hir),
+        functions: copy_functions(input.functions));
+}

@@ -1,0 +1,492 @@
+// Mutable emission state and the shared value/cleanup primitives of the
+// pure-Python backend.
+//
+// Direct migration of the Emitter class fields and helpers from
+// src/backend/python/emitter.cpp.  Ordered std::set/std::map uses are kept as
+// sorted vectors so iteration order matches the C++ output exactly.  Value
+// classification and inout-slot rules are imported from the shared
+// app/wzcc/valueops package; this file never redefines them.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/system" as system;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func use_kind_id(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func cleanup_kind_id(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func value_kind_id(kind hir.ValueKind) u32 {
+    switch kind {
+        case hir.ValueKind.Trivial: return 0;
+        case hir.ValueKind.Vec: return 1;
+        case hir.ValueKind.Structure: return 2;
+        case hir.ValueKind.Enumeration: return 3;
+        case hir.ValueKind.Dependent: return 4;
+        case hir.ValueKind.Unsupported: return 5;
+        case hir.ValueKind.ForeignReference: return 6;
+        case hir.ValueKind.ForeignCallable: return 7;
+        case hir.ValueKind.ForeignError: return 8;
+        case hir.ValueKind.CPointer: return 9;
+        case hir.ValueKind.CBuffer: return 10;
+        case hir.ValueKind.CRecord: return 11;
+        case hir.ValueKind.CResource: return 12;
+        case hir.ValueKind.CCallback: return 13;
+        case hir.ValueKind.RuntimeHandle: return 14;
+        case hir.ValueKind.String: return 15;
+        case hir.ValueKind.Slice: return 16;
+        case hir.ValueKind.Function: return 17;
+        case hir.ValueKind.Weak: return 18;
+        case hir.ValueKind.TraitObject: return 19;
+    }
+}
+
+func inout_slot_id(slot hir.InoutSlot) u32 {
+    switch slot {
+        case hir.InoutSlot.Allowed: return 0;
+        case hir.InoutSlot.Unit: return 1;
+        case hir.InoutSlot.Task: return 2;
+        case hir.InoutSlot.External: return 3;
+        case hir.InoutSlot.TypeParameter: return 4;
+        case hir.InoutSlot.Unsupported: return 5;
+    }
+}
+
+func backend_id(backend model.Backend) u32 {
+    switch backend {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+// Shared algorithms report model.SupportError; the emitter keeps the exact
+// original message and turns it into an internal emission failure.
+func support_failure(error model.SupportError) Failure {
+    switch error {
+        case model.SupportError.Invalid(message): return internal(message);
+        case model.SupportError.Limit(message): return internal(message);
+    }
+}
+
+struct Loop {
+    id usize;
+    code_scope u64;
+    crosses_helper bool;
+}
+
+struct EmitState {
+    module hir.HirModule;
+    cells Vec[u64];
+    named Vec[u64];
+    current usize;
+    serial u64;
+    loops Vec[Loop];
+    break_targets Vec[usize];
+    active_defers Vec[usize];
+    uses_cleanup_guard bool;
+    uses_foreign_access bool;
+    fallback bool;
+    outlining bool;
+    checking_only bool;
+    code_scope u64;
+    next_scope u64;
+    helper_count u64;
+    capture_work u64;
+    // A capture local is a read-only environment alias, never a source
+    // binding and never an owning local slot: it must not be dropped at
+    // function exit or read through '.value'.
+    expression_depth u32;
+    available Vec[u64];
+    capture_locals Vec[u64];
+    helpers Vec[Statement];
+    adapters Vec[Statement];
+    bound_adapter_keys Vec[string];
+    bound_adapter_values Vec[string];
+    bound_adapter_count u64;
+    // Computed owning switch subjects currently held by an enclosing
+    // structured try/finally.  Their drops are emitted by that finally after
+    // the arm block cleanup.
+    held_subjects Vec[usize];
+    printer Printer;
+    symbols Vec[SymbolName];
+    temporary_ids Vec[u64];
+    owned_bindings Vec[u64];
+    value_types Vec[u64];
+    specs Vec[system.OperationSpec];
+}
+
+func new_emitter(module hir.HirModule, fallback bool) EmitState {
+    return EmitState(module: module, cells: [], named: [], current: 0,
+        serial: 0, loops: [], break_targets: [], active_defers: [],
+        uses_cleanup_guard: false, uses_foreign_access: false,
+        fallback: fallback, outlining: false, checking_only: false,
+        code_scope: 0, next_scope: 0, helper_count: 0, capture_work: 0,
+        expression_depth: 0, available: [], capture_locals: [], helpers: [],
+        adapters: [], bound_adapter_keys: [], bound_adapter_values: [],
+        bound_adapter_count: 0, held_subjects: [], printer: printer(),
+        symbols: [], temporary_ids: [], owned_bindings: [], value_types: [],
+        specs: system.operations());
+}
+
+func node_at(state EmitState, id usize) hir.HirNode throws Failure {
+    return hir_node(state.module, id);
+}
+
+func node_kind_id_of(node hir.HirNode) u32 {
+    return hir.node_kind_id(hir.node_kind(node.data));
+}
+
+func classify_value_of(state EmitState, id usize) hir.ValueOps throws Failure {
+    try {
+        return valueops.classify_value(state.module, id);
+    } catch error model.SupportError {
+        throw support_failure(error);
+    }
+}
+
+func owned(state EmitState, id usize) bool throws Failure {
+    // Function/Weak are owning reference values.  The shared classifier still
+    // reports their stage-A result until its reference-values branch lands, so
+    // honour the published ValueKind here without redefining it.
+    let value = classify_value_of(state, id);
+    if value.needs_drop {
+        return true;
+    }
+    let kind = value_kind_id(value.kind);
+    return kind == 17 || kind == 18;
+}
+
+func owner_key(kind hir.OwnerKind, identity u64) string {
+    return owner_key_text(kind, identity);
+}
+
+func take_value(state EmitState, id usize, value string) string {
+    if ordered_contains(state.temporary_ids, u64(id)) {
+        return "_frame.take(" + owner_key(hir.OwnerKind.Temporary, u64(id)) + ")";
+    }
+    return value;
+}
+
+func append_suite(target inout Vec[Statement], source Vec[Statement]) {
+    for value in source {
+        vec.push(target, value);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verified exit plans
+
+func steps(state inout EmitState, actions Vec[hir.CleanupStep],
+           suite inout Vec[Statement], node hir.HirNode,
+           temporaries_only bool) throws Failure {
+    for action in actions {
+        let kind = cleanup_kind_id(action.kind);
+        if kind == 1 {
+            line_hir(inout suite, "_frame.end_borrow(" +
+                owner_key(action.owner.kind, action.owner.identity) + ")", node);
+        }
+        if kind == 2 {
+            let owner_temporary = owner_kind_id(action.owner.kind) == 1;
+            let held = temporaries_only && owner_temporary &&
+                id_contains(state.held_subjects,
+                    usize(action.owner.identity));
+            if (!temporaries_only || owner_temporary) && !held {
+                line_hir(inout suite, "_frame.drop(" +
+                    owner_key(action.owner.kind, action.owner.identity) + ")",
+                    node);
+            }
+        }
+    }
+}
+
+func full(state inout EmitState, id usize,
+          suite inout Vec[Statement]) throws Failure {
+    let node = node_at(state, id);
+    for expression_lifetime in state.module.ownership.full_expressions {
+        if expression_lifetime.node == id {
+            steps(inout state, expression_lifetime.actions, inout suite, node,
+                false);
+        }
+    }
+}
+
+func defer_scope(node hir.HirNode) usize throws Failure {
+    switch node.data {
+        case hir.NodeData.Defer(value): return value.owner_scope;
+        default: throw internal("verified defer registration changed");
+    }
+}
+
+// The structured block cleanups implement the verified plans.  Check the
+// registrations in each plan against exactly those active at this point;
+// never substitute a block-tail plan for an earlier return/call failure.
+func exits(state EmitState, node hir.HirNode, normal bool) throws Failure {
+    for plan in node.exits {
+        if (exit_kind_id(plan.kind) == 0) != normal {
+            continue;
+        }
+        let cleanups = vec.empty[usize]();
+        var index = vec.len(state.active_defers);
+        for index > 0 {
+            index -= 1;
+            let scope = defer_scope(node_at(state, state.active_defers[index]));
+            if id_contains(plan.exited_scopes, scope) {
+                vec.push(cleanups, state.active_defers[index]);
+            }
+        }
+        if !id_vectors_equal(cleanups, plan.defers) {
+            throw internal("Python lexical cleanup differs from verified ExitPlan");
+        }
+    }
+}
+
+func local_drops(state inout EmitState, scope usize,
+                 suite inout Vec[Statement], node hir.HirNode) throws Failure {
+    let locals = vec.empty[hir.LocalLifetime]();
+    for lifetime in state.module.ownership.locals {
+        if lifetime.scope == scope && mode_id(lifetime.mode) == 2 &&
+           owned(state, lifetime.type_id) && !lifetime.read_only_capture &&
+           !ordered_contains(state.capture_locals, u64(lifetime.symbol)) {
+            vec.push(locals, lifetime);
+        }
+    }
+    // std::sort(..., a.order > b.order): descending registration order.
+    var index usize = 1;
+    for index < vec.len(locals) {
+        let item = locals[index];
+        var cursor = index;
+        for cursor > 0 {
+            if locals[cursor - 1].order >= item.order {
+                break;
+            }
+            locals[cursor] = locals[cursor - 1];
+            cursor -= 1;
+        }
+        locals[cursor] = item;
+        index += 1;
+    }
+    for lifetime in locals {
+        line_hir(inout suite, "_frame.drop(" +
+            owner_key(hir.OwnerKind.Binding, u64(lifetime.symbol)) + ")", node);
+    }
+}
+
+func guarded(state inout EmitState, body Vec[Statement], cleanup Vec[Statement],
+             suite inout Vec[Statement], node hir.HirNode) throws Failure {
+    if vec.len(cleanup) == 0 {
+        append_suite(inout suite, body);
+        return;
+    }
+    state.uses_cleanup_guard = true;
+    let callback = "_cleanup" + u64_text(state.serial);
+    state.serial += 1;
+    vec.push(suite, stmt_suite("def " + callback + "()", true,
+        node.source.span, cleanup));
+    vec.push(suite, stmt_suite("with _LangCleanup(" + callback + ")", true,
+        node.source.span, body));
+}
+
+func scope_wrap(state inout EmitState, scope usize, body Vec[Statement],
+                suite inout Vec[Statement], node hir.HirNode) throws Failure {
+    var cleanup = vec.empty[Statement]();
+    local_drops(inout state, scope, inout cleanup, node);
+    guarded(inout state, body, cleanup, inout suite, node);
+}
+
+// ---------------------------------------------------------------------------
+// Value types
+
+func collect_type(state inout EmitState, id usize) throws Failure {
+    if !ordered_insert(inout state.value_types, u64(id)) {
+        return;
+    }
+    let type_value = type_of(state.module, id);
+    if kind_is(type_value.kind, model.TypeKind.Vec) ||
+       kind_is(type_value.kind, model.TypeKind.Slice) {
+        collect_type(inout state, type_value.type_args[0]);
+    }
+    let value = classify_value_of(state, id);
+    for field in value.fields {
+        collect_type(inout state, field.type_id);
+    }
+}
+
+func emit_type(state inout EmitState, id usize,
+               program inout Vec[Statement],
+               done inout Vec[u64]) throws Failure {
+    if !ordered_insert(inout done, u64(id)) {
+        return;
+    }
+    let value = classify_value_of(state, id);
+    let type_value = type_of(state.module, id);
+    var desc = "_rt.ValueType()";
+    if kind_is(type_value.kind, model.TypeKind.Vec) {
+        desc = "_rt.ValueType('vec')";
+    } else if kind_is(type_value.kind, model.TypeKind.Slice) {
+        desc = "_rt.ValueType('slice')";
+    } else if kind_is(type_value.kind, model.TypeKind.String) {
+        desc = "_rt.ValueType('string', stride=32)";
+    } else if kind_is(type_value.kind, model.TypeKind.Bool) ||
+              kind_is(type_value.kind, model.TypeKind.Unit) {
+        desc = "_rt.ValueType(stride=1)";
+    } else if kind_is(type_value.kind, model.TypeKind.SignedInt) ||
+              kind_is(type_value.kind, model.TypeKind.UnsignedInt) ||
+              kind_is(type_value.kind, model.TypeKind.Float) {
+        desc = "_rt.ValueType(stride=" +
+            u32_text(type_value.bits / 8) + ")";
+    } else if kind_is(type_value.kind, model.TypeKind.Function) {
+        desc = "_rt.ValueType('function')";
+    } else if kind_is(type_value.kind, model.TypeKind.Weak) {
+        desc = "_rt.ValueType('weak')";
+    } else if kind_is(type_value.kind, model.TypeKind.TraitObject) {
+        desc = "_rt.ValueType('dyn')";
+    }
+
+    let value_kind = value_kind_id(value.kind);
+    if value_kind == 17 {
+        desc = "_rt.ValueType('function')";
+    }
+    if value_kind == 18 {
+        desc = "_rt.ValueType('weak')";
+    }
+    if value_kind == 19 {
+        desc = "_rt.ValueType('dyn')";
+    }
+    if value_kind == 6 || value_kind == 7 {
+        desc = "_rt.ValueType('foreign')";
+    }
+    if value_kind == 8 {
+        desc = "_rt.ValueType('error')";
+    }
+    if value_kind == 2 {
+        desc = "_rt.ValueType('struct')";
+    }
+    if value_kind == 3 {
+        desc = "_rt.ValueType('enum')";
+    }
+    // Recursive aggregates must share the same descriptor object before any
+    // of their field/variant descriptors can refer back to it.
+    vec.push(program, stmt(type_ops_name(id) + " = " + desc));
+    if kind_is(type_value.kind, model.TypeKind.Vec) ||
+       kind_is(type_value.kind, model.TypeKind.Slice) {
+        emit_type(inout state, type_value.type_args[0], inout program, inout done);
+    }
+    for field in value.fields {
+        emit_type(inout state, field.type_id, inout program, inout done);
+    }
+    if value_kind == 2 {
+        let fields = vec.empty[string]();
+        for field in value.fields {
+            vec.push(fields, type_ops_name(field.type_id));
+        }
+        vec.push(program, stmt(type_ops_name(id) + ".fields = " +
+            tuple_text(fields)));
+    }
+    if value_kind == 3 {
+        let variants = vec.empty[string]();
+        for declaration in state.module.nominals {
+            if declaration.symbol == type_value.declaration {
+                for variant in declaration.variants {
+                    let fields = vec.empty[string]();
+                    for field in value.fields {
+                        var matches = false;
+                        switch field.variant {
+                            case option.Option.Some(symbol):
+                                if symbol == variant.symbol {
+                                    matches = true;
+                                }
+                            case option.Option.None: {}
+                        }
+                        if matches {
+                            vec.push(fields, type_ops_name(field.type_id));
+                        }
+                    }
+                    vec.push(variants, usize_text(variant.symbol) + ": " +
+                        tuple_text(fields));
+                }
+            }
+        }
+        vec.push(program, stmt(type_ops_name(id) + ".variants = {" +
+            join_text(variants) + "}"));
+    }
+}
+
+func field_index(state EmitState, receiver usize,
+                 field usize) usize throws Failure {
+    for declaration in state.module.nominals {
+        if declaration.symbol == type_of(state.module, receiver).declaration {
+            for var index usize = 0; index < vec.len(declaration.fields);
+                index += 1 {
+                if declaration.fields[index].symbol == field {
+                    return index;
+                }
+            }
+        }
+    }
+    throw internal("verified field has no declaration index");
+}
+
+// ---------------------------------------------------------------------------
+// Signature capability
+
+func signature_inout_allowed(state EmitState,
+                             type_id usize) bool throws Failure {
+    try {
+        return inout_slot_id(valueops.inout_slot(state.module, type_id, [])) ==
+            0;
+    } catch error model.SupportError {
+        throw support_failure(error);
+    }
+}
+
+func signature_inout_reason(state EmitState, type_id usize) string throws Failure {
+    try {
+        return valueops.inout_slot_reason(
+            valueops.inout_slot(state.module, type_id, []));
+    } catch error model.SupportError {
+        throw support_failure(error);
+    }
+}
+
+func check_signature(state EmitState, id usize,
+                     source model.Span) throws Failure {
+    let signature = type_of(state.module, id);
+    for parameter in signature.parameters {
+        if mode_id(parameter.mode) == 1 &&
+           !signature_inout_allowed(state, parameter.type_id) {
+            // Python Cells and _rt.Field/_rt.Index places already replace an
+            // owning value by dropping the old one and installing the new one.
+            let reason = signature_inout_reason(state, parameter.type_id);
+            throw rejected_at("Python value profile inout: " + reason, source);
+        }
+    }
+}

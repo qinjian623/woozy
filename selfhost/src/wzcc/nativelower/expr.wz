@@ -1,0 +1,783 @@
+// Native CFG expression lowering.
+//
+// Direct port of lang::ir::Lower::raw_expr, ::expr and ::constant_value in
+// src/ir/lower.cpp.  Every HIR expression node keeps the C++ evaluation
+// order: source-order argument evaluation, then declaration-order operands in
+// the instruction, then move/take effects, then the instruction itself.  Named
+// arguments are only reordered in the stored input vector, never evaluated out
+// of order.  Short-circuit joins, TryCall three-way edges, await ready/error/
+// cancel edges and owning temporaries keep the same ValueId allocation order.
+package nativelower;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func use_kind_id(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func param_mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func field_access_kind(kind hir.NodeKind) bool {
+    switch kind {
+        case hir.NodeKind.FieldRead: return true;
+        case hir.NodeKind.FieldPlace: return true;
+        default: return false;
+    }
+}
+
+func first_read_use(state Lower, id usize) option.Option[hir.ValueUse] {
+    for used in state.h.ownership.uses {
+        if used.consumer == id && used.operand == 0 &&
+           !option_some(used.destination) {
+            return option.Option[hir.ValueUse].Some(used);
+        }
+    }
+    return option.Option[hir.ValueUse].None;
+}
+
+func borrow_use(state Lower, consumer usize,
+                operand u32) option.Option[hir.ValueUse] {
+    for used in state.h.ownership.uses {
+        if used.consumer == consumer && !option_some(used.destination) &&
+           used.operand == operand &&
+           (use_kind_id(used.kind) == 0 || use_kind_id(used.kind) == 3) {
+            return option.Option[hir.ValueUse].Some(used);
+        }
+    }
+    return option.Option[hir.ValueUse].None;
+}
+
+func call_has_lifetime(state Lower, id usize) bool {
+    for call in state.h.ownership.calls {
+        if call.node == id {
+            return true;
+        }
+    }
+    return false;
+}
+
+func temporary_produced(state Lower, id usize) bool {
+    for temporary in state.h.ownership.temporaries {
+        if temporary.producer == id {
+            return true;
+        }
+    }
+    return false;
+}
+
+func constant_value(state inout Lower, value hir.ConstantValue,
+                    source model.Span,
+                    origin option.Option[usize]) usize throws model.SupportError {
+    var instruction = nativeir.empty_instruction();
+    instruction.type_id = value.type_id;
+    instruction.source = source;
+    instruction.origin = origin;
+    switch value.data {
+        case hir.ConstantData.UnitLiteral(item): {
+            instruction.op = nativeir.Op.Constant;
+        }
+        case hir.ConstantData.BoolLiteral(item): {
+            instruction.op = nativeir.Op.Constant;
+            var bits u64 = 0;
+            if item.value {
+                bits = 1;
+            }
+            instruction.bits = bits;
+        }
+        case hir.ConstantData.IntegerLiteral(item): {
+            instruction.op = nativeir.Op.Constant;
+            instruction.bits = item.bits;
+        }
+        case hir.ConstantData.FloatLiteral(item): {
+            instruction.op = nativeir.Op.Constant;
+            instruction.bits = item.bits;
+        }
+        case hir.ConstantData.StringLiteral(item): {
+            instruction.op = nativeir.Op.StringLiteral;
+            instruction.utf8 = item.utf8;
+        }
+        case hir.ConstantData.FunctionValue(item): {
+            instruction.op = nativeir.Op.Function;
+            instruction.function = item.symbol;
+        }
+        case hir.ConstantData.ConstantAggregate(item): {
+            var has_variant = false;
+            switch item.variant {
+                case option.Option.Some(variant): {
+                    has_variant = true;
+                    instruction.variant = variant;
+                }
+                case option.Option.None: {}
+            }
+            if has_variant {
+                instruction.op = nativeir.Op.EnumInit;
+            } else {
+                instruction.op = nativeir.Op.StructInit;
+            }
+            for field in item.fields {
+                let field_value = constant_value(inout state, field, source,
+                    option.Option[usize].None);
+                vec.push(instruction.inputs, field_value);
+            }
+        }
+    }
+    return emit(inout state, instruction);
+}
+
+// Owning full-expressions install their real temporary slot after the value.
+func expr(state inout Lower, id usize) usize throws model.SupportError {
+    let value = raw_expr(inout state, id);
+    var found = false;
+    var index usize = 0;
+    for var position usize = 0;
+        position < vec.len(state.h.ownership.temporaries);
+        position += 1 {
+        if state.h.ownership.temporaries[position].producer == id {
+            found = true;
+            index = position;
+            break;
+        }
+    }
+    if found {
+        let temporary = state.h.ownership.temporaries[index];
+        let storage = slot_new(inout state, temporary.type_id);
+        state.f.slots[storage].owner = option.Option[hir.OwnerRef].Some(
+            hir.OwnerRef(kind: hir.OwnerKind.Temporary, identity: u64(id)));
+        temporary_set(inout state, id, storage);
+        let span = node(state, id).source.span;
+        store(inout state, storage, value, span);
+    }
+    return value;
+}
+
+func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
+    let current = node(state, id);
+    var instruction = nativeir.empty_instruction();
+    instruction.type_id = current.type_id;
+    instruction.source = current.source.span;
+    switch current.data {
+        case hir.NodeData.ConstantLiteral(data): {
+            return constant_value(inout state, data.value, current.source.span,
+                option.Option[usize].Some(id));
+        }
+        case hir.NodeData.UnitLiteral(data): {
+            return constant(inout state, current.type_id, 0, current.source.span);
+        }
+        case hir.NodeData.BoolLiteral(data): {
+            var bits u64 = 0;
+            if data.value {
+                bits = 1;
+            }
+            return constant(inout state, current.type_id, bits, current.source.span);
+        }
+        case hir.NodeData.IntegerLiteral(data): {
+            return constant(inout state, current.type_id, data.bits,
+                current.source.span);
+        }
+        case hir.NodeData.FloatLiteral(data): {
+            return constant(inout state, current.type_id, data.bits,
+                current.source.span);
+        }
+        case hir.NodeData.StringLiteral(data): {
+            instruction.op = nativeir.Op.StringLiteral;
+            instruction.utf8 = data.utf8;
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.Read(data): {
+            let local = slot_require(state, data.symbol);
+            let value = access(inout state, nativeir.Op.Load, local,
+                instruction.source);
+            switch first_read_use(state, id) {
+                case option.Option.None: return value;
+                case option.Option.Some(used): {
+                    if use_kind_id(used.kind) == 1 {
+                        instruction.op = nativeir.Op.Copy;
+                    } else {
+                        instruction.op = nativeir.Op.Borrow;
+                    }
+                    vec.push(instruction.inputs, value);
+                    instruction.origin = option.Option[usize].Some(id);
+                    return emit(inout state, instruction);
+                }
+            }
+        }
+        case hir.NodeData.Place(data): {
+            let local = slot_require(state, data.symbol);
+            return access(inout state, nativeir.Op.Address, local,
+                instruction.source);
+        }
+        case hir.NodeData.Move(data): {
+            instruction.op = nativeir.Op.Move;
+            instruction.origin = option.Option[usize].Some(id);
+            switch data.binding {
+                case option.Option.Some(binding): {
+                    instruction.slot = slot_require(state, binding);
+                    return emit(inout state, instruction);
+                }
+                case option.Option.None: {
+                    let value = expr(inout state, current.children[0]);
+                    take_temporary(inout state, current.children[0]);
+                    return value;
+                }
+            }
+        }
+        case hir.NodeData.VecInit(data): {
+            instruction.op = nativeir.Op.VecInit;
+            for child in current.children {
+                let value = expr(inout state, child);
+                vec.push(instruction.inputs, value);
+            }
+            for child in current.children {
+                take_temporary(inout state, child);
+            }
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.IndexRead(data): {
+            instruction.origin = option.Option[usize].Some(id);
+            let receiver_kind = type_of(state,
+                node(state, current.children[0]).type_id).kind;
+            switch receiver_kind {
+                case model.TypeKind.CForeignPointer: {
+                    instruction.op = nativeir.Op.CPtrRead;
+                }
+                case model.TypeKind.CForeignBuffer: {
+                    instruction.op = nativeir.Op.CBufferRead;
+                }
+                default: instruction.op = nativeir.Op.VecRead;
+            }
+            let receiver = expr(inout state, current.children[0]);
+            let index = expr(inout state, current.children[1]);
+            vec.push(instruction.inputs, receiver);
+            vec.push(instruction.inputs, index);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.CFieldRead(data): {
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.op = nativeir.Op.CFieldRead;
+            instruction.c_type = data.c_type;
+            instruction.c_field = data.field;
+            let receiver = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, receiver);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.VecSlice(data): {
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.op = nativeir.Op.VecSlice;
+            for child in current.children {
+                let value = expr(inout state, child);
+                vec.push(instruction.inputs, value);
+            }
+            var bits u64 = 0;
+            if option_some(data.start) {
+                bits |= 1;
+            }
+            if option_some(data.end) {
+                bits |= 2;
+            }
+            instruction.bits = bits;
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.FunctionValue(data): {
+            instruction.op = nativeir.Op.Function;
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.function = data.symbol;
+            for child in current.children {
+                let value = expr(inout state, child);
+                vec.push(instruction.inputs, value);
+            }
+            for child in current.children {
+                take_temporary(inout state, child);
+            }
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.StructInit(data): {
+            instruction.op = nativeir.Op.StructInit;
+            vec.resize(instruction.inputs, vec.len(data.fields), 0);
+            for argument in data.fields {
+                let value = expr(inout state, argument.expression);
+                instruction.inputs[usize(argument.parameter_index)] = value;
+            }
+            for argument in data.fields {
+                take_temporary(inout state, argument.expression);
+            }
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.EnumInit(data): {
+            instruction.op = nativeir.Op.EnumInit;
+            instruction.variant = data.variant;
+            vec.resize(instruction.inputs, vec.len(data.payload), 0);
+            for argument in data.payload {
+                let value = expr(inout state, argument.expression);
+                instruction.inputs[usize(argument.parameter_index)] = value;
+            }
+            for argument in data.payload {
+                take_temporary(inout state, argument.expression);
+            }
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.IndexPlace(data): {
+            // An inout index place is a direct address into the container
+            // storage. The receiver and index are evaluated once in source
+            // order, and the bounds check is part of forming the place, before
+            // the callee runs.
+            let receiver_kind = type_of(state,
+                node(state, current.children[0]).type_id).kind;
+            var supported = false;
+            switch receiver_kind {
+                case model.TypeKind.Vec: supported = true;
+                case model.TypeKind.Slice: supported = true;
+                default: {}
+            }
+            if !supported {
+                throw model.SupportError.Invalid(
+                    "non-Vec/Slice index place in expression");
+            }
+            let receiver = expr(inout state, current.children[0]);
+            let index = expr(inout state, current.children[1]);
+            let check_source = node(state, current.children[1]).source.span;
+            var check_inputs = vec.empty[usize]();
+            vec.push(check_inputs, receiver);
+            vec.push(check_inputs, index);
+            effect(inout state, nativeir.Op.VecCheck, 0, check_source, check_inputs,
+                option.Option[hir.OwnerRef].None,
+                option.Option[usize].Some(id));
+            instruction.op = nativeir.Op.VecElementAddress;
+            instruction.origin = option.Option[usize].Some(id);
+            vec.push(instruction.inputs, receiver);
+            vec.push(instruction.inputs, index);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.FieldRead(data): {
+            instruction.op = nativeir.Op.FieldRead;
+            instruction.field = data.field;
+            let receiver = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, receiver);
+            let value = emit(inout state, instruction);
+            if temporary_produced(state, id) {
+                instruction.op = nativeir.Op.Copy;
+                var inputs = vec.empty[usize]();
+                vec.push(inputs, value);
+                instruction.inputs = inputs;
+                return emit(inout state, instruction);
+            }
+            return value;
+        }
+        case hir.NodeData.FieldPlace(data): {
+            instruction.op = nativeir.Op.FieldAddress;
+            instruction.field = data.field;
+            let receiver = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, receiver);
+            let value = emit(inout state, instruction);
+            if temporary_produced(state, id) {
+                instruction.op = nativeir.Op.Copy;
+                var inputs = vec.empty[usize]();
+                vec.push(inputs, value);
+                instruction.inputs = inputs;
+                return emit(inout state, instruction);
+            }
+            return value;
+        }
+        case hir.NodeData.Unary(data): {
+            instruction.op = nativeir.Op.Unary;
+            instruction.unary = data.op;
+            let value = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, value);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.Binary(data): {
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.op = nativeir.Op.Binary;
+            instruction.binary = data.op;
+            let left = expr(inout state, current.children[0]);
+            let right = expr(inout state, current.children[1]);
+            vec.push(instruction.inputs, left);
+            vec.push(instruction.inputs, right);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.IntegerConvert(data): {
+            instruction.op = nativeir.Op.Convert;
+            instruction.origin = option.Option[usize].Some(id);
+            let value = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, value);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.ShortCircuit(data): {
+            let left = expr(inout state, current.children[0]);
+            let boolean = state.boolean;
+            let result = slot_new(inout state, boolean);
+            store(inout state, result, left, instruction.source);
+            let right = block(inout state);
+            let join = block(inout state);
+            var is_and = false;
+            switch data.op {
+                case hir.LogicalOp.And: is_and = true;
+                case hir.LogicalOp.Or: is_and = false;
+            }
+            var targets = vec.empty[usize]();
+            if is_and {
+                vec.push(targets, right);
+                vec.push(targets, join);
+            } else {
+                vec.push(targets, join);
+                vec.push(targets, right);
+            }
+            end(inout state, nativeir.Exit.Conditional, [left], targets,
+                instruction.source);
+            state.current = right;
+            let right_value = expr(inout state, current.children[1]);
+            store(inout state, result, right_value, instruction.source);
+            jump(inout state, join, instruction.source);
+            state.current = join;
+            return access(inout state, nativeir.Op.Load, result, instruction.source);
+        }
+        case hir.NodeData.Await(data): {
+            // The awaited child evaluates to an owning Task value. It stays
+            // owned by the enclosing full expression; the await only borrows
+            // the handle.
+            let task = node(state, current.children[0]).type_id;
+            let task_type = type_of(state, task);
+            var is_task = false;
+            switch task_type.kind {
+                case model.TypeKind.Task: is_task = true;
+                default: {}
+            }
+            if !is_task || vec.len(task_type.type_args) != 2 {
+                throw model.SupportError.Invalid("await child is not a Task");
+            }
+            let result_type = task_type.type_args[0];
+            let error_type = task_type.type_args[1];
+            var unit_result = false;
+            switch type_of(state, result_type).kind {
+                case model.TypeKind.Unit: unit_result = true;
+                default: {}
+            }
+            var unit_error = false;
+            switch type_of(state, error_type).kind {
+                case model.TypeKind.Unit: unit_error = true;
+                default: {}
+            }
+            let future = expr(inout state, current.children[0]);
+            let ready = block(inout state);
+            let fail = block(inout state);
+            let cancelled = block(inout state);
+            let value = state.next_value;
+            state.next_value += 1;
+            let error_value = state.next_value;
+            state.next_value += 1;
+            if !unit_result {
+                vec.push(state.f.blocks[ready].parameters,
+                    nativeir.BlockParameter(value: value, type_id: result_type,
+                        call: id, error: false));
+            }
+            if !unit_error {
+                vec.push(state.f.blocks[fail].parameters,
+                    nativeir.BlockParameter(value: error_value,
+                        type_id: error_type, call: id, error: true));
+            }
+            var targets = vec.empty[usize]();
+            vec.push(targets, ready);
+            vec.push(targets, fail);
+            vec.push(targets, cancelled);
+            end(inout state, nativeir.Exit.Await, [future], targets,
+                instruction.source);
+            state.f.blocks[state.current].terminator.signature = task;
+            state.f.blocks[state.current].terminator.origin =
+                option.Option[usize].Some(id);
+            state.current = fail;
+            if unit_error {
+                end(inout state, nativeir.Exit.Unreachable, [], [],
+                    instruction.source);
+            } else {
+                error_exit(inout state, id, error_type, error_value);
+            }
+            // Cancellation runs the recorded cancel exit plan: defers and
+            // owning locals/temporaries of every exited scope, then a no-value
+            // return.
+            state.current = cancelled;
+            let cancel_site = nativeir.ExitSite(origin: id,
+                kind: hir.ExitKind.Cancel,
+                error_type: option.Option[usize].None);
+            clean(inout state, cancel_site, option.Option[usize].None);
+            end(inout state, nativeir.Exit.CancelReturn, [], [],
+                instruction.source);
+            finish(inout state, cancel_site);
+            state.current = ready;
+            if unit_result {
+                let unit_type = state.unit;
+                return constant(inout state, unit_type, 0, instruction.source);
+            }
+            return value;
+        }
+        case hir.NodeData.TraitObjectInit(data): {
+            instruction.op = nativeir.Op.TraitObject;
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.variant = data.trait_ref.declaration;
+            instruction.methods = vector_copy(data.methods);
+            let value = expr(inout state, current.children[0]);
+            vec.push(instruction.inputs, value);
+            return emit(inout state, instruction);
+        }
+        case hir.NodeData.TraitDispatch(data): {
+            instruction.op = nativeir.Op.TraitCall;
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.signature = data.signature;
+            instruction.bits = u64(data.index);
+            instruction.field = data.method;
+            vec.resize(instruction.inputs, vec.len(data.args), 0);
+            // Evaluation follows source order, but the vtable ABI receives
+            // formals in declaration order even when named arguments were
+            // reordered.
+            for argument in data.args {
+                let value = expr(inout state, argument.expression);
+                instruction.inputs[usize(argument.parameter_index)] = value;
+                switch borrow_use(state, id, argument.source_index) {
+                    case option.Option.Some(used): {
+                        switch used.root {
+                            case option.Option.Some(root): {
+                                begin_borrow(inout state,
+                                    hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                        identity: u64(root)), value,
+                                    instruction.source);
+                            }
+                            case option.Option.None: {
+                                if owning(state, used.type_id) {
+                                    begin_borrow(inout state,
+                                        hir.OwnerRef(
+                                            kind: hir.OwnerKind.Temporary,
+                                            identity: u64(argument.expression)),
+                                        value, instruction.source);
+                                }
+                            }
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            let result = emit(inout state, instruction);
+            call_end(inout state, id);
+            return result;
+        }
+        case hir.NodeData.Call(data): {
+            var is_system = false;
+            var is_c_foreign = false;
+            switch data.kind {
+                case hir.CalleeKind.System: is_system = true;
+                case hir.CalleeKind.CForeign: is_c_foreign = true;
+                default: {}
+            }
+            if is_system {
+                instruction.op = nativeir.Op.SystemCall;
+            } else if is_c_foreign {
+                instruction.op = nativeir.Op.ForeignCall;
+            } else {
+                instruction.op = nativeir.Op.Call;
+            }
+            instruction.system = data.system;
+            instruction.c_callable = data.c_callable;
+            instruction.origin = option.Option[usize].Some(id);
+            instruction.signature = data.signature;
+            var callee usize = 0;
+            var has_callee = false;
+            var callee_node usize = 0;
+            if is_system {
+                // Fixed typed operation; there is no source-level function
+                // pointer.
+            } else if is_c_foreign {
+                // C calls have no source-level callee value. The adapter
+                // identity is an immutable binding index checked by both
+                // verifiers.
+            } else {
+                switch data.callee {
+                    case option.Option.Some(node_id): {
+                        has_callee = true;
+                        callee_node = node_id;
+                        callee = expr(inout state, node_id);
+                    }
+                    case option.Option.None: {
+                        var function_value = nativeir.empty_instruction();
+                        function_value.op = nativeir.Op.Function;
+                        function_value.type_id = data.signature;
+                        function_value.function =
+                            option_require(data.direct_symbol);
+                        function_value.source = instruction.source;
+                        callee = emit(inout state, function_value);
+                    }
+                }
+            }
+            var argument_offset usize = 1;
+            if is_system || is_c_foreign {
+                argument_offset = 0;
+            }
+            // A callee read from a real binding is borrowed rather than copied;
+            // a computed owning callee is saved as a temporary and borrowed
+            // too. Both happen before argument evaluation and use the recorded
+            // end_borrow on success and typed-error exits.
+            if has_callee {
+                let callee_type = node(state, callee_node).type_id;
+                if owning(state, callee_type) {
+                    var owner = option.Option[hir.OwnerRef].None;
+                    switch temporary_find(state, callee_node) {
+                        case option.Option.Some(value): {
+                            owner = option.Option[hir.OwnerRef].Some(
+                                hir.OwnerRef(kind: hir.OwnerKind.Temporary,
+                                    identity: u64(callee_node)));
+                        }
+                        case option.Option.None: {
+                            var base = callee_node;
+                            for true {
+                                let base_node = node(state, base);
+                                if !field_access_kind(
+                                    hir.node_kind(base_node.data)) {
+                                    break;
+                                }
+                                base = base_node.children[0];
+                            }
+                            var root = option.Option[usize].None;
+                            switch node(state, base).data {
+                                case hir.NodeData.Read(read_data): {
+                                    root = option.Option[usize].Some(
+                                        read_data.symbol);
+                                }
+                                case hir.NodeData.Place(place_data): {
+                                    root = option.Option[usize].Some(
+                                        place_data.symbol);
+                                }
+                                default: {}
+                            }
+                            switch root {
+                                case option.Option.Some(symbol): {
+                                    if slot_contains(state, symbol) {
+                                        owner = option.Option[hir.OwnerRef].Some(
+                                            hir.OwnerRef(
+                                                kind: hir.OwnerKind.Binding,
+                                                identity: u64(symbol)));
+                                    }
+                                }
+                                case option.Option.None: {}
+                            }
+                        }
+                    }
+                    switch owner {
+                        case option.Option.Some(value): {
+                            begin_borrow(inout state, value, callee,
+                                instruction.source);
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            vec.resize(instruction.inputs,
+                vec.len(data.args) + argument_offset, 0);
+            if !is_system && !is_c_foreign {
+                instruction.inputs[0] = callee;
+            }
+            // Evaluation follows source order. Only the saved values are
+            // reordered.
+            let has_lifetime = call_has_lifetime(state, id);
+            for argument in data.args {
+                let value = expr(inout state, argument.expression);
+                instruction.inputs[usize(argument.parameter_index) +
+                    argument_offset] = value;
+                if has_lifetime &&
+                   param_mode_id(argument.mode) != 2 {
+                    var use_offset usize = 0;
+                    if has_callee {
+                        use_offset = 1;
+                    }
+                    switch borrow_use(state, id,
+                        argument.source_index + u32(use_offset)) {
+                        case option.Option.Some(used): {
+                            switch used.root {
+                                case option.Option.Some(root): {
+                                    begin_borrow(inout state,
+                                        hir.OwnerRef(
+                                            kind: hir.OwnerKind.Binding,
+                                            identity: u64(root)), value,
+                                        instruction.source);
+                                }
+                                case option.Option.None: {
+                                    if owning(state, used.type_id) {
+                                        begin_borrow(inout state,
+                                            hir.OwnerRef(
+                                                kind: hir.OwnerKind.Temporary,
+                                                identity: u64(
+                                                    argument.expression)),
+                                            value, instruction.source);
+                                    }
+                                }
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            let signature = type_of(state, data.signature);
+            for argument in data.args {
+                switch argument.mode {
+                    case model.ParamMode.Move: {
+                        take_temporary(inout state, argument.expression);
+                    }
+                    default: {}
+                }
+            }
+            var has_throws = false;
+            var throws_type usize = 0;
+            switch signature.throws_type {
+                case option.Option.Some(value): {
+                    has_throws = true;
+                    throws_type = value;
+                }
+                case option.Option.None: {}
+            }
+            if !has_throws {
+                let result = emit(inout state, instruction);
+                call_end(inout state, id);
+                return result;
+            }
+            let ok = block(inout state);
+            let fail = block(inout state);
+            let value = state.next_value;
+            state.next_value += 1;
+            let error_value = state.next_value;
+            state.next_value += 1;
+            vec.push(state.f.blocks[ok].parameters,
+                nativeir.BlockParameter(value: value,
+                    type_id: current.type_id, call: id, error: false));
+            vec.push(state.f.blocks[fail].parameters,
+                nativeir.BlockParameter(value: error_value,
+                    type_id: throws_type, call: id, error: true));
+            var targets = vec.empty[usize]();
+            vec.push(targets, ok);
+            vec.push(targets, fail);
+            end(inout state, nativeir.Exit.TryCall, instruction.inputs, targets,
+                instruction.source);
+            state.f.blocks[state.current].terminator.signature = data.signature;
+            state.f.blocks[state.current].terminator.origin =
+                option.Option[usize].Some(id);
+            state.current = fail;
+            error_exit(inout state, id, throws_type, error_value);
+            state.current = ok;
+            call_end(inout state, id);
+            return value;
+        }
+        default: {
+            throw model.SupportError.Invalid(
+                "non-expression in native expression lowering");
+        }
+    }
+}

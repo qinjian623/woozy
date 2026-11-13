@@ -1,0 +1,73 @@
+package main;
+
+import "std/vec" as vec;
+
+struct Table {
+    items Vec[i32];
+}
+
+struct Square {
+    side i32;
+}
+
+struct Point {
+    x i32;
+    y i32;
+}
+
+trait Measured {
+    func measure(self Self) i32;
+    func scaled(self Self, factor i32) i32;
+}
+
+impl Measured for Table {
+    func measure(self Table) i32 {
+        var total i32 = 0;
+        for item in self.items {
+            total += item;
+        }
+        return total;
+    }
+    func scaled(self Table, factor i32) i32 { return self.measure() * factor; }
+}
+
+impl Measured for Square {
+    func measure(self Square) i32 { return self.side * self.side; }
+    func scaled(self Square, factor i32) i32 { return self.measure() * factor; }
+}
+
+impl Measured for Point {
+    func measure(self Point) i32 { return self.x + self.y; }
+    func scaled(self Point, factor i32) i32 { return self.measure() * factor; }
+}
+
+func measure_all(values Vec[dyn Measured]) i32 {
+    var total i32 = 0;
+    for value in values {
+        total += value.measure();
+    }
+    return total;
+}
+
+func make_table(values Vec[i32]) dyn Measured {
+    return Table(items: values);
+}
+
+func main() i32 {
+    let table = Table(items: [1, 2, 3]);
+    let object dyn Measured = table;
+    if object.measure() != 6 { return 1; }
+    if object.scaled(2) != 12 { return 2; }
+    let alias = object;
+    if alias.measure() != 6 { return 3; }
+    let moved = move object;
+    if moved.measure() != 6 { return 4; }
+    let square dyn Measured = Square(side: 5);
+    let point dyn Measured = Point(x: 3, y: 4);
+    let values Vec[dyn Measured] = [square, point];
+    if vec.len(values) != 2 { return 5; }
+    if measure_all(values) != 32 { return 6; }
+    if make_table([4, 5]).measure() != 9 { return 7; }
+    if make_table([4, 5]).scaled(3) != 27 { return 8; }
+    return 0;
+}

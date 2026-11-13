@@ -1,0 +1,628 @@
+// B: source function assembly, CFG walk and the executable entry wrapper.
+//
+// Ports Emitter::function/run/main of src/backend/native/emit.cpp.  Slot
+// storage, active flags, try/await incoming addresses and the RPO order are
+// B's; async prologue/finalisation are D's and are called at exactly the
+// documented points.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func b_frame_index(state Emitter) usize throws Error {
+    switch state.frame.native_index {
+        case option.Option.Some(index): return index;
+        case option.Option.None: throw invalid("no source function selected");
+    }
+}
+
+func b_parameter_offset(state Emitter, symbol usize) usize {
+    if b_capturing(state, symbol) {
+        return 1;
+    }
+    return 0;
+}
+
+func b_option_equal(left option.Option[usize], right usize) bool {
+    switch left {
+        case option.Option.Some(item): return item == right;
+        case option.Option.None: return false;
+    }
+}
+
+func b_contains(values Vec[usize], wanted usize) bool {
+    for value in values {
+        if value == wanted {
+            return true;
+        }
+    }
+    return false;
+}
+
+func b_reset_frame(native_index usize, state inout Emitter) {
+    state.frame = empty_frame();
+    state.frame.native_index = option.Option[usize].Some(native_index);
+}
+
+func b_slot_binding(function nativeir.Function,
+                    local usize) option.Option[usize] {
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        let slot = function.slots[index];
+        switch slot.binding {
+            case option.Option.Some(item): {
+                if item == local {
+                    return option.Option[usize].Some(index);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func b_incoming(state Emitter, block usize) option.Option[IncomingValue] {
+    for entry in state.frame.incoming {
+        if entry.block == block {
+            return option.Option[IncomingValue].Some(entry);
+        }
+    }
+    return option.Option[IncomingValue].None;
+}
+
+func b_incoming_has(state Emitter, block usize) bool {
+    switch b_incoming(state, block) {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+// ---- declaration ------------------------------------------------------------
+
+func declare_source_functions(state inout Emitter) throws Error {
+    for var index usize = 0; index < vec.len(state.input.functions); index += 1 {
+        let function = state.input.functions[index];
+        if function.is_async {
+            // D creates the coroutine plus its start/resume/destroy helpers and
+            // registers d.async_symbols; B stores the source record it returns.
+            let source = declare_async(index, inout state);
+            vec.push(state.b.source_functions, source);
+            continue;
+        }
+        let capturing = b_capturing(state, function.symbol);
+        let sig = signature(function.signature, capturing, false, inout state);
+        let name = "lang.fn." + number(function.symbol);
+        let text_index = new_function(name, sig, "internal", "", inout state);
+        let code = function_reference(state, text_index);
+        let hir_index = b_hir_index(state, function.symbol);
+        vec.push(state.b.source_functions, SourceFunction(symbol: function.symbol,
+            signature: function.signature, native_index: index,
+            text_index: text_index, hir_index: hir_index, code: code));
+    }
+}
+
+// ---- per-function storage ---------------------------------------------------
+
+func b_declare_slots(function nativeir.Function, source SourceFunction,
+                     parameter_offset usize, state inout Emitter) throws Error {
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        let slot = function.slots[index];
+        var address = Value(type_name: "ptr", reference: "");
+        if slot.is_inout {
+            var parameter_index usize = 0;
+            switch slot.parameter {
+                case option.Option.Some(item): parameter_index = usize(item);
+                case option.Option.None: {
+                    throw invalid("inout slot has no parameter index");
+                }
+            }
+            address = parameter(state, source.text_index,
+                parameter_index + parameter_offset);
+        } else {
+            let type_name = lower_type(slot.type_id, inout state);
+            address = storage(type_name, inout state);
+        }
+        var active = option.Option[Value].None;
+        var owning_slot = false;
+        switch slot.owner {
+            case option.Option.Some(item): owning_slot = true;
+            case option.Option.None: {}
+        }
+        if owning_slot {
+            let flag = storage("i1", inout state);
+            var initial = "false";
+            if slot.owning_parameter {
+                initial = "true";
+            }
+            append("store i1 " + initial + ", ptr " + flag.reference,
+                inout state);
+            active = option.Option[Value].Some(flag);
+        }
+        vec.push(state.frame.slots, SlotStorage(address: address, active: active,
+            iteration_length: option.Option[Value].None,
+            iteration_index: option.Option[Value].None));
+    }
+}
+
+func b_load_captures(function nativeir.Function, captures Vec[hir.CaptureBinding],
+                     source SourceFunction, state inout Emitter) throws Error {
+    // A lambda entry receives borrowed capture slots from the single env row.
+    // Loading a field into its slot copies nothing and takes no ownership.
+    var fields = vec.empty[usize]();
+    for capture in captures {
+        vec.push(fields, capture.type_id);
+    }
+    let layout = env_record_type(fields, inout state);
+    let env = parameter(state, source.text_index, 0);
+    let zero = Value(type_name: "i64", reference: "0");
+    let row = runtime("lang_vec_at_v1", "ptr", [env, zero], inout state);
+    for var index usize = 0; index < vec.len(captures); index += 1 {
+        let capture = captures[index];
+        let found = b_slot_binding(function, capture.local);
+        var slot_index usize = 0;
+        switch found {
+            case option.Option.Some(item): slot_index = item;
+            case option.Option.None: {
+                throw invalid("capture local has no matching initialized slot");
+            }
+        }
+        if slot_index >= vec.len(function.slots) {
+            throw invalid("capture local has no matching initialized slot");
+        }
+        let slot = function.slots[slot_index];
+        if slot.type_id != capture.type_id {
+            throw invalid("capture local has no matching initialized slot");
+        }
+        var illegal = slot.is_inout;
+        switch slot.parameter {
+            case option.Option.Some(item): illegal = true;
+            case option.Option.None: {}
+        }
+        switch slot.owner {
+            case option.Option.Some(item): illegal = true;
+            case option.Option.None: {}
+        }
+        if illegal {
+            throw invalid("capture local is marked as an owning parameter or local");
+        }
+        let field = number(index);
+        let address = result("ptr", "getelementptr inbounds " + layout +
+            ", ptr " + row.reference + ", i32 0, i32 " + field, inout state);
+        let type_name = lower_type(capture.type_id, inout state);
+        let loaded = result(type_name, "load " + type_name + ", ptr " +
+            address.reference, inout state);
+        let destination = state.frame.slots[slot_index].address;
+        append(b_store_line(loaded, destination), inout state);
+    }
+}
+
+func b_store_parameters(function nativeir.Function, source SourceFunction,
+                        parameter_offset usize, state inout Emitter) throws Error {
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        let slot = function.slots[index];
+        var parameter_index usize = 0;
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(item): {
+                parameter_index = usize(item);
+                is_parameter = true;
+            }
+            case option.Option.None: {}
+        }
+        if !is_parameter || slot.is_inout {
+            continue;
+        }
+        let argument = parameter(state, source.text_index,
+            parameter_index + parameter_offset);
+        let destination = state.frame.slots[index].address;
+        append(b_store_line(argument, destination), inout state);
+    }
+}
+
+func b_declare_iterations(function nativeir.Function,
+                          state inout Emitter) throws Error {
+    for block in function.blocks {
+        for instruction in block.instructions {
+            if nativeir.op_id(instruction.op) !=
+               nativeir.op_id(nativeir.Op.IterationBegin) {
+                continue;
+            }
+            if instruction.slot >= vec.len(state.frame.slots) {
+                throw invalid("iteration slot index out of range");
+            }
+            let length = storage("i64", inout state);
+            let index = storage("i64", inout state);
+            state.frame.slots[instruction.slot].iteration_length =
+                option.Option[Value].Some(length);
+            state.frame.slots[instruction.slot].iteration_index =
+                option.Option[Value].Some(index);
+        }
+    }
+}
+
+func b_declare_incoming(function nativeir.Function,
+                        state inout Emitter) throws Error {
+    for var block usize = 0; block < vec.len(function.blocks); block += 1 {
+        let terminator = function.blocks[block].terminator;
+        if nativeir.exit_id(terminator.kind) !=
+           nativeir.exit_id(nativeir.Exit.TryCall) {
+            continue;
+        }
+        let sig = type_of(state, terminator.signature);
+        var value_slot = option.Option[Value].None;
+        let payload = type_of(state, sig.result);
+        if !b_kind_is(payload.kind, model.TypeKind.Unit) {
+            let type_name = lower_type(sig.result, inout state);
+            value_slot = option.Option[Value].Some(storage(type_name, inout state));
+        }
+        let error_type = b_throws_type(state, sig);
+        let error_name = lower_type(error_type, inout state);
+        let error_slot = storage(error_name, inout state);
+        vec.push(state.frame.try_outputs, TryOutput(block: block,
+            value: value_slot, error: error_slot));
+        let success_block = b_target(terminator, 0);
+        let error_block = b_target(terminator, 1);
+        vec.push(state.frame.incoming, IncomingValue(block: success_block,
+            type_id: sig.result, address: value_slot));
+        vec.push(state.frame.incoming, IncomingValue(block: error_block,
+            type_id: error_type, address: option.Option[Value].Some(error_slot)));
+    }
+    for var block usize = 0; block < vec.len(function.blocks); block += 1 {
+        let terminator = function.blocks[block].terminator;
+        if nativeir.exit_id(terminator.kind) !=
+           nativeir.exit_id(nativeir.Exit.Await) {
+            continue;
+        }
+        let task = type_of(state, terminator.signature);
+        for var side usize = 0; side < 2; side += 1 {
+            let payload = b_type_arg(task, side);
+            let kind = type_of(state, payload);
+            if b_kind_is(kind.kind, model.TypeKind.Unit) {
+                continue;
+            }
+            let type_name = lower_type(payload, inout state);
+            let address = storage(type_name, inout state);
+            let target = b_target(terminator, side);
+            if b_incoming_has(state, target) {
+                throw invalid("await side target already has an incoming value");
+            }
+            vec.push(state.frame.incoming, IncomingValue(block: target,
+                type_id: payload,
+                address: option.Option[Value].Some(address)));
+        }
+    }
+}
+
+// ---- reverse post order -----------------------------------------------------
+
+func b_rpo(function nativeir.Function) Vec[usize] {
+    let count = vec.len(function.blocks);
+    var visited = vec.make[bool](count, false);
+    var order = vec.empty[usize]();
+    for var root usize = 0; root < count; root += 1 {
+        if visited[root] {
+            continue;
+        }
+        var stack = vec.empty[usize]();
+        var edges = vec.empty[usize]();
+        var post = vec.empty[usize]();
+        visited[root] = true;
+        vec.push(stack, root);
+        vec.push(edges, 0);
+        for vec.len(stack) > 0 {
+            let top = vec.len(stack) - 1;
+            let node = stack[top];
+            let targets = function.blocks[node].terminator.targets;
+            var advanced = false;
+            for edges[top] < vec.len(targets) {
+                let target = targets[edges[top]];
+                edges[top] = edges[top] + 1;
+                if target >= count {
+                    continue;
+                }
+                if visited[target] {
+                    continue;
+                }
+                visited[target] = true;
+                vec.push(stack, target);
+                vec.push(edges, 0);
+                advanced = true;
+                break;
+            }
+            if advanced {
+                continue;
+            }
+            vec.push(post, node);
+            vec.pop(stack);
+            vec.pop(edges);
+        }
+        for var index usize = 0; index < vec.len(post); index += 1 {
+            vec.push(order, post[vec.len(post) - 1 - index]);
+        }
+    }
+    return order;
+}
+
+// ---- function emission ------------------------------------------------------
+
+// Integration precondition shared with the C++ run(): the driver stores the
+// executable SymbolId in state.gc_entry_symbol before emitting source
+// functions.  Entry loop-exit collection is emitted here, so selecting it only
+// from emit_main would be too late.  emit_main still validates and records it.
+func emit_function(native_index usize, state inout Emitter) throws Error {
+    let function = b_native_function(state, native_index);
+    let source = b_source_by_native(state, native_index);
+    b_reset_frame(native_index, inout state);
+    let sig = type_of(state, function.signature);
+    let hf = find_hir_function(state, function.symbol);
+    var capturing = false;
+    var captures = vec.empty[hir.CaptureBinding]();
+    switch hf {
+        case option.Option.Some(item): {
+            capturing = vec.len(item.captures) != 0;
+            captures = item.captures;
+        }
+        case option.Option.None: {}
+    }
+    var parameter_offset usize = 0;
+    if capturing {
+        parameter_offset = 1;
+    }
+    let is_async = function.is_async;
+    if is_async {
+        // A GC clear callback runs with the world stopped and therefore may not
+        // call an external C destructor/release.  Reject every frame/promise
+        // owning type that can reach a C resource before emitting anything.
+        let task = type_of(state, sig.result);
+        if !b_kind_is(task.kind, model.TypeKind.Task) ||
+           vec.len(task.type_args) != 2 {
+            throw invalid("async signature result is not a Task");
+        }
+        for slot in function.slots {
+            var owning_slot = false;
+            switch slot.owner {
+                case option.Option.Some(item): owning_slot = true;
+                case option.Option.None: {}
+            }
+            if owning_slot && !slot.is_inout {
+                if type_owns_c_resource(slot.type_id, inout state) {
+                    throw b_unsupported(
+                        "async function frame owns an external C resource: stopped-world frame clear has no safe C release path");
+                }
+            }
+        }
+        for payload in task.type_args {
+            if type_owns_c_resource(payload, inout state) {
+                throw b_unsupported(
+                    "async Task promise owns an external C resource: stopped-world frame clear has no safe C release path");
+            }
+        }
+        // D creates the coroutine entry block first, so it stays LLVM block 0
+        // and the cursor is left there for the slot/parameter prologue.
+        let async_state = async_begin(native_index, inout state);
+        state.frame.async_state = option.Option[AsyncState].Some(async_state);
+    }
+    if vec.len(function.blocks) == 0 {
+        throw invalid("source function has no blocks");
+    }
+    for var block usize = 0; block < vec.len(function.blocks); block += 1 {
+        let prefix = "b" + number(block);
+        let created = new_block(source.text_index, prefix, inout state);
+        vec.push(state.frame.blocks, created);
+    }
+    if !is_async {
+        let first = state.frame.blocks[0];
+        position(first, inout state);
+    }
+    b_declare_slots(function, source, parameter_offset, inout state);
+    if capturing {
+        b_load_captures(function, captures, source, inout state);
+    }
+    b_store_parameters(function, source, parameter_offset, inout state);
+    if is_async {
+        copy_async_ordinary_parameters(native_index, inout state);
+    }
+    b_declare_iterations(function, inout state);
+    b_declare_incoming(function, inout state);
+    if is_async {
+        async_publish_and_suspend(native_index, inout state);
+    }
+    let points = gc_loop_safepoints(function);
+    let order = b_rpo(function);
+    let gc_entry = b_option_equal(state.gc_entry_symbol, function.symbol);
+    for block_index in order {
+        let reference = state.frame.blocks[block_index];
+        position(reference, inout state);
+        for parameter_value in function.blocks[block_index].parameters {
+            let found = b_incoming(state, block_index);
+            var produced = Value(type_name: "i8", reference: "zeroinitializer");
+            switch found {
+                case option.Option.Some(entry): {
+                    switch entry.address {
+                        case option.Option.Some(address): {
+                            let type_name = lower_type(parameter_value.type_id, inout state);
+                            produced = result(type_name, "load " + type_name +
+                                ", ptr " + address.reference, inout state);
+                        }
+                        case option.Option.None: {
+                            let type_name = lower_type(parameter_value.type_id, inout state);
+                            produced = Value(type_name: type_name,
+                                reference: "zeroinitializer");
+                        }
+                    }
+                }
+                case option.Option.None: {
+                    throw invalid("missing incoming value for block parameter");
+                }
+            }
+            vec.push(state.frame.values, ValueBinding(
+                value_id: parameter_value.value,
+                type_id: parameter_value.type_id, value: produced));
+        }
+        // Stable safepoint: function entry, loop headers and loop exits.
+        if block_index == 0 || b_contains(points.headers, block_index) {
+            gc_poll(inout state);
+        }
+        if gc_entry && b_contains(points.exits, block_index) {
+            gc_collect_loop_exit(inout state);
+        }
+        for instruction in function.blocks[block_index].instructions {
+            emit_instruction(instruction, inout state);
+        }
+        let terminator = function.blocks[block_index].terminator;
+        emit_terminator(terminator, block_index, inout state);
+    }
+    if is_async {
+        async_finish(native_index, inout state);
+    }
+}
+
+// ---- executable entry -------------------------------------------------------
+
+func b_entry_shape(state Emitter, selected usize, entry_async bool) throws Error {
+    let sig = type_of(state, selected);
+    if entry_async {
+        let task = type_of(state, sig.result);
+        if !b_kind_is(task.kind, model.TypeKind.Task) ||
+           vec.len(task.type_args) != 2 {
+            throw invalid("async entry signature is not a Task");
+        }
+        let payload = type_of(state, b_type_arg(task, 0));
+        let ok = b_kind_is(payload.kind, model.TypeKind.Unit) ||
+            (b_kind_is(payload.kind, model.TypeKind.SignedInt) && payload.bits == 32);
+        if vec.len(sig.parameters) != 0 || !ok {
+            throw b_unsupported(
+                "async executable entry requires no parameters and i32 or Unit result");
+        }
+        return;
+    }
+    let result = type_of(state, sig.result);
+    let ok = b_kind_is(result.kind, model.TypeKind.Unit) ||
+        (b_kind_is(result.kind, model.TypeKind.SignedInt) && result.bits == 32);
+    if vec.len(sig.parameters) != 0 || !ok {
+        throw b_unsupported(
+            "executable entry requires no parameters and i32 or Unit result");
+    }
+}
+
+func b_report(state inout Emitter, key string) throws Error {
+    let key_bytes = text.bytes(key);
+    let key_global = b_bytes_global(key, inout state);
+    let report_sig = Signature(result: "void", parameters: ["ptr", "i64"]);
+    let report = declare_function("lang_native_typed_error_v1", report_sig,
+        inout state);
+    let pointer = Value(type_name: "ptr", reference: key_global.reference);
+    let length = Value(type_name: "i64", reference: number(vec.len(key_bytes)));
+    call(report_sig, report, [pointer, length], inout state);
+}
+
+func emit_main(entry usize, state inout Emitter) throws Error {
+    let source = source_function(state, entry);
+    let hf = find_hir_function(state, entry);
+    switch hf {
+        case option.Option.Some(item): {
+            if vec.len(item.captures) != 0 {
+                throw invalid("capturing lambda cannot be the executable entry");
+            }
+        }
+        case option.Option.None: {}
+    }
+    let function = b_native_function(state, source.native_index);
+    let entry_async = function.is_async;
+    b_entry_shape(state, function.signature, entry_async);
+    state.gc_entry_symbol = option.Option[usize].Some(entry);
+    let sig = type_of(state, function.signature);
+    let result_type = type_of(state, sig.result);
+    declare_function("lang_gc_program_init_v1",
+        Signature(result: "i64", parameters: []), inout state);
+    declare_function("lang_gc_program_finish_v1",
+        Signature(result: "i64", parameters: []), inout state);
+    let main_signature = Signature(result: "i32", parameters: []);
+    let main_index = new_function("main", main_signature, "", "", inout state);
+    let entry_block = new_block(main_index, "entry", inout state);
+    position(entry_block, inout state);
+    // Outermost lifecycle wrapper: the integration guards are enabled before
+    // any source code runs and finish only after all wrapper cleanup.  A module
+    // with no graph registration never activates the GC world.
+    var init_status = Value(type_name: "i64", reference: "0");
+    if state.d.gc_program_required {
+        init_status = runtime("lang_gc_program_init_v1", "i64", [], inout state);
+    }
+    let condition = result("i1", "icmp ne " + typed(init_status) + ", 0",
+        inout state);
+    let init_failed = new_block(main_index, "main.gc.init_failed", inout state);
+    let run = new_block(main_index, "main.gc.run", inout state);
+    terminate("br " + typed(condition) + ", " + b_label(init_failed) + ", " +
+        b_label(run), inout state);
+    position(init_failed, inout state);
+    b_report(inout state, "lang-gc-program-init");
+    terminate("ret i32 1", inout state);
+    position(run, inout state);
+    if entry_async {
+        if !emit_async_main(entry, inout state) {
+            throw invalid("async executable entry main branch was not emitted");
+        }
+        return;
+    }
+    let target = source.code;
+    let throws_type = sig.throws_type;
+    switch throws_type {
+        case option.Option.None: {
+            let entry_signature = signature(function.signature, false,
+                false, inout state);
+            let value = call(entry_signature, target, [], inout state);
+            var result_value = Value(type_name: "i32", reference: "0");
+            if !b_kind_is(result_type.kind, model.TypeKind.Unit) {
+                result_value = value;
+            }
+            runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+            terminate("ret i32 " + result_value.reference, inout state);
+        }
+        case option.Option.Some(item): {
+            var outputs = vec.empty[Value]();
+            var value_slot = option.Option[Value].None;
+            if !b_kind_is(result_type.kind, model.TypeKind.Unit) {
+                let type_name = lower_type(sig.result, inout state);
+                let slot = result("ptr", "alloca " + type_name, inout state);
+                value_slot = option.Option[Value].Some(slot);
+                vec.push(outputs, slot);
+            }
+            let error_type = b_throws_type(state, sig);
+            let error_name = lower_type(error_type, inout state);
+            let error_slot = result("ptr", "alloca " + error_name, inout state);
+            vec.push(outputs, error_slot);
+            let entry_signature = signature(function.signature, false,
+                false, inout state);
+            let success = call(entry_signature, target, outputs, inout state);
+            let ok_block = new_block(main_index, "main.success", inout state);
+            let error_block = new_block(main_index, "main.error", inout state);
+            terminate("br " + typed(success) + ", " + b_label(ok_block) + ", " +
+                b_label(error_block), inout state);
+            position(ok_block, inout state);
+            var result_value = Value(type_name: "i32", reference: "0");
+            switch value_slot {
+                case option.Option.Some(slot): {
+                    let type_name = lower_type(sig.result, inout state);
+                    result_value = result(type_name, "load " + type_name +
+                        ", ptr " + slot.reference, inout state);
+                }
+                case option.Option.None: {}
+            }
+            runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+            terminate("ret i32 " + result_value.reference, inout state);
+            position(error_block, inout state);
+            let key = type_key(state, error_type);
+            b_report(inout state, key);
+            if owning(error_type, inout state) {
+                let drop = value_op(error_type, false, inout state);
+                let drop_signature = Signature(result: "void", parameters: ["ptr"]);
+                call(drop_signature, drop, [error_slot], inout state);
+            }
+            runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+            terminate("ret i32 1", inout state);
+        }
+    }
+}

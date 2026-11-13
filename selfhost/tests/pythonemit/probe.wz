@@ -1,0 +1,675 @@
+// Test-only probe for the pure text/identity half of the Python emitter.
+//
+// This file is copied into the temporary project's pythonemit package by
+// run.py.  It exercises only api.wz/writer.wz helpers, which do not depend on
+// the shared valueops classifier or the verifier gate, so no stubbed or
+// fabricated verified module is involved.  Expected values live in run.py and
+// follow the C++ emitter's exact spelling rules.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/system" as system;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func span_of(snapshot u64, begin u64, end u64) model.Span {
+    return model.Span(snapshot: snapshot, begin_byte: begin, end_byte: end);
+}
+
+func span_text(value model.Span) string {
+    return u64_text(value.snapshot) + ":" + u64_text(value.begin_byte) + "-" +
+        u64_text(value.end_byte);
+}
+
+func failure_text(error Failure) string {
+    switch error {
+        case Failure.Rejected(message, has_source, source, reason):
+            var location = "-";
+            if has_source {
+                location = span_text(source);
+            }
+            return "rejected|" + u32_text(reject_reason_id(reason)) + "|" +
+                message + "|" + location;
+        case Failure.Internal(message):
+            return "internal|" + message;
+    }
+}
+
+func record_error(out inout Vec[string], name string, error Failure) {
+    vec.push(out, name + "=" + failure_text(error));
+}
+
+func symbol(id usize, name string, kind model.SymbolKind,
+            module usize) model.Symbol {
+    return model.Symbol(id: id, name: name, kind: kind, module: module,
+        definition: option.Option[model.NodeRef].Some(
+            model.NodeRef(module: module, file: 0, node: 0)),
+        declaration: option.Option[model.Span].None, exported: true,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+}
+
+func empty_module(id usize, path string) model.Module {
+    return model.Module(id: id, logical_path: path, identity: path,
+        package_name: "p", files: [], imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+}
+
+func intern_type(state inout types.Context,
+                 value model.Type) usize throws model.SupportError {
+    try {
+        return types.intern(inout state, value);
+    } catch error types.Error {
+        var message = "";
+        switch error {
+            case types.Error.Invalid(text_value): message = text_value;
+        }
+        throw model.SupportError.Invalid(message);
+    }
+}
+
+struct Fixture {
+    module hir.HirModule;
+    unit usize;
+    boolean usize;
+    string_type usize;
+    isize usize;
+    usize_type usize;
+    i8_type usize;
+    u32_type usize;
+    f32_type usize;
+    f64_type usize;
+    nominal usize;
+    generic_nominal usize;
+    vec_i8 usize;
+    slice_vec_i8 usize;
+    function_type usize;
+    trait_object usize;
+    module_read usize;
+    module_error usize;
+    module_bad_error usize;
+    weak_i8 usize;
+    option_i8 usize;
+    box_param usize;
+    param usize;
+}
+
+func type_with(kind model.TypeKind) model.Type {
+    return model.empty_type(kind);
+}
+
+func build_fixture() Fixture throws model.SupportError {
+    var context = types.context();
+    let unit = intern_type(inout context, type_with(model.TypeKind.Unit));
+    let boolean = intern_type(inout context, type_with(model.TypeKind.Bool));
+    let string_type = intern_type(inout context,
+        type_with(model.TypeKind.String));
+    let isize_value = intern_type(inout context,
+        type_with(model.TypeKind.Isize));
+    let usize_value = intern_type(inout context,
+        type_with(model.TypeKind.Usize));
+    var i8_value = type_with(model.TypeKind.SignedInt);
+    i8_value.bits = 8;
+    let i8_type = intern_type(inout context, i8_value);
+    var u32_value = type_with(model.TypeKind.UnsignedInt);
+    u32_value.bits = 32;
+    let u32_type = intern_type(inout context, u32_value);
+    var f32_value = type_with(model.TypeKind.Float);
+    f32_value.bits = 32;
+    let f32_type = intern_type(inout context, f32_value);
+    var f64_value = type_with(model.TypeKind.Float);
+    f64_value.bits = 64;
+    let f64_type = intern_type(inout context, f64_value);
+    var nominal_value = type_with(model.TypeKind.NominalStruct);
+    nominal_value.declaration = 0;
+    let nominal = intern_type(inout context, nominal_value);
+    var generic_value = type_with(model.TypeKind.NominalStruct);
+    generic_value.declaration = 0;
+    generic_value.type_args = [i8_type];
+    let generic_nominal = intern_type(inout context, generic_value);
+    var vec_value = type_with(model.TypeKind.Vec);
+    vec_value.type_args = [i8_type];
+    let vec_i8 = intern_type(inout context, vec_value);
+    var slice_value = type_with(model.TypeKind.Slice);
+    slice_value.type_args = [vec_i8];
+    let slice_vec_i8 = intern_type(inout context, slice_value);
+    var function_value = type_with(model.TypeKind.Function);
+    function_value.parameters = [
+        model.ParameterType(mode: model.ParamMode.Inout, type_id: i8_type),
+        model.ParameterType(mode: model.ParamMode.Move, type_id: u32_type)];
+    function_value.result = f32_type;
+    function_value.throws_type = option.Option[usize].Some(string_type);
+    let function_type = intern_type(inout context, function_value);
+    var trait_value = type_with(model.TypeKind.TraitObject);
+    trait_value.declaration = 1;
+    trait_value.type_args = [boolean];
+    let trait_object = intern_type(inout context, trait_value);
+    var read_value = type_with(model.TypeKind.ForeignOpaque);
+    read_value.binding = 0;
+    let module_read = intern_type(inout context, read_value);
+    var error_value = type_with(model.TypeKind.ForeignOpaque);
+    error_value.binding = 1;
+    let module_error = intern_type(inout context, error_value);
+    var bad_error_value = type_with(model.TypeKind.ForeignOpaque);
+    bad_error_value.binding = 2;
+    let module_bad_error = intern_type(inout context, bad_error_value);
+    var weak_value = type_with(model.TypeKind.Weak);
+    weak_value.type_args = [i8_type];
+    let weak_i8 = intern_type(inout context, weak_value);
+    var option_value = type_with(model.TypeKind.NominalEnum);
+    option_value.declaration = 5;
+    option_value.type_args = [i8_type];
+    let option_i8 = intern_type(inout context, option_value);
+    var param_value = type_with(model.TypeKind.TypeParameter);
+    param_value.declaration = 3;
+    let param = intern_type(inout context, param_value);
+    var vec_param_value = type_with(model.TypeKind.Vec);
+    vec_param_value.type_args = [param];
+    let vec_param = intern_type(inout context, vec_param_value);
+    var box_value = type_with(model.TypeKind.NominalStruct);
+    box_value.declaration = 2;
+    box_value.type_args = [param];
+    let box_param = intern_type(inout context, box_value);
+
+    var project = model.empty_project();
+    project.root = "test";
+    project.package_name = "p";
+    project.backend = "python";
+    project.word_bits = 64;
+    project.entry = 0;
+    project.modules = [empty_module(0, "app/pkg"),
+        empty_module(1, "std/traits"), empty_module(2, "std/box")];
+    project.bindings = [model.BindingBundle(path: "bindings/x.json",
+        json: "{}", sha256: "abc", source: span_of(1, 1, 2), schema_version: 1,
+        contract: "python-binding/1", review_status: "reviewed",
+        allowed_backends: ["python", "native"],
+        package_requirements: [model.PackageRequirement(
+            package_name: "numpy", version_policy: "^2",
+            source: span_of(1, 1, 2))],
+        modules: [model.BindingModule(logical_path: "std/np",
+            host_module: "numpy", provider: "pypi", source: span_of(1, 1, 2))],
+        declarations: [], conformance_required: [])];
+    project.foreign_bindings = [
+        model.ForeignDeclaration(id: 0, bundle: 0, source: span_of(1, 3, 4),
+            json_pointer: "/0", identity: "host.Thing", module: "std/np",
+            name: "Thing", host_attribute: ["attr"],
+            detail: model.ForeignDetail.Type(value: model.BindingType(
+                kind: "host_reference", copy: "share", members: [],
+                properties: [], indexers: [], slices: [])),
+            stable_identity: "host.Thing"),
+        model.ForeignDeclaration(id: 1, bundle: 0, source: span_of(1, 5, 9),
+            json_pointer: "/1", identity: "py.Error", module: "std/np",
+            name: "Error", host_attribute: ["attr"],
+            detail: model.ForeignDetail.Type(value: model.BindingType(
+                kind: "runtime_error", copy: "share", members: [],
+                properties: [], indexers: [], slices: [])),
+            stable_identity: "py.Error"),
+        model.ForeignDeclaration(id: 2, bundle: 0, source: span_of(1, 5, 9),
+            json_pointer: "/2", identity: "host.Bad", module: "std/np",
+            name: "Bad", host_attribute: ["attr"],
+            detail: model.ForeignDetail.Type(value: model.BindingType(
+                kind: "host_reference", copy: "share", members: [],
+                properties: [], indexers: [], slices: [])),
+            stable_identity: "host.Bad")];
+    project.files = [model.ParseResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Source,
+        lexed: model.LexResult(state: model.PhaseState.Complete,
+            failure: model.FailureKind.Source,
+            source: model.Source(file_id: 1, revision_id: 1, id: 1,
+                path: "src/main.wz", original: [], normalized: [], offsets: [],
+                boundaries: [], valid: true, error_byte: 0, error_length: 0,
+                error_message: ""),
+            tokens: [], diagnostics: [], has_value: true),
+        nodes: [], root: 0, recovered: false, diagnostics: [],
+        has_value: true)];
+    var modules = vec.empty[model.Module]();
+    vec.push(modules, empty_module(0, "app/pkg"));
+    vec.push(modules, empty_module(1, "std/traits"));
+    vec.push(modules, empty_module(2, "std/box"));
+    modules[0].files = [0];
+    project.modules = modules;
+    var resolved = model.ResolvedProject(project: project, symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    resolved.symbols = [
+        symbol(0, "Thing", model.SymbolKind.Type, 0),
+        symbol(1, "Show", model.SymbolKind.Trait, 1),
+        symbol(2, "Box", model.SymbolKind.Type, 2),
+        symbol(3, "T", model.SymbolKind.TypeParameter, 0),
+        symbol(4, "cell", model.SymbolKind.Field, 2),
+        symbol(5, "Option", model.SymbolKind.Type, 0)];
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Python, word_bits: 64));
+    module.types = context;
+    module.nominals = [hir.NominalDecl(symbol: 2,
+        kind: model.TypeKind.NominalStruct,
+        params: [hir.GenericParam(symbol: 3,
+            trait_ref: option.Option[hir.TraitRef].None,
+            source: hir.HirSource(node: model.NodeRef(module: 2, file: 0,
+                node: 0), span: span_of(1, 1, 2)))],
+        fields: [hir.FieldDecl(symbol: 4, type_id: vec_param, exported: false,
+            source: hir.HirSource(node: model.NodeRef(module: 2, file: 0,
+                node: 1), span: span_of(1, 1, 2)))],
+        variants: [], source: hir.HirSource(node: model.NodeRef(module: 2,
+            file: 0, node: 0), span: span_of(1, 1, 2)))];
+    return Fixture(module: module, unit: unit, boolean: boolean,
+        string_type: string_type, isize: isize_value, usize_type: usize_value,
+        i8_type: i8_type, u32_type: u32_type, f32_type: f32_type,
+        f64_type: f64_type, nominal: nominal, generic_nominal: generic_nominal,
+        vec_i8: vec_i8, slice_vec_i8: slice_vec_i8,
+        function_type: function_type, trait_object: trait_object,
+        module_read: module_read, module_error: module_error,
+        module_bad_error: module_bad_error, weak_i8: weak_i8,
+        option_i8: option_i8, box_param: box_param, param: param);
+}
+
+func source_node() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: span_of(1, 10, 20));
+}
+
+func synthetic_node(type_id usize) hir.HirNode {
+    return hir.HirNode(type_id: type_id, source: source_node(), scope: 0,
+        children: [], data: hir.NodeData.Noop(value: hir.Noop()), errors: [],
+        exits: []);
+}
+
+func map_text(value Printer) string {
+    var result = "";
+    for entry in value.source_map {
+        if text.len(result) > 0 {
+            result += ";";
+        }
+        result += u64_text(entry.line) + ":" + span_text(entry.source);
+    }
+    return result;
+}
+
+func code_text(value Printer) string {
+    return text.replace(value.code, "\n", "\\n");
+}
+
+func basic_checks(out inout Vec[string]) {
+    vec.push(out, "escape_empty=" + python_string_literal(""));
+    vec.push(out, "escape_ascii=" + python_string_literal("Ab"));
+    vec.push(out, "escape_unicode=" + python_string_literal("é𝄞"));
+    vec.push(out, "escape_controls=" +
+        python_string_literal("a\n\t\\\"'\u{0}"));
+    let empty_values = vec.empty[string]();
+    vec.push(out, "join_empty=" + join_text(empty_values));
+    let single = vec.empty[string]();
+    vec.push(single, "a");
+    vec.push(out, "join_single=" + join_text(single));
+    let pair = vec.empty[string]();
+    vec.push(pair, "a");
+    vec.push(pair, "b");
+    vec.push(out, "join_pair=" + join_text(pair));
+    let leading = vec.empty[string]();
+    vec.push(leading, "");
+    vec.push(leading, "a");
+    vec.push(out, "join_leading_empty=" + join_text(leading));
+    let all_empty = vec.empty[string]();
+    vec.push(all_empty, "");
+    vec.push(all_empty, "");
+    vec.push(out, "join_all_empty=" + join_text(all_empty));
+    let middle = vec.empty[string]();
+    vec.push(middle, "a");
+    vec.push(middle, "");
+    vec.push(middle, "c");
+    vec.push(out, "join_middle_empty=" + join_text(middle));
+    let empty_tuple = vec.empty[string]();
+    vec.push(out, "tuple_empty=" + tuple_text(empty_tuple));
+    let one_tuple = vec.empty[string]();
+    vec.push(one_tuple, "x");
+    vec.push(out, "tuple_single=" + tuple_text(one_tuple));
+    vec.push(out, "tuple_pair=" + tuple_text(pair));
+    let ordered = vec.empty[string]();
+    for op in [hir.BinaryOp.Add, hir.BinaryOp.Subtract,
+               hir.BinaryOp.Multiply, hir.BinaryOp.Divide,
+               hir.BinaryOp.Remainder, hir.BinaryOp.ShiftLeft,
+               hir.BinaryOp.ShiftRight, hir.BinaryOp.BitAnd,
+               hir.BinaryOp.BitOr, hir.BinaryOp.BitXor,
+               hir.BinaryOp.Equal, hir.BinaryOp.NotEqual,
+               hir.BinaryOp.Less, hir.BinaryOp.LessEqual,
+               hir.BinaryOp.Greater, hir.BinaryOp.GreaterEqual] {
+        vec.push(ordered, operation_text(op));
+    }
+    vec.push(out, "operations=" + join_ordered(ordered, ","));
+    vec.push(out, "names=" + symbol_name(0) + "," +
+        function_symbol_name(7) + "," + type_ops_name(3) + "," +
+        owner_key_text(hir.OwnerKind.Binding, 5) + "," +
+        owner_key_text(hir.OwnerKind.Temporary, 5));
+    var set = vec.empty[u64]();
+    ordered_insert(inout set, 5);
+    ordered_insert(inout set, 3);
+    ordered_insert(inout set, 9);
+    let inserted_duplicate = ordered_insert(inout set, 3);
+    ordered_insert(inout set, 1);
+    var values = "";
+    for item in set {
+        if text.len(values) > 0 {
+            values += ",";
+        }
+        values += u64_text(item);
+    }
+    var duplicate_text = "dup";
+    if inserted_duplicate {
+        duplicate_text = "new";
+    }
+    var present_text = "no";
+    if ordered_contains(set, 5) {
+        present_text = "yes";
+    }
+    var absent_text = "no";
+    if ordered_contains(set, 4) {
+        absent_text = "yes";
+    }
+    vec.push(out, "ordered=" + values + "|" + duplicate_text + "|" +
+        present_text + "|" + absent_text);
+    vec.push(out, "foreign_key=" + foreign_type_key("host.Thing") + "|" +
+        foreign_type_key("é") + "|" + foreign_type_key(""));
+    vec.push(out, "substring=" + substring_from("__woozy_weak_upgrade", 8) +
+        "|" + substring_from("short", 9));
+    let specs = system.operations();
+    var spec_text = "";
+    try {
+        spec_text = operation_spec(specs, 203).name + "," +
+            operation_spec(specs, 210).name + "," +
+            operation_spec(specs, 34).name;
+        vec.push(out, "specs=" + spec_text);
+        let missing = operation_spec(specs, 9999);
+        vec.push(out, "specs_missing=" + missing.name);
+    } catch error Failure {
+        record_error(inout out, "specs_missing", error);
+    }
+}
+
+func printer_checks(out inout Vec[string]) {
+    var state = printer();
+    let program = vec.empty[Statement]();
+    vec.push(program, stmt_at("x = 1", span_of(1, 1, 2)));
+    let if_body = vec.empty[Statement]();
+    vec.push(if_body, stmt_at("y = 2", span_of(1, 3, 4)));
+    vec.push(program, stmt_suite("if x", true, span_of(1, 5, 6), if_body));
+    let while_body = vec.empty[Statement]();
+    vec.push(while_body, stmt_at("break", span_of(1, 7, 8)));
+    vec.push(program, stmt_suite("while True", true, span_of(1, 9, 10),
+        while_body));
+    try {
+        print_suite(inout state, program, 0, 0);
+        vec.push(out, "printer_basic=" + code_text(state));
+        vec.push(out, "printer_basic_map=" + map_text(state));
+        vec.push(out, "printer_basic_lines=" + u64_text(state.printed_lines));
+    } catch error Failure {
+        record_error(inout out, "printer_basic", error);
+    }
+
+    var chain_state = printer();
+    let chain = vec.empty[Statement]();
+    let first_body = vec.empty[Statement]();
+    vec.push(first_body, stmt("pass1"));
+    let second_body = vec.empty[Statement]();
+    vec.push(second_body, stmt("pass2"));
+    let third_body = vec.empty[Statement]();
+    vec.push(third_body, stmt("pass3"));
+    let inner = vec.empty[Statement]();
+    vec.push(inner, stmt_suite_else("if b", true, span_of(1, 1, 2),
+        second_body, third_body));
+    vec.push(chain, stmt_suite_else("if a", true, span_of(1, 1, 2), first_body,
+        inner));
+    try {
+        print_suite(inout chain_state, chain, 0, 0);
+        vec.push(out, "printer_chain=" + code_text(chain_state));
+    } catch error Failure {
+        record_error(inout out, "printer_chain", error);
+    }
+
+    var try_state = printer();
+    let try_program = vec.empty[Statement]();
+    let try_body = vec.empty[Statement]();
+    vec.push(try_body, stmt("body"));
+    vec.push(try_program, stmt_suite("try", true, span_of(1, 1, 2), try_body));
+    let handler_body = vec.empty[Statement]();
+    vec.push(handler_body, stmt("handle"));
+    vec.push(try_program, stmt_suite("except E", true, span_of(1, 1, 2),
+        handler_body));
+    let finally_body = vec.empty[Statement]();
+    vec.push(finally_body, stmt("clean"));
+    vec.push(try_program, stmt_suite("finally", true, span_of(1, 1, 2),
+        finally_body));
+    try {
+        print_suite(inout try_state, try_program, 0, 0);
+        vec.push(out, "printer_try=" + code_text(try_state));
+    } catch error Failure {
+        record_error(inout out, "printer_try", error);
+    }
+
+    var empty_state = printer();
+    let empty = vec.empty[Statement]();
+    try {
+        print_suite(inout empty_state, empty, 0, 0);
+        vec.push(out, "printer_empty=" + code_text(empty_state) + "|lines=" +
+            u64_text(empty_state.printed_lines));
+    } catch error Failure {
+        record_error(inout out, "printer_empty", error);
+    }
+
+    var quiet_state = printer();
+    quiet_state.checking_only = true;
+    let quiet = vec.empty[Statement]();
+    vec.push(quiet, stmt_at("x = 1", span_of(1, 1, 2)));
+    try {
+        print_suite(inout quiet_state, quiet, 0, 0);
+        vec.push(out, "printer_checking_only=|" + code_text(quiet_state) +
+            "|" + map_text(quiet_state) + "|" +
+            u64_text(quiet_state.printed_lines));
+    } catch error Failure {
+        record_error(inout out, "printer_checking_only", error);
+    }
+
+    var deep_state = printer();
+    var deep = vec.empty[Statement]();
+    vec.push(deep, stmt("leaf"));
+    for var index usize = 0; index < 81; index += 1 {
+        var outer = vec.empty[Statement]();
+        vec.push(outer, stmt_suite("if x", true, span_of(1, 3, 4), deep));
+        deep = outer;
+    }
+    try {
+        print_suite(inout deep_state, deep, 0, 0);
+        vec.push(out, "printer_indent=ok");
+    } catch error Failure {
+        record_error(inout out, "printer_indent", error);
+    }
+
+    var loop_state = printer();
+    var loops = vec.empty[Statement]();
+    vec.push(loops, stmt("leaf"));
+    for var index usize = 0; index < 22; index += 1 {
+        var outer = vec.empty[Statement]();
+        vec.push(outer, stmt_suite("while True", true, span_of(1, 7, 8), loops));
+        loops = outer;
+    }
+    try {
+        print_suite(inout loop_state, loops, 0, 0);
+        vec.push(out, "printer_depth=ok");
+    } catch error Failure {
+        record_error(inout out, "printer_depth", error);
+    }
+
+    var helper_state = printer();
+    var helpers = vec.empty[Statement]();
+    emit_foreign_access_helpers(inout helpers);
+    try {
+        print_suite(inout helper_state, helpers, 0, 0);
+        vec.push(out, "foreign_helpers=" + code_text(helper_state));
+    } catch error Failure {
+        record_error(inout out, "foreign_helpers", error);
+    }
+}
+
+func type_key_checks(out inout Vec[string], fixture Fixture) {
+    let module = fixture.module;
+    let names = vec.empty[string]();
+    let ids = vec.empty[usize]();
+    vec.push(ids, fixture.unit);
+    vec.push(ids, fixture.boolean);
+    vec.push(ids, fixture.string_type);
+    vec.push(ids, fixture.isize);
+    vec.push(ids, fixture.usize_type);
+    vec.push(ids, fixture.i8_type);
+    vec.push(ids, fixture.u32_type);
+    vec.push(ids, fixture.f32_type);
+    vec.push(ids, fixture.f64_type);
+    vec.push(ids, fixture.nominal);
+    vec.push(ids, fixture.generic_nominal);
+    vec.push(ids, fixture.vec_i8);
+    vec.push(ids, fixture.slice_vec_i8);
+    vec.push(ids, fixture.function_type);
+    vec.push(ids, fixture.trait_object);
+    vec.push(ids, fixture.module_read);
+    vec.push(ids, fixture.module_error);
+    vec.push(ids, fixture.weak_i8);
+    vec.push(ids, fixture.option_i8);
+    for id in ids {
+        try {
+            vec.push(names, type_key(module, id, false));
+        } catch error Failure {
+            vec.push(names, failure_text(error));
+        }
+    }
+    vec.push(out, "type_keys=" + join_ordered(names, "|"));
+    try {
+        vec.push(out, "type_key_error=" +
+            type_key(module, fixture.module_error, true) + "|" +
+            type_key(module, fixture.module_read, false));
+    } catch error Failure {
+        record_error(inout out, "type_key_error", error);
+    }
+    try {
+        let unexpected = type_key(module, fixture.module_bad_error, true);
+        vec.push(out, "type_key_bad_error=" + unexpected);
+    } catch error Failure {
+        record_error(inout out, "type_key_bad_error", error);
+    }
+    try {
+        let unexpected = type_key(module, 999, false);
+        vec.push(out, "type_key_missing=" + unexpected);
+    } catch error Failure {
+        record_error(inout out, "type_key_missing", error);
+    }
+    try {
+        let numbers = vec.empty[string]();
+        for id in [fixture.boolean, fixture.i8_type, fixture.u32_type,
+                   fixture.f32_type, fixture.f64_type, fixture.isize,
+                   fixture.usize_type] {
+            vec.push(numbers, numeric_text(module, id));
+        }
+        vec.push(out, "numeric=" + join_ordered(numbers, "|"));
+    } catch error Failure {
+        record_error(inout out, "numeric", error);
+    }
+    let projections = vec.empty[string]();
+    try {
+        var flag = "no";
+        if canonical_weak_box(module, fixture.box_param) {
+            flag = "box";
+        }
+        vec.push(projections, flag);
+        flag = "no";
+        if canonical_weak_target(module, fixture.box_param) {
+            flag = "box";
+        }
+        vec.push(projections, flag);
+        flag = "no";
+        if canonical_weak_target(module, fixture.vec_i8) {
+            flag = "vec";
+        }
+        vec.push(projections, flag);
+        flag = "no";
+        if canonical_weak_target(module, fixture.generic_nominal) {
+            flag = "nominal";
+        }
+        vec.push(projections, flag);
+        flag = "no";
+        if canonical_weak_target(module, fixture.i8_type) {
+            flag = "i8";
+        }
+        vec.push(projections, flag);
+        flag = "no";
+        if canonical_nominal(module, fixture.generic_nominal, "app/pkg",
+                             "Thing", 1) {
+            flag = "thing";
+        }
+        vec.push(projections, flag);
+        vec.push(out, "weak_targets=" + join_ordered(projections, "|"));
+    } catch error Failure {
+        record_error(inout out, "weak_targets", error);
+    }
+    let upgrade = synthetic_node(fixture.option_i8);
+    let downgrade = synthetic_node(fixture.weak_i8);
+    let bad = synthetic_node(fixture.vec_i8);
+    let weak_names = vec.empty[string]();
+    try {
+        var upgrade_text = "other";
+        if weak_target_type(module, 203, upgrade) == fixture.i8_type {
+            upgrade_text = "i8";
+        }
+        var downgrade_text = "other";
+        if weak_target_type(module, 202, downgrade) == fixture.i8_type {
+            downgrade_text = "i8";
+        }
+        vec.push(weak_names, upgrade_text);
+        vec.push(weak_names, downgrade_text);
+        vec.push(out, "weak_ops=" + join_ordered(weak_names, "|"));
+    } catch error Failure {
+        record_error(inout out, "weak_ops", error);
+    }
+    try {
+        let unexpected = usize_text(weak_target_type(module, 203, bad));
+        vec.push(out, "weak_bad=" + unexpected);
+    } catch error Failure {
+        record_error(inout out, "weak_bad", error);
+    }
+    try {
+        vec.push(out, "binding_info=" + binding_info(module));
+    } catch error Failure {
+        record_error(inout out, "binding_info", error);
+    }
+    try {
+        let node = hir.HirNode(type_id: fixture.unit, source: source_node(),
+            scope: 0, children: [],
+            data: hir.NodeData.ForeignRead(value: hir.ForeignRead(binding: 0,
+                access: option.Option[hir.ForeignAccessKind].None,
+                start: option.Option[usize].None,
+                end: option.Option[usize].None)),
+            errors: [], exits: []);
+        let declaration = foreign_declaration(module, 0);
+        vec.push(out, "source_path=" + source_path(module, source_node()));
+        vec.push(out, "foreign_location=" +
+            foreign_location(module, node, declaration));
+    } catch error Failure {
+        record_error(inout out, "foreign_location", error);
+    }
+}
+
+pub func checks() Vec[string] {
+    var out = vec.empty[string]();
+    basic_checks(inout out);
+    printer_checks(inout out);
+    try {
+        let fixture = build_fixture();
+        type_key_checks(inout out, fixture);
+    } catch error model.SupportError {
+        var message = "";
+        switch error {
+            case model.SupportError.Invalid(text_value): message = text_value;
+            case model.SupportError.Limit(text_value): message = text_value;
+        }
+        vec.push(out, "fixture=error|" + message);
+    }
+    return out;
+}

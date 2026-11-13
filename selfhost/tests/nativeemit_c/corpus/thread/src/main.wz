@@ -1,0 +1,38 @@
+package main;
+
+import "std/os" as os;
+import "std/thread" as thread;
+
+struct Worker {
+    base i32;
+}
+
+func add(x i64) i64 { return x + 1; }
+
+func main() i32 throws os.Error {
+    // noncapturing entry: environment is the null LangFn encoding
+    let plain func(i64) i64 = add;
+    let first = thread.spawn[i64](plain, 4294967296);
+    if thread.join(first) != 4294967297 { return 1; }
+
+    // capturing entry: the context owns the whole LangFn value plus the arg
+    let bias i64 = 40;
+    let closure func(i64) i64 = func(value i64) i64 { return value + bias; };
+    let second = thread.spawn[i64](closure, 2);
+    if thread.join(second) != 42 { return 2; }
+    let second_alias = second;
+    if thread.join(second_alias) != 42 { return 3; }
+
+    // an owning capture keeps its Vec alive across the thread
+    let items Vec[i64] = [1, 2, 3];
+    let total func(i64) i64 = func(value i64) i64 {
+        var sum = value;
+        for item in items {
+            sum += item;
+        }
+        return sum;
+    };
+    let third = thread.spawn[i64](total, 10);
+    if thread.join(third) != 16 { return 4; }
+    return 0;
+}

@@ -1,0 +1,196 @@
+// Test-only differential fixture for the internal Python emitter helpers.
+//
+// The runner copies the production package and appends this file plus
+// probe.wz.  It exercises the expression/statement helpers directly with real
+// HIR records and the real shared value classifier; no verifier is stubbed.
+// Every line starts with "OK|" so a caller that turned a Failure into text can
+// never be mistaken for successful generation.
+package pythonemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func independent_expression_case(module hir.HirModule,
+                                 nodes Vec[hir.HirNode], id usize,
+                                 name string) string {
+    var m = module;
+    m.nodes = nodes;
+    var state = new_emitter(m, false);
+    var suite = vec.empty[Statement]();
+    try {
+        let value = expression(inout state, id, inout suite);
+        print_suite(inout state.printer, suite, 0, 0);
+        return name + "=OK|" + python_string_literal(state.printer.code);
+    } catch error Failure {
+        return name + "=FAIL|" + failure_text(error);
+    }
+}
+
+func independent_statement_case(module hir.HirModule,
+                                nodes Vec[hir.HirNode], id usize,
+                                name string) string {
+    var m = module;
+    m.nodes = nodes;
+    var state = new_emitter(m, false);
+    var suite = vec.empty[Statement]();
+    try {
+        statement(inout state, id, inout suite);
+        print_suite(inout state.printer, suite, 0, 0);
+        return name + "=OK|" + python_string_literal(state.printer.code);
+    } catch error Failure {
+        return name + "=FAIL|" + failure_text(error);
+    }
+}
+
+pub func independent_checks() Vec[string] throws model.SupportError {
+    let fixture = build_fixture();
+    var module = fixture.module;
+    // A non-zero declaration keeps the field receiver test meaningful: the
+    // buggy TypeId 1 (Unit, declaration 0) cannot match it.
+    var type_context = module.types;
+    var extra_nominal_value = model.empty_type(model.TypeKind.NominalStruct);
+    extra_nominal_value.declaration = 5;
+    let extra_nominal = intern_type(inout type_context, extra_nominal_value);
+    module.types = type_context;
+    module.nominals = [hir.NominalDecl(symbol: 5,
+        kind: model.TypeKind.NominalStruct, params: [],
+        fields: [hir.FieldDecl(symbol: 7, type_id: fixture.i8_type,
+            exported: true, source: source_node())],
+        variants: [], source: source_node())];
+    module.ownership.locals = [hir.LocalLifetime(symbol: 88, scope: 0,
+        type_id: fixture.u32_type, order: 0,
+        mode: model.ParamMode.Ordinary, read_only_capture: false)];
+    let out = vec.empty[string]();
+
+    // Constant control: no child type lookup is involved.
+    var lit = synthetic_node(fixture.i8_type);
+    lit.data = hir.NodeData.IntegerLiteral(
+        hir.IntegerLiteral(decimal: "5", bits: 5));
+    var second = lit;
+    second.data = hir.NodeData.IntegerLiteral(
+        hir.IntegerLiteral(decimal: "2", bits: 2));
+    vec.push(out, independent_expression_case(module, [lit], 0,
+        "control_integer"));
+
+    // Unary with the operand at NodeId 0 and at a non-zero NodeId.
+    var node = synthetic_node(fixture.i8_type);
+    node.children = [0];
+    node.data = hir.NodeData.Unary(hir.Unary(op: hir.UnaryOp.Negate));
+    vec.push(out, independent_expression_case(module, [lit, node], 1,
+        "unary_node0"));
+    node.children = [1];
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), lit, node], 2, "unary_node1"));
+
+    // Binary with both operands at NodeId 0/1 and at non-zero NodeIds.
+    node.children = [0, 1];
+    node.data = hir.NodeData.Binary(hir.Binary(op: hir.BinaryOp.Add));
+    vec.push(out, independent_expression_case(module, [lit, second, node], 2,
+        "binary_node0"));
+    node.children = [1, 2];
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), lit, second, node], 3,
+        "binary_node12"));
+
+    // IntegerConvert from the operand at NodeId 0.
+    node.type_id = fixture.u32_type;
+    node.children = [0];
+    node.data = hir.NodeData.IntegerConvert(hir.IntegerConvert());
+    vec.push(out, independent_expression_case(module, [lit, node], 1,
+        "convert_node0"));
+    var float_lit = synthetic_node(fixture.f32_type);
+    float_lit.data = hir.NodeData.FloatLiteral(hir.FloatLiteral(bits: 0));
+    node.type_id = fixture.i8_type;
+    node.children = [1];
+    node.data = hir.NodeData.IntegerConvert(hir.IntegerConvert());
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), float_lit, node], 2, "convert_node1"));
+
+    // String index read: receiver NodeId 0, index NodeId 1.
+    var str = synthetic_node(fixture.string_type);
+    str.data = hir.NodeData.StringLiteral(hir.StringLiteral(utf8: "é"));
+    second.type_id = fixture.usize_type;
+    node.type_id = fixture.u32_type;
+    node.children = [0, 1];
+    node.data = hir.NodeData.IndexRead(hir.IndexRead());
+    vec.push(out, independent_expression_case(module, [str, second, node], 2,
+        "index_node0"));
+    node.children = [1, 2];
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), str, second, node], 3, "index_node1"));
+
+    // Slice receiver at NodeId 0.
+    var read = synthetic_node(fixture.slice_vec_i8);
+    read.data = hir.NodeData.Read(hir.Read(symbol: 99));
+    node.type_id = fixture.slice_vec_i8;
+    node.children = [0];
+    node.data = hir.NodeData.VecSlice(hir.VecSlice(
+        start: option.Option[usize].None, end: option.Option[usize].None));
+    vec.push(out, independent_expression_case(module, [read, node], 1,
+        "slice_node0"));
+    node.children = [1];
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), read, node], 2, "slice_node1"));
+
+    // Struct field receiver at NodeId 0 and at non-zero NodeId 1.
+    read.type_id = extra_nominal;
+    node.type_id = fixture.i8_type;
+    node.children = [0];
+    node.data = hir.NodeData.FieldRead(hir.FieldRead(field: 7));
+    vec.push(out, independent_expression_case(module, [read, node], 1,
+        "field_node0"));
+    node.children = [1];
+    vec.push(out, independent_expression_case(module,
+        [synthetic_node(fixture.unit), read, node], 2, "field_node1"));
+
+    // for-in control: collection at NodeId 0 and at non-zero NodeId 1.
+    var body = synthetic_node(fixture.unit);
+    node.type_id = fixture.unit;
+    node.children = [0, 1];
+    node.data = hir.NodeData.ForIn(hir.ForIn(element: 88, body_scope: 0,
+        body: 1, iterator: option.Option[hir.IteratorFor].None));
+    vec.push(out, independent_statement_case(module, [str, body, node], 2,
+        "for_in_node0"));
+    node.children = [1, 2];
+    node.data = hir.NodeData.ForIn(hir.ForIn(element: 88, body_scope: 0,
+        body: 2, iterator: option.Option[hir.IteratorFor].None));
+    vec.push(out, independent_statement_case(module,
+        [synthetic_node(fixture.unit), str, body, node], 3, "for_in_node1"));
+
+    // for-in over a Slice: exercises the element_type type_args path.
+    read.type_id = fixture.slice_vec_i8;
+    read.data = hir.NodeData.Read(hir.Read(symbol: 99));
+    node.type_id = fixture.unit;
+    node.children = [0, 1];
+    node.data = hir.NodeData.ForIn(hir.ForIn(element: 88, body_scope: 0,
+        body: 1, iterator: option.Option[hir.IteratorFor].None));
+    vec.push(out, independent_statement_case(module, [read, body, node], 2,
+        "for_in_slice_node0"));
+    node.children = [1, 2];
+    node.data = hir.NodeData.ForIn(hir.ForIn(element: 88, body_scope: 0,
+        body: 2, iterator: option.Option[hir.IteratorFor].None));
+    vec.push(out, independent_statement_case(module,
+        [synthetic_node(fixture.unit), read, body, node], 3,
+        "for_in_slice_node1"));
+
+    // Compound assignment: place at NodeId 0 and at non-zero NodeId 1.
+    var place = synthetic_node(fixture.i8_type);
+    place.data = hir.NodeData.Place(hir.Place(symbol: 77));
+    var three = synthetic_node(fixture.i8_type);
+    three.data = hir.NodeData.IntegerLiteral(
+        hir.IntegerLiteral(decimal: "3", bits: 3));
+    var assign = synthetic_node(fixture.i8_type);
+    assign.children = [0, 1];
+    assign.data = hir.NodeData.Assign(hir.Assign(
+        compound: option.Option[hir.BinaryOp].Some(hir.BinaryOp.Add)));
+    vec.push(out, independent_statement_case(module, [place, three, assign], 2,
+        "compound_assign_node0"));
+    assign.children = [1, 2];
+    vec.push(out, independent_statement_case(module,
+        [synthetic_node(fixture.unit), place, three, assign], 3,
+        "compound_assign_node1"));
+
+    return out;
+}

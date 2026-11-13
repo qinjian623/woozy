@@ -1,0 +1,999 @@
+// Native CFG statement lowering.
+//
+// Direct port of lang::ir::Lower::stmt and Lower::take in src/ir/lower.cpp.
+// Statement order, block creation order, slot creation order, handler
+// registration order, loop target registration and dead-block removal all
+// keep the C++ sequence because the verifier and the stable dump observe ids.
+package nativelower;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func place_symbol(data hir.NodeData) option.Option[usize] {
+    switch data {
+        case hir.NodeData.Place(place): {
+            return option.Option[usize].Some(place.symbol);
+        }
+        default: return option.Option[usize].None;
+    }
+}
+
+// The assign path walks field places down to the container root.
+func indexed_place(state Lower, id usize) option.Option[usize] throws model.SupportError {
+    var base = node(state, id).children[0];
+    for true {
+        let base_node = node(state, base);
+        var is_field = false;
+        switch hir.node_kind(base_node.data) {
+            case hir.NodeKind.FieldPlace: is_field = true;
+            default: {}
+        }
+        if !is_field {
+            break;
+        }
+        base = base_node.children[0];
+    }
+    var is_index = false;
+    switch hir.node_kind(node(state, base).data) {
+        case hir.NodeKind.IndexPlace: is_index = true;
+        default: {}
+    }
+    if is_index {
+        return option.Option[usize].Some(base);
+    }
+    return option.Option[usize].None;
+}
+
+// End-borrow steps recorded for a field-place assignment full expression.
+func end_borrow_owners(state Lower, id usize) Vec[hir.OwnerRef] {
+    var owners = vec.empty[hir.OwnerRef]();
+    for full_expression in state.h.ownership.full_expressions {
+        if full_expression.node == id {
+            for step in full_expression.actions {
+                if cleanup_kind_id(step.kind) == 1 {
+                    vec.push(owners, step.owner);
+                }
+            }
+        }
+    }
+    return owners;
+}
+
+func cleanup_kind_id(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func stmt(state inout Lower, id usize) throws model.SupportError {
+    if !live(state) {
+        return;
+    }
+    let current = node(state, id);
+    let source = current.source.span;
+    switch current.data {
+        case hir.NodeData.Block(data): {
+            for child in current.children {
+                stmt(inout state, child);
+            }
+            let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Normal,
+                error_type: option.Option[usize].None);
+            if live(state) && option_some(plan(state, site)) {
+                clean(inout state, site, option.Option[usize].None);
+                let next = block(inout state);
+                jump(inout state, next, source);
+                finish(inout state, site);
+                state.current = next;
+            }
+        }
+        case hir.NodeData.Defer(data): {
+            // Registration is represented by the VerifiedHIR plan at each
+            // exit.
+        }
+        case hir.NodeData.Throw(data): {
+            let value = expr(inout state, current.children[0]);
+            take_temporary(inout state, current.children[0]);
+            let thrown_type = node(state, current.children[0]).type_id;
+            error_exit(inout state, id, thrown_type, value);
+        }
+        case hir.NodeData.Try(data): {
+            let protected_entry = block(inout state);
+            let after = block(inout state);
+            jump(inout state, protected_entry, source);
+            state.f.blocks[state.current].terminator.origin =
+                option.Option[usize].Some(id);
+            state.current = protected_entry;
+            let catches = vector_copy(data.catches);
+            for var index usize = 0; index < vec.len(catches); index += 1 {
+                let catch_clause = catches[index];
+                let handler = nativeir.Handler(
+                    target: hir.CatchTarget(try_node: id, index: u32(index)),
+                    block: block(inout state),
+                    slot: slot_new(inout state, catch_clause.error_type),
+                    protected_entry: protected_entry);
+                handler_emplace(inout state, id, u32(index), handler);
+                vec.push(state.f.handlers, handler);
+                slot_emplace(inout state, catch_clause.binding, handler.slot);
+                state.f.slots[handler.slot].binding =
+                    option.Option[usize].Some(catch_clause.binding);
+                if owning(state, catch_clause.error_type) {
+                    state.f.slots[handler.slot].owner =
+                        option.Option[hir.OwnerRef].Some(
+                            hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                identity: u64(catch_clause.binding)));
+                }
+            }
+            stmt(inout state, current.children[0]);
+            if live(state) {
+                jump(inout state, after, source);
+            }
+            for var index usize = 0; index < vec.len(catches); index += 1 {
+                let handler = handler_require(state, id, u32(index));
+                state.current = handler.block;
+                stmt(inout state, catches[index].body);
+                if live(state) {
+                    jump(inout state, after, source);
+                }
+            }
+            state.current = after;
+        }
+        case hir.NodeData.Noop(data): {}
+        case hir.NodeData.ExpressionStatement(data): {
+            expr(inout state, current.children[0]);
+            full(inout state, id);
+        }
+        case hir.NodeData.Binding(data): {
+            let initial = expr(inout state, current.children[0]);
+            let initial_type = node(state, current.children[0]).type_id;
+            let target = slot_new(inout state, initial_type);
+            slot_emplace(inout state, data.symbol, target);
+            state.f.slots[target].binding = option.Option[usize].Some(data.symbol);
+            if owning(state, initial_type) {
+                state.f.slots[target].owner = option.Option[hir.OwnerRef].Some(
+                    hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                        identity: u64(data.symbol)));
+            }
+            take_temporary(inout state, current.children[0]);
+            store(inout state, target, initial, source);
+            full(inout state, id);
+        }
+        case hir.NodeData.Assign(data): {
+            let place = node(state, current.children[0]);
+            let indexed_root = indexed_place(state, id);
+            var has_indexed_root = false;
+            var index_root usize = 0;
+            switch indexed_root {
+                case option.Option.Some(value): {
+                    has_indexed_root = true;
+                    index_root = value;
+                }
+                case option.Option.None: {}
+            }
+            var is_field_place = false;
+            switch hir.node_kind(place.data) {
+                case hir.NodeKind.FieldPlace: is_field_place = true;
+                default: {}
+            }
+            var is_index_place = false;
+            switch hir.node_kind(place.data) {
+                case hir.NodeKind.IndexPlace: is_index_place = true;
+                default: {}
+            }
+            if is_field_place && has_indexed_root {
+                // The receiver/index are evaluated once in source order. The
+                // bounds check belongs to the assignment target and precedes
+                // the RHS.
+                let indexed = node(state, index_root);
+                let receiver = expr(inout state, indexed.children[0]);
+                let index = expr(inout state, indexed.children[1]);
+                var check_inputs = vec.empty[usize]();
+                vec.push(check_inputs, receiver);
+                vec.push(check_inputs, index);
+                effect(inout state, nativeir.Op.VecCheck, 0, source, check_inputs,
+                    option.Option[hir.OwnerRef].None,
+                    option.Option[usize].Some(index_root));
+                var element = nativeir.empty_instruction();
+                element.op = nativeir.Op.VecElementAddress;
+                element.type_id = indexed.type_id;
+                element.origin = option.Option[usize].Some(index_root);
+                vec.push(element.inputs, receiver);
+                vec.push(element.inputs, index);
+                element.source = indexed.source.span;
+                var target = emit(inout state, element);
+                var field_nodes = vec.empty[usize]();
+                var field = current.children[0];
+                for true {
+                    let field_node = node(state, field);
+                    var is_field = false;
+                    switch hir.node_kind(field_node.data) {
+                        case hir.NodeKind.FieldPlace: is_field = true;
+                        default: {}
+                    }
+                    if !is_field {
+                        break;
+                    }
+                    vec.push(field_nodes, field);
+                    field = field_node.children[0];
+                }
+                var remaining = vec.len(field_nodes);
+                for remaining > 0 {
+                    remaining -= 1;
+                    let field_node = node(state, field_nodes[remaining]);
+                    var address = nativeir.empty_instruction();
+                    address.op = nativeir.Op.FieldAddress;
+                    address.type_id = field_node.type_id;
+                    var field_symbol usize = 0;
+                    switch field_node.data {
+                        case hir.NodeData.FieldPlace(field_place): {
+                            field_symbol = field_place.field;
+                        }
+                        default: {}
+                    }
+                    address.field = field_symbol;
+                    vec.push(address.inputs, target);
+                    address.source = field_node.source.span;
+                    target = emit(inout state, address);
+                }
+                var has_lhs = false;
+                var lhs usize = 0;
+                switch data.compound {
+                    case option.Option.Some(operation): {
+                        has_lhs = true;
+                        lhs = indirect(inout state, target, place.type_id, source);
+                    }
+                    case option.Option.None: {}
+                }
+                var right = expr(inout state, current.children[1]);
+                switch data.compound {
+                    case option.Option.Some(operation): {
+                        var combined = nativeir.empty_instruction();
+                        combined.op = nativeir.Op.Binary;
+                        combined.type_id = place.type_id;
+                        vec.push(combined.inputs, lhs);
+                        vec.push(combined.inputs, right);
+                        combined.binary = operation;
+                        combined.source = source;
+                        right = emit(inout state, combined);
+                    }
+                    case option.Option.None: {}
+                }
+                take_temporary(inout state, current.children[1]);
+                var write = nativeir.empty_instruction();
+                if owning(state, place.type_id) {
+                    write.op = nativeir.Op.ReplaceIndirect;
+                } else {
+                    write.op = nativeir.Op.StoreIndirect;
+                }
+                write.type_id = state.unit;
+                vec.push(write.inputs, target);
+                vec.push(write.inputs, right);
+                write.source = source;
+                push_instruction(inout state, write);
+                full(inout state, id);
+            } else if is_index_place {
+                let receiver = expr(inout state, place.children[0]);
+                let index = expr(inout state, place.children[1]);
+                let receiver_kind = type_of(state,
+                    node(state, place.children[0]).type_id).kind;
+                var is_pointer = false;
+                var is_buffer = false;
+                switch receiver_kind {
+                    case model.TypeKind.CForeignPointer: is_pointer = true;
+                    case model.TypeKind.CForeignBuffer: is_buffer = true;
+                    default: {}
+                }
+                if is_pointer || is_buffer {
+                    var has_lhs = false;
+                    var lhs usize = 0;
+                    switch data.compound {
+                        case option.Option.Some(operation): {
+                            has_lhs = true;
+                            var read = nativeir.empty_instruction();
+                            if is_buffer {
+                                read.op = nativeir.Op.CBufferRead;
+                            } else {
+                                read.op = nativeir.Op.CPtrRead;
+                            }
+                            read.type_id = place.type_id;
+                            vec.push(read.inputs, receiver);
+                            vec.push(read.inputs, index);
+                            read.origin =
+                                option.Option[usize].Some(current.children[0]);
+                            read.source = source;
+                            lhs = emit(inout state, read);
+                        }
+                        case option.Option.None: {}
+                    }
+                    var right = expr(inout state, current.children[1]);
+                    switch data.compound {
+                        case option.Option.Some(operation): {
+                            var combined = nativeir.empty_instruction();
+                            combined.op = nativeir.Op.Binary;
+                            combined.type_id = place.type_id;
+                            vec.push(combined.inputs, lhs);
+                            vec.push(combined.inputs, right);
+                            combined.binary = operation;
+                            combined.source = source;
+                            right = emit(inout state, combined);
+                        }
+                        case option.Option.None: {}
+                    }
+                    take_temporary(inout state, current.children[1]);
+                    var write = nativeir.empty_instruction();
+                    if is_buffer {
+                        write.op = nativeir.Op.CBufferWrite;
+                    } else {
+                        write.op = nativeir.Op.CPtrWrite;
+                    }
+                    write.type_id = state.unit;
+                    write.origin =
+                        option.Option[usize].Some(current.children[0]);
+                    vec.push(write.inputs, receiver);
+                    vec.push(write.inputs, index);
+                    vec.push(write.inputs, right);
+                    write.source = source;
+                    push_instruction(inout state, write);
+                    full(inout state, id);
+                } else {
+                    var check_inputs = vec.empty[usize]();
+                    vec.push(check_inputs, receiver);
+                    vec.push(check_inputs, index);
+                    effect(inout state, nativeir.Op.VecCheck, 0, source,
+                        check_inputs, option.Option[hir.OwnerRef].None,
+                        option.Option[usize].Some(current.children[0]));
+                    var has_lhs = false;
+                    var lhs usize = 0;
+                    switch data.compound {
+                        case option.Option.Some(operation): {
+                            has_lhs = true;
+                            var read = nativeir.empty_instruction();
+                            read.op = nativeir.Op.VecRead;
+                            read.type_id = place.type_id;
+                            read.origin =
+                                option.Option[usize].Some(current.children[0]);
+                            vec.push(read.inputs, receiver);
+                            vec.push(read.inputs, index);
+                            read.source = source;
+                            lhs = emit(inout state, read);
+                        }
+                        case option.Option.None: {}
+                    }
+                    var right = expr(inout state, current.children[1]);
+                    switch data.compound {
+                        case option.Option.Some(operation): {
+                            var combined = nativeir.empty_instruction();
+                            combined.op = nativeir.Op.Binary;
+                            combined.type_id = place.type_id;
+                            vec.push(combined.inputs, lhs);
+                            vec.push(combined.inputs, right);
+                            combined.binary = operation;
+                            combined.source = source;
+                            right = emit(inout state, combined);
+                        }
+                        case option.Option.None: {}
+                    }
+                    take_temporary(inout state, current.children[1]);
+                    var set_inputs = vec.empty[usize]();
+                    vec.push(set_inputs, receiver);
+                    vec.push(set_inputs, index);
+                    vec.push(set_inputs, right);
+                    effect(inout state, nativeir.Op.VecSet, 0, source, set_inputs,
+                        option.Option[hir.OwnerRef].None,
+                        option.Option[usize].Some(current.children[0]));
+                    full(inout state, id);
+                }
+            } else {
+                var target = expr(inout state, current.children[0]);
+                if is_field_place {
+                    for owner in end_borrow_owners(state, id) {
+                        begin_borrow(inout state, owner, target, source);
+                    }
+                }
+                var has_lhs = false;
+                var lhs usize = 0;
+                switch data.compound {
+                    case option.Option.Some(operation): {
+                        has_lhs = true;
+                        lhs = indirect(inout state, target, place.type_id, source);
+                    }
+                    case option.Option.None: {}
+                }
+                var right = expr(inout state, current.children[1]);
+                switch data.compound {
+                    case option.Option.Some(operation): {
+                        var combined = nativeir.empty_instruction();
+                        combined.op = nativeir.Op.Binary;
+                        combined.type_id = place.type_id;
+                        combined.binary = operation;
+                        combined.origin = option.Option[usize].Some(id);
+                        vec.push(combined.inputs, lhs);
+                        vec.push(combined.inputs, right);
+                        combined.source = source;
+                        right = emit(inout state, combined);
+                    }
+                    case option.Option.None: {}
+                }
+                var skip_take = false;
+                switch data.compound {
+                    case option.Option.Some(operation): {
+                        var is_string = false;
+                        switch type_of(state, place.type_id).kind {
+                            case model.TypeKind.String: is_string = true;
+                            default: {}
+                        }
+                        if is_string {
+                            skip_take = true;
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+                if !skip_take {
+                    take_temporary(inout state, current.children[1]);
+                }
+                // A whole inout parameter is caller storage reached through
+                // the incoming pointer. It must never be destroyed by the
+                // callee (the caller still owns it) and its slot holds the
+                // pointer, not the value, so the only correct write is
+                // replace-through-place.
+                var has_binding = false;
+                var binding usize = 0;
+                switch place_symbol(place.data) {
+                    case option.Option.Some(value): {
+                        has_binding = true;
+                        binding = value;
+                    }
+                    case option.Option.None: {}
+                }
+                var borrowed_storage = false;
+                if has_binding && slot_contains(state, binding) &&
+                   state.f.slots[slot_require(state, binding)].is_inout {
+                    borrowed_storage = true;
+                }
+                let place_owning = owning(state, place.type_id);
+                if has_binding && place_owning && !borrowed_storage {
+                    let binding_slot = slot_require(state, binding);
+                    effect(inout state, nativeir.Op.Destroy, binding_slot,
+                        source, [], option.Option[hir.OwnerRef].None,
+                        option.Option[usize].None);
+                }
+                var write = nativeir.empty_instruction();
+                if place_owning {
+                    write.op = nativeir.Op.ReplaceIndirect;
+                } else {
+                    write.op = nativeir.Op.StoreIndirect;
+                }
+                write.type_id = state.unit;
+                vec.push(write.inputs, target);
+                vec.push(write.inputs, right);
+                write.source = source;
+                if has_binding && place_owning && !borrowed_storage {
+                    let binding_slot = slot_require(state, binding);
+                    store(inout state, binding_slot, right, source);
+                } else {
+                    push_instruction(inout state, write);
+                }
+                full(inout state, id);
+            }
+        }
+        case hir.NodeData.Switch(data): {
+            let subject = current.children[0];
+            let subject_node = node(state, subject);
+            let subject_owning = owning(state, subject_node.type_id);
+            var subject_is_read = false;
+            switch hir.node_kind(subject_node.data) {
+                case hir.NodeKind.Read: subject_is_read = true;
+                default: {}
+            }
+            let computed_owning = subject_owning && !subject_is_read;
+            var value usize = 0;
+            if computed_owning {
+                // Evaluate the subject once. expr() installs the real temporary
+                // slot; the switch full expression cleans only the other live
+                // temporaries of the subject expression, never the result.
+                value = expr(inout state, subject);
+                full(inout state, id);
+            } else if subject_owning {
+                var symbol usize = 0;
+                switch subject_node.data {
+                    case hir.NodeData.Read(read_data): {
+                        symbol = read_data.symbol;
+                    }
+                    default: {
+                        throw model.SupportError.Invalid("map::at");
+                    }
+                }
+                let symbol_slot = slot_require(state, symbol);
+                value = access(inout state, nativeir.Op.Load, symbol_slot,
+                    source);
+                begin_borrow(inout state,
+                    hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                        identity: u64(symbol)), value, source);
+            } else {
+                value = expr(inout state, subject);
+                full(inout state, subject);
+            }
+            let after = block(inout state);
+            loop_emplace(inout state, id, after, after);
+            let arms = vector_copy(data.arms);
+            for arm in arms {
+                let next = block(inout state);
+                var extracted = vec.empty[ExtractedValue]();
+                var path = vec.empty[usize]();
+                match_pattern(inout state, arm.pattern, value, next, path, extracted);
+                bind_pattern(inout state, arm.pattern, value, path, extracted);
+                if !computed_owning {
+                    full(inout state, id);
+                }
+                stmt(inout state, arm.body);
+                if live(state) {
+                    jump(inout state, after, source);
+                }
+                state.current = next;
+            }
+            end(inout state, nativeir.Exit.Unreachable, [], [], source);
+            loop_erase(inout state, id);
+            state.current = after;
+        }
+        case hir.NodeData.If(data): {
+            let condition = expr(inout state, current.children[0]);
+            full(inout state, current.children[0]);
+            let yes = block(inout state);
+            let no = block(inout state);
+            let join = block(inout state);
+            var targets = vec.empty[usize]();
+            vec.push(targets, yes);
+            vec.push(targets, no);
+            end(inout state, nativeir.Exit.Conditional, [condition], targets, source);
+            state.current = yes;
+            stmt(inout state, current.children[1]);
+            if live(state) {
+                jump(inout state, join, source);
+            }
+            state.current = no;
+            if vec.len(current.children) == 3 {
+                stmt(inout state, current.children[2]);
+            }
+            if live(state) {
+                jump(inout state, join, source);
+            }
+            state.current = join;
+        }
+        case hir.NodeData.For(data): {
+            stmt(inout state, current.children[0]);
+            let condition = block(inout state);
+            let body = block(inout state);
+            let step = block(inout state);
+            let after = block(inout state);
+            jump(inout state, condition, source);
+            loop_emplace(inout state, id, after, step);
+            state.current = condition;
+            let test = expr(inout state, current.children[1]);
+            full(inout state, current.children[1]);
+            var targets = vec.empty[usize]();
+            vec.push(targets, body);
+            vec.push(targets, after);
+            end(inout state, nativeir.Exit.Conditional, [test], targets, source);
+            state.current = body;
+            stmt(inout state, current.children[3]);
+            if live(state) {
+                jump(inout state, step, source);
+            }
+            state.current = step;
+            stmt(inout state, current.children[2]);
+            if live(state) {
+                jump(inout state, condition, source);
+            }
+            loop_erase(inout state, id);
+            state.current = after;
+            let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Normal,
+                error_type: option.Option[usize].None);
+            if option_some(plan(state, site)) {
+                clean(inout state, site, option.Option[usize].None);
+                let next = block(inout state);
+                jump(inout state, next, source);
+                finish(inout state, site);
+                state.current = next;
+            }
+        }
+        case hir.NodeData.ForIn(data): {
+            switch data.iterator {
+                case option.Option.Some(iterator): {
+                    // Evaluate the source iterator exactly once and transfer a
+                    // logical copy into the private cursor. The source binding
+                    // is never advanced.
+                    let collection = expr(inout state, current.children[0]);
+                    take_temporary(inout state, current.children[0]);
+                    let cursor = slot_new(inout state, iterator.iterator);
+                    slot_set(inout state, iterator.cursor, cursor);
+                    state.f.slots[cursor].binding =
+                        option.Option[usize].Some(iterator.cursor);
+                    if owning(state, iterator.iterator) {
+                        state.f.slots[cursor].owner =
+                            option.Option[hir.OwnerRef].Some(
+                                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                    identity: u64(iterator.cursor)));
+                    }
+                    store(inout state, cursor, collection, source);
+                    full(inout state, id);
+
+                    let option_type = node(state, iterator.next).type_id;
+                    let option_slot = slot_new(inout state, option_type);
+                    slot_set(inout state, iterator.option, option_slot);
+                    state.f.slots[option_slot].binding =
+                        option.Option[usize].Some(iterator.option);
+                    if owning(state, option_type) {
+                        state.f.slots[option_slot].owner =
+                            option.Option[hir.OwnerRef].Some(
+                                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                    identity: u64(iterator.option)));
+                    }
+                    let element_slot = slot_new(inout state, iterator.element);
+                    slot_set(inout state, data.element, element_slot);
+                    state.f.slots[element_slot].binding =
+                        option.Option[usize].Some(data.element);
+                    if owning(state, iterator.element) {
+                        state.f.slots[element_slot].owner =
+                            option.Option[hir.OwnerRef].Some(
+                                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                    identity: u64(data.element)));
+                    }
+
+                    let condition = block(inout state);
+                    let some = block(inout state);
+                    let none = block(inout state);
+                    let step = block(inout state);
+                    let done = block(inout state);
+                    let after = block(inout state);
+                    jump(inout state, condition, source);
+                    loop_emplace(inout state, id, after, step);
+                    state.current = condition;
+                    let next_value = expr(inout state, iterator.next);
+                    take_temporary(inout state, iterator.next);
+                    store(inout state, option_slot, next_value, source);
+                    full(inout state, iterator.next);
+                    let option_value = access(inout state, nativeir.Op.Load,
+                        option_slot, source);
+                    var test = nativeir.empty_instruction();
+                    test.op = nativeir.Op.EnumTest;
+                    test.type_id = state.boolean;
+                    vec.push(test.inputs, option_value);
+                    test.variant = iterator.some;
+                    test.source = source;
+                    let test_value = emit(inout state, test);
+                    var targets = vec.empty[usize]();
+                    vec.push(targets, some);
+                    vec.push(targets, none);
+                    end(inout state, nativeir.Exit.Conditional, [test_value], targets,
+                        source);
+
+                    state.current = some;
+                    var payload = nativeir.empty_instruction();
+                    payload.op = nativeir.Op.EnumPayload;
+                    payload.type_id = iterator.element;
+                    vec.push(payload.inputs, option_value);
+                    payload.variant = iterator.some;
+                    payload.field = iterator.some_field;
+                    payload.source = source;
+                    var element = emit(inout state, payload);
+                    if owning(state, iterator.element) {
+                        var copy = nativeir.empty_instruction();
+                        copy.op = nativeir.Op.Copy;
+                        copy.type_id = iterator.element;
+                        vec.push(copy.inputs, element);
+                        copy.source = source;
+                        element = emit(inout state, copy);
+                    }
+                    store(inout state, element_slot, element, source);
+                    stmt(inout state, data.body);
+                    if live(state) {
+                        jump(inout state, step, source);
+                    }
+                    state.current = step;
+                    jump(inout state, condition, source);
+
+                    state.current = none;
+                    if owning(state, option_type) {
+                        effect(inout state, nativeir.Op.Destroy, option_slot, source,
+                            [], option.Option[hir.OwnerRef].None,
+                            option.Option[usize].None);
+                    }
+                    jump(inout state, done, source);
+                    state.current = done;
+                    let site = nativeir.ExitSite(origin: id,
+                        kind: hir.ExitKind.Normal,
+                        error_type: option.Option[usize].None);
+                    clean(inout state, site, option.Option[usize].None);
+                    jump(inout state, after, source);
+                    finish(inout state, site);
+                    loop_erase(inout state, id);
+                    state.current = after;
+                }
+                case option.Option.None: {
+                    let collection = expr(inout state, current.children[0]);
+                    take_temporary(inout state, current.children[0]);
+                    let collection_type = node(state, current.children[0]).type_id;
+                    let hidden = slot_new(inout state, collection_type);
+                    iteration_set(inout state, id, hidden);
+                    state.f.slots[hidden].owner =
+                        option.Option[hir.OwnerRef].Some(
+                            hir.OwnerRef(kind: hir.OwnerKind.Iteration,
+                                identity: u64(id)));
+                    store(inout state, hidden, collection, source);
+                    full(inout state, id);
+                    effect(inout state, nativeir.Op.IterationBegin, hidden, source,
+                        [], option.Option[hir.OwnerRef].None,
+                        option.Option[usize].None);
+                    let condition = block(inout state);
+                    let body = block(inout state);
+                    let step = block(inout state);
+                    let done = block(inout state);
+                    let after = block(inout state);
+                    jump(inout state, condition, source);
+                    loop_emplace(inout state, id, after, step);
+                    state.current = condition;
+                    var compare = nativeir.empty_instruction();
+                    compare.op = nativeir.Op.IterationTest;
+                    compare.type_id = state.boolean;
+                    compare.slot = hidden;
+                    compare.source = source;
+                    let compare_value = emit(inout state, compare);
+                    var targets = vec.empty[usize]();
+                    vec.push(targets, body);
+                    vec.push(targets, done);
+                    end(inout state, nativeir.Exit.Conditional, [compare_value],
+                        targets, source);
+
+                    state.current = body;
+                    let source_type = type_of(state, collection_type);
+                    var element_type usize = 0;
+                    if vec.len(source_type.type_args) != 0 {
+                        element_type = source_type.type_args[0];
+                    }
+                    var is_string = false;
+                    switch source_type.kind {
+                        case model.TypeKind.String: is_string = true;
+                        default: {}
+                    }
+                    if is_string {
+                        for local in state.h.ownership.locals {
+                            if local.symbol == data.element {
+                                element_type = local.type_id;
+                            }
+                        }
+                    }
+                    var read = nativeir.empty_instruction();
+                    read.op = nativeir.Op.IterationRead;
+                    read.type_id = element_type;
+                    read.slot = hidden;
+                    read.source = source;
+                    let element = emit(inout state, read);
+                    let local = slot_new(inout state, element_type);
+                    slot_set(inout state, data.element, local);
+                    state.f.slots[local].binding =
+                        option.Option[usize].Some(data.element);
+                    if owning(state, element_type) {
+                        state.f.slots[local].owner =
+                            option.Option[hir.OwnerRef].Some(
+                                hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                                    identity: u64(data.element)));
+                    }
+                    store(inout state, local, element, source);
+                    stmt(inout state, data.body);
+                    if live(state) {
+                        jump(inout state, step, source);
+                    }
+                    state.current = step;
+                    effect(inout state, nativeir.Op.IterationNext, hidden, source, [],
+                        option.Option[hir.OwnerRef].None,
+                        option.Option[usize].None);
+                    jump(inout state, condition, source);
+                    state.current = done;
+                    let site = nativeir.ExitSite(origin: id,
+                        kind: hir.ExitKind.Normal,
+                        error_type: option.Option[usize].None);
+                    clean(inout state, site, option.Option[usize].None);
+                    jump(inout state, after, source);
+                    finish(inout state, site);
+                    loop_erase(inout state, id);
+                    state.current = after;
+                }
+            }
+        }
+        case hir.NodeData.Return(data): {
+            var result usize = 0;
+            if vec.len(current.children) == 0 {
+                let unit_type = state.unit;
+                result = constant(inout state, unit_type, 0, source);
+            } else {
+                result = expr(inout state, current.children[0]);
+            }
+            let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Return,
+                error_type: option.Option[usize].None);
+            var saved = option.Option[usize].None;
+            if vec.len(current.children) != 0 {
+                take_temporary(inout state, current.children[0]);
+                saved = option.Option[usize].Some(result);
+            }
+            clean(inout state, site, saved);
+            end(inout state, nativeir.Exit.Return, [result], [], source);
+            finish(inout state, site);
+        }
+        case hir.NodeData.Break(data): {
+            let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Break,
+                error_type: option.Option[usize].None);
+            clean(inout state, site, option.Option[usize].None);
+            let loop_target = loop_require(state, data.loop);
+            jump(inout state, loop_target.breaks, source);
+            finish(inout state, site);
+        }
+        case hir.NodeData.Continue(data): {
+            let site = nativeir.ExitSite(origin: id,
+                kind: hir.ExitKind.Continue,
+                error_type: option.Option[usize].None);
+            clean(inout state, site, option.Option[usize].None);
+            let loop_target = loop_require(state, data.loop);
+            jump(inout state, loop_target.continues, source);
+            finish(inout state, site);
+        }
+        default: {
+            expr(inout state, id);
+        }
+    }
+}
+
+// Dead-block and dead-slot removal from Lower::take().
+func take_function(state inout Lower) throws model.SupportError {
+    let block_count = vec.len(state.f.blocks);
+    var reachable = vec.empty[bool]();
+    vec.resize(reachable, block_count, false);
+    var work = vec.empty[usize]();
+    vec.push(work, 0);
+    for vec.len(work) > 0 {
+        let block_id = option_require(vec.pop(work));
+        if reachable[block_id] {
+            continue;
+        }
+        reachable[block_id] = true;
+        for target in state.f.blocks[block_id].terminator.targets {
+            vec.push(work, target);
+        }
+    }
+    var remap = vec.empty[usize]();
+    vec.resize(remap, block_count, 0);
+    var kept = vec.empty[nativeir.BasicBlock]();
+    for var index usize = 0; index < block_count; index += 1 {
+        if reachable[index] {
+            remap[index] = vec.len(kept);
+            vec.push(kept, state.f.blocks[index]);
+        }
+    }
+    for var index usize = 0; index < vec.len(kept); index += 1 {
+        let targets = kept[index].terminator.targets;
+        for var position usize = 0; position < vec.len(targets); position += 1 {
+            targets[position] = remap[targets[position]];
+        }
+    }
+    let slot_count = vec.len(state.f.slots);
+    var kept_handlers = vec.empty[nativeir.Handler]();
+    var removed_handler_slot = vec.empty[bool]();
+    vec.resize(removed_handler_slot, slot_count, false);
+    for handler in state.f.handlers {
+        if !reachable[handler.block] {
+            if handler.slot < vec.len(removed_handler_slot) {
+                removed_handler_slot[handler.slot] = true;
+            }
+            continue;
+        }
+        var kept_handler = handler;
+        kept_handler.block = remap[handler.block];
+        kept_handler.protected_entry = remap[handler.protected_entry];
+        vec.push(kept_handlers, kept_handler);
+    }
+    var removed_use = vec.empty[bool]();
+    vec.resize(removed_use, slot_count, false);
+    var kept_use = vec.empty[bool]();
+    vec.resize(kept_use, slot_count, false);
+    for var index usize = 0; index < block_count; index += 1 {
+        if reachable[index] {
+            continue;
+        }
+        for instruction in state.f.blocks[index].instructions {
+            if uses_slot(instruction.op) &&
+               instruction.slot < vec.len(removed_use) {
+                removed_use[instruction.slot] = true;
+            }
+        }
+    }
+    for basic in kept {
+        for instruction in basic.instructions {
+            if uses_slot(instruction.op) &&
+               instruction.slot < vec.len(kept_use) {
+                kept_use[instruction.slot] = true;
+            }
+        }
+    }
+    for handler in kept_handlers {
+        if handler.slot < vec.len(kept_use) {
+            kept_use[handler.slot] = true;
+        }
+    }
+    var slot_remap = vec.empty[option.Option[usize]]();
+    for var index usize = 0; index < slot_count; index += 1 {
+        vec.push(slot_remap, option.Option[usize].None);
+    }
+    var kept_slots = vec.empty[nativeir.Slot]();
+    for var index usize = 0; index < slot_count; index += 1 {
+        let slot = state.f.slots[index];
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(value): is_parameter = true;
+            case option.Option.None: {}
+        }
+        let dead_only = !is_parameter && !kept_use[index] &&
+            (removed_use[index] || removed_handler_slot[index]);
+        if dead_only {
+            continue;
+        }
+        slot_remap[index] = option.Option[usize].Some(vec.len(kept_slots));
+        vec.push(kept_slots, slot);
+    }
+    for var index usize = 0; index < vec.len(kept); index += 1 {
+        for var position usize = 0;
+            position < vec.len(kept[index].instructions);
+            position += 1 {
+            var instruction = kept[index].instructions[position];
+            if uses_slot(instruction.op) {
+                instruction.slot = mapped_slot(slot_remap, instruction.slot);
+                kept[index].instructions[position] = instruction;
+            }
+        }
+    }
+    for var index usize = 0; index < vec.len(kept_handlers); index += 1 {
+        var handler = kept_handlers[index];
+        handler.slot = mapped_slot(slot_remap, handler.slot);
+        kept_handlers[index] = handler;
+    }
+    state.f.handlers = kept_handlers;
+    state.f.slots = kept_slots;
+    state.f.blocks = kept;
+}
+
+func mapped_slot(slot_remap Vec[option.Option[usize]],
+                 old usize) usize throws model.SupportError {
+    if old >= vec.len(slot_remap) {
+        throw model.SupportError.Invalid(
+            "slot reference belongs to removed control flow");
+    }
+    switch slot_remap[old] {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw model.SupportError.Invalid(
+                "slot reference belongs to removed control flow");
+        }
+    }
+}
+
+func uses_slot(op nativeir.Op) bool {
+    switch op {
+        case nativeir.Op.Load: return true;
+        case nativeir.Op.Address: return true;
+        case nativeir.Op.Store: return true;
+        case nativeir.Op.Move: return true;
+        case nativeir.Op.Take: return true;
+        case nativeir.Op.Destroy: return true;
+        case nativeir.Op.BeginBorrow: return true;
+        case nativeir.Op.IterationBegin: return true;
+        case nativeir.Op.IterationEnd: return true;
+        case nativeir.Op.IterationTest: return true;
+        case nativeir.Op.IterationRead: return true;
+        case nativeir.Op.IterationNext: return true;
+        default: return false;
+    }
+}

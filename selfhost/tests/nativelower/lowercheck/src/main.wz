@@ -1,0 +1,171 @@
+// Native lowering package smoke test.
+//
+// This project type-checks and code-generates the whole nativelower package
+// against the staged nativeverify/nativelayout/valueops/hirverify packages.
+// It never fabricates a VerifiedHirModule: a real app module (project module
+// id 0, "app", HIR identity 0) goes through the real hirverify.verify, and the
+// VerifiedModule in the result can only come from nativeverify.verify inside
+// nativelower.lower.
+//
+// Success is exact: verify Complete + Some + no error diagnostic, lower
+// Complete + Some + no error diagnostic, a zero-function Native Module and the
+// fixed complete empty-module dump.  Any None, rejection or thrown error exits
+// nonzero so the runner cannot mistake a failed lower for a pass.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeirdump" as nativeirdump;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeverify" as nativeverify;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const EMPTY_DUMP string = "native-scalars compiler-dev/1 native64\n";
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_id(failure model.FailureKind) u32 {
+    switch failure {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func error_diagnostics(diagnostics Vec[model.Diagnostic]) usize {
+    var count usize = 0;
+    for diagnostic in diagnostics {
+        if diagnostic.severity == "error" {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// A legal empty app module: project module 0 has id 0 and HIR identity is 0.
+// The real C++ hir::verify accepts exactly this shape ("module identity
+// index"); identity=1 with no module 1 is rejected, which the identity
+// control in controls/ pins down.
+func empty_hir_module() hir.HirModule {
+    var project = model.empty_project();
+    project.backend = "native";
+    project.word_bits = 64;
+    project.entry = 0;
+    vec.push(project.modules, model.Module(id: 0, logical_path: "app",
+        identity: "app", package_name: "app", files: [], imports: [],
+        foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None));
+    let resolved = model.ResolvedProject(project: project, symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return hir.empty_module(resolved, 0, model.CheckConfig(
+        backend: model.Backend.Native, word_bits: 64));
+}
+
+func split_lines(value string) Vec[string] {
+    var lines = vec.empty[string]();
+    var start usize = 0;
+    for var index usize = 0; index < text.len(value); index += 1 {
+        if value[index] == 10 {
+            vec.push(lines, value[start:index]);
+            start = index + 1;
+        }
+    }
+    return lines;
+}
+
+func main() i32 throws os.Error {
+    let module = empty_hir_module();
+    let verified = hirverify.verify(module, hirverify.VerifyMode.StaticOnly);
+    io.println("verify state=" + num(usize(phase_id(verified.state))) +
+        " failure=" + num(usize(failure_id(verified.failure))) + " value=" +
+        flag(option.is_some(verified.value)) + " diagnostics=" +
+        num(vec.len(verified.diagnostics)) + " errors=" +
+        num(error_diagnostics(verified.diagnostics)));
+    switch verified.value {
+        case option.Option.None: {
+            io.eprintln("FAIL: hirverify did not publish a value");
+            return 1;
+        }
+        case option.Option.Some(value): {
+            if phase_id(verified.state) != 0 ||
+               error_diagnostics(verified.diagnostics) != 0 {
+                io.eprintln("FAIL: hirverify is not Complete without errors");
+                return 1;
+            }
+            let lowered = nativelower.lower(value);
+            io.println("lower state=" + num(usize(phase_id(lowered.state))) +
+                " failure=" + num(usize(failure_id(lowered.failure))) +
+                " value=" + flag(option.is_some(lowered.value)) +
+                " diagnostics=" + num(vec.len(lowered.diagnostics)) +
+                " errors=" + num(error_diagnostics(lowered.diagnostics)));
+            switch lowered.value {
+                case option.Option.None: {
+                    io.eprintln("FAIL: nativelower.lower did not publish a value");
+                    return 1;
+                }
+                case option.Option.Some(built): {
+                    if phase_id(lowered.state) != 0 ||
+                       error_diagnostics(lowered.diagnostics) != 0 {
+                        io.eprintln(
+                            "FAIL: lower is not Complete without errors");
+                        return 1;
+                    }
+                    var raw = nativeir.empty_module(module);
+                    try {
+                        raw = nativeverify.snapshot(built);
+                    } catch error model.SupportError {
+                        io.eprintln("FAIL: nativeverify.snapshot threw");
+                        return 2;
+                    }
+                    io.println("functions=" + num(vec.len(raw.functions)));
+                    var dump_text = "";
+                    try {
+                        dump_text = nativeirdump.dump(raw);
+                    } catch error model.SupportError {
+                        io.eprintln("FAIL: nativeirdump.dump threw");
+                        return 3;
+                    }
+                    io.println("dump_lines=" +
+                        num(vec.len(split_lines(dump_text))));
+                    io.print(dump_text);
+                    // The empty legal module must lower to zero functions and
+                    // the exact complete empty dump.
+                    if vec.len(raw.functions) != 0 ||
+                       dump_text != EMPTY_DUMP {
+                        io.eprintln(
+                            "FAIL: lowered empty module dump is not the fixed header");
+                        return 4;
+                    }
+                    return 0;
+                }
+            }
+        }
+    }
+}

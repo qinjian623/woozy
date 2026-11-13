@@ -1,0 +1,283 @@
+// C-layer driver, compiled as part of the nativeemit package.
+//
+// The production C entry points stay package-private (same namespace as B/D/E),
+// so this file is package nativeemit and is only copied into the package
+// directory by ../run.py.  It exercises the value operations, environment
+// records, instruction dispatch, cache identity and the internal error paths
+// that do not need a full NativeIR CFG, and returns the assembled LLVM module.
+//
+// The source fixtures in ./corpus are the differential oracle for the paths
+// that need real HIR/NativeIR input (aggregates, traits, Weak, threads): they
+// are built and executed by the existing C++ native backend today, and by the
+// merged Wz pipeline once B/D/E are complete.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct CTypedInput {
+    module nativeir.Module;
+    unit usize;
+    i32_type usize;
+    vec_type usize;
+}
+
+func c_driver_bad(message string) Error {
+    return Error.Failure("E_TEST_ASSERTION", model.FailureKind.Internal, message);
+}
+
+func c_driver_empty(op nativeir.Op, type_id usize) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.type_id = type_id;
+    return instruction;
+}
+
+func c_driver_input() CTypedInput throws Error {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    var unit usize = 0;
+    var i32_type usize = 0;
+    var vec_type usize = 0;
+    var context = module.types;
+    try {
+        unit = types.intern(inout context, model.empty_type(model.TypeKind.Unit));
+        var integer = model.empty_type(model.TypeKind.SignedInt);
+        integer.bits = 32;
+        i32_type = types.intern(inout context, integer);
+        var vec_entry = model.empty_type(model.TypeKind.Vec);
+        vec_entry.type_args = [i32_type];
+        vec_type = types.intern(inout context, vec_entry);
+    } catch error types.Error {
+        throw c_driver_bad("type interning failed");
+    }
+    module.types = context;
+    return CTypedInput(module: nativeir.Module(hir: module, functions: []),
+        unit: unit, i32_type: i32_type, vec_type: vec_type);
+}
+
+func c_driver_contains(haystack string, needle string) bool {
+    let source = text.bytes(haystack);
+    let pattern = text.bytes(needle);
+    if vec.len(pattern) > vec.len(source) {
+        return false;
+    }
+    for var start usize = 0; start + vec.len(pattern) <= vec.len(source);
+        start += 1 {
+        var matched = true;
+        for var offset usize = 0; offset < vec.len(pattern); offset += 1 {
+            if source[start + offset] != pattern[offset] {
+                matched = false;
+            }
+        }
+        if matched {
+            return true;
+        }
+    }
+    return false;
+}
+
+func c_driver_join(chunks Vec[string]) string {
+    var out = "";
+    for chunk in chunks {
+        out += chunk;
+    }
+    return out;
+}
+
+// A handled no-result instruction with real slot storage, so the assembled text
+// stays valid LLVM: Take must clear the declared active flag and return Unit.
+func c_driver_take(state inout Emitter, input CTypedInput) bool throws Error {
+    let function_index = new_function("nativeemit.c.driver",
+        Signature(result: "void", parameters: []), "internal", "", inout state);
+    let entry = new_block(function_index, "entry", inout state);
+    position(entry, inout state);
+    let active = entry_result("ptr", "alloca i1", inout state);
+    let address = entry_result("ptr", "alloca i8", inout state);
+    append("store i1 true, ptr " + active.reference, inout state);
+    vec.push(state.frame.slots, SlotStorage(address: address,
+        active: option.Option[Value].Some(active),
+        iteration_length: option.Option[Value].None,
+        iteration_index: option.Option[Value].None));
+    var take = c_driver_empty(nativeir.Op.Take, input.unit);
+    take.slot = 0;
+    var produced = false;
+    switch emit_value_instruction(take, [], inout state) {
+        case option.Option.Some(value): {
+            produced = value.type_name == "i8" && value.reference == "0";
+        }
+        case option.Option.None: {}
+    }
+    terminate("ret void", inout state);
+    state.frame.slots = [];
+    return produced;
+}
+
+// Ops owned by another group must return None; a non-Weak system operation must
+// not be claimed by weak_system_call; and an internal inconsistency must be an
+// Error instead of a fabricated result.
+func c_driver_dispatch(state inout Emitter, input CTypedInput) bool throws Error {
+    var foreign = c_driver_empty(nativeir.Op.Store, input.unit);
+    switch emit_value_instruction(foreign, [], inout state) {
+        case option.Option.Some(value): return false;
+        case option.Option.None: {}
+    }
+    foreign = c_driver_empty(nativeir.Op.SystemCall, input.unit);
+    switch emit_value_instruction(foreign, [], inout state) {
+        case option.Option.Some(value): return false;
+        case option.Option.None: {}
+    }
+    foreign = c_driver_empty(nativeir.Op.ForeignCall, input.unit);
+    switch emit_value_instruction(foreign, [], inout state) {
+        case option.Option.Some(value): return false;
+        case option.Option.None: {}
+    }
+    var system = c_driver_empty(nativeir.Op.SystemCall, input.unit);
+    system.system = option.Option[u32].Some(13);
+    switch weak_system_call(system, [], inout state) {
+        case option.Option.Some(value): return false;
+        case option.Option.None: {}
+    }
+    var take = c_driver_empty(nativeir.Op.Take, input.unit);
+    take.slot = 9;
+    var rejected = false;
+    try {
+        let ignored = emit_value_instruction(take, [], inout state);
+    } catch error Error {
+        switch error {
+            case Error.Failure(code, kind, message): {
+                switch kind {
+                    case model.FailureKind.Internal: {
+                        rejected = code == "E_IR_INVALID";
+                    }
+                    default: {}
+                }
+            }
+        }
+    }
+    return rejected;
+}
+
+func c_driver_checks_with(optimization u32) string throws Error {
+    let input = c_driver_input();
+    var options = default_options();
+    options.optimization = optimization;
+    var state = new_emitter(input.module, options);
+    // The Root assembler declares the fixed runtime layouts first; do the same
+    // so the text assembled here is a complete module.
+    declare_runtime_types(inout state);
+    if !owning(input.vec_type, inout state) {
+        throw c_driver_bad("Vec must be owning");
+    }
+    if owning(input.unit, inout state) {
+        throw c_driver_bad("Unit must not be owning");
+    }
+    if owning(input.i32_type, inout state) {
+        throw c_driver_bad("i32 must not be owning");
+    }
+    // The copy helper is registered before its body, so a second lookup must
+    // return the same symbol and must not append another cache entry.
+    let copy_op = value_op(input.vec_type, true, inout state);
+    let copy_again = value_op(input.vec_type, true, inout state);
+    let drop_op = value_op(input.vec_type, false, inout state);
+    if copy_op.reference != copy_again.reference {
+        throw c_driver_bad("value_op is not cached");
+    }
+    if copy_op.reference == drop_op.reference {
+        throw c_driver_bad("copy and drop share a symbol");
+    }
+    if vec.len(state.c.value_ops) != 2 {
+        throw c_driver_bad("value_ops cache size");
+    }
+    switch state.c.vec_retain_fast {
+        case option.Option.Some(value): {}
+        case option.Option.None: throw c_driver_bad("missing retain helper cache");
+    }
+    switch state.c.vec_release_fast {
+        case option.Option.Some(value): {}
+        case option.Option.None: throw c_driver_bad("missing release helper cache");
+    }
+    // Environment records are keyed by the ordered field list; the cache key
+    // must be a copy, so widening the caller array must create a new record.
+    var fields Vec[usize] = [input.vec_type];
+    let layout = env_record_type(fields, inout state);
+    let layout_again = env_record_type(fields, inout state);
+    if layout != layout_again {
+        throw c_driver_bad("environment type is not cached");
+    }
+    vec.push(fields, input.i32_type);
+    let widened = env_record_type(fields, inout state);
+    if widened == layout {
+        throw c_driver_bad("environment key was not copied");
+    }
+    let env_copy = env_record_op(fields, true, inout state);
+    let env_drop = env_record_op(fields, false, inout state);
+    if vec.len(state.c.environment_ops) != 2 {
+        throw c_driver_bad("environment_ops cache size");
+    }
+    if env_copy.reference == env_drop.reference {
+        throw c_driver_bad("environment copy and drop share a symbol");
+    }
+    // Function-value bookkeeping is what E uses to reject captured or bound
+    // callables in an ordinary C callback slot.
+    switch function_value_info(state, 4) {
+        case option.Option.Some(value): throw c_driver_bad("stale function value entry");
+        case option.Option.None: {}
+    }
+    vec.push(state.frame.function_values,
+        FunctionValueInfo(value_id: 4, symbol: 11, dynamic: true));
+    switch function_value_info(state, 4) {
+        case option.Option.Some(value): {
+            if value.symbol != 11 || !value.dynamic {
+                throw c_driver_bad("function value entry");
+            }
+        }
+        case option.Option.None: throw c_driver_bad("missing function value entry");
+    }
+    if !c_driver_take(inout state, input) {
+        throw c_driver_bad("handled Take did not return Unit");
+    }
+    if !c_driver_dispatch(inout state, input) {
+        throw c_driver_bad("instruction dispatch");
+    }
+    let module_text = c_driver_join(sections(state));
+    if !c_driver_contains(module_text,
+        "define internal void @\"lang.vec.retain\"(ptr %p0)") {
+        throw c_driver_bad("missing retain helper");
+    }
+    if !c_driver_contains(module_text, "cmpxchg ptr") {
+        throw c_driver_bad("missing atomic refcount update");
+    }
+    if !c_driver_contains(module_text, "extern_weak global i8") {
+        throw c_driver_bad("missing observer address probe");
+    }
+    if !c_driver_contains(module_text, "lang_vec_retain_v1") {
+        throw c_driver_bad("missing runtime retain");
+    }
+    if !c_driver_contains(module_text, "define internal void @\"lang.env.copy.") {
+        throw c_driver_bad("missing environment copy helper");
+    }
+    if !c_driver_contains(module_text, "store i1 false, ptr") {
+        throw c_driver_bad("Take did not clear its active flag");
+    }
+    return module_text;
+}
+
+func c_driver_checks() string throws Error {
+    return c_driver_checks_with(0);
+}
+
+pub func c_driver_module_text() string throws Error {
+    return c_driver_checks();
+}
+
+pub func c_driver_module_text_opt(optimization u32) string throws Error {
+    return c_driver_checks_with(optimization);
+}

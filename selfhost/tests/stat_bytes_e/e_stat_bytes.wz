@@ -1,0 +1,156 @@
+// Test-only E probe for operation 213 (raw byte-path stat).
+//
+// It builds the same records review.wz uses, calls the production
+// B emit_instruction -> system_call path, and returns the resulting LLVM text.
+// The file payload is a 120-byte C record matching LangFileStat so the emitted
+// function can be executed with a real vector descriptor and the actual
+// runtime stat symbol.
+package nativeemit;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct EStatBytesCase { pub llvm string; }
+
+func sb_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+func sb_source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: sb_span());
+}
+func sb_field(symbol usize, t usize) hir.FieldDecl {
+    return hir.FieldDecl(symbol: symbol, type_id: t, exported: true,
+        source: sb_source());
+}
+func sb_generic(symbol usize) hir.GenericParam {
+    return hir.GenericParam(symbol: symbol,
+        trait_ref: option.Option[hir.TraitRef].None, source: sb_source());
+}
+func sb_variant(symbol usize, payload Vec[hir.FieldDecl]) hir.VariantDecl {
+    return hir.VariantDecl(symbol: symbol, payload: payload,
+        source: sb_source());
+}
+func sb_enum(symbol usize, params Vec[hir.GenericParam],
+             variants Vec[hir.VariantDecl]) hir.NominalDecl {
+    return hir.NominalDecl(symbol: symbol, kind: model.TypeKind.NominalEnum,
+        params: params, fields: [], variants: variants, source: sb_source());
+}
+func sb_intern(c inout types.Context, v model.Type) usize throws Error {
+    try { return types.intern(inout c, v); }
+    catch e types.Error {
+        switch e { case types.Error.Invalid(m): throw invalid(m); }
+    }
+}
+func sb_function_type(c inout types.Context, parameters Vec[usize],
+                      result usize) usize throws Error {
+    var value = model.empty_type(model.TypeKind.Function);
+    var fields Vec[model.ParameterType] = [];
+    for item in parameters {
+        vec.push(fields, model.ParameterType(mode: model.ParamMode.Ordinary,
+            type_id: item));
+    }
+    value.parameters = fields;
+    value.result = result;
+    return sb_intern(inout c, value);
+}
+func sb_scalar(name string) model.CTypeRef {
+    return model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: name,
+        writable: false, args: [], named: 0);
+}
+func sb_cfield(name string, t model.CTypeRef, offset u64) model.CFieldDecl {
+    return model.CFieldDecl(name: name, type_ref: t, offset: offset,
+        source: sb_span());
+}
+func sb_record(id u32, name string, fields Vec[model.CFieldDecl], size u64,
+               align u64) model.CTypeDecl {
+    return model.CTypeDecl(id: id, bundle: 0, source: sb_span(),
+        identity: "test." + name, module: "test", name: name, c_name: name,
+        kind: model.CDeclKind.Record, fields: fields, size: size, align: align,
+        release_symbol: "", retain_symbol: "", result: sb_scalar("Unit"),
+        parameters: [],
+        registration: option.Option[model.CRegistrationDecl].None);
+}
+func sb_begin(state inout Emitter, name string, parameters Vec[string],
+              result string) usize throws Error {
+    let function = new_function(name, Signature(result: result,
+        parameters: parameters), "", "", inout state);
+    let entry = new_block(function, "entry", inout state);
+    position(entry, inout state);
+    return function;
+}
+func sb_value(returned option.Option[Value]) Value throws Error {
+    switch returned {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("stat_bytes emission returned no value");
+    }
+}
+
+pub func e_stat_bytes_case() EStatBytesCase throws Error {
+    var resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    var c = types.context();
+
+    var i32_type = model.empty_type(model.TypeKind.SignedInt);
+    i32_type.bits = 32;
+    let i32_id = sb_intern(inout c, i32_type);
+    var u8_type = model.empty_type(model.TypeKind.UnsignedInt);
+    u8_type.bits = 8;
+    let u8_id = sb_intern(inout c, u8_type);
+    var vec_type = model.empty_type(model.TypeKind.Vec);
+    vec_type.type_args = [u8_id];
+    let vec_id = sb_intern(inout c, vec_type);
+
+    var fileinfo_type = model.empty_type(model.TypeKind.CForeignRecord);
+    fileinfo_type.c_type = 1;
+    let fileinfo_id = sb_intern(inout c, fileinfo_type);
+    var result_type = model.empty_type(model.TypeKind.NominalEnum);
+    result_type.declaration = 10;
+    result_type.type_args = [fileinfo_id];
+    let result_id = sb_intern(inout c, result_type);
+    let signature_id = sb_function_type(inout c, [vec_id], result_id);
+
+    var fields = vec.empty[model.CFieldDecl]();
+    for var index usize = 0; index < 120; index += 1 {
+        vec.push(fields, sb_cfield("b" + number(index), sb_scalar("i8"),
+            u64(index)));
+    }
+    module.resolved.project.c_types = [
+        sb_record(1, "FileInfoBytes", fields, 120, 1)];
+    module.types = c;
+    module.nominals = [
+        sb_enum(10, [sb_generic(100)], [
+            sb_variant(11, [sb_field(12, fileinfo_id)]),
+            sb_variant(13, [sb_field(14, i32_id)])])];
+
+    var state = new_emitter(nativeir.empty_module(module), default_options());
+    declare_runtime_types(inout state);
+    let result_layout = lower_type(result_id, inout state);
+    let function = sb_begin(inout state, "ex_stat_bytes", ["ptr"],
+        result_layout);
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.SystemCall;
+    instruction.type_id = result_id;
+    instruction.signature = signature_id;
+    instruction.system = option.Option[u32].Some(213);
+    // Use the production B emit_instruction path, not a private helper.
+    vec.clear(state.frame.values);
+    let argument = parameter(state, function, 0);
+    vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: vec_id,
+        value: argument));
+    var inputs Vec[usize] = [];
+    vec.push(inputs, 0);
+    instruction.inputs = inputs;
+    instruction.result = option.Option[usize].Some(1);
+    emit_instruction(instruction, inout state);
+    let value = value(state, 1);
+    terminate("ret " + typed(value), inout state);
+    return EStatBytesCase(llvm: text.join(sections(state), ""));
+}

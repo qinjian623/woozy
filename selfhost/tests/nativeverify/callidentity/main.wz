@@ -1,0 +1,425 @@
+// Component regression for the direct-callee `Op.Function` instruction.
+//
+// The C++ verifier (src/ir/verify.cpp, `case Op::function` without origin)
+// compares the registered function type of the instruction's symbol with the
+// instruction's *result type* (`functions.at(i.function) == i.type`).  Lowering
+// (src/ir/lower.cpp, selfhost nativelower/expr.wz) builds such an instruction
+// with `type_id = data.signature`, `function = direct_symbol` and never sets
+// `signature` or `origin`, so `signature` is the value-initialized 0.
+//
+// This program runs the real self-hosted pipeline on real Source fixtures
+// (project.load -> resolve -> sema.check_project -> nativelower.lower) and then
+// only uses the published nativeverify API:
+//
+//   * the unmodified lowered module verifies (all direct Function instructions
+//     keep signature 0 and carry their own instance signature),
+//   * a wrong function identity is still rejected,
+//   * a wrong type_id is rejected even when `signature` holds the symbol's
+//     correct function type (this is the port bug: comparing the wrong field),
+//   * an unrelated `signature` value with a correct type_id is accepted (the
+//     no-origin branch must not read `signature`),
+//   * swapping the two concrete generic instances' identities is rejected.
+//
+// It never builds a VerifiedHirModule/VerifiedModule itself and never claims a
+// full-Source backend success; the nativeirdump of the lowered module is
+// printed so the harness can compare it with the real C++ `ir::dump`.
+
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeirdump" as nativeirdump;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct Target {
+    function usize;
+    block usize;
+    instruction usize;
+    symbol usize;
+    type_id usize;
+}
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func empty_hir() hir.HirModule {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    return hir.empty_module(resolved, 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}
+
+func print_diagnostics(values Vec[model.Diagnostic]) throws os.Error {
+    for value in values {
+        io.eprintln(value.code + " " + value.phase + " " + value.severity +
+            ": " + value.message);
+    }
+}
+
+func first_code(values Vec[model.Diagnostic]) string {
+    if vec.len(values) == 0 {
+        return "";
+    }
+    return values[0].code;
+}
+
+func first_message(values Vec[model.Diagnostic]) string {
+    if vec.len(values) == 0 {
+        return "";
+    }
+    return values[0].message;
+}
+
+func is_function_instruction(op nativeir.Op) bool {
+    var result = false;
+    switch op {
+        case nativeir.Op.Function: result = true;
+        default: {}
+    }
+    return result;
+}
+
+func snap(built nativeverify.VerifiedModule) nativeir.Module throws os.Error {
+    var copy = nativeir.empty_module(empty_hir());
+    var present = false;
+    try {
+        copy = nativeverify.snapshot(built);
+        present = true;
+    } catch error model.SupportError {
+        io.eprintln("FAIL nativeverify.snapshot threw");
+    }
+    if !present {
+        os.exit(1);
+    }
+    return copy;
+}
+
+func dump(module nativeir.Module) string throws os.Error {
+    var text = "";
+    var present = false;
+    try {
+        text = nativeirdump.dump(module);
+        present = true;
+    } catch error model.SupportError {
+        io.eprintln("FAIL nativeirdump.dump threw");
+    }
+    if !present {
+        os.exit(1);
+    }
+    return text;
+}
+
+func collect(module nativeir.Module) Vec[Target] {
+    var found = vec.empty[Target]();
+    for var fi usize = 0; fi < vec.len(module.functions); fi += 1 {
+        for var bi usize = 0;
+            bi < vec.len(module.functions[fi].blocks); bi += 1 {
+            for var ii usize = 0;
+                ii < vec.len(module.functions[fi].blocks[bi].instructions);
+                ii += 1 {
+                let instruction =
+                    module.functions[fi].blocks[bi].instructions[ii];
+                if is_function_instruction(instruction.op) &&
+                   !option.is_some(instruction.origin) {
+                    vec.push(found, Target(function: fi, block: bi,
+                        instruction: ii, symbol: instruction.function,
+                        type_id: instruction.type_id));
+                }
+            }
+        }
+    }
+    return found;
+}
+
+func signature_of(module nativeir.Module, target Target) usize {
+    return module.functions[target.function].blocks[target.block]
+        .instructions[target.instruction].signature;
+}
+
+func origin_of(module nativeir.Module, target Target)
+    option.Option[usize] {
+    return module.functions[target.function].blocks[target.block]
+        .instructions[target.instruction].origin;
+}
+
+func set_function(module inout nativeir.Module, target Target,
+                  symbol usize) {
+    module.functions[target.function].blocks[target.block]
+        .instructions[target.instruction].function = symbol;
+}
+
+func set_type(module inout nativeir.Module, target Target,
+              type_id usize) {
+    module.functions[target.function].blocks[target.block]
+        .instructions[target.instruction].type_id = type_id;
+}
+
+func set_signature(module inout nativeir.Module, target Target,
+                   signature usize) {
+    module.functions[target.function].blocks[target.block]
+        .instructions[target.instruction].signature = signature;
+}
+
+// Any TypeId that really exists in the HIR type table and differs from
+// `correct`, so a rejection cannot be blamed on an invalid TypeId.
+func different_type(module nativeir.Module, correct usize) usize {
+    let total = types.size(module.hir.types);
+    for var index usize = 0; index < total; index += 1 {
+        if index == correct {
+            continue;
+        }
+        switch types.find(module.hir.types, index) {
+            case option.Option.Some(value): return index;
+            case option.Option.None: {}
+        }
+    }
+    return correct + 1;
+}
+
+func absent_symbol(module nativeir.Module) usize {
+    var highest usize = 0;
+    for function in module.hir.functions {
+        if function.symbol > highest {
+            highest = function.symbol;
+        }
+    }
+    return highest + 1000;
+}
+
+func expect_accept(label string, module nativeir.Module,
+                   failures inout usize) throws os.Error {
+    let result = nativeverify.verify(module);
+    if !option.is_some(result.value) ||
+       phase_id(result.state) != phase_id(model.PhaseState.Complete) {
+        failures += 1;
+        io.println("FAIL " + label + ": state=" +
+            num(usize(phase_id(result.state))) + " code=" +
+            first_code(result.diagnostics) + " message=" +
+            first_message(result.diagnostics));
+        return;
+    }
+    io.println("PASS accept " + label);
+}
+
+func expect_reject(label string, module nativeir.Module, message string,
+                   failures inout usize) throws os.Error {
+    let result = nativeverify.verify(module);
+    if option.is_some(result.value) ||
+       phase_id(result.state) != phase_id(model.PhaseState.Failed) ||
+       first_code(result.diagnostics) != "E_IR_INVALID" ||
+       first_message(result.diagnostics) != message {
+        failures += 1;
+        io.println("FAIL " + label + ": state=" +
+            num(usize(phase_id(result.state))) + " value=" +
+            flag(option.is_some(result.value)) + " code=" +
+            first_code(result.diagnostics) + " message=" +
+            first_message(result.diagnostics));
+        return;
+    }
+    io.println("PASS reject " + label + " (" + message + ")");
+}
+
+func check_identity(label string, built nativeverify.VerifiedModule,
+                    module nativeir.Module, targets Vec[Target],
+                    failures inout usize) throws os.Error {
+    let direct_message = "unknown function identity/signature";
+    let identity_message = "unknown function identity";
+    let bad_symbol = absent_symbol(module);
+    for var index usize = 0; index < vec.len(targets); index += 1 {
+        let target = targets[index];
+        let tag = label + "#" + num(index) + "@" + num(target.symbol);
+        // Real lowering leaves `signature` at the value-initialized default.
+        if signature_of(module, target) != 0 {
+            failures += 1;
+            io.println("FAIL signature is not zero for " + tag);
+        }
+        // A nonexistent function symbol is rejected before the type compare.
+        var mutated = snap(built);
+        set_function(inout mutated, target, bad_symbol);
+        expect_reject("unknown-function " + tag, mutated, identity_message,
+            inout failures);
+
+        // Wrong result type with the *correct* symbol signature in
+        // `signature`: the port must still reject by type_id.
+        mutated = snap(built);
+        let wrong_type = different_type(module, target.type_id);
+        set_type(inout mutated, target, wrong_type);
+        set_signature(inout mutated, target, target.type_id);
+        expect_reject("wrong-type-correct-signature " + tag, mutated,
+            direct_message, inout failures);
+
+        // An unrelated signature value with the correct type_id is legal:
+        // this branch compares the result type, not `signature`.
+        mutated = snap(built);
+        set_signature(inout mutated, target, 987654321);
+        expect_accept("unrelated-signature " + tag, mutated, inout failures);
+    }
+}
+
+func check_built(built nativeverify.VerifiedModule)
+    i32 throws os.Error {
+    var failures usize = 0;
+    let pristine = snap(built);
+    let targets = collect(pristine);
+
+    io.println("=== NATIVEIR BEGIN ===");
+    io.print(dump(pristine));
+    io.println("=== NATIVEIR END ===");
+
+    if vec.len(targets) == 0 {
+        failures += 1;
+        io.println("FAIL no no-origin Function instruction in the module");
+        io.println("failures=" + num(failures));
+        return 1;
+    }
+
+    var symbols = vec.empty[usize]();
+    var kinds = vec.empty[usize]();
+    for target in targets {
+        var have_symbol = false;
+        for symbol in symbols {
+            if symbol == target.symbol {
+                have_symbol = true;
+            }
+        }
+        if !have_symbol {
+            vec.push(symbols, target.symbol);
+        }
+        var have_type = false;
+        for type_id in kinds {
+            if type_id == target.type_id {
+                have_type = true;
+            }
+        }
+        if !have_type {
+            vec.push(kinds, target.type_id);
+        }
+        if option.is_some(origin_of(pristine, target)) {
+            failures += 1;
+            io.println("FAIL collected instruction has an origin");
+        }
+    }
+    io.println("PASS direct-function-instructions=" + num(vec.len(targets)) +
+        " symbols=" + num(vec.len(symbols)) + " signatures=" +
+        num(vec.len(kinds)));
+
+    // The unmodified real lowering must verify.
+    expect_accept("pristine-lowering", pristine, inout failures);
+    check_identity("direct", built, pristine, targets, inout failures);
+
+    // Two concrete instances of one generic: exchanging their identities must
+    // not verify, and each instance keeps its own signature type.
+    var swapped = false;
+    for var left usize = 0; left < vec.len(targets); left += 1 {
+        for var right usize = 0; right < vec.len(targets); right += 1 {
+            if swapped || left == right {
+                continue;
+            }
+            if targets[left].symbol != targets[right].symbol &&
+               targets[left].type_id != targets[right].type_id {
+                var mutated = snap(built);
+                set_function(inout mutated, targets[left],
+                    targets[right].symbol);
+                expect_reject("swapped-instance-identity " +
+                    num(left) + "/" + num(right), mutated,
+                    "unknown function identity/signature", inout failures);
+                swapped = true;
+            }
+        }
+    }
+    if !swapped {
+        io.println("PASS swapped-instance-identity skipped (single instance)");
+    }
+
+    io.println("failures=" + num(failures));
+    if failures != 0 {
+        return 1;
+    }
+    return 0;
+}
+
+func run(manifest string, std_root option.Option[string])
+    i32 throws os.Error {
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: manifest,
+        std_source_root: std_root,
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value {
+        print_diagnostics(loaded.diagnostics);
+        io.eprintln("FAIL project load failed");
+        return 1;
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value {
+        print_diagnostics(resolved.diagnostics);
+        io.eprintln("FAIL resolve failed");
+        return 1;
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None,
+        hirverify.VerifyMode.Backend);
+    switch checked.value {
+        case option.Option.None: {
+            print_diagnostics(checked.diagnostics);
+            io.eprintln("FAIL HIR verification did not publish a value");
+            return 1;
+        }
+        case option.Option.Some(verified): {
+            let lowered = nativelower.lower(verified);
+            switch lowered.value {
+                case option.Option.None: {
+                    print_diagnostics(lowered.diagnostics);
+                    io.eprintln("FAIL lowering did not verify");
+                    return 1;
+                }
+                case option.Option.Some(built): return check_built(built);
+            }
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 2 {
+        io.eprintln("usage: callidentity MANIFEST [STDLIB_ROOT]");
+        return 2;
+    }
+    var std_root = option.Option[string].None;
+    if vec.len(args) >= 3 {
+        std_root = option.Option[string].Some(args[2]);
+    }
+    return run(args[1], std_root);
+}

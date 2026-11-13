@@ -1,0 +1,176 @@
+package cli;
+import "app/wzcc/model" as model;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/render" as render;
+import "app/wzcc/resources" as resources;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativebuild" as nativebuild;
+import "app/wzcc/pythonemit" as pythonemit;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func support_text(problem model.SupportError) string {
+    switch problem {
+        case model.SupportError.Invalid(message): return message;
+        case model.SupportError.Limit(message): return message;
+    }
+}
+func native_entry(resolved model.ResolvedProject) option.Option[usize] throws model.SupportError {
+    var entry = option.Option[usize].None;
+    for symbol in resolved.symbols {
+        var function = false;
+        switch symbol.kind { case model.SymbolKind.Function: function = true; default: {} }
+        if function && symbol.module == resolved.project.entry && symbol.name == "main" {
+            if option.is_some(entry) { throw model.SupportError.Invalid("ambiguous entry name"); }
+            entry = option.Option[usize].Some(symbol.id);
+        }
+    }
+    return entry;
+}
+func python_entry(module hir.HirModule) option.Option[usize] throws model.SupportError {
+    var entry = option.Option[usize].None;
+    for function in module.functions {
+        if function.symbol >= vec.len(module.resolved.symbols) {
+            throw model.SupportError.Invalid("entry function symbol index");
+        }
+        let symbol = module.resolved.symbols[function.symbol];
+        if symbol.module == module.identity && symbol.name == "main" {
+            entry = option.Option[usize].Some(symbol.id);
+        }
+    }
+    return entry;
+}
+func missing_main(options Options, sources Vec[model.Source]) i32 throws os.Error {
+    return fail(options, sources, "E_CAPABILITY_UNAVAILABLE", "codegen",
+        "executable build requires main in the entry module", model.FailureKind.Unsupported);
+}
+func build_native(options Options, original model.Project, resolved model.ResolvedProject,
+                  verified hirverify.VerifiedHirModule, sources Vec[model.Source]) i32 throws os.Error {
+    try {
+        switch native_entry(resolved) {
+            case option.Option.None: return missing_main(options, sources);
+            case option.Option.Some(entry): {
+                let lowered = nativelower.lower(verified);
+                let has_native = option.is_some(lowered.value);
+                if !render.succeeded(lowered.state, has_native, lowered.diagnostics) {
+                    return finish(options, sources, lowered.state, lowered.failure, has_native, lowered.diagnostics);
+                }
+                switch lowered.value {
+                    case option.Option.None:
+                        return finish(options, sources, lowered.state, lowered.failure, false, lowered.diagnostics);
+                    case option.Option.Some(native): {
+                        var settings = nativeemit.default_options();
+                        if options.opt == "2" { settings.optimization = 2; }
+                        if options.target != "" { settings.triple = options.target; }
+                        let emitted = nativeemit.emit(native, entry, settings);
+                        let has_output = option.is_some(emitted.value);
+                        if !render.succeeded(emitted.state, has_output, emitted.diagnostics) {
+                            return finish(options, sources, emitted.state, emitted.failure, has_output, emitted.diagnostics);
+                        }
+                        switch emitted.value {
+                            case option.Option.None:
+                                return finish(options, sources, emitted.state, emitted.failure, false, emitted.diagnostics);
+                            case option.Option.Some(output): {
+                                let built = nativebuild.build(output, original, options.output, settings.optimization);
+                                return finish(options, sources, built.state, built.failure, built.has_value, built.diagnostics);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch problem model.SupportError {
+        return fail(options, sources, "E_INTERNAL_ERROR", "toolchain", support_text(problem), model.FailureKind.Internal);
+    }
+}
+func build_python(options Options, verified hirverify.VerifiedHirModule,
+                  sources Vec[model.Source]) i32 throws os.Error {
+    try {
+        let module = hirverify.snapshot(verified);
+        switch python_entry(module) {
+            case option.Option.None: return missing_main(options, sources);
+            case option.Option.Some(entry): {
+                let directory = resources.directory();
+                let runtime = fs.read_text(directory + "/runtime/python/unicode18.py") + "\n" +
+                    fs.read_text(directory + "/runtime/python/langrt.py");
+                let emitted = pythonemit.emit(verified, entry, pythonemit.Options(entrypoint: true), runtime);
+                let has_output = option.is_some(emitted.value);
+                if !render.succeeded(emitted.state, has_output, emitted.diagnostics) {
+                    return finish(options, sources, emitted.state, emitted.failure, has_output, emitted.diagnostics);
+                }
+                switch emitted.value {
+                    case option.Option.None:
+                        return finish(options, sources, emitted.state, emitted.failure, false, emitted.diagnostics);
+                    case option.Option.Some(output): {
+                        var staging = toolio.stage(options.output, "python");
+                        defer { toolio.cleanup(staging); }
+                        let directory = staging.path;
+                        fs.write_text(directory + "/program.py", output.code, 0o666);
+                        fs.write_text(directory + "/langrt.py", output.runtime, 0o666);
+                        toolio.publish_pair(inout staging, "langrt.py", "program.py");
+                        return finish(options, sources, emitted.state, emitted.failure, true, emitted.diagnostics);
+                    }
+                }
+            }
+        }
+    } catch problem model.SupportError {
+        return fail(options, sources, "E_INTERNAL_ERROR", "toolchain", support_text(problem), model.FailureKind.Internal);
+    } catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error):
+                return fail(options, sources, "E_INPUT_IO", "toolchain", os_text(error), model.FailureKind.Environment);
+            case toolio.Error.Rollback(backup, error):
+                return fail(options, sources, "E_INPUT_IO", "toolchain",
+                    "output recovery failed; retained at " + backup + ": " + os_text(error), model.FailureKind.Environment);
+        }
+    }
+}
+func project_command(input Options, manager inout source.Manager) i32 throws os.Error {
+    var options = input;
+    try {
+        var library = option.Option[string].None;
+        var binding = option.Option[string].None;
+        if options.std_binding != "" { binding = option.Option[string].Some(options.std_binding); }
+        else { library = option.Option[string].Some(resources.standard_library()); }
+        let project_options = model.ProjectOptions(manifest: options.project,
+            std_source_root: library, std_binding_bundle: binding);
+        let loaded = project.load(project_options, inout manager);
+        if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
+            return finish(options, manager.snapshots, loaded.state, loaded.failure, loaded.has_value, loaded.diagnostics);
+        }
+        var original = loaded.value;
+        if options.backend != "" { original.backend = options.backend; }
+        options.backend = original.backend;
+        if options.command == "build" && options.backend == "python" && (options.opt != "" || options.target != "") {
+            return fail(options, manager.snapshots, "E_DRIVER_ARGUMENT", "toolchain",
+                "--opt and --target require native build", model.FailureKind.Environment);
+        }
+        let resolved = resolve.resolve_project(original);
+        let checked = sema.check_project(resolved, option.Option[model.CheckConfig].None, hirverify.VerifyMode.Backend);
+        let has_checked = option.is_some(checked.value);
+        if !render.succeeded(checked.state, has_checked, checked.diagnostics) || options.command == "check" {
+            return finish(options, manager.snapshots, checked.state, checked.failure, has_checked, checked.diagnostics);
+        }
+        switch checked.value {
+            case option.Option.None:
+                return finish(options, manager.snapshots, checked.state, checked.failure, false, checked.diagnostics);
+            case option.Option.Some(verified): {
+                if options.backend == "native" {
+                    return build_native(options, original, resolved.value, verified, manager.snapshots);
+                }
+                return build_python(options, verified, manager.snapshots);
+            }
+        }
+    } catch problem os.Error {
+        return fail(options, manager.snapshots, "E_INPUT_IO", "toolchain", os_text(problem), model.FailureKind.Environment);
+    }
+}

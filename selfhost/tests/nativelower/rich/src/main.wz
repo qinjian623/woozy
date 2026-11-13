@@ -1,0 +1,487 @@
+// Rich Native CFG dump test.
+//
+// The program builds a data-only nativeir.Module whose two functions cover all
+// 53 Op records, all 9 Exit terminators, block parameters, handler rows,
+// parameter/inout slots, every optional dump field, both origin spellings and
+// a multi-byte UTF-8 literal.  oracle.cpp builds the same records and prints
+// them with the real linked lang::ir::dump; the HIR is a legal empty app
+// module (module id 0, identity 0) so the real C++ verifier accepts it.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeirdump" as nativeirdump;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func some_id(value usize) option.Option[usize] {
+    return option.Option[usize].Some(value);
+}
+
+func some_u32(value u32) option.Option[u32] {
+    return option.Option[u32].Some(value);
+}
+
+func span(snapshot u64, begin u64, end u64) model.Span {
+    return model.Span(snapshot: snapshot, begin_byte: begin, end_byte: end);
+}
+
+func base(op nativeir.Op, result option.Option[usize], type_id usize,
+          source model.Span) nativeir.Instruction {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = op;
+    instruction.result = result;
+    instruction.type_id = type_id;
+    instruction.source = source;
+    return instruction;
+}
+
+func site(origin usize, kind hir.ExitKind,
+          error_type option.Option[usize]) nativeir.ExitSite {
+    return nativeir.ExitSite(origin: origin, kind: kind,
+        error_type: error_type);
+}
+
+func owner(kind hir.OwnerKind, identity u64) hir.OwnerRef {
+    return hir.OwnerRef(kind: kind, identity: identity);
+}
+
+func empty_hir_module() hir.HirModule {
+    var project = model.empty_project();
+    project.backend = "native";
+    project.word_bits = 64;
+    project.entry = 0;
+    vec.push(project.modules, model.Module(id: 0, logical_path: "app",
+        identity: "app", package_name: "app", files: [], imports: [],
+        foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None));
+    let resolved = model.ResolvedProject(project: project, symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return hir.empty_module(resolved, 0, model.CheckConfig(
+        backend: model.Backend.Native, word_bits: 64));
+}
+
+func function_zero() nativeir.Function {
+    let slots = vec.empty[nativeir.Slot]();
+    vec.push(slots, nativeir.Slot(type_id: 6,
+        parameter: option.Option[u32].Some(0), is_inout: false,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: some_id(9)));
+    vec.push(slots, nativeir.Slot(type_id: 7,
+        parameter: option.Option[u32].Some(1), is_inout: true,
+        owner: option.Option[hir.OwnerRef].Some(
+            owner(hir.OwnerKind.Binding, 1)), owning_parameter: true,
+        binding: some_id(19)));
+    vec.push(slots, nativeir.Slot(type_id: 12,
+        parameter: option.Option[u32].None, is_inout: false,
+        owner: option.Option[hir.OwnerRef].Some(
+            owner(hir.OwnerKind.Temporary, 7)), owning_parameter: false,
+        binding: option.Option[usize].None));
+    vec.push(slots, nativeir.Slot(type_id: 3,
+        parameter: option.Option[u32].None, is_inout: true,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: option.Option[usize].None));
+
+    let handlers = vec.empty[nativeir.Handler]();
+    vec.push(handlers, nativeir.Handler(
+        target: hir.CatchTarget(try_node: 40, index: 2), block: 3, slot: 2,
+        protected_entry: 1));
+
+    let block_instructions = vec.empty[nativeir.Instruction]();
+    var i = base(nativeir.Op.Constant, some_id(0), 6, span(2, 50, 53));
+    i.bits = 127;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Store, option.Option[usize].None, 1, span(2, 36, 53));
+    i.slot = 0;
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.StringLiteral, some_id(1), 12, span(2, 72, 90));
+    i.utf8 = "A\u{e9}\u{1f600}";
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Function, some_id(2), 5, span(2, 95, 110));
+    i.function = 99;
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Load, some_id(3), 6, span(2, 117, 121));
+    i.slot = 0;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Address, some_id(4), 12, span(2, 130, 140));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Unary, some_id(5), 6, span(2, 150, 160));
+    i.unary = hir.UnaryOp.LogicalNot;
+    vec.push(i.inputs, 3);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Binary, some_id(6), 1, span(2, 170, 180));
+    i.binary = hir.BinaryOp.GreaterEqual;
+    i.origin = some_id(15);
+    vec.push(i.inputs, 5);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Convert, some_id(7), 7, span(2, 190, 200));
+    i.origin = some_id(16);
+    vec.push(i.inputs, 6);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Call, some_id(8), 9, span(2, 210, 230));
+    i.signature = 5;
+    i.origin = some_id(17);
+    i.c_callable = some_u32(4);
+    i.c_type = 3;
+    vec.push(i.inputs, 2);
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.StructInit, some_id(9), 9, span(2, 240, 250));
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.EnumInit, some_id(10), 10, span(2, 260, 270));
+    i.variant = 41;
+    vec.push(i.inputs, 9);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.FieldRead, some_id(11), 6, span(2, 280, 290));
+    i.field = 42;
+    vec.push(i.inputs, 9);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.FieldAddress, some_id(12), 12, span(2, 300, 310));
+    i.field = 43;
+    vec.push(i.inputs, 9);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.LoadIndirect, some_id(13), 6, span(2, 320, 330));
+    vec.push(i.inputs, 12);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.StoreIndirect, option.Option[usize].None, 1,
+        span(2, 340, 350));
+    vec.push(i.inputs, 12);
+    vec.push(i.inputs, 13);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.EnumTest, some_id(14), 1, span(2, 360, 370));
+    i.variant = 41;
+    vec.push(i.inputs, 10);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.EnumPayload, some_id(15), 6, span(2, 380, 390));
+    i.field = 42;
+    i.variant = 41;
+    vec.push(i.inputs, 10);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.ExitBegin, option.Option[usize].None, 1,
+        span(2, 400, 410));
+    i.exit = option.Option[nativeir.ExitSite].Some(
+        site(50, hir.ExitKind.Error, some_id(7)));
+    vec.push(i.inputs, 15);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CleanupBegin, option.Option[usize].None, 1,
+        span(2, 420, 430));
+    i.cleanup = some_id(60);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CleanupEnd, option.Option[usize].None, 1,
+        span(2, 440, 450));
+    i.cleanup = some_id(60);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Copy, some_id(16), 12, span(2, 460, 470));
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Move, some_id(17), 12, span(2, 480, 490));
+    i.origin = some_id(18);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Take, option.Option[usize].None, 1, span(2, 500, 510));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Destroy, option.Option[usize].None, 1,
+        span(2, 520, 530));
+    i.slot = 2;
+    i.owner = option.Option[hir.OwnerRef].Some(
+        owner(hir.OwnerKind.Temporary, 7));
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.Borrow, some_id(18), 12, span(2, 540, 550));
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.EndBorrow, option.Option[usize].None, 1,
+        span(2, 560, 570));
+    i.owner = option.Option[hir.OwnerRef].Some(
+        owner(hir.OwnerKind.Binding, 3));
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.SaveOutput, option.Option[usize].None, 1,
+        span(2, 580, 590));
+    vec.push(i.inputs, 17);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecInit, some_id(19), 20, span(2, 600, 610));
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(i.inputs, 3);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecRead, some_id(20), 6, span(2, 620, 630));
+    i.origin = some_id(21);
+    vec.push(i.inputs, 19);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecSet, option.Option[usize].None, 1,
+        span(2, 640, 650));
+    vec.push(i.inputs, 19);
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 20);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecSlice, some_id(21), 20, span(2, 660, 670));
+    i.bits = 3;
+    i.origin = some_id(22);
+    vec.push(i.inputs, 19);
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.IterationBegin, option.Option[usize].None, 1,
+        span(2, 680, 690));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.IterationEnd, option.Option[usize].None, 1,
+        span(2, 700, 710));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecLength, some_id(22), 7, span(2, 720, 730));
+    vec.push(i.inputs, 19);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.IterationTest, some_id(23), 1, span(2, 740, 750));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.IterationRead, some_id(24), 6, span(2, 760, 770));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.IterationNext, option.Option[usize].None, 1,
+        span(2, 780, 790));
+    i.slot = 2;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.OwnershipBegin, option.Option[usize].None, 1,
+        span(2, 800, 810));
+    i.origin = some_id(70);
+    i.bits = 1;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.OwnershipEnd, option.Option[usize].None, 1,
+        span(2, 820, 830));
+    i.origin = some_id(70);
+    i.bits = 1;
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.ReplaceIndirect, option.Option[usize].None, 1,
+        span(2, 840, 850));
+    vec.push(i.inputs, 12);
+    vec.push(i.inputs, 13);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.BeginBorrow, option.Option[usize].None, 1,
+        span(2, 860, 870));
+    i.slot = 2;
+    i.owner = option.Option[hir.OwnerRef].Some(
+        owner(hir.OwnerKind.Binding, 1));
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecCheck, option.Option[usize].None, 1,
+        span(2, 880, 890));
+    i.origin = some_id(21);
+    vec.push(i.inputs, 19);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.VecElementAddress, some_id(25), 12,
+        span(2, 900, 910));
+    i.origin = some_id(21);
+    vec.push(i.inputs, 19);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.SystemCall, some_id(26), 7, span(2, 920, 930));
+    i.signature = 8;
+    i.system = some_u32(33);
+    i.c_callable = some_u32(9);
+    i.c_type = 3;
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.ForeignCall, some_id(27), 9, span(2, 940, 950));
+    i.signature = 5;
+    i.c_callable = some_u32(4);
+    i.c_type = 7;
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CFieldRead, some_id(28), 6, span(2, 960, 970));
+    i.c_type = 3;
+    i.c_field = 5;
+    i.origin = some_id(23);
+    vec.push(i.inputs, 1);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CPtrRead, some_id(29), 6, span(2, 980, 990));
+    i.origin = some_id(24);
+    vec.push(i.inputs, 1);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CPtrWrite, option.Option[usize].None, 1,
+        span(2, 1000, 1010));
+    i.origin = some_id(24);
+    vec.push(i.inputs, 1);
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 29);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CBufferRead, some_id(30), 6, span(2, 1020, 1030));
+    i.origin = some_id(25);
+    vec.push(i.inputs, 1);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.CBufferWrite, option.Option[usize].None, 1,
+        span(2, 1040, 1050));
+    i.origin = some_id(25);
+    vec.push(i.inputs, 1);
+    vec.push(i.inputs, 0);
+    vec.push(i.inputs, 30);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.TraitObject, some_id(31), 9, span(2, 1060, 1070));
+    i.variant = 41;
+    i.origin = some_id(26);
+    vec.push(i.methods, 77);
+    vec.push(i.methods, 78);
+    vec.push(i.inputs, 9);
+    vec.push(block_instructions, i);
+    i = base(nativeir.Op.TraitCall, some_id(32), 6, span(2, 1080, 1090));
+    i.signature = 8;
+    i.bits = 2;
+    i.field = 79;
+    i.origin = some_id(27);
+    vec.push(i.inputs, 31);
+    vec.push(i.inputs, 0);
+    vec.push(block_instructions, i);
+
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Conditional;
+    terminator.inputs = [32];
+    terminator.targets = [1, 2];
+    terminator.source = span(2, 60, 70);
+    terminator.origin = some_id(80);
+    vec.push(blocks, nativeir.BasicBlock(instructions: block_instructions,
+        terminator: terminator, parameters: []));
+
+    let one_parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(one_parameters, nativeir.BlockParameter(value: 40, type_id: 6,
+        call: 50, error: false));
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.TryCall;
+    terminator.signature = 5;
+    vec.push(terminator.inputs, 0);
+    vec.push(terminator.inputs, 1);
+    vec.push(terminator.targets, 2);
+    terminator.source = span(2, 30, 40);
+    terminator.origin = some_id(51);
+    terminator.exit = option.Option[nativeir.ExitSite].Some(
+        site(53, hir.ExitKind.Error, option.Option[usize].None));
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: one_parameters));
+
+    let two_parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(two_parameters, nativeir.BlockParameter(value: 41, type_id: 7,
+        call: 50, error: true));
+    let two_instructions = vec.empty[nativeir.Instruction]();
+    var constant_instruction = base(nativeir.Op.Constant, some_id(33), 7,
+        span(2, 1100, 1110));
+    vec.push(two_instructions, constant_instruction);
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Return;
+    vec.push(terminator.inputs, 33);
+    terminator.source = span(2, 1120, 1130);
+    terminator.origin = some_id(52);
+    vec.push(blocks, nativeir.BasicBlock(instructions: two_instructions,
+        terminator: terminator, parameters: two_parameters));
+
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Branch;
+    vec.push(terminator.targets, 0);
+    terminator.source = span(2, 1140, 1150);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: []));
+
+    terminator = nativeir.empty_terminator();
+    terminator.source = span(2, 1160, 1170);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: []));
+
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Unreachable;
+    terminator.source = span(2, 1180, 1190);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: []));
+
+    return nativeir.Function(symbol: 20, signature: 5, is_async: false,
+        slots: slots, blocks: blocks, source: span(2, 10, 30),
+        handlers: handlers);
+}
+
+func function_one() nativeir.Function {
+    let slots = vec.empty[nativeir.Slot]();
+    vec.push(slots, nativeir.Slot(type_id: 29,
+        parameter: option.Option[u32].None, is_inout: false,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: option.Option[usize].None));
+
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    let zero_instructions = vec.empty[nativeir.Instruction]();
+    var i = base(nativeir.Op.Constant, some_id(0), 6, span(3, 10, 20));
+    i.bits = 1;
+    vec.push(zero_instructions, i);
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Await;
+    terminator.signature = 29;
+    vec.push(terminator.inputs, 0);
+    vec.push(terminator.targets, 1);
+    vec.push(terminator.targets, 2);
+    vec.push(terminator.targets, 3);
+    terminator.source = span(3, 30, 40);
+    terminator.origin = some_id(90);
+    terminator.exit = option.Option[nativeir.ExitSite].Some(
+        site(90, hir.ExitKind.Cancel, option.Option[usize].None));
+    vec.push(blocks, nativeir.BasicBlock(instructions: zero_instructions,
+        terminator: terminator, parameters: []));
+
+    let one_parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(one_parameters, nativeir.BlockParameter(value: 1, type_id: 6,
+        call: 90, error: false));
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Return;
+    vec.push(terminator.inputs, 1);
+    terminator.source = span(3, 50, 60);
+    terminator.origin = some_id(91);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: one_parameters));
+
+    let two_parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(two_parameters, nativeir.BlockParameter(value: 2, type_id: 7,
+        call: 90, error: true));
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.ErrorReturn;
+    vec.push(terminator.inputs, 2);
+    terminator.source = span(3, 70, 80);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: two_parameters));
+
+    terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.CancelReturn;
+    terminator.source = span(3, 90, 100);
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: terminator, parameters: []));
+
+    return nativeir.Function(symbol: 21, signature: 30, is_async: true,
+        slots: slots, blocks: blocks, source: span(3, 1, 9), handlers: []);
+}
+
+func main() i32 throws os.Error {
+    let functions = vec.empty[nativeir.Function]();
+    vec.push(functions, function_zero());
+    vec.push(functions, function_one());
+    let built = nativeir.Module(hir: empty_hir_module(), functions: functions);
+    var text = "";
+    try {
+        text = nativeirdump.dump(built);
+    } catch error model.SupportError {
+        io.eprintln("nativeirdump threw");
+        return 2;
+    }
+    io.print(text);
+    return 0;
+}

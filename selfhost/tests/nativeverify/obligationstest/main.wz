@@ -1,0 +1,20 @@
+// Prints the required exit/call obligations of the shared fixture.
+//
+// The package-internal trace.wz is staged into nativeverify by run.py; this
+// app only forwards its text so stdout can be compared with the C++ oracle.
+// Importing each staged package makes stage0 type-check the whole verifier
+// (minus the hirverify-only facade) together with the obligation trace.
+package app;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/pattern" as pattern;
+import "app/wzcc/valueops" as valueops;
+import "std/io" as io;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    io.print(nativeverify.obligation_trace());
+    return 0;
+}

@@ -1,0 +1,339 @@
+// Native aggregate layout tests.
+//
+// Builds the same canonical type table and nominal declarations as oracle.cpp
+// (which uses the real src/ir/layout.hpp), then prints declaration/fields/
+// field_index/variant_index results plus the error texts.  The stdout trace is
+// compared byte-for-byte with the oracle at O0 and O2.
+//
+// Additional isolation assertions (not part of the compared trace) check that
+// the AggregateTypes context is a private copy: substituting fields must not
+// append to the public HirModule type table, and mutating a returned
+// declaration/field array must not rewrite module.nominals.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct Fixture {
+    context types.Context;
+    unit usize;
+    i32 usize;
+    parameter usize;
+    function_type usize;
+    vec_type usize;
+    struct_generic usize;
+    struct_i32 usize;
+    enum_generic usize;
+    enum_i32 usize;
+    missing usize;
+    plain_struct usize;
+}
+
+func num(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func simple(kind model.TypeKind, bits u32) model.Type {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    return value;
+}
+
+func with_args(kind model.TypeKind, declaration usize,
+               args Vec[usize]) model.Type {
+    var value = model.empty_type(kind);
+    value.declaration = declaration;
+    value.type_args = args;
+    return value;
+}
+
+func function_value(parameter usize, result usize) model.Type {
+    var value = model.empty_type(model.TypeKind.Function);
+    value.parameters = [model.ParameterType(mode: model.ParamMode.Ordinary,
+        type_id: parameter)];
+    value.result = result;
+    return value;
+}
+
+func argument_list(value usize) Vec[usize] {
+    let result = vec.empty[usize]();
+    vec.push(result, value);
+    return result;
+}
+
+func build() Fixture throws types.Error {
+    var context = types.context();
+    let unit = types.intern(inout context, simple(model.TypeKind.Unit, 0));
+    let i32_type = types.intern(inout context,
+        simple(model.TypeKind.SignedInt, 32));
+    let parameter = types.intern(inout context,
+        with_args(model.TypeKind.TypeParameter, 100, vec.empty[usize]()));
+    let function_type = types.intern(inout context,
+        function_value(i32_type, unit));
+    let vec_type = types.intern(inout context,
+        with_args(model.TypeKind.Vec, 0, argument_list(i32_type)));
+    let struct_generic = types.intern(inout context,
+        with_args(model.TypeKind.NominalStruct, 7, argument_list(parameter)));
+    let struct_i32 = types.intern(inout context,
+        with_args(model.TypeKind.NominalStruct, 7, argument_list(i32_type)));
+    let enum_generic = types.intern(inout context,
+        with_args(model.TypeKind.NominalEnum, 8, argument_list(parameter)));
+    let enum_i32 = types.intern(inout context,
+        with_args(model.TypeKind.NominalEnum, 8, argument_list(i32_type)));
+    let missing = types.intern(inout context,
+        with_args(model.TypeKind.NominalStruct, 55, vec.empty[usize]()));
+    let plain_struct = types.intern(inout context,
+        with_args(model.TypeKind.NominalStruct, 9, vec.empty[usize]()));
+    return Fixture(context: context, unit: unit, i32: i32_type,
+        parameter: parameter, function_type: function_type, vec_type: vec_type,
+        struct_generic: struct_generic, struct_i32: struct_i32,
+        enum_generic: enum_generic, enum_i32: enum_i32, missing: missing,
+        plain_struct: plain_struct);
+}
+
+func source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func field(symbol usize, type_id usize) hir.FieldDecl {
+    return hir.FieldDecl(symbol: symbol, type_id: type_id, exported: false,
+        source: source());
+}
+
+func nominal(symbol usize, kind model.TypeKind, parameter usize,
+             fields Vec[hir.FieldDecl],
+             variants Vec[hir.VariantDecl]) hir.NominalDecl {
+    let params = vec.empty[hir.GenericParam]();
+    if parameter != 0 {
+        vec.push(params, hir.GenericParam(symbol: parameter,
+            trait_ref: option.Option[hir.TraitRef].None, source: source()));
+    }
+    return hir.NominalDecl(symbol: symbol, kind: kind, params: params,
+        fields: fields, variants: variants, source: source());
+}
+
+func print_type(context types.Context, id usize) throws os.Error {
+    let found = types.find(context, id);
+    switch found {
+        case option.Option.None: io.print(" missing");
+        case option.Option.Some(value): {
+            io.print(" kind=" + num(u64(model.type_kind_id(value.kind))) +
+                " bits=" + num(u64(value.bits)) +
+                " decl=" + num(u64(value.declaration)) +
+                " args=" + num(u64(vec.len(value.type_args))));
+            for arg in value.type_args {
+                let inner = types.find(context, arg);
+                switch inner {
+                    case option.Option.None: io.print(" [missing]");
+                    case option.Option.Some(item): {
+                        io.print(" [" +
+                            num(u64(model.type_kind_id(item.kind))) + " " +
+                            num(u64(item.bits)) + " " +
+                            num(u64(item.declaration)) + " " +
+                            num(u64(vec.len(item.type_args))) + "]");
+                    }
+                }
+            }
+        }
+    }
+}
+
+func message(value model.SupportError) string {
+    switch value {
+        case model.SupportError.Invalid(text): return text;
+        case model.SupportError.Limit(text): return text;
+    }
+}
+
+func print_declaration(aggregates nativelayout.AggregateTypes, id usize,
+                       label string) throws os.Error {
+    try {
+        let value = nativelayout.declaration(aggregates, id);
+        io.println(label + " symbol=" + num(u64(value.symbol)) +
+            " kind=" + num(u64(model.type_kind_id(value.kind))) +
+            " params=" + num(u64(vec.len(value.params))) +
+            " fields=" + num(u64(vec.len(value.fields))) +
+            " variants=" + num(u64(vec.len(value.variants))));
+    } catch error model.SupportError {
+        io.println("declaration err=" + message(error));
+    }
+}
+
+func print_fields(aggregates inout nativelayout.AggregateTypes, id usize,
+                  variant option.Option[usize], label string)
+    throws os.Error {
+    try {
+        let values = nativelayout.fields(inout aggregates, id, variant);
+        io.println(label + " count=" + num(u64(vec.len(values))));
+        for value in values {
+            io.print(" f " + num(u64(value.symbol)) + " type=" +
+                num(u64(value.type_id)));
+            print_type(aggregates.context, value.type_id);
+            io.println("");
+        }
+    } catch error model.SupportError {
+        io.println("fields err=" + message(error));
+    }
+}
+
+func print_field_index(aggregates inout nativelayout.AggregateTypes,
+                       id usize, field_id usize,
+                       variant option.Option[usize], label string)
+    throws os.Error {
+    try {
+        io.println(label + "=" + num(u64(nativelayout.field_index(
+            inout aggregates, id, field_id, variant))));
+    } catch error model.SupportError {
+        io.println(label + " err=" + message(error));
+    }
+}
+
+func print_variant_index(aggregates nativelayout.AggregateTypes, id usize,
+                         variant usize, label string) throws os.Error {
+    try {
+        io.println(label + "=" + num(u64(nativelayout.variant_index(
+            aggregates, id, variant))));
+    } catch error model.SupportError {
+        io.println(label + " err=" + message(error));
+    }
+}
+
+func check(label string, condition bool, failures inout usize)
+    throws os.Error {
+    if !condition {
+        failures += 1;
+        io.eprintln("FAIL " + label);
+    }
+}
+
+func main() i32 throws os.Error {
+    var fixture = Fixture(context: types.context(), unit: 0, i32: 0,
+        parameter: 0, function_type: 0, vec_type: 0, struct_generic: 0,
+        struct_i32: 0, enum_generic: 0, enum_i32: 0, missing: 0,
+        plain_struct: 0);
+    try {
+        fixture = build();
+    } catch error types.Error {
+        io.eprintln("FAIL fixture type table");
+        return 1;
+    }
+    var module = hir.empty_module(option_resolved(), 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = fixture.context;
+    let struct_fields = vec.empty[hir.FieldDecl]();
+    vec.push(struct_fields, field(10, fixture.parameter));
+    vec.push(struct_fields, field(11, fixture.i32));
+    vec.push(struct_fields, field(12, fixture.vec_type));
+    let variant_fields = vec.empty[hir.FieldDecl]();
+    vec.push(variant_fields, field(21, fixture.parameter));
+    vec.push(variant_fields, field(22, fixture.i32));
+    let plain_fields = vec.empty[hir.FieldDecl]();
+    vec.push(plain_fields, field(30, fixture.function_type));
+    let variants = vec.empty[hir.VariantDecl]();
+    vec.push(variants, hir.VariantDecl(symbol: 20, payload: variant_fields,
+        source: source()));
+    vec.push(variants, hir.VariantDecl(symbol: 23,
+        payload: vec.empty[hir.FieldDecl](), source: source()));
+    let struct_params = vec.empty[hir.GenericParam]();
+    vec.push(struct_params, hir.GenericParam(symbol: fixture.parameter,
+        trait_ref: option.Option[hir.TraitRef].None, source: source()));
+    let nominals = vec.empty[hir.NominalDecl]();
+    vec.push(nominals, nominal(7, model.TypeKind.NominalStruct, 100,
+        struct_fields, vec.empty[hir.VariantDecl]()));
+    vec.push(nominals, nominal(8, model.TypeKind.NominalEnum, 100,
+        vec.empty[hir.FieldDecl](), variants));
+    vec.push(nominals, nominal(9, model.TypeKind.NominalStruct, 0,
+        plain_fields, vec.empty[hir.VariantDecl]()));
+    module.nominals = nominals;
+
+    var aggregates = nativelayout.aggregate_types(module);
+    io.println("context size=" + num(u64(types.size(aggregates.context))));
+    io.println("ids i32=" + num(u64(fixture.i32)) + " unit=" +
+        num(u64(fixture.unit)) + " param=" + num(u64(fixture.parameter)) +
+        " func=" + num(u64(fixture.function_type)) + " vec=" +
+        num(u64(fixture.vec_type)) + " sg=" +
+        num(u64(fixture.struct_generic)) + " si=" +
+        num(u64(fixture.struct_i32)) + " eg=" +
+        num(u64(fixture.enum_generic)) + " ei=" +
+        num(u64(fixture.enum_i32)) + " missing=" +
+        num(u64(fixture.missing)) + " plain=" +
+        num(u64(fixture.plain_struct)));
+    print_declaration(aggregates, fixture.struct_i32, "decl S");
+    print_declaration(aggregates, fixture.enum_i32, "decl E");
+    print_declaration(aggregates, fixture.plain_struct, "decl P");
+    print_declaration(aggregates, fixture.missing, "decl missing");
+    print_fields(inout aggregates, fixture.struct_i32,
+        option.Option[usize].None, "fields S");
+    print_fields(inout aggregates, fixture.enum_i32,
+        option.Option[usize].Some(20), "fields Ev20");
+    print_fields(inout aggregates, fixture.enum_i32,
+        option.Option[usize].Some(23), "fields Ev23");
+    print_fields(inout aggregates, fixture.enum_i32,
+        option.Option[usize].None, "fields Enone");
+    print_fields(inout aggregates, fixture.plain_struct,
+        option.Option[usize].None, "fields P");
+    print_fields(inout aggregates, fixture.struct_i32,
+        option.Option[usize].Some(99), "fields badvariant");
+    print_field_index(inout aggregates, fixture.struct_i32, 11,
+        option.Option[usize].None, "field_index S");
+    print_field_index(inout aggregates, fixture.enum_i32, 22,
+        option.Option[usize].Some(20), "field_index E");
+    print_field_index(inout aggregates, fixture.struct_i32, 99,
+        option.Option[usize].None, "field_index bad");
+    print_variant_index(aggregates, fixture.enum_i32, 20, "variant_index A");
+    print_variant_index(aggregates, fixture.enum_i32, 23, "variant_index B");
+    print_variant_index(aggregates, fixture.struct_i32, 20, "variant_index S");
+    print_variant_index(aggregates, fixture.missing, 20,
+        "variant_index missing");
+    io.println("private context after=" +
+        num(u64(types.size(aggregates.context))));
+    io.println("public types=" + num(u64(types.size(module.types))));
+
+    // Isolation assertions: the compared trace above is complete.
+    var failures usize = 0;
+    var declared_fields usize = 0;
+    try {
+        let declared = nativelayout.declaration(aggregates,
+            fixture.struct_i32);
+        declared_fields = vec.len(declared.fields);
+        declared.fields[0].type_id = 0;
+    } catch error model.SupportError {
+        failures += 1;
+    }
+    check("declaration field count", declared_fields == 3, inout failures);
+    var again_first usize = 0;
+    try {
+        let again = nativelayout.fields(inout aggregates, fixture.struct_i32,
+            option.Option[usize].None);
+        again_first = again[0].type_id;
+    } catch error model.SupportError {
+        failures += 1;
+    }
+    check("returned declaration is independent", again_first == fixture.i32,
+        inout failures);
+    check("module nominal field unchanged",
+        module.nominals[0].fields[0].type_id == fixture.parameter,
+        inout failures);
+    check("module type table unchanged",
+        types.size(module.types) == 11, inout failures);
+    check("private context is a copy",
+        types.size(aggregates.context) >= types.size(module.types),
+        inout failures);
+    if failures > 0 {
+        return 1;
+    }
+    return 0;
+}
+
+func option_resolved() model.ResolvedProject {
+    return model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+}

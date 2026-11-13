@@ -1,0 +1,33 @@
+package app;
+
+struct Pair[T] {
+    first T;
+    second T;
+}
+
+func swap[T](left T, right T) Pair[T] {
+    return Pair[T](first: right, second: left);
+}
+
+func identity[T](value T) T {
+    return value;
+}
+
+func main() i32 {
+    // The two concrete instances of swap come first so the lowered direct
+    // callee instructions 0 and 1 really are swap[i32] and swap[bool].
+    let pair = swap[i32](7, 9);
+    if pair.first != 9 || pair.second != 7 {
+        return 1;
+    }
+    // swap(true, false) returns (first: false, second: true).
+    let flags = swap[bool](true, false);
+    if flags.first || !flags.second {
+        return 2;
+    }
+    let word = identity[string]("woozy");
+    if word != "woozy" {
+        return 3;
+    }
+    return 0;
+}

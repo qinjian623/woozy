@@ -1,0 +1,13 @@
+// Test-only driver for the pure Python-emitter probes.
+package app;
+
+import "app/wzcc/pythonemit" as pythonemit;
+import "std/io" as io;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    for line in pythonemit.checks() {
+        io.println(line);
+    }
+    return 0;
+}

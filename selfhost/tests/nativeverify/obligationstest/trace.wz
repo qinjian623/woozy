@@ -1,0 +1,421 @@
+// Test-only package-internal obligations trace.
+//
+// Copied into the staged nativeverify package by obligationstest/run.py.  It
+// builds the same hand-written HIR control tree as the C++ oracle (which calls
+// the real lang::ir::detail::RequiredExits from src/ir/obligations.hpp) and
+// prints the required exit/call obligations.  This exercises the complete
+// exit/defer/call/await/loop/switch/try obligation algorithm without needing
+// the still-missing hirverify package.  No verified HIR is constructed and no
+// verification success is claimed.
+package nativeverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+const TRACE_FUNCTION usize = 7;
+const N_BODY usize = 0;
+const N_CALL usize = 1;
+const N_DEFER_CALL usize = 2;
+const N_DEFER_CALL_BODY usize = 3;
+const N_RETURN usize = 4;
+const N_RETURN_VALUE usize = 5;
+const N_DEFER_A usize = 6;
+const N_DEFER_A_BODY usize = 7;
+const N_NESTED_CALL usize = 8;
+const N_DEFER_B usize = 9;
+const N_DEFER_C usize = 10;
+const N_DEFER_B_BODY usize = 11;
+const N_DEFER_C_BODY usize = 12;
+const N_FORIN usize = 13;
+const N_ITERABLE usize = 14;
+const N_NEXT usize = 15;
+const N_FOR_BODY usize = 16;
+const N_IF usize = 17;
+const N_CONDITION usize = 18;
+const N_CONTINUE_BLOCK usize = 19;
+const N_BREAK_BLOCK usize = 20;
+const N_CONTINUE usize = 21;
+const N_BREAK usize = 22;
+const N_SWITCH usize = 23;
+const N_SCRUTINEE usize = 24;
+const N_ARM1_BODY usize = 25;
+const N_ARM2_BODY usize = 26;
+const N_ARM1_RETURN usize = 27;
+const N_ARM2_BREAK usize = 28;
+const N_ARM1_VALUE usize = 29;
+const N_TRY usize = 30;
+const N_TRY_BODY usize = 31;
+const N_THROW usize = 32;
+const N_THROW_VALUE usize = 33;
+const N_CATCH_BODY usize = 34;
+const N_AWAIT usize = 35;
+const N_FUTURE usize = 36;
+const NODE_COUNT usize = 37;
+
+const TYPE_UNIT usize = 1;
+const TYPE_I32 usize = 2;
+const TYPE_ERROR usize = 3;
+const TYPE_FUNCTION usize = 4;
+const TYPE_BOOL usize = 5;
+const TYPE_TASK usize = 6;
+const TYPE_ENUM usize = 7;
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func optional_text(value option.Option[usize]) string {
+    switch value {
+        case option.Option.Some(item): return num(item);
+        case option.Option.None: return "-";
+    }
+}
+
+func span0() model.Span {
+    return model.Span(snapshot: 1, begin_byte: 0, end_byte: 0);
+}
+
+func source0() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: span0());
+}
+
+func simple(kind model.TypeKind, bits u32) model.Type {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    return value;
+}
+
+func function_target() hir.ExitTarget {
+    return hir.ExitTarget.FunctionExit(value: hir.FunctionExit(
+        function: TRACE_FUNCTION));
+}
+
+func jump_target(node usize) hir.ExitTarget {
+    return hir.ExitTarget.JumpExit(value: hir.JumpExit(node: node));
+}
+
+func scope_target() hir.ExitTarget {
+    return hir.ExitTarget.ScopeExit(value: hir.ScopeExit(
+        scope: option.Option[usize].None));
+}
+
+func catch_target(node usize, index u32) hir.ExitTarget {
+    return hir.ExitTarget.CatchTarget(value: hir.CatchTarget(try_node: node,
+        index: index));
+}
+
+func plan(kind hir.ExitKind, error_type option.Option[usize],
+          target hir.ExitTarget, defers Vec[usize], saves_value bool)
+    hir.ExitPlan {
+    return hir.ExitPlan(kind: kind, error_type: error_type, target: target,
+        exited_scopes: [], defers: defers, saves_value: saves_value,
+        actions: []);
+}
+
+func exits1(value hir.ExitPlan) Vec[hir.ExitPlan] {
+    let result = vec.empty[hir.ExitPlan]();
+    vec.push(result, value);
+    return result;
+}
+
+func exits2(first hir.ExitPlan, second hir.ExitPlan) Vec[hir.ExitPlan] {
+    let result = vec.empty[hir.ExitPlan]();
+    vec.push(result, first);
+    vec.push(result, second);
+    return result;
+}
+
+func node(type_id usize, children Vec[usize], data hir.NodeData) hir.HirNode {
+    return with_exits(type_id, children, data, vec.empty[hir.ExitPlan]());
+}
+
+func with_exits(type_id usize, children Vec[usize], data hir.NodeData,
+                exits Vec[hir.ExitPlan]) hir.HirNode {
+    return hir.HirNode(type_id: type_id, source: source0(), scope: 0,
+        children: children, data: data, errors: [], exits: exits);
+}
+
+func unit_node(type_id usize, children Vec[usize], data hir.NodeData)
+    hir.HirNode {
+    return node(type_id, children, data);
+}
+
+func call_data(signature usize) hir.NodeData {
+    return hir.NodeData.Call(value: hir.Call(kind: hir.CalleeKind.Direct,
+        signature: signature, direct_symbol: option.Option[usize].None,
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None));
+}
+
+func read_data(symbol usize) hir.NodeData {
+    return hir.NodeData.Read(value: hir.Read(symbol: symbol));
+}
+
+func block_data() hir.NodeData {
+    return hir.NodeData.Block(value: hir.Block());
+}
+
+func pattern_variant(variant usize) hir.Pattern {
+    return hir.Pattern(type_id: TYPE_ENUM, source: source0(),
+        variant: option.Option[usize].Some(variant),
+        binding: option.Option[usize].None, payload: [],
+        literal: option.Option[hir.PatternLiteral].None);
+}
+
+func arm(variant usize, body usize) hir.Arm {
+    return hir.Arm(pattern: pattern_variant(variant), scope: 0, body: body,
+        source: source0());
+}
+
+func fixture_module() hir.HirModule throws types.Error {
+    var context = types.context();
+    let unit = types.intern(inout context, simple(model.TypeKind.Unit, 0));
+    let int_type = types.intern(inout context,
+        simple(model.TypeKind.SignedInt, 32));
+    let error_type = types.intern(inout context, with_declaration(
+        model.TypeKind.NominalEnum, 20));
+    var function_type = model.empty_type(model.TypeKind.Function);
+    let parameters = vec.empty[model.ParameterType]();
+    vec.push(parameters, model.ParameterType(mode: model.ParamMode.Ordinary,
+        type_id: int_type));
+    function_type.parameters = parameters;
+    function_type.result = int_type;
+    function_type.throws_type = option.Option[usize].Some(error_type);
+    let function_id = types.intern(inout context, function_type);
+    let boolean = types.intern(inout context, simple(model.TypeKind.Bool, 0));
+    var task_type = model.empty_type(model.TypeKind.Task);
+    let task_args = vec.empty[usize]();
+    vec.push(task_args, unit);
+    vec.push(task_args, error_type);
+    task_type.type_args = task_args;
+    let task_id = types.intern(inout context, task_type);
+    let enum_type = types.intern(inout context, with_declaration(
+        model.TypeKind.NominalEnum, 21));
+    if unit != TYPE_UNIT || int_type != TYPE_I32 ||
+       error_type != TYPE_ERROR || function_id != TYPE_FUNCTION ||
+       boolean != TYPE_BOOL || task_id != TYPE_TASK ||
+       enum_type != TYPE_ENUM {
+        throw types.Error.Invalid("obligation fixture type ids changed");
+    }
+    var module = hir.empty_module(empty_resolved(), 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    let variants = vec.empty[hir.VariantDecl]();
+    vec.push(variants, hir.VariantDecl(symbol: 21, payload: [],
+        source: source0()));
+    vec.push(variants, hir.VariantDecl(symbol: 22, payload: [],
+        source: source0()));
+    vec.push(module.nominals, hir.NominalDecl(symbol: 20,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: variants, source: source0()));
+    let switch_variants = vec.empty[hir.VariantDecl]();
+    vec.push(switch_variants, hir.VariantDecl(symbol: 23, payload: [],
+        source: source0()));
+    vec.push(switch_variants, hir.VariantDecl(symbol: 24, payload: [],
+        source: source0()));
+    vec.push(module.nominals, hir.NominalDecl(symbol: 21,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: switch_variants, source: source0()));
+    module.nodes = fixture_nodes();
+    let function = hir.HirFunction(symbol: TRACE_FUNCTION,
+        signature: TYPE_FUNCTION, parameters: [], body: N_BODY, scope: 0,
+        source: source0(), captures: [], is_async: false);
+    vec.push(module.functions, function);
+    return module;
+}
+
+func with_declaration(kind model.TypeKind, declaration usize) model.Type {
+    var value = model.empty_type(kind);
+    value.declaration = declaration;
+    return value;
+}
+
+func empty_resolved() model.ResolvedProject {
+    return model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+}
+
+func fixture_nodes() Vec[hir.HirNode] {
+    let nodes = vec.empty[hir.HirNode]();
+    // 0: function body block.
+    vec.push(nodes, node(TYPE_UNIT, [N_CALL, N_RETURN, N_FORIN, N_SWITCH,
+        N_TRY, N_AWAIT], block_data()));
+    // 1: throwing call with an error exit and one defer.
+    vec.push(nodes, with_exits(TYPE_I32, [], call_data(TYPE_FUNCTION),
+        exits1(plan(hir.ExitKind.Error, option.Option[usize].Some(TYPE_ERROR),
+            function_target(), [N_DEFER_CALL], true))));
+    // 2,3: defer registration and its body.
+    vec.push(nodes, node(TYPE_UNIT, [N_DEFER_CALL_BODY],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 0, references: []))));
+    vec.push(nodes, node(TYPE_UNIT, [], block_data()));
+    // 4,5: return value and return exit with two defers.
+    vec.push(nodes, with_exits(TYPE_UNIT, [N_RETURN_VALUE],
+        hir.NodeData.Return(value: hir.Return(function: TRACE_FUNCTION)),
+        exits1(plan(hir.ExitKind.Return, option.Option[usize].None,
+            function_target(), [N_DEFER_A, N_DEFER_B], true))));
+    vec.push(nodes, node(TYPE_I32, [],
+        hir.NodeData.IntegerLiteral(value: hir.IntegerLiteral(decimal: "1",
+            bits: 1))));
+    // 6,7: first return defer whose body calls another throwing function.
+    vec.push(nodes, node(TYPE_UNIT, [N_DEFER_A_BODY],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 0, references: []))));
+    vec.push(nodes, node(TYPE_UNIT, [N_NESTED_CALL], block_data()));
+    // 8: nested throwing call with its own defer.
+    vec.push(nodes, with_exits(TYPE_I32, [], call_data(TYPE_FUNCTION),
+        exits1(plan(hir.ExitKind.Error, option.Option[usize].Some(TYPE_ERROR),
+            function_target(), [N_DEFER_C], true))));
+    // 9,10,11,12: the two defer bodies.
+    vec.push(nodes, node(TYPE_UNIT, [N_DEFER_B_BODY],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 0, references: []))));
+    vec.push(nodes, node(TYPE_UNIT, [N_DEFER_C_BODY],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 0, references: []))));
+    vec.push(nodes, node(TYPE_UNIT, [], block_data()));
+    vec.push(nodes, node(TYPE_UNIT, [], block_data()));
+    // 13: ForIn with iterator next and continue/break arms.
+    var iterator = hir.IteratorFor(cursor: 61, option: 62, next: N_NEXT,
+        iterator: TYPE_I32, element: TYPE_I32, some: 63, none: 64,
+        some_field: 65);
+    vec.push(nodes, with_exits(TYPE_UNIT, [N_ITERABLE, N_FOR_BODY],
+        hir.NodeData.ForIn(value: hir.ForIn(element: 60, body_scope: 0,
+            body: N_FOR_BODY,
+            iterator: option.Option[hir.IteratorFor].Some(iterator))),
+        exits1(plan(hir.ExitKind.Normal, option.Option[usize].None,
+            scope_target(), [], false))));
+    vec.push(nodes, node(TYPE_I32, [], read_data(1)));
+    vec.push(nodes, node(TYPE_I32, [], read_data(2)));
+    // 16,17: loop body with a two-arm if.
+    vec.push(nodes, node(TYPE_UNIT, [N_IF], block_data()));
+    vec.push(nodes, node(TYPE_UNIT, [N_CONDITION, N_CONTINUE_BLOCK,
+        N_BREAK_BLOCK], hir.NodeData.If(value: hir.If())));
+    vec.push(nodes, node(TYPE_BOOL, [],
+        hir.NodeData.BoolLiteral(value: hir.BoolLiteral(value: true))));
+    // 19,20: continue/break blocks.
+    vec.push(nodes, node(TYPE_UNIT, [N_CONTINUE], block_data()));
+    vec.push(nodes, node(TYPE_UNIT, [N_BREAK], block_data()));
+    // 21,22: continue and break exits.
+    vec.push(nodes, with_exits(TYPE_UNIT, [],
+        hir.NodeData.Continue(value: hir.Continue(loop: N_FORIN)),
+        exits1(plan(hir.ExitKind.Continue, option.Option[usize].None,
+            jump_target(N_FORIN), [], false))));
+    vec.push(nodes, with_exits(TYPE_UNIT, [],
+        hir.NodeData.Break(value: hir.Break(loop: N_FORIN)),
+        exits1(plan(hir.ExitKind.Break, option.Option[usize].None,
+            jump_target(N_FORIN), [], false))));
+    // 23,24: exhaustive two-variant switch.
+    let arms = vec.empty[hir.Arm]();
+    vec.push(arms, arm(23, N_ARM1_BODY));
+    vec.push(arms, arm(24, N_ARM2_BODY));
+    vec.push(nodes, node(TYPE_UNIT, [N_SCRUTINEE],
+        hir.NodeData.Switch(value: hir.Switch(arms: arms,
+            exhaustive: true))));
+    vec.push(nodes, node(TYPE_ENUM, [], read_data(3)));
+    // 25,26: switch arm bodies.
+    vec.push(nodes, node(TYPE_UNIT, [N_ARM1_RETURN], block_data()));
+    vec.push(nodes, node(TYPE_UNIT, [N_ARM2_BREAK], block_data()));
+    // 27: return in arm one.
+    vec.push(nodes, with_exits(TYPE_UNIT, [N_ARM1_VALUE],
+        hir.NodeData.Return(value: hir.Return(function: TRACE_FUNCTION)),
+        exits1(plan(hir.ExitKind.Return, option.Option[usize].None,
+            function_target(), [], true))));
+    // 28: break out of the switch in arm two.
+    vec.push(nodes, with_exits(TYPE_UNIT, [],
+        hir.NodeData.Break(value: hir.Break(loop: N_SWITCH)),
+        exits1(plan(hir.ExitKind.Break, option.Option[usize].None,
+            jump_target(N_SWITCH), [], false))));
+    vec.push(nodes, node(TYPE_I32, [],
+        hir.NodeData.IntegerLiteral(value: hir.IntegerLiteral(decimal: "2",
+            bits: 2))));
+    // 30: try with one catch.
+    let catches = vec.empty[hir.Catch]();
+    vec.push(catches, hir.Catch(error_type: TYPE_ERROR, binding: 50, scope: 0,
+        body: N_CATCH_BODY, source: source0()));
+    vec.push(nodes, node(TYPE_UNIT, [N_TRY_BODY],
+        hir.NodeData.Try(value: hir.Try(catches: catches))));
+    // 31,32,33: protected body throwing into the catch.
+    vec.push(nodes, node(TYPE_UNIT, [N_THROW], block_data()));
+    vec.push(nodes, with_exits(TYPE_UNIT, [N_THROW_VALUE],
+        hir.NodeData.Throw(value: hir.Throw()),
+        exits1(plan(hir.ExitKind.Error, option.Option[usize].Some(TYPE_ERROR),
+            catch_target(N_TRY, 0), [], true))));
+    vec.push(nodes, node(TYPE_ERROR, [], read_data(4)));
+    // 34: catch body.
+    vec.push(nodes, node(TYPE_UNIT, [], block_data()));
+    // 35,36: await with error and cancel plans.
+    vec.push(nodes, with_exits(TYPE_UNIT, [N_FUTURE],
+        hir.NodeData.Await(value: hir.Await()),
+        exits2(plan(hir.ExitKind.Error, option.Option[usize].Some(TYPE_ERROR),
+                function_target(), [], false),
+            plan(hir.ExitKind.Cancel, option.Option[usize].None,
+                function_target(), [], false))));
+    vec.push(nodes, node(TYPE_TASK, [], read_data(5)));
+    if vec.len(nodes) != NODE_COUNT {
+        // Defensive: the test fixture is a fixed array.
+        vec.clear(nodes);
+    }
+    return nodes;
+}
+
+func context_text(entries Vec[ContextEntry]) string {
+    var text = "";
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += num(entries[index].origin) + ":" +
+            num(usize(exit_kind_id(entries[index].kind))) + ":" +
+            optional_text(entries[index].error_type) + ":" +
+            num(entries[index].defer_node);
+    }
+    return text;
+}
+
+func support_text(value model.SupportError) string {
+    switch value {
+        case model.SupportError.Invalid(message): return message;
+        case model.SupportError.Limit(message): return message;
+    }
+}
+
+pub func obligation_trace() string {
+    var module = hir.empty_module(empty_resolved(), 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    try {
+        module = fixture_module();
+    } catch error types.Error {
+        return "fixture error\n";
+    }
+    let function = module.functions[0];
+    var text = "";
+    try {
+        let obligations = required_exits(module, function);
+        text += "exits=" + num(vec.len(obligations.exits)) + "\n";
+        for entry in obligations.exits {
+            text += "exit ctx=" + context_text(entry.key.context) +
+                " origin=" + num(entry.key.origin) +
+                " kind=" + num(usize(exit_kind_id(entry.key.kind))) +
+                " error=" + optional_text(entry.key.error_type) +
+                " count=" + num(entry.count) + "\n";
+        }
+        text += "calls=" + num(vec.len(obligations.calls)) + "\n";
+        for entry in obligations.calls {
+            text += "call ctx=" + context_text(entry.key.context) +
+                " origin=" + num(entry.key.origin) +
+                " count=" + num(entry.count) + "\n";
+        }
+    } catch error VerifyError {
+        var message = "";
+        switch error {
+            case VerifyError.Bad(text_value, span): message = text_value;
+            case VerifyError.Support(value): message = support_text(value);
+        }
+        text += "error " + message + "\n";
+    }
+    return text;
+}
