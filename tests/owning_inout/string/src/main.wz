@@ -1,0 +1,25 @@
+package app;
+
+struct Labeled { text string; tag i32; }
+
+func replace(slot inout string) {
+    slot = "new \0 text";
+}
+
+func replace_field(slot inout Labeled) {
+    slot.text = "replaced";
+}
+
+func main() i32 {
+    var text string = "old";
+    let alias = text;
+    replace(inout text);
+    if text != "new \0 text" { return 1; }
+    if alias != "old" { return 2; }
+
+    var labeled = Labeled(text: "keep", tag: 4);
+    replace_field(inout labeled);
+    if labeled.text != "replaced" { return 3; }
+    if labeled.tag != 4 { return 4; }
+    return 0;
+}

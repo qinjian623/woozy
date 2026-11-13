@@ -665,7 +665,7 @@ class Verifier {
              "internal callable/external inout parameter");
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                  (p.mode == ParamMode::inout &&
-                  inout_data_type(m, p.type, allowed)),
+                  inout_slot_type(m, p.type, allowed)),
              "unsupported move/nontrivial inout");
         valid_type(p.type, allowed, depth + 1);
       }
@@ -981,7 +981,7 @@ class Verifier {
   // Check one complete trait application's method graphs after substituting
   // the real Self and every ordered trait argument. Unresolved parameters
   // from the surrounding template remain deferred, but all concrete callback
-  // and top-level inout data uses the same inout_data_type rule as calls.
+  // and top-level inout data uses the same inout_slot_type rule as calls.
   // Substitution interns local TypeIds, so the data helper is given a scratch
   // module whose context is this verifier's substituted context, never the
   // producer's original m.types.
@@ -1131,8 +1131,8 @@ class Verifier {
             HirModule context;
             context.types = substituted;
             context.nominals = m.nominals;
-            need(inout_data_type(context, p.type, allowed),
-                 "trait application inout data is not a finite POD value");
+            need(inout_slot_type(context, p.type, allowed),
+                 "trait application inout data is not a whole Woozy value");
           }
           visit(p.type, depth + 1);
         }
@@ -2852,8 +2852,8 @@ class Verifier {
            "call argument mode/type");
       if (p.mode == ParamMode::inout) {
         need(inout_place(argument) &&
-                 inout_data_type(m, p.type, owner_allowed),
-             "inout requires a trivial numeric/bool or POD aggregate place");
+                 inout_slot_type(m, p.type, owner_allowed),
+             "inout requires a whole Woozy value place");
       } else {
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
              "unsupported argument mode");
@@ -4611,8 +4611,8 @@ class Verifier {
              "trait-static argument type/mode");
         if (p.mode == ParamMode::inout) {
           need(inout_place(argument) &&
-                   inout_data_type(m, p.type, owner_allowed),
-               "trait-static inout requires a trivial POD place");
+                   inout_slot_type(m, p.type, owner_allowed),
+               "trait-static inout requires a whole Woozy value place");
         } else {
           need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
                "unsupported trait-static argument mode");
@@ -4669,8 +4669,8 @@ class Verifier {
     if (receiver.mode == ParamMode::inout) {
       const auto &place = node(receiver.expression);
       need(inout_place(place) &&
-               inout_data_type(m, place.type, owner_allowed),
-           "constraint receiver inout requires a trivial POD place");
+               inout_slot_type(m, place.type, owner_allowed),
+           "constraint receiver inout requires a whole Woozy value place");
     } else {
       expr(receiver.expression);
     }
@@ -4700,9 +4700,9 @@ class Verifier {
             type(raw.type).declaration == tr->self &&
             p.type == c.receiver;
         need(inout_place(argument) &&
-                 (inout_data_type(m, p.type, owner_allowed) ||
+                 (inout_slot_type(m, p.type, owner_allowed) ||
                   trait_self_slot),
-             "constraint inout requires a trivial POD place");
+             "constraint inout requires a whole Woozy value place");
       } else {
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
              "unsupported constraint argument mode");

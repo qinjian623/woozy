@@ -104,7 +104,7 @@ def build(manifest: Path, out: Path, timeout, log, cli: Path, helper: Path):
         if digest(out / "cli" / name) != digest(out / "helper" / name):
             raise RuntimeError(f"CLI/helper disagree on generated {name}")
     runtime = (out / "cli" / "langrt.py").read_text(encoding="utf-8")
-    if "RUNTIME_VERSION = 'compiler-dev/1-python-values/9'" not in runtime:
+    if "RUNTIME_VERSION = 'compiler-dev/1-python-values/10'" not in runtime:
         raise RuntimeError("generated runtime is not the expected version 9")
     return {"program": digest(out / "cli" / "program.py"),
             "runtime": digest(out / "cli" / "langrt.py")}

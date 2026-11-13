@@ -1,0 +1,77 @@
+package app;
+
+struct Item { items Vec[i32]; tag i32; }
+
+trait Value { func read(self Self) i32; }
+impl Value for Item { func read(self Self) i32 { return self.items[0]; } }
+
+func bump(slot inout Vec[i32]) {
+    slot = [99];
+}
+
+func set_pair(slot inout Vec[i32]) {
+    slot = [7, 8];
+}
+
+// Passing an existing inout parameter along keeps the same caller storage.
+func relay(slot inout Vec[i32]) {
+    bump(inout slot);
+}
+
+// A generic swap over owning values exchanges the two real storages.
+func swap[T](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+func swap_values[T Value](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+enum Failure { Bad; }
+
+func maybe_fail(slot inout Vec[i32]) throws Failure {
+    throw Failure.Bad;
+}
+
+func main() i32 {
+    var first Vec[i32] = [1];
+    relay(inout first);
+    if first[0] != 99 { return 1; }
+
+    // An indirect callee receives the same real storage. Element addresses are
+    // not borrowed here, so no unknown-environment alias rule applies.
+    let op func(inout Vec[i32]) = set_pair;
+    op(inout first);
+    if first[0] != 7 || first[1] != 8 { return 2; }
+
+    // A typed throw from the callee ends the borrow on the error edge and
+    // leaves the caller storage untouched and reusable.
+    var failing Vec[i32] = [3];
+    try {
+        maybe_fail(inout failing);
+        return 3;
+    } catch err Failure {
+        if failing[0] != 3 { return 4; }
+    }
+
+    var a Vec[i32] = [1];
+    var b Vec[i32] = [2];
+    swap[Vec[i32]](inout a, inout b);
+    if a[0] != 2 || b[0] != 1 { return 5; }
+
+    var left string = "left";
+    var right string = "right";
+    swap[string](inout left, inout right);
+    if left != "right" || right != "left" { return 6; }
+
+    var one = Item(items: [1], tag: 1);
+    var two = Item(items: [2], tag: 2);
+    swap_values[Item](inout one, inout two);
+    if one.items[0] != 2 || one.tag != 2 { return 7; }
+    if two.items[0] != 1 || two.tag != 1 { return 8; }
+    return 0;
+}

@@ -7,7 +7,7 @@ import sys
 import traceback
 import weakref
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/9'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/10'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -145,6 +145,35 @@ class SwitchBreak(BaseException):
 
     def __init__(self, target):
         self.target = target
+
+
+def replace_place(place, ops, value):
+    """Publish a new whole-place value, then release exactly the old one.
+
+    The place can be an Owner slot, a Cell, a Field path or an Index element,
+    because an inout parameter is bound to the caller's real place object. The
+    new value becomes visible before any logical drop runs, so a reentrant
+    cleanup can never observe the replaced member. An Index, and a Field whose
+    root is an Index, publishes through Vec.set, which already drops the
+    replaced element (and with it the old field); those must not drop again.
+    Owner keeps its inactive-slot behavior, and every other shape (a direct
+    Cell or a Field over an Owner/Cell) drops the replaced value explicitly.
+    Only a Field has a root, so the storage test reads it for Field alone.
+    """
+    if isinstance(place, Owner):
+        if place.value is not _DEAD:
+            old = place.value
+            place.value = value
+            ops.drop(old)
+        else:
+            place.value = value
+        return
+    old = place.value
+    place.value = value
+    if isinstance(place, Index) or (
+            isinstance(place, Field) and isinstance(place.root, Index)):
+        return
+    ops.drop(old)
 
 
 def wrap(value, bits, signed):

@@ -1,0 +1,38 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+struct Leaf { items Vec[i32]; tag i32; }
+struct Outer { leaf Leaf; name string; }
+
+// Owning fields are replaced through the caller's real struct storage. The
+// sibling owning field and the unrelated string stay untouched.
+func replace_items(slot inout Vec[i32]) {
+    slot = [4, 5];
+}
+
+func replace_both(left inout Vec[i32], right inout Vec[i32]) {
+    left = [6];
+    right = [7];
+}
+
+func main() i32 {
+    var outer = Outer(leaf: Leaf(items: [1, 2], tag: 9), name: "keep");
+    let old_weak = weak.downgrade(outer.leaf.items);
+    replace_items(inout outer.leaf.items);
+    if outer.leaf.items[0] != 4 || outer.leaf.items[1] != 5 { return 1; }
+    if outer.leaf.tag != 9 || outer.name != "keep" { return 2; }
+    switch weak.upgrade(old_weak) {
+    case option.Option.Some(strong):
+        return 3;
+    case option.Option.None:
+    }
+
+    var other = Leaf(items: [1], tag: 2);
+    replace_both(inout other.items, inout outer.leaf.items);
+    if other.items[0] != 6 || other.tag != 2 { return 4; }
+    if outer.leaf.items[0] != 7 || outer.leaf.tag != 9 { return 5; }
+    if outer.name != "keep" { return 6; }
+    return 0;
+}

@@ -1,0 +1,37 @@
+package app;
+
+struct Inner { items Vec[i32]; tag i32; }
+struct Middle { inner Inner; name string; }
+enum Maybe { Empty; Full(items Vec[i32], label string); }
+
+func replace_middle(slot inout Middle) {
+    slot = Middle(inner: Inner(items: [8], tag: 4), name: "x");
+}
+
+func replace_enum(slot inout Maybe) {
+    slot = Maybe.Full(items: [3, 4], label: "full");
+}
+
+func replace_inner(slot inout Inner) {
+    slot = Inner(items: [5, 6], tag: 7);
+}
+
+func main() i32 {
+    var middle = Middle(inner: Inner(items: [1], tag: 2), name: "keep");
+    replace_inner(inout middle.inner);
+    if middle.inner.items[0] != 5 || middle.inner.tag != 7 { return 1; }
+    if middle.name != "keep" { return 2; }
+    replace_middle(inout middle);
+    if middle.inner.items[0] != 8 || middle.inner.tag != 4 { return 3; }
+    if middle.name != "x" { return 4; }
+
+    var maybe = Maybe.Empty;
+    replace_enum(inout maybe);
+    switch maybe {
+    case Maybe.Full(items, label):
+        if items[0] != 3 || items[1] != 4 || label != "full" { return 5; }
+    case Maybe.Empty:
+        return 6;
+    }
+    return 0;
+}

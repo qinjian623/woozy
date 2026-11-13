@@ -1,0 +1,12 @@
+package app;
+
+// A borrowed inout parameter is not an owner: it cannot be moved out.
+func steal(slot inout Vec[i32]) Vec[i32] {
+    return move slot;
+}
+
+func main() i32 {
+    var v Vec[i32] = [1];
+    let w = steal(inout v);
+    return w[0] - 1;
+}

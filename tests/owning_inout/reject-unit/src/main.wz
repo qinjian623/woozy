@@ -1,0 +1,10 @@
+package app;
+
+func make() {}
+
+// Unit is not a writable value place.
+func replace(slot inout Unit) {}
+
+func main() i32 {
+    return 0;
+}

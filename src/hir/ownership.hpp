@@ -8,6 +8,9 @@ namespace lang::hir {
 // is allowed only when its declaration is in `parameters`.
 bool inout_data_type(const HirModule &, TypeId,
                      const std::set<uint64_t> &parameters = {});
+// inout_slot / inout_slot_type / inout_slot_reason live in the public HIR
+// header because the source checker, HIR verification and both backends must
+// share one rule for owning (non-POD) inout slots.
 // Canonical source Weak targets. The declaration is selected by its real
 // resolved SymbolId and logical std module, never by a same-shaped user type
 // or a type_key string.

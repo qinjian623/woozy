@@ -54,8 +54,11 @@ REJECTS = {
         BOX + "struct S{b Box;}func main(){var x=S(b:Box(items:[1]));let y=(move x.b).take(2);}",
         "E_CAPABILITY_UNAVAILABLE",
     ),
+    # Owning inout Self is supported now. The receiver capability gate still
+    # rejects a value whose copy/drop contract is not represented in HIR (a
+    # Task handle is owned by the executor), so this keeps testing the gate.
     "owning-inout": (
-        "struct S{v Vec[i32];}impl S{func edit(self inout Self){}}func main(){var x=S(v:[1]);(inout x).edit();}",
+        "struct S{v Task[i32,Unit];}impl S{func edit(self inout Self){}}func main()i32{return 0;}",
         "E_CAPABILITY_UNAVAILABLE",
     ),
     "alias-read": (

@@ -1,0 +1,42 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+struct Tracked { handle Weak[Vec[i32]]; tag i32; }
+
+func replace(slot inout Weak[Vec[i32]], next Weak[Vec[i32]]) {
+    slot = next;
+}
+
+func main() i32 {
+    var target Vec[i32] = [1];
+    var handle Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    var other Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    handle = weak.downgrade(target);
+    let empty = weak.empty[Vec[i32]]();
+    replace(inout handle, empty);
+    switch weak.upgrade(handle) {
+    case option.Option.Some(strong):
+        return 1;
+    case option.Option.None:
+    }
+    other = weak.downgrade(target);
+    replace(inout handle, other);
+    switch weak.upgrade(handle) {
+    case option.Option.Some(strong):
+        if strong[0] != 1 { return 2; }
+    case option.Option.None:
+        return 3;
+    }
+
+    var tracked = Tracked(handle: weak.downgrade(target), tag: 5);
+    replace(inout tracked.handle, empty);
+    switch weak.upgrade(tracked.handle) {
+    case option.Option.Some(strong):
+        return 4;
+    case option.Option.None:
+    }
+    if tracked.tag != 5 { return 5; }
+    return 0;
+}

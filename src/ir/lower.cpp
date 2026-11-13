@@ -923,14 +923,25 @@ class Lower {
       }
       if (!compound || h.types.find(place.type)->kind != hir::TypeKind::String)
         take(n.children[1]);
-      if (auto binding = std::get_if<hir::Place>(&place.data); binding && owning(place.type))
+      // A whole inout parameter is caller storage reached through the incoming
+      // pointer. It must never be destroyed by the callee (the caller still
+      // owns it) and its slot holds the pointer, not the value, so the only
+      // correct write is replace-through-place: keep the old owner, publish
+      // the complete new value in one graph-stable interval, then drop the old
+      // owner outside that interval. Local owners keep their existing
+      // destroy-then-store order.
+      auto *binding = std::get_if<hir::Place>(&place.data);
+      const bool borrowed_storage =
+          binding && slots.count(binding->symbol) &&
+          f.slots[slots.at(binding->symbol).value].inout;
+      if (binding && owning(place.type) && !borrowed_storage)
         effect(Op::destroy, slots.at(binding->symbol), s);
       Instruction write;
       write.op = owning(place.type) ? Op::replace_indirect : Op::store_indirect;
       write.type = unit;
       write.inputs = {target, rhs};
       write.source = s;
-      if (auto binding = std::get_if<hir::Place>(&place.data); binding && owning(place.type))
+      if (binding && owning(place.type) && !borrowed_storage)
         store(slots.at(binding->symbol), rhs, s);
       else
         f.blocks[current.value].instructions.push_back(write);

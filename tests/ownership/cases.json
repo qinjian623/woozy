@@ -9,7 +9,7 @@
   "stage_policy": {
     "syntax": "全部 18 个项目的 src/main.wz 必须通过现有 C++ woozyc check --syntax-only --format json：退出 0、status=ok、diagnostics 为空。语法通过不代表类型、所有权、后端生成或执行通过。",
     "current_full_check": "在根版本 e808169 的现有完整 check 下，native 与 python 各 18/18 都在当前 Vec 类型处返回 E_CAPABILITY_UNAVAILABLE。该结果只是 T09 未实现前的当前能力拒绝，不是未来 expected_static 的 accept/reject 结果。",
-    "future_static": "expected_static 是 T09 实现后的目标。5个已移动绑定反例采用既有 E_OWNERSHIP_USE_AFTER_MOVE，inout Vec采用 E_CAPABILITY_UNAVAILABLE；普通参数借用不可直接move尚无专用固定诊断，code保留null，不在资料中新增code。",
+    "future_static": "expected_static 按已实施的所有权规则检查；移动后读取使用 E_OWNERSHIP_USE_AFTER_MOVE。纯 Woozy 拥有值 inout 已支持，Task/外部资源仍明确拒绝；普通参数不可直接 move。历史 root_revision/current_check 保留当时的测量，不代表当前编译器结果。",
     "runtime": "runtime_expected 全部是未来目标；没有 T09 runtime/native/Python 执行。所有 runtime_expected 和 future_observations 都标 not_run，不能把语法通过或当前 E_CAPABILITY_UNAVAILABLE 算作运行通过。"
   },
   "observation_policy": {
@@ -612,13 +612,12 @@
       }
     },
     {
-      "id": "reject-inout-vec",
-      "purpose": "首版 inout 只接受平凡数值/bool 整体绑定，Vec 共享容器不支持。",
-      "specification": "docs/SEMANTICS.md §7.2 inout 类型限制（引用容器明确未支持）；development/docs/ACCEPTANCE.md A07；development/DEVELOPMENT.md 阶段未覆盖使用 E_CAPABILITY_UNAVAILABLE",
+      "id": "owning-inout-vec",
+      "purpose": "Owning inout：整体 Vec 绑定是共享句柄，bump 通过调用方真实存储写回并只替换该绑定。",
+      "specification": "LANG03 owning inout（development/docs/LANG03_INOUT_PLACES.md）；docs/SEMANTICS.md §7.2 拥有值 inout；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
-        "status": "reject",
-        "code": "E_CAPABILITY_UNAVAILABLE",
-        "reason": "bump 的 inout Vec[i32] 是共享引用容器；首版 inout 明确拒绝引用容器，使用已发布的 E_CAPABILITY_UNAVAILABLE，不把槽独占推导成深层 noalias。"
+        "status": "accept",
+        "reason": "Vec 是引用计数共享句柄，inout 传递调用方真实槽地址；bump 的 values[0] 写回可见，main 返回 0。"
       },
       "manifest": "tests/ownership/fixtures/reject-inout-vec/lang.toml",
       "source": "tests/ownership/fixtures/reject-inout-vec/src/main.wz",
@@ -630,13 +629,19 @@
           "exit": 0
         },
         "full_check": {
-          "status": "rejected",
-          "exit": 1,
-          "code": "E_CAPABILITY_UNAVAILABLE",
-          "phase": "type",
-          "message": "container, owned string and Result support requires T08/T09"
+          "status": "accepted",
+          "exit": 0
         }
-      }
+      },
+      "runtime_expected": {
+        "status": "accept",
+        "main_return": 0,
+        "observations": {
+          "values_after_bump": 2
+        },
+        "reason": "inout 写回后 values[0] 为 2，main 返回 0。"
+      },
+      "owning_inout_note": "原 reject-inout-vec 曾断言 POD-only inout；LANG03 已支持拥有值 inout，源字节不变，改为正向用例。"
     },
     {
       "id": "reject-branch-maybe-moved",

@@ -32,7 +32,16 @@ POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
             'modes-before-static-own-named-self',
             'modes-combinations', 'modes-lifetime',
             'ordinary-receiver-identity',
-            'callback-cross-package-lambda')
+            'callback-cross-package-lambda',
+            # Approved owning inout: these sources used to stop at the
+            # POD-only gate. Their declarations/programs are real now, so
+            # they run on both backends instead of being rejected.
+            'bound-direct-owning-callback', 'bound-held-owning-callback',
+            'bound-dependent-held-owning-callback',
+            'reject-bound-owning-callback',
+            'reject-concrete-self-callback',
+            'reject-concrete-trait-argument',
+            'modes-reject-inout-owning')
 # Declaration-only controls: both backends must accept, but their main does not
 # exercise the bound, so they are not reported as runtime coverage.
 # Old reject-* sources keep their bytes. Their declarations are now legal;
@@ -82,13 +91,8 @@ SOURCE_ERROR = {
     'modes-reject-inout-alias': {'E_CALL_ARGUMENT'},
 }
 UNSUPPORTED = {
-    'bound-direct-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'bound-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'bound-dependent-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-bound-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-concrete-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-concrete-trait-argument': {'E_CAPABILITY_UNAVAILABLE'},
-    'modes-reject-inout-owning': {'E_CAPABILITY_UNAVAILABLE'},
+    # Unbounded Wrap[Vec[T]]/Relay recursion still exceeds the checking budget;
+    # only the old POD-only inout gate is gone.
     'recursive-wrap-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
     'recursive-wrap-mutual-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
 }

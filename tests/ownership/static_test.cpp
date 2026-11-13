@@ -554,7 +554,11 @@ void flow_tests() {
   rejected("func f() {let x i32=[1];}", "E_TYPE_MISMATCH");
   rejected("func f() {let x i32=1;let y=x[0];}", "E_TYPE_MISMATCH");
   rejected("func f(v Vec[i32]) {v=[2];}", "E_TYPE_MISMATCH");
-  rejected("func f(v inout Vec[i32]) {}", "E_CAPABILITY_UNAVAILABLE");
+  // Owning inout: a whole Vec parameter is a legal borrowed slot now; the
+  // closed kinds (a Task handle, Unit) keep the source capability rejection.
+  accepted("func f(v inout Vec[i32]) {}");
+  rejected("func f(v inout Task[i32,Unit]) {}", "E_CAPABILITY_UNAVAILABLE");
+  rejected("func f(v inout Unit) {}", "E_CAPABILITY_UNAVAILABLE");
   auto string_vec = accepted("func f() {let x Vec[string]=[\"x\"];}");
   facts(string_vec);
   bool saw_string = false;

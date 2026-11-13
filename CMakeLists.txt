@@ -59,6 +59,7 @@ if(BUILD_TESTING)
   add_subdirectory(tests/bindings)
   if(LANG_ENABLE_LLVM)
     add_subdirectory(tests/inout_places)
+    add_subdirectory(tests/owning_inout)
   endif()
   add_executable(lang_concurrency_frontend_test tests/sema/concurrency_test.cpp
     src/ir/lower.cpp src/ir/verify.cpp)

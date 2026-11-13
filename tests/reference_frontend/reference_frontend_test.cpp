@@ -506,11 +506,17 @@ func main() i32 { let w = bad[i32](1); return 0; }
 func f(x Weak[Vec[i32], Vec[i32]]) {}
 func main() i32 { return 0; }
 )WZ", "Weak requires one target type", "Weak two arguments");
+  // Owning inout: a Weak handle is a whole value with a real copy/drop, so the
+  // closed kind is checked instead. Only a Task handle stays unavailable.
   deny_code(root, R"WZ(package app;
+func f(t inout Task[i32, Unit]) {}
+func main() i32 { return 0; }
+)WZ", "E_CAPABILITY_UNAVAILABLE", "Task inout", "Task inout");
+  accept_source(root, R"WZ(package app;
 import "std/weak" as weak;
-func f(w inout Weak[Vec[i32]]) {}
+func f(w inout Weak[Vec[i32]]) { w = weak.empty[Vec[i32]](); }
 func main() i32 { var w Weak[Vec[i32]] = weak.empty[Vec[i32]](); f(inout w); return 0; }
-)WZ", "E_CAPABILITY_UNAVAILABLE", "POD aggregate", "Weak inout");
+)WZ", "Weak inout");
   deny_code(root, R"WZ(package app;
 func main() i32 { let w Weak[Vec[i32]] = __woozy_weak_empty[Vec[i32]](); return 0; }
 )WZ", "E_CAPABILITY_UNAVAILABLE", "owner std module", "direct builtin call");

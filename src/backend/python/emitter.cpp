@@ -291,12 +291,6 @@ class Emitter {
             return i;
     throw std::logic_error("verified field has no declaration index");
   }
-  bool indexed_field_place(HirNodeId id) const {
-    auto base = id;
-    while (node(base).kind() == NodeKind::field_place)
-      base = node(base).children[0];
-    return node(base).kind() == NodeKind::index_place;
-  }
   // Weak target projection is selected by the verified canonical declaration,
   // not by layout or a type-key spelling. Python maps Vec and function values
   // directly; Box is the one canonical wrapper whose private cell Vec is the
@@ -544,11 +538,14 @@ class Emitter {
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
     for (const auto &p : t.parameters)
-      if (p.mode == ParamMode::inout &&
-          !classify_value(m, p.type).pod_inout)
-        throw Rejected{"Python value profile supports ordinary/move or "
-                       "trivial numeric/bool/POD aggregate inout parameters",
+      if (p.mode == ParamMode::inout && !inout_slot_type(m, p.type)) {
+        // Python Cells and _rt.Field/_rt.Index places already replace an
+        // owning value by dropping the old one and installing the new one, so
+        // the same whole-value rule as the other backends applies.
+        auto reason = inout_slot_reason(inout_slot(m, p.type));
+        throw Rejected{std::string("Python value profile inout: ") + reason,
                        source};
+      }
   }
   // Stable identity for typed-error dispatch.  A foreign type in error
   // position must itself be a declared runtime_error; a source nominal's type
@@ -1708,17 +1705,18 @@ class Emitter {
             n);
       auto installed = assign.compound && type(node(n.children[0]).type).kind == TypeKind::String
                            ? value : take(n.children[1], value);
-      if (owned(node(n.children[0]).type) &&
-          !indexed_field_place(n.children[0])) {
-        // Field is a short-lived place and its old field owns exactly once.
-        // An indexed field replaces the element through its real storage, so
-        // Vec.set performs that old-field drop with the sibling fields.
-        if (node(n.children[0]).kind() == NodeKind::field_place)
-          line(suite,
-               ops(node(n.children[0]).type) + ".drop(" + place + ".value)", n);
-        else {
-          line(suite, place + ".drop()", n);
-        }
+      if (owned(node(n.children[0]).type)) {
+        // The place may be a real Owner slot (a local owning binding), a Cell,
+        // a Field path or an Index element: an inout parameter is bound to the
+        // caller's genuine place object. The runtime helper publishes the new
+        // value first and then releases exactly the replaced one; an indexed
+        // receiver already drops the replaced element through Vec.set.
+        line(suite,
+             "_rt.replace_place(" + place + ", " +
+                 ops(node(n.children[0]).type) + ", " + installed + ")",
+             n);
+        full(id, suite);
+        break;
       }
       line(suite, place + ".value = " + installed, n);
       full(id, suite);

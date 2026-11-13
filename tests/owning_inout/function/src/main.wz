@@ -1,0 +1,29 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+// A function value owns its optional environment. Replacing the slot releases
+// the old environment exactly once, while an ordinary copy keeps it alive.
+func replace(slot inout func() i32) {
+    slot = func() i32 { return 2; };
+}
+
+func main() i32 {
+    let base i32 = 1;
+    var f func() i32 = func() i32 { return base; };
+    let previous = f;
+    let old_weak = weak.downgrade(f);
+    if f() != 1 { return 1; }
+    replace(inout f);
+    if f() != 2 { return 2; }
+    // The saved copy still owns the old environment.
+    if previous() != 1 { return 3; }
+    switch weak.upgrade(old_weak) {
+    case option.Option.Some(strong):
+        if strong() != 1 { return 4; }
+    case option.Option.None:
+        return 5;
+    }
+    return 0;
+}

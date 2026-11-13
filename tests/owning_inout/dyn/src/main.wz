@@ -1,0 +1,48 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+trait Watch {
+    func watch(self Self) Weak[Vec[i32]];
+    func name(self Self) i32;
+}
+
+struct Holder { items Vec[i32]; }
+struct Other { value i32; }
+
+impl Watch for Holder {
+    func watch(self Self) Weak[Vec[i32]] { return weak.downgrade(self.items); }
+    func name(self Self) i32 { return self.items[0]; }
+}
+impl Watch for Other {
+    func watch(self Self) Weak[Vec[i32]] { return weak.empty[Vec[i32]](); }
+    func name(self Self) i32 { return self.value; }
+}
+
+// A dyn trait object owns one boxed concrete value. Replacing it must drop the
+// old box (and the Vec it owns) exactly once and publish the new object.
+func replace(slot inout dyn Watch) i32 {
+    let before = slot.name();
+    slot = Other(value: 42);
+    return before;
+}
+
+func main() i32 {
+    var value dyn Watch = Holder(items: [7]);
+    let old = value.watch();
+    if replace(inout value) != 7 { return 1; }
+    if value.name() != 42 { return 2; }
+    switch weak.upgrade(old) {
+    case option.Option.Some(strong):
+        return 3;
+    case option.Option.None:
+    }
+    let now = value.watch();
+    switch weak.upgrade(now) {
+    case option.Option.Some(strong):
+        return 4;
+    case option.Option.None:
+    }
+    return 0;
+}

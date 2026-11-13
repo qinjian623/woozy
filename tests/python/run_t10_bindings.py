@@ -260,7 +260,7 @@ func main() i32 throws py.Error {
                     event)
         info = observed['binding_info']
         bundle = info['bundles'][0]
-        require(info['runtime_version'] == 'compiler-dev/1-python-values/9', info)
+        require(info['runtime_version'] == 'compiler-dev/1-python-values/10', info)
         require(bundle['contract'] == 'compiler-dev/1', bundle)
         require(bundle['sha256'] == sha(args.binding), bundle)
         require(bundle['review_status'] == 'draft_requires_conformance', bundle)

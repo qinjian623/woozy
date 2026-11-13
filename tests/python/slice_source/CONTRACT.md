@@ -1,7 +1,7 @@
 # Python source `Slice[T]` contract
 
 Task: LANG03 Python-only Source Slice step. Contract `compiler-dev/1`; Python
-value runtime `compiler-dev/1-python-values/9`.
+value runtime `compiler-dev/1-python-values/10`.
 
 ## Source interface
 

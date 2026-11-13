@@ -16,7 +16,10 @@ CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes',
          'trait-qualified-inout', 'trait-qualified-own',
          'trait-ordinary-holder-control', 'trait-ordinary-return-control',
          'trait-function-cycle-reject', 'trait-type-inout-return-reject')
-REJECT_CASES = ('reject', 'trait-generic-nonscalar-reject')
+REJECT_CASES = ('reject',)
+# Approved owning inout: the generic trait method replaces an owning slot, so
+# this former rejection source is a real program now.
+OWNING_CASES = ('trait-generic-nonscalar-reject',)
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
@@ -456,6 +459,57 @@ def main():
             }
             row['status'] = 'passed'
 
+        if not args.only:
+            for case in OWNING_CASES:
+                manifest = (args.root / 'tests/generics/method-inout' / case /
+                            'lang.toml')
+                sources = {str(path.relative_to(manifest.parent)): digest(path)
+                           for path in sorted(manifest.parent.rglob('*'))
+                           if path.is_file()}
+                for backend in ('native', 'python'):
+                    check = run([args.cli, 'check', '--project', manifest,
+                                 '--backend', backend, '--format', 'json'],
+                                library=library)
+                    row = dict(case=case, backend=backend, check=check,
+                               source_sha256=sources, status='failed')
+                    report['runs'].append(row)
+                    check_ok(check, 'check ' + backend)
+                    assert json.loads(check['stdout'])['status'] == 'ok', check
+                    row['status'] = 'passed'
+                for opt in (0, 2):
+                    row = dict(case=case, opt=opt, source_sha256=sources,
+                               status='failed')
+                    report['runs'].append(row)
+                    native = args.out / case / f'O{opt}'
+                    build = run([args.cli, 'build', '--project', manifest,
+                                 '--backend', 'native', '--opt', opt,
+                                 '--out-dir', native / 'cli', '--format',
+                                 'json'], library=library)
+                    row['build'] = build
+                    check_ok(build, 'native build')
+                    assert json.loads(build['stdout'])['status'] == 'ok', build
+                    row['execute'] = executed = run([native / 'cli/program'],
+                                                    library=library)
+                    check_ok(executed, 'native execute')
+                    assert not executed['stdout'] and not executed['stderr'], executed
+                    row['status'] = 'passed'
+                row = dict(case=case, backend='python', source_sha256=sources,
+                           status='failed')
+                report['runs'].append(row)
+                destination = args.out / case / 'python'
+                shutil.rmtree(destination, ignore_errors=True)
+                build = run([args.cli, 'build', '--project', manifest,
+                             '--backend', 'python', '--out-dir', destination,
+                             '--format', 'json'], library=library)
+                row['build'] = build
+                check_ok(build, 'python build')
+                assert json.loads(build['stdout'])['status'] == 'ok', build
+                row['execute'] = executed = run(
+                    [args.python, '-s', destination / 'program.py'],
+                    library=library)
+                check_ok(executed, 'python execute')
+                assert not executed['stdout'] and not executed['stderr'], executed
+                row['status'] = 'passed'
         if not args.only:
             for reject_case in REJECT_CASES:
                 manifest = (args.root / 'tests/generics/method-inout' /

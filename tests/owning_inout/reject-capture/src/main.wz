@@ -1,0 +1,12 @@
+package app;
+
+// An inout parameter may not escape into a closure environment.
+func capture(slot inout Vec[i32]) i32 {
+    let f = func() i32 { return slot[0]; };
+    return f();
+}
+
+func main() i32 {
+    var v Vec[i32] = [1];
+    return capture(inout v);
+}

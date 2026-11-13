@@ -1,0 +1,29 @@
+package app;
+
+// The user-facing goal: a struct with owning fields can modify itself through
+// an explicit inout Self receiver.
+struct Iter { items Vec[i32]; index i32; }
+
+impl Iter {
+    func next(self inout Self) i32 {
+        let value = self.items[self.index];
+        self.index = self.index + 1;
+        return value;
+    }
+    func reset(self inout Self, next Vec[i32]) {
+        self.items = next;
+        self.index = 0;
+    }
+}
+
+func main() i32 {
+    var it = Iter(items: [4, 5], index: 0);
+    if (inout it).next() != 4 { return 1; }
+    if (inout it).next() != 5 { return 2; }
+    if it.index != 2 { return 3; }
+    var fresh Vec[i32] = [9];
+    (inout it).reset(fresh);
+    if it.index != 0 || it.items[0] != 9 { return 4; }
+    if (inout it).next() != 9 { return 5; }
+    return 0;
+}

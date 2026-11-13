@@ -1,0 +1,10 @@
+package app;
+
+// The same storage may not be borrowed twice in one call.
+func twice(a inout Vec[i32], b inout Vec[i32]) {}
+
+func main() i32 {
+    var v Vec[i32] = [1];
+    twice(inout v, inout v);
+    return 0;
+}

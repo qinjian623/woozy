@@ -1,0 +1,12 @@
+package app;
+
+// While an element address is borrowed, another argument holding a shared
+// handle to that container could resize it, so the call is rejected.
+func grab(slot inout i32, other Vec[i32]) {}
+
+func main() i32 {
+    var v Vec[i32] = [1];
+    let alias = v;
+    grab(inout v[0], alias);
+    return 0;
+}

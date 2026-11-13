@@ -1,0 +1,44 @@
+package app;
+
+import "std/box" as box;
+import "std/option" as option;
+import "std/weak" as weak;
+
+struct Holder { cell box.Box[i32]; label i32; }
+
+// Box is the canonical shared ARC cell: replacing the handle must keep the
+// shared identity of the new value and drop the old identity exactly once.
+func replace(slot inout box.Box[i32]) {
+    slot = box.new[i32](9);
+}
+
+func main() i32 {
+    var target = box.new[i32](2);
+    let identity = target;
+    let old_weak = weak.downgrade(target);
+    replace(inout target);
+    if box.get(target) != 9 { return 1; }
+    // The saved copy keeps the old identity alive and unchanged.
+    if box.get(identity) != 2 { return 2; }
+    switch weak.upgrade(old_weak) {
+    case option.Option.Some(strong):
+        if box.get(strong) != 2 { return 3; }
+    case option.Option.None:
+        return 4;
+    }
+
+    var holder = Holder(cell: box.new[i32](1), label: 5);
+    replace(inout holder.cell);
+    if box.get(holder.cell) != 9 || holder.label != 5 { return 5; }
+
+    // With no other owner the replaced identity dies exactly once.
+    var lonely = box.new[i32](3);
+    let lonely_weak = weak.downgrade(lonely);
+    replace(inout lonely);
+    switch weak.upgrade(lonely_weak) {
+    case option.Option.Some(strong):
+        return 6;
+    case option.Option.None:
+    }
+    return 0;
+}

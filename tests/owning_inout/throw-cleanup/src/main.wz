@@ -1,0 +1,44 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+enum Failure { Bad; }
+
+// Both a normal writeback and a typed throw must publish the complete new value
+// and drop each replaced owner exactly once; defers run on the error edge.
+func install(slot inout Vec[i32], log inout i64) i32 throws Failure {
+    slot = [3, 4];
+    defer {
+        log = log * 10 + 1;
+        slot = [5];
+    }
+    log = log * 10 + 2;
+    throw Failure.Bad;
+}
+
+func normal(slot inout Vec[i32]) i32 {
+    slot = [6, 7];
+    return slot[0];
+}
+
+func main() i32 {
+    var v Vec[i32] = [1];
+    let old_weak = weak.downgrade(v);
+    var log i64 = 0;
+    try {
+        let ignored = install(inout v, inout log);
+        return 1;
+    } catch err Failure {
+        if v[0] != 5 { return 2; }
+        if log != 21 { return 3; }
+    }
+    switch weak.upgrade(old_weak) {
+    case option.Option.Some(strong):
+        return 4;
+    case option.Option.None:
+    }
+    if normal(inout v) != 6 { return 5; }
+    if v[1] != 7 { return 6; }
+    return 0;
+}

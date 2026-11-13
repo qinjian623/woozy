@@ -1551,10 +1551,17 @@ void constrained_free_inout(const fs::path &root) {
       "func use[T V](a inout T,b T){} "
       "func main(){var x i32=1;use(inout x,g(inout x));}",
       "E_CALL_ARGUMENT");
+  // Approved owning inout: a concrete Vec callback slot is an owning value
+  // with a real copy/drop, so the generic application is legal now. A Task
+  // handle stays closed because the executor owns its completion lifetime.
+  good("trait V{} impl V for i32{} "
+       "struct Box[T]{cb func(inout T);} "
+       "func keep[T V](cb func() Box[Vec[i32]])i32{return 0;} "
+       "func main()i32{let f=keep[i32];return 0;}");
   unsupported("trait V{} impl V for i32{} "
               "struct Box[T]{cb func(inout T);} "
-              "func keep[T V](cb func() Box[Vec[i32]])i32{return 0;} "
-              "func main()i32{let f=keep[i32];return 0;}");
+              "func keep[T V](cb func() Box[Task[i32,Unit]])i32{return 0;} "
+              "func main()i32{let f=keep[Task[i32,Unit]];return 0;}");
   auto name_expected = good("trait V{func get(self Self)i32;} "
       "impl V for i32{func get(self Self)i32{return self;}} "
       "func replace[T V](slot inout T,value T)T{"
@@ -1662,15 +1669,20 @@ void generic_inout(const fs::path &root) {
                   "swap(inout x,inout y);}");
   need(hir::verify(aggregate_enum).success(),
        "empty-enum inout did not publish");
-  unsupported(swap + "func main(){var x Vec[i32]=[1];var y Vec[i32]=[2];"
-              "swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported(swap + "func main(){var x string=\"a\";var y string=\"b\";"
-              "swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("func inc(x i32)i32{return x;} " + swap +
-                  "func main(){var f func(i32)i32=inc;"
-                  "var g func(i32)i32=inc;swap(inout f,inout g);}",
+  // Approved owning inout: a whole Vec/string/function value is a shared
+  // handle with a real copy and drop, so a generic swap is legal.
+  good(swap + "func main(){var x Vec[i32]=[1];var y Vec[i32]=[2];"
+              "swap(inout x,inout y);}");
+  good(swap + "func main(){var x string=\"a\";var y string=\"b\";"
+              "swap(inout x,inout y);}");
+  good("func inc(x i32)i32{return x;} " + swap +
+       "func main(){var f func(i32)i32=inc;"
+       "var g func(i32)i32=inc;swap(inout f,inout g);}");
+  // A Task handle stays closed: the executor owns its completion lifetime, so
+  // a generic inout application over Task is reported, not guessed at.
+  unsupported(swap + "func main(){var x Task[i32,Unit]=make();"
+              "var y Task[i32,Unit]=make();swap(inout x,inout y);}"
+              "func make()Task[i32,Unit]{return make();}",
               "E_CAPABILITY_UNAVAILABLE");
   unsupported("func make(){} " + swap +
                   "func main(){var x Unit=make();var y Unit=make();"
@@ -1737,24 +1749,37 @@ void generic_inout(const fs::path &root) {
   };
   const std::string keep =
       "func keep[T](cb func(inout T))i32{return 0;} ";
-  unsupported_span(keep + "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  // Approved owning inout: concrete Vec/function values in these generic
+  // positions are ordinary owning slots now, so each application is legal.
+  good(keep + "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  good("struct Box[T]{cb func(inout T);} "
+       "func keep(value Box[Vec[i32]])i32{return 0;} "
+       "func main()i32{return 0;}");
+  good("func keep[T](cb func() (func(inout T)))i32{return 0;} "
+       "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  good("func keep[T](cb func(func(inout T)))i32{return 0;} "
+       "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  good("struct Box[T]{cb func(inout T);} "
+       "func keep[T](cb func() Box[T])i32{return 0;} "
+       "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  good("func make[T]() (func(inout T)){"
+       "return func(x inout T){};} "
+       "func main()i32{let f=make[Vec[i32]];return 0;}");
+  good("enum E[T]{A(cb func(inout T));} "
+       "func keep(value E[Vec[i32]])i32{return 0;} "
+       "func main()i32{return 0;}");
+  // The capability diagnostic keeps its source span for the still-closed
+  // owning kinds: a Task slot and a foreign resource slot.
+  unsupported_span(keep +
+                   "func main()i32{let f=keep[Task[i32,Unit]];return 0;}");
   unsupported_span("struct Box[T]{cb func(inout T);} "
-                   "func keep(value Box[Vec[i32]])i32{return 0;} "
+                   "func keep(value Box[Task[i32,Unit]])i32{return 0;} "
                    "func main()i32{return 0;}");
   unsupported_span("func keep[T](cb func() (func(inout T)))i32{return 0;} "
-                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
-  unsupported_span("func keep[T](cb func(func(inout T)))i32{return 0;} "
-                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
-  unsupported_span("struct Box[T]{cb func(inout T);} "
-                   "func keep[T](cb func() Box[T])i32{return 0;} "
-                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
-  unsupported_span("func make[T]() (func(inout T)){"
-                   "return func(x inout T){};} "
-                   "func main()i32{let f=make[Vec[i32]];return 0;}");
-  unsupported_span("enum E[T]{A(cb func(inout T));} "
-                   "func keep(value E[Vec[i32]])i32{return 0;} "
-                   "func main()i32{return 0;}");
-  // S[i32] contains function fields, so the first concrete callback is not POD.
+                   "func main()i32{let f=keep[Task[i32,Unit]];return 0;}");
+  // S[i32] contains function fields, so the concrete callback is an owning
+  // slot now; the strictly growing S[S[i32]] return graph still hits the
+  // explicit inout checking budget instead of being silently accepted.
   unsupported_span("struct S[T]{f func() S[S[T]];cb func(inout T);} "
                    "func take(value S[S[i32]])i32{return 0;} "
                    "func main()i32{return 0;}");
@@ -1762,10 +1787,12 @@ void generic_inout(const fs::path &root) {
   unsupported_budget("struct S[T]{f func() S[S[T]];cb func(inout i32);} "
                      "func take(value S[i32])i32{return 0;} "
                      "func main()i32{return 0;}");
-  unsupported_span("struct A[T]{b B[T];} "
-                   "struct B[T]{f func() A[T];cb func(inout T);} "
-                   "func take(value A[Vec[i32]])i32{return 0;} "
-                   "func main()i32{return 0;}");
+  // A[Vec[i32]] reaches B[Vec[i32]] whose return graph cycles back to the same
+  // complete application, so the owning inout data is checked once and legal.
+  good("struct A[T]{b B[T];} "
+       "struct B[T]{f func() A[T];cb func(inout T);} "
+       "func take(value A[Vec[i32]])i32{return 0;} "
+       "func main()i32{return 0;}");
 
   good(keep + "func main()i32{let f=keep[i32];return 0;}");
   good(keep + "func main()i32{let f=keep[bool];return 0;}");
@@ -2344,11 +2371,19 @@ return 0;}
        "func replace(self Self,slot inout i32){slot=slot;}} "
        "func main(){let h=H(marker:0);var x i32=1;"
        "h.replace(inout x);}");
+  // Approved owning inout: the method replaces a whole Vec value through the
+  // caller's real storage, which drops exactly the old handle.
+  good(method_prefix +
+       "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
+       "let old=slot;slot=value;return old;}} "
+       "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+       "var v Vec[i32]=[1];b.replace(inout v,[2]);}");
   unsupported(method_prefix +
               "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
               "let old=slot;slot=value;return old;}} "
               "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
-              "var v Vec[i32]=[1];b.replace(inout v,[2]);}");
+              "var v Task[i32,Unit]=make();b.replace(inout v,make());}"
+              "func make()Task[i32,Unit]{return make();}");
   bad(method_prefix +
           "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
           "let old=slot;slot=value;return old;}} "
@@ -4547,12 +4582,15 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
                     "return move value;}} "
                     "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
                     "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func take[U](self inout Self,value move U)U{"
-                    "return move value;}} "
-                    "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
-                    "var x i32=1;let r=Box[i32].take(inout b,move x);"
-                    "return r-1;}");
+  // Approved owning inout: the explicit Type call passes the real receiver
+  // storage, so a Box with an owning Vec field is a legal inout Self now. The
+  // implicit receiver form above still requires the explicit marker.
+  good(box + "impl[T] Box[T]{"
+            "func take[U](self inout Self,value move U)U{"
+            "return move value;}} "
+            "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+            "var x i32=1;let r=Box[i32].take(inout b,move x);"
+            "return r-1;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take[U](self Self,value move U)U{return move value;}} "
                     "func main()i32{let b=Box[Vec[i32]](value:[1],items:[2],"
@@ -4598,15 +4636,22 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
        "return move value;}} "
        "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
        "var v Vec[i32]=[2];let r=b.keep(move v,bump);return r[0]-2;}");
-  unsupported("func bump(x inout Vec[i32]){} " + box +
-              "impl[T] Box[T]{"
-              "func keep[U](self Self,value move U,"
-              "cb func(inout Vec[i32]))U{return move value;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var v Vec[i32]=[2];let r=b.keep(move v,bump);return r[0]-2;}");
+  // Approved owning inout: the callback slot is a whole Vec value now, and a
+  // function value that returns such a callback is an owning handle too.
+  good("func bump(x inout Vec[i32]){} " + box +
+       "impl[T] Box[T]{"
+       "func keep[U](self Self,value move U,"
+       "cb func(inout Vec[i32]))U{return move value;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var v Vec[i32]=[2];let r=b.keep(move v,bump);return r[0]-2;}");
+  good(box + "impl[T] Box[T]{"
+            "func keep[U](value move U,"
+            "cb func() (func(inout Vec[i32])))U{"
+            "return move value;}} "
+            "func main()i32{return 0;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func keep[U](value move U,"
-                    "cb func() (func(inout Vec[i32])))U{"
+                    "cb func() (func(inout Task[i32,Unit])))U{"
                     "return move value;}} "
                     "func main()i32{return 0;}");
 
@@ -5219,11 +5264,13 @@ void constrained_inherent_move(const fs::path &root) {
               "return move value;}} "
               "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
               "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported("trait V{} impl V for i32{} " + box +
-              "impl[T V] Box[T]{func take[U V](self inout Self,value move U)U{"
-              "return move value;}} "
-              "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;let r=Box[i32].take(inout b,move x);return r-1;}");
+  // Approved owning inout: a constrained generic impl method may take its
+  // real Self by inout even when Self owns a Vec.
+  good("trait V{} impl V for i32{} " + box +
+       "impl[T V] Box[T]{func take[U V](self inout Self,value move U)U{"
+       "return move value;}} "
+       "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;let r=Box[i32].take(inout b,move x);return r-1;}");
   bad("trait V{} impl V for i32{} " + box +
           "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
           "return move value;}} "
@@ -5254,13 +5301,13 @@ void constrained_inherent_move(const fs::path &root) {
        "return move value;}} "
        "func main()i32{let h=H(items:[1]);var v Item=Item(items:[2]);"
        "let r=h.keep(move v,bump);return r.items[0]-2;}");
-  unsupported(std::string("func bump(x inout Vec[i32]){} trait V{} "
-                           "struct Item{items Vec[i32];} impl V for Item{} ") +
-              "struct H{items Vec[i32];} impl H{"
-              "func keep[U V](self Self,value move U,"
-              "cb func(inout Vec[i32]))U{return move value;}} "
-              "func main()i32{let h=H(items:[1]);var v Item=Item(items:[2]);"
-              "let r=h.keep(move v,bump);return r.items[0]-2;}");
+  good(std::string("func bump(x inout Vec[i32]){} trait V{} "
+                   "struct Item{items Vec[i32];} impl V for Item{} ") +
+       "struct H{items Vec[i32];} impl H{"
+       "func keep[U V](self Self,value move U,"
+       "cb func(inout Vec[i32]))U{return move value;}} "
+       "func main()i32{let h=H(items:[1]);var v Item=Item(items:[2]);"
+       "let r=h.keep(move v,bump);return r.items[0]-2;}");
 }
 
 void constrained_inherent_inout(const fs::path &root) {
@@ -5800,11 +5847,20 @@ void constrained_inherent_inout(const fs::path &root) {
           "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
           "var x i64=1;b.replace(inout x,2);return 0;}",
       "E_TYPE_MISMATCH");
+  // Approved owning inout: a constrained generic method may replace a whole
+  // Vec value; the closed Task kind keeps an explicit capability control.
+  good("trait V{} impl V for i32{} impl V for Vec[i32]{} " + box +
+       "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+       "value U)U{let old=slot;slot=value;return old;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var v Vec[i32]=[1];b.replace(inout v,[2]);return 0;}");
   unsupported("trait V{} impl V for i32{} " + box +
               "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
               "value U)U{let old=slot;slot=value;return old;}} "
               "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var v Vec[i32]=[1];b.replace(inout v,[2]);return 0;}");
+              "var v Task[i32,Unit]=make();"
+              "b.replace(inout v,make());return 0;}"
+              "func make()Task[i32,Unit]{return make();}");
   bad("trait V{} impl V for i32{} " + box +
           "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
           "value U)U{let old=slot;slot=value;return old;}} "
@@ -5834,13 +5890,13 @@ void constrained_inherent_inout(const fs::path &root) {
        "slot inout U,value U)U{return f(inout slot,value);}} "
        "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
        "var x i32=1;let r=b.use(bump[i32],inout x,2);return r+x-3;}");
-  unsupported("trait V{} impl V for i32{} struct S{"
-              "cb func(inout Vec[i32]);} struct H[T]{value T;} "
-              "impl[T V] H[T]{func keep[U V](self Self,cb func() S)i32{"
-              "return 0;}} func make()S{return S(cb:bump);}"
-              "func bump(x inout Vec[i32]){} "
-              "func main()i32{let h=H[i32](value:1);"
-              "return h.keep[i32](make);}");
+  good("trait V{} impl V for i32{} struct S{"
+       "cb func(inout Vec[i32]);} struct H[T]{value T;} "
+       "impl[T V] H[T]{func keep[U V](self Self,cb func() S)i32{"
+       "return 0;}} func make()S{return S(cb:bump);}"
+       "func bump(x inout Vec[i32]){} "
+       "func main()i32{let h=H[i32](value:1);"
+       "return h.keep[i32](make);}");
 }
 
 
@@ -6283,11 +6339,11 @@ func main(){let s=S(items:[1]);var x i32=0;var y i32=0;forward(s,inout x,inout y
              messages(r));
     return *r.value;
   };
-  unsupported("trait V{func bump(self Self,slot inout Vec[i32]);}"
-              "struct S{items Vec[i32];} impl V for S{"
-              "func bump(self Self,slot inout Vec[i32]){}}"
-              "func main(){let s=S(items:[1]);var v Vec[i32]=[2];"
-              "s.bump(inout v);}");
+  accept("trait V{func bump(self Self,slot inout Vec[i32]);}"
+         "struct S{items Vec[i32];} impl V for S{"
+         "func bump(self Self,slot inout Vec[i32]){}}"
+         "func main(){let s=S(items:[1]);var v Vec[i32]=[2];"
+         "s.bump(inout v);}");
   unsupported("trait V{func take(self move Self)Self;}"
               "struct S{items Vec[i32];} impl V for S{"
               "func take(self move Self)Self{return move self;}}"
@@ -6809,12 +6865,19 @@ impl Exchange for i32 {
        "struct S{x i32;} impl V for S{"
        "func bad(self Self,cb func(inout Self)){}} "
        "func main()i32{return 0;}");
+  // The owning Self value is legal now, but the value-form call still needs an
+  // explicit `(inout s)` receiver marker: the synthetic receiver here is
+  // ordinary while the declared first Self is inout.
   unsupported("trait V{func bad(self inout Self);} struct S{x i32;} "
               "impl V for S{func bad(self inout Self){}} "
               "func main()i32{var s S=S(x:1);s.bad(inout s);return 0;}");
-  unsupported("trait V{func bad(self Self,slot inout Vec[Self]);} "
-              "struct S{x i32;} impl V for S{"
-              "func bad(self Self,slot inout Vec[Self]){}} "
+  good("trait V{func bad(self Self,slot inout Vec[Self]);} "
+       "struct S{x i32;} impl V for S{"
+       "func bad(self Self,slot inout Vec[Self]){}} "
+       "func main()i32{return 0;}");
+  // A Task Self stays closed; Unit is not a writable value place.
+  unsupported("trait V{func bad(self inout Self);} struct S{x Task[i32,Unit];} "
+              "impl V for S{func bad(self inout Self){}} "
               "func main()i32{return 0;}");
   auto trait_self_struct = good("trait V{func set(self Self,slot inout Self);} "
       "struct S{x i32;} impl V for S{"
@@ -6834,12 +6897,12 @@ impl Exchange for i32 {
       "func main()i32{return 0;}");
   need(hir::verify(trait_self_generic).success(),
        "trait generic POD Self inout did not publish");
-  unsupported("trait V{func set(self Self,slot inout Self);} "
-              "impl V for Vec[i32]{func set(self Self,slot inout Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func set(self Self,slot inout Self);} "
-              "impl V for string{func set(self Self,slot inout Self){}} "
-              "func main()i32{return 0;}");
+  good("trait V{func set(self Self,slot inout Self);} "
+       "impl V for Vec[i32]{func set(self Self,slot inout Self){}} "
+       "func main()i32{return 0;}");
+  good("trait V{func set(self Self,slot inout Self);} "
+       "impl V for string{func set(self Self,slot inout Self){}} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func set(self Self,slot inout Self);} "
               "impl V for Unit{func set(self Self,slot inout Self){}} "
               "func main()i32{return 0;}");
@@ -7147,14 +7210,14 @@ func main() i32 {
        "enum E{One;} impl V for E{"
        "func bad(self Self,f func(inout Self,Self)Self){}} "
        "func main()i32{return 0;}");
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "impl V for Vec[i32]{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "impl V for string{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "impl V for Vec[i32]{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "impl V for string{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
               "impl V for Unit{"
               "func bad(self Self,f func(inout Self,Self)Self){}} "
@@ -7163,10 +7226,14 @@ func main() i32 {
        "struct Box[U]{value U;} impl[U] V for Box[U]{"
        "func bad(self Self,f func(inout Self,Self)Self){}} "
        "func main()i32{return 0;}");
-  // Approved C5: Function is owning and never POD inout, so a concrete
-  // Box[func() i32] Self is not an inout data aggregate.
+  // A concrete Box[func() i32] Self is an owning value now, so the callback
+  // data is legal; a Task-bearing Self stays closed.
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "struct Box[U]{value U;} impl V for Box[func() i32]{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "struct Box[U]{value U;} impl V for Box[func() i32]{"
+              "struct Box[U]{value U;} impl V for Box[Task[i32,Unit]]{"
               "func bad(self Self,f func(inout Self,Self)Self){}} "
               "func main()i32{return 0;}");
 
@@ -9844,11 +9911,11 @@ func main() i32 {
        "func main()i32{return 0;}");
   good("trait V{func bad[U](owner Self,cb func(inout Self));} "
        "func main()i32{return 0;}");
-  unsupported("trait V{func bad[U](owner Self,slot inout U);} "
-              "struct S{x i32;} impl V for S{"
-              "func bad[U](owner Self,slot inout U){}} "
-              "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
-              "s.bad[Vec[i32]](inout v);return 0;}");
+  good("trait V{func bad[U](owner Self,slot inout U);} "
+       "struct S{x i32;} impl V for S{"
+       "func bad[U](owner Self,slot inout U){}} "
+       "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
+       "s.bad[Vec[i32]](inout v);return 0;}");
   // Ordinary-only Type/T calls keep the pre-existing support for a nominal
   // Holder[Self] callback parameter. The new strict top-level-inout check is
   // not applied to this old entry.
@@ -10084,10 +10151,17 @@ func main()i32{var slot i32=6;i32.adjust(inout slot);return slot;}
       "struct H{items Vec[i32];}"
       "impl H{func take(self move Self)Self{return move self;}}"
       "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
-  unsupported(
+  // Approved owning inout: the explicit Type form already passes the real
+  // receiver storage, so an owning Self is legal here too. A Task Self stays
+  // closed and keeps an explicit capability control.
+  good(
       "struct H{items Vec[i32];}"
       "impl H{func bump(self inout Self){}}"
-      "func main()i32{var h=H(items:[1]);H.bump(inout h);}");
+      "func main()i32{var h=H(items:[1]);H.bump(inout h);return 0;}");
+  unsupported(
+      "struct H{handle Task[i32,Unit];}"
+      "impl H{func bump(self inout Self){}}"
+      "func main()i32{return 0;}");
   good(
       "trait T{func take[U](self move Self,value U)U;}"
       "struct H{} impl T for H{func take[U](self move Self,value U)U{"
@@ -10886,23 +10960,30 @@ void aggregate_inout_validation() {
   }
   need(saw_unit && saw_function, "Unit/Function types missing from probe");
 
-  unavailable("struct Own{items Vec[i32];} func f(slot inout Own){} "
-              "func main()i32{return 0;}");
-  unavailable("enum Owned{Empty;Value(items Vec[i32]);} "
-              "func f(slot inout Owned){} func main()i32{return 0;}");
-  unavailable("func f(slot inout Vec[i32]){} func main()i32{return 0;}");
-  unavailable("func f(slot inout string){} func main()i32{return 0;}");
+  // Approved owning inout: a whole owning value is a shared reference-counted
+  // handle with a real copy and drop, so replacing it through the caller's
+  // storage drops exactly the old value. Unit, Task and external C resources
+  // stay closed because HIR has no value contract for them.
+  good("struct Own{items Vec[i32];} func f(slot inout Own){} "
+       "func main()i32{return 0;}");
+  good("enum Owned{Empty;Value(items Vec[i32]);} "
+       "func f(slot inout Owned){} func main()i32{return 0;}");
+  good("func f(slot inout Vec[i32]){} func main()i32{return 0;}");
+  good("func f(slot inout string){} func main()i32{return 0;}");
   unavailable("func f(slot inout Unit){} func main()i32{return 0;}");
-  unavailable("func f(slot inout func(i32)i32){} func main()i32{return 0;}");
-  unavailable("func f[T](slot inout T){} func main()i32{"
-              "var v Vec[i32]=[1];f(inout v);return 0;}");
-  unavailable("struct F{callback func(inout Vec[i32]);} "
+  good("func f(slot inout func(i32)i32){} func main()i32{return 0;}");
+  good("func f[T](slot inout T){} func main()i32{"
+       "var v Vec[i32]=[1];f(inout v);return 0;}");
+  good("struct F{callback func(inout Vec[i32]);} "
+       "func f(slot inout F){} func main()i32{return 0;}");
+  good("struct F{callback func(i32)i32;pad u64;} "
+       "func f(slot inout F){} func main()i32{return 0;}");
+  good("enum F{Empty;Call(callback func(i32)i32);} "
+       "func f(slot inout F){} func main()i32{return 0;}");
+  unavailable("func f(slot inout Task[i32,Unit]){} func main()i32{return 0;}");
+  unavailable("struct F{handle Task[i32,Unit];} "
               "func f(slot inout F){} func main()i32{return 0;}");
-  // Approved C5: a Function field is owning and makes the containing value
-  // non-POD, even when every other field is trivial.
-  unavailable("struct F{callback func(i32)i32;pad u64;} "
-              "func f(slot inout F){} func main()i32{return 0;}");
-  unavailable("enum F{Empty;Call(callback func(i32)i32);} "
+  unavailable("enum F{Empty;Call(handle Task[i32,Unit]);} "
               "func f(slot inout F){} func main()i32{return 0;}");
 
   bad("struct S{x i32;} func f(slot inout S){} func main()i32{"
@@ -10928,21 +11009,23 @@ void aggregate_inout_validation() {
   auto mutable_hir = good(
       "struct Inner{x i32;} struct Outer{inner Inner;}"
       "struct Holder{items Vec[i32];}"
+      "struct Sealed{handle Task[i32,Unit];}"
       "func replace(slot inout Outer){} func main()i32{"
       "var o=Outer(inner:Inner(x:1));replace(inout o);return 0;}");
-  // A forged nominal field turns the transitive inout data into an owning
-  // Vec. Recomputing ownership must not be enough to publish it.
-  invalid_recomputed(mutable_hir, "aggregate inout owning forged field",
+  // A forged nominal field turns the transitive inout data into a Task
+  // handle, which has no HIR copy/drop contract. Recomputing ownership must
+  // not be enough to publish it.
+  invalid_recomputed(mutable_hir, "aggregate inout Task forged field",
                      [&](auto &x) {
-    TypeId vector{0};
+    TypeId task{0};
     for (uint64_t i = 1; i <= x.types.size(); ++i)
-      if (x.types.find(TypeId{i})->kind == hir::TypeKind::Vec)
-        vector = TypeId{i};
-    need(vector.value, "Vec type missing from forged field source");
+      if (x.types.find(TypeId{i})->kind == hir::TypeKind::Task)
+        task = TypeId{i};
+    need(task.value, "Task type missing from forged field source");
     for (auto &d : x.nominals)
       if (x.resolved->symbols.at(d.symbol.value).name == "Inner") {
         need(d.fields.size() == 1, "Inner field changed");
-        d.fields[0].type = vector;
+        d.fields[0].type = task;
         return;
       }
     throw std::runtime_error("Inner declaration missing");
@@ -11021,10 +11104,9 @@ void aggregate_inout_validation() {
   const std::string function_cycle =
       "struct Wrap[T]{apply func(Wrap[T])T;value T;}"
       "struct Owner{token i32;} ";
-  // Approved C5: a Function field is owning, so the concrete Wrap[i32] below
-  // is no longer a POD inout aggregate. Keep the negative capability explicit
-  // instead of relying on the old "Function is trivial" classification.
-  unavailable(function_cycle +
+  // A Function field is owning, so the concrete Wrap[i32] below is a whole
+  // owning inout value with real copy/drop, and the callback may write it back.
+  good(function_cycle +
       "trait Edit{func apply(self Self,slot inout Wrap[i32],"
       "callback func(inout Wrap[i32])Unit)Unit;}"
       "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
@@ -11034,7 +11116,7 @@ void aggregate_inout_validation() {
       "func main()i32{let owner=Owner(token:100);"
       "var slot=Wrap[i32](apply:read,value:7);owner.apply(inout slot,bump);"
       "if slot.apply(slot)!=12{return 1;}return 0;}");
-  unavailable(
+  good(
       "struct Wrap[T]{factory func()Wrap[Wrap[T]];}"
       "struct Owner{token i32;}"
       "trait Edit{func apply(self Self,slot inout Wrap[i32],"
@@ -11042,11 +11124,20 @@ void aggregate_inout_validation() {
       "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
       "callback func(inout Wrap[i32])Unit)Unit{}}"
       "func main()i32{return 0;}");
-  unavailable(function_cycle +
+  good(function_cycle +
       "trait Edit{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit;}"
       "impl Edit for Owner{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit{}}"
+      "func main()i32{return 0;}"
+      );
+  // The closed owning kinds keep an explicit source capability diagnostic.
+  unavailable(function_cycle +
+      "trait Edit{func apply(self Self,slot inout Wrap[Task[i32,Unit]],"
+      "callback func(inout Wrap[i32])Unit)Unit;}"
+      "impl Edit for Owner{func apply(self Self,"
+      "slot inout Wrap[Task[i32,Unit]],"
+      "callback func(inout Wrap[i32])Unit)Unit{}}"
       "func main()i32{return 0;}");
 
   auto wrapped_self = good(
@@ -11060,10 +11151,10 @@ void aggregate_inout_validation() {
       "if old.value.value!=3||s.value.value!=8{return 1;}return 0;}");
   need(hir::verify(wrapped_self).success(),
        "wrapped Self was not accepted as a concrete POD aggregate");
-  unavailable("struct Wrap[T]{value T;} struct Own{items Vec[i32];} "
-              "trait Edit{func edit(self Self,slot inout Wrap[Self])Unit;} "
-              "impl Edit for Own{func edit(self Self,slot inout Wrap[Self])"
-              "Unit{}} func main()i32{return 0;}");
+  good("struct Wrap[T]{value T;} struct Own{items Vec[i32];} "
+       "trait Edit{func edit(self Self,slot inout Wrap[Self])Unit;} "
+       "impl Edit for Own{func edit(self Self,slot inout Wrap[Self])"
+       "Unit{}} func main()i32{return 0;}");
   // Value-form actual-self inout remains an explicit capability limit, even
   // though the same explicit Type call would be a legal POD whole binding.
   unavailable("struct Pair{value i32;} impl Pair{func bad(self inout Pair){}} "
@@ -12185,7 +12276,10 @@ void generic_trait_applications() {
       "struct Holder[U Mark[Later[i32]]]{value U;}"
       "struct Later{}"
       "func main()i32{return 0;}", "E_TYPE_MISMATCH");
-  unsupported("trait Tag[T]{} struct Data{items Vec[i32];}"
+  good("trait Tag[T]{} struct Data{items Vec[i32];}"
+       "struct Holder[U Tag[func(inout Data)Unit]]{value U;}"
+       "func main()i32{return 0;}");
+  unsupported("trait Tag[T]{} struct Data{handle Task[i32,Unit];}"
               "struct Holder[U Tag[func(inout Data)Unit]]{value U;}"
               "func main()i32{return 0;}");
   good("trait Tag[T]{} struct Data{items i32;}"
@@ -12221,6 +12315,16 @@ void generic_trait_method_modes(const fs::path &root) {
       need(!r.success() && r.failure == failure && has(r, code) &&
                !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
            std::string(backend) + ": " + text + "\n" + messages(r));
+    }
+  };
+  auto accept = [](const std::string &text) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(text, backend);
+      need(r.success(), std::string(backend) + ": " + text + "\n" +
+                            messages(r));
+      need(hir::verify_types(*r.value).success() &&
+               hir::verify(*r.value).success(),
+           std::string(backend) + ": owning inout trait HIR rejected");
     }
   };
   const std::string take =
@@ -12268,12 +12372,18 @@ void generic_trait_method_modes(const fs::path &root) {
          "func edit[V](owner Self,a inout V,b inout V){}}"
          "func main()i32{let h=Host();var x i32=1;"
          "h.edit[i32](inout x,inout x);return 0;}", "E_CALL_ARGUMENT");
-  reject(edit + "func main()i32{let h=Pair(value:0);var x Vec[i32]=[1];"
-                "let r=h.edit[Vec[i32]](inout x,[2]);return 0;}",
-         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject(edit + "struct Owned{items Vec[i32];}"
+  // Approved owning inout: a trait method may replace a whole Vec or owning
+  // struct value through the caller's storage. A Task substitution keeps the
+  // explicit capability rejection.
+  accept(edit + "func main()i32{let h=Pair(value:0);var x Vec[i32]=[1];"
+                "let r=h.edit[Vec[i32]](inout x,[2]);return 0;}");
+  accept(edit + "struct Owned{items Vec[i32];}"
                 "func main()i32{let h=Pair(value:0);var x=Owned(items:[1]);"
-                "let r=h.edit[Owned](inout x,Owned(items:[2]));return 0;}",
+                "let r=h.edit[Owned](inout x,Owned(items:[2]));return 0;}");
+  reject(edit + "func main()i32{let h=Pair(value:0);"
+                "var x Task[i32,Unit]=make();"
+                "let r=h.edit[Task[i32,Unit]](inout x,make());return 0;}"
+                "func make()Task[i32,Unit]{return make();}",
          "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
 
   // The raw prototype determines actual Self, regardless of its label.
@@ -12330,33 +12440,40 @@ void generic_trait_method_modes(const fs::path &root) {
     need(hir::verify_types(*e.value).success(),
          std::string(backend) + ": dependent throws callback HIR rejected");
   }
+  // Approved owning inout: a complete trait application that substitutes an
+  // owning value into a callback slot is legal now, for nominal holders, real
+  // Self substitution, returned callbacks and typed throws alike.
   const std::string owning = "struct Own{items Vec[i32];}";
-  reject("struct Holder[T]{cb func(inout T);}" + owning +
+  accept("struct Holder[T]{cb func(inout T);}" + owning +
+         "trait Closed[A]{func run[U](owner Self,holder Holder[A]);}"
+         "impl Closed[Own] for i32{"
+         "func run[U](owner Self,holder Holder[Own]){}}"
+         "func main()i32{return 0;}");
+  accept("struct Holder[T]{cb func(inout T);}" + owning +
+         "trait Closed[A]{func run[U](owner Self,holder Holder[Self]);}"
+         "impl Closed[bool] for Own{"
+         "func run[U](owner Self,holder Holder[Own]){}}"
+         "func main()i32{return 0;}");
+  accept("struct Holder[T]{cb func(inout T);}" + owning +
+         "trait Closed[A]{func run[U](owner Self,value move U)"
+         "(func()Holder[A]);}"
+         "impl Closed[Own] for i32{"
+         "func run[U](owner Self,value move U)(func()Holder[Own]){"
+         "return func()Holder[Own]{return Holder[Own](cb:noop);};}}"
+         "func noop(slot inout Own){}"
+         "func main()i32{return 0;}");
+  accept("enum E[T]{Bad(cb func(inout T));}" + owning +
+         "trait Closed[A]{func run[U](owner Self,value move U) "
+         "throws E[A];}"
+         "impl Closed[Own] for i32{"
+         "func run[U](owner Self,value move U) throws E[Own]{}}"
+         "func main()i32{return 0;}");
+  // A Task handle in the same position stays closed and reports at its source.
+  reject("struct Holder[T]{cb func(inout T);}"
+             "struct Own{handle Task[i32,Unit];}"
              "trait Closed[A]{func run[U](owner Self,holder Holder[A]);}"
              "impl Closed[Own] for i32{"
              "func run[U](owner Self,holder Holder[Own]){}}"
-             "func main()i32{return 0;}",
-         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject("struct Holder[T]{cb func(inout T);}" + owning +
-             "trait Closed[A]{func run[U](owner Self,holder Holder[Self]);}"
-             "impl Closed[bool] for Own{"
-             "func run[U](owner Self,holder Holder[Own]){}}"
-             "func main()i32{return 0;}",
-         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject("struct Holder[T]{cb func(inout T);}" + owning +
-             "trait Closed[A]{func run[U](owner Self,value move U)"
-             "(func()Holder[A]);}"
-             "impl Closed[Own] for i32{"
-             "func run[U](owner Self,value move U)(func()Holder[Own]){"
-             "return func()Holder[Own]{return Holder[Own](cb:noop);};}}"
-             "func noop(slot inout Own){}"
-             "func main()i32{return 0;}",
-         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject("enum E[T]{Bad(cb func(inout T));}" + owning +
-             "trait Closed[A]{func run[U](owner Self,value move U) "
-             "throws E[A];}"
-             "impl Closed[Own] for i32{"
-             "func run[U](owner Self,value move U) throws E[Own]{}}"
              "func main()i32{return 0;}",
          "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
 
@@ -12493,12 +12610,15 @@ void trait_parameter_bounds(const fs::path &root) {
   };
   // Data fields are declared after the trait bound. Recheck their completed
   // types before publishing HIR, including callbacks hidden in Holder.
+  good("trait Tag[A]{}"
+       "trait Use[U Tag[func(inout Data)Unit]]{}"
+       "struct Data{items Vec[i32];}func main()i32{return 0;}");
+  good("trait Tag[A]{}trait Use[U Tag[Holder[Data]]]{}"
+       "struct Holder[T]{cb func(inout T)Unit;}"
+       "struct Data{items Vec[i32];}func main()i32{return 0;}");
   unsupported("trait Tag[A]{}"
               "trait Use[U Tag[func(inout Data)Unit]]{}"
-              "struct Data{items Vec[i32];}func main()i32{return 0;}");
-  unsupported("trait Tag[A]{}trait Use[U Tag[Holder[Data]]]{}"
-              "struct Holder[T]{cb func(inout T)Unit;}"
-              "struct Data{items Vec[i32];}func main()i32{return 0;}");
+              "struct Data{handle Task[i32,Unit];}func main()i32{return 0;}");
   good("trait Tag[A]{}trait Use[U Tag[func(inout Data)Unit]]{}"
        "struct Data{value i32;}func main()i32{return 0;}");
   good("trait Tag[A]{}trait Use[U Tag[Holder[Data]]]{}"
@@ -12506,11 +12626,11 @@ void trait_parameter_bounds(const fs::path &root) {
        "struct Data{value i32;}func main()i32{return 0;}");
   // Holder[A] is a legal template; its inout data must be checked again when
   // the trait application substitutes concrete Data for A.
-  unsupported("trait Tag[T]{}struct Holder[T]{cb func(inout T)Unit;}"
-              "struct Data{items Vec[i32];}trait Use[A,U Tag[Holder[A]]]{}"
-              "struct Proof{}struct Host{}"
-              "impl Tag[Holder[Data]] for Proof{}"
-              "impl Use[Data,Proof] for Host{}func main()i32{return 0;}");
+  good("trait Tag[T]{}struct Holder[T]{cb func(inout T)Unit;}"
+       "struct Data{items Vec[i32];}trait Use[A,U Tag[Holder[A]]]{}"
+       "struct Proof{}struct Host{}"
+       "impl Tag[Holder[Data]] for Proof{}"
+       "impl Use[Data,Proof] for Host{}func main()i32{return 0;}");
   good("trait Tag[T]{}struct Holder[T]{cb func(inout T)Unit;}"
        "struct Data{value i32;}trait Use[A,U Tag[Holder[A]]]{}"
        "struct Proof{}struct Host{}impl Tag[Holder[Data]] for Proof{}"
@@ -13423,21 +13543,28 @@ func main() i32 {
          "generic dependent impl application arity changed");
   }
 
-  // A concrete trait application that substitutes owning data must reject
-  // even when the declaration is never called.
-  unsupported("struct Own{items Vec[i32];}"
+  // A concrete trait application that substitutes owning data is legal, even
+  // when the declaration is never called: the callback slot is a whole owning
+  // value. A Task-bearing substitution is still reported at its real source.
+  good("struct Own{items Vec[i32];}"
+       "struct Box[P]{marker i32;}"
+       "trait F[A]{func bad[U](owner Self,cb func(inout A,A)A)Unit;}"
+       "impl[P] F[P] for Box[P]{"
+       "func bad[U](owner Self,cb func(inout P,P)P)Unit{}}"
+       "func uncalled[T F[Own]](x T)Unit{}"
+       "func main()i32{return 0;}");
+  good("struct Own{items Vec[i32];}"
+       "trait S{func bad[U](owner Self,"
+       "cb func(inout Self,Self)Self)Unit;}"
+       "impl S for Own{func bad[U](owner Self,"
+       "cb func(inout Own,Own)Own)Unit{}}"
+       "func main()i32{return 0;}");
+  unsupported("struct Own{handle Task[i32,Unit];}"
               "struct Box[P]{marker i32;}"
               "trait F[A]{func bad[U](owner Self,cb func(inout A,A)A)Unit;}"
               "impl[P] F[P] for Box[P]{"
               "func bad[U](owner Self,cb func(inout P,P)P)Unit{}}"
               "func uncalled[T F[Own]](x T)Unit{}"
-              "func main()i32{return 0;}");
-  // Real Self replacement with owning data is also a source error.
-  unsupported("struct Own{items Vec[i32];}"
-              "trait S{func bad[U](owner Self,"
-              "cb func(inout Self,Self)Self)Unit;}"
-              "impl S for Own{func bad[U](owner Self,"
-              "cb func(inout Own,Own)Own)Unit{}}"
               "func main()i32{return 0;}");
 
   // Corrupt the complete trait application and the real Self identity. Both
@@ -13581,11 +13708,12 @@ func main() i32 {
                      erase_mode);
 
   // A returned recursive nominal must expand the next complete application.
-  // Wrap[i32] -> Wrap[Vec[i32]] reaches a concrete illegal callback instead
-  // of stopping at the shared Wrap declaration or exhausting a budget.
+  // Wrap[i32] -> Wrap[Vec[i32]] reaches a concrete closed Task callback slot
+  // instead of stopping at the shared Wrap declaration or exhausting a budget.
+  // (An owning slot would be legal now, so the precise-error probe uses Task.)
   const std::string recursive_return = R"WRAP(
 struct Wrap[T] {
-    direct func(inout T);
+    direct func(inout Task[i32,Unit]);
     next func() Wrap[Vec[T]];
 }
 trait F[A] { func see[U](owner Self, held Wrap[A]); }
@@ -13594,7 +13722,8 @@ impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
 func main() i32 { return 0; }
 )WRAP";
   const std::string mutual_next_first = R"WRAP(
-struct Wrap[T] { next func() Relay[Vec[T]]; direct func(inout T); }
+struct Wrap[T] { next func() Relay[Vec[T]];
+                 direct func(inout Task[i32,Unit]); }
 struct Relay[U] { next func() Wrap[U]; }
 trait F[A] { func see[U](owner Self, held Wrap[A]); }
 struct Host {}
@@ -13602,7 +13731,8 @@ impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
 func main() i32 { return 0; }
 )WRAP";
   const std::string mutual_direct_first = R"WRAP(
-struct Wrap[T] { direct func(inout T); next func() Relay[Vec[T]]; }
+struct Wrap[T] { direct func(inout Task[i32,Unit]);
+                 next func() Relay[Vec[T]]; }
 struct Relay[U] { next func() Wrap[U]; }
 trait F[A] { func see[U](owner Self, held Wrap[A]); }
 struct Host {}
@@ -13955,13 +14085,16 @@ func main() i32 {
       "func main() i32 { var p = Pair(value: 1);"
       "Pair.bump(inout p, p.value); return 0; }",
       "E_CALL_ARGUMENT");
-  unsupported("struct Owned { items Vec[i32]; }"
+  good("struct Owned { items Vec[i32]; }"
+       "impl Owned { func bump(self inout Self) { } }"
+       "func main() i32 { var o = Owned(items: [1]);"
+       "Owned.bump(inout o); return 0; }");
+  good("struct Owned { items Vec[i32]; }"
+       "trait Step { func change(owner inout Self); }"
+       "impl Step for Owned { func change(owner inout Self) { } }"
+       "func main() i32 { return 0; }");
+  unsupported("struct Owned { handle Task[i32,Unit]; }"
               "impl Owned { func bump(self inout Self) { } }"
-              "func main() i32 { var o = Owned(items: [1]);"
-              "Owned.bump(inout o); return 0; }");
-  unsupported("struct Owned { items Vec[i32]; }"
-              "trait Step { func change(owner inout Self); }"
-              "impl Step for Owned { func change(owner inout Self) { } }"
               "func main() i32 { return 0; }");
   unsupported("struct Box { items Vec[i32]; }"
               "impl Box { func take(self move Self) Self { return move self; } }"

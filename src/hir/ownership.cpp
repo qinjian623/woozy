@@ -2076,6 +2076,147 @@ bool inout_data_type(const HirModule &m, TypeId root,
   return visit(root, false, 0, 0);
 }
 
+// Inout reuses each type's copy/drop; POD classification remains separate.
+// Task and external lifetimes are not supported here.
+const char *inout_slot_reason(InoutSlot kind) {
+  switch (kind) {
+  case InoutSlot::allowed:
+    return "";
+  case InoutSlot::unit:
+    return "inout of Unit is not a writable value place";
+  case InoutSlot::task:
+    return "Task inout is not supported: the executor owns its completion "
+           "lifetime";
+  case InoutSlot::external:
+    return "external C resource inout is not supported: no verified "
+           "retain/release pairing";
+  case InoutSlot::type_parameter:
+    return "inout type parameter has no concrete value";
+  case InoutSlot::unsupported:
+    break;
+  }
+  return "inout requires a whole Woozy value place: numeric/bool, POD "
+         "aggregate, Vec, Slice, string, function value, Weak, dyn trait "
+         "object, runtime handle, or an owning struct/enum";
+}
+InoutSlot inout_slot(const HirModule &m, TypeId root,
+                     const std::set<uint64_t> &parameters) {
+  // Substitution may intern storage-only member types; the walk keeps its own
+  // TypeContext copy so no reference is held across a possible reallocation.
+  TypeContext types = m.types;
+  std::map<uint64_t, InoutSlot> memo;
+  size_t visited = 0;
+  std::function<InoutSlot(TypeId, bool, size_t)> visit =
+      [&](TypeId id, bool member, size_t depth) -> InoutSlot {
+    if (depth > 128 || ++visited > 65536)
+      return InoutSlot::unsupported;
+    if (auto known = memo.find(id.value); known != memo.end())
+      return known->second;
+    const auto *found = types.find(id);
+    if (!found)
+      return InoutSlot::unsupported;
+    const Type t = *found;
+    InoutSlot result = InoutSlot::allowed;
+    switch (t.kind) {
+    case TypeKind::Unit:
+      result = member ? InoutSlot::allowed : InoutSlot::unit;
+      break;
+    case TypeKind::Bool:
+    case TypeKind::SignedInt:
+    case TypeKind::UnsignedInt:
+    case TypeKind::Isize:
+    case TypeKind::Usize:
+    case TypeKind::Float:
+    case TypeKind::String:
+    case TypeKind::Function:
+    case TypeKind::TraitObject:
+    case TypeKind::ThreadHandle:
+    case TypeKind::MutexHandle:
+    case TypeKind::CondvarHandle:
+    case TypeKind::AtomicI64Handle:
+    case TypeKind::IpcHandle:
+      result = InoutSlot::allowed;
+      break;
+    case TypeKind::Vec:
+    case TypeKind::Slice:
+    case TypeKind::Weak:
+      // Element/owner handles are stored inline, so an unsupported member
+      // would make the whole slot's copy/drop unsupported as well.
+      for (auto a : t.type_args) {
+        auto nested = visit(a, true, depth + 1);
+        if (nested != InoutSlot::allowed) {
+          result = nested;
+          break;
+        }
+      }
+      break;
+    case TypeKind::TypeParameter:
+      result = parameters.count(t.declaration.value) != 0
+                   ? InoutSlot::allowed
+                   : InoutSlot::type_parameter;
+      break;
+    case TypeKind::Task:
+      result = InoutSlot::task;
+      break;
+    case TypeKind::CForeignResource:
+    case TypeKind::CForeignPointer:
+    case TypeKind::CForeignBuffer:
+    case TypeKind::CForeignRecord:
+    case TypeKind::CForeignCallback:
+    case TypeKind::CForeignOpaque:
+    case TypeKind::ForeignOpaque:
+    case TypeKind::ForeignCallable:
+      result = InoutSlot::external;
+      break;
+    case TypeKind::Error:
+      result = InoutSlot::unsupported;
+      break;
+    case TypeKind::NominalStruct:
+    case TypeKind::NominalEnum: {
+      const NominalDecl *decl = nullptr;
+      for (const auto &d : m.nominals)
+        if (d.symbol == t.declaration) {
+          decl = &d;
+          break;
+        }
+      if (!decl || t.type_args.size() != decl->params.size()) {
+        result = InoutSlot::unsupported;
+        break;
+      }
+      // A recursive value layout is impossible for a finite struct/enum; a
+      // revisit therefore means a handle broke the cycle and is allowed.
+      memo.emplace(id.value, InoutSlot::allowed);
+      Substitutions sub;
+      for (size_t i = 0; i < decl->params.size(); ++i)
+        sub.push_back({decl->params[i].symbol, t.type_args[i]});
+      auto fields = [&](const auto &fs) {
+        InoutSlot outcome = InoutSlot::allowed;
+        for (const auto &f : fs) {
+          auto concrete = substitute(f.type, sub, types);
+          auto nested = visit(concrete, true, depth + 1);
+          if (nested != InoutSlot::allowed) {
+            outcome = nested;
+            break;
+          }
+        }
+        return outcome;
+      };
+      result = fields(decl->fields);
+      for (const auto &v : decl->variants) {
+        if (result != InoutSlot::allowed)
+          break;
+        result = fields(v.payload);
+      }
+      memo.erase(id.value);
+      break;
+    }
+    }
+    memo.emplace(id.value, result);
+    return result;
+  };
+  return visit(root, false, 0);
+}
+
 ValueOps classify_value(const HirModule &m, TypeId id) {
   return Classifier(m).run(id);
 }

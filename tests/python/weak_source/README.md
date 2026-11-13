@@ -2,7 +2,7 @@
 
 Task: `python-source-weak-operations-20261112`  
 Contract: `compiler-dev/1`  
-Runtime profile: Python/64, `compiler-dev/1-python-values/9`  
+Runtime profile: Python/64, `compiler-dev/1-python-values/10`
 Authority: `docs/SEMANTICS.md` §7.1/§9 and the canonical target table in
 `development/plans/REFERENCE_VALUES.md` §6.
 

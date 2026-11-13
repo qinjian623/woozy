@@ -1,0 +1,19 @@
+package app;
+
+import "std/slice" as slice;
+
+// A Slice value owns one owner reference and one iteration pin. Replacing it
+// releases the old descriptor and keeps the new view readable.
+func replace(slot inout Slice[i32]) {
+    slot = slice.view([9, 10], 0, 2);
+}
+
+func main() i32 {
+    let owner Vec[i32] = [1, 2, 3];
+    var view Slice[i32] = slice.view(owner, 0, 2);
+    replace(inout view);
+    if slice.len(view) != 2 { return 1; }
+    if view[0] != 9 || view[1] != 10 { return 2; }
+    if owner[0] != 1 || owner[2] != 3 { return 3; }
+    return 0;
+}

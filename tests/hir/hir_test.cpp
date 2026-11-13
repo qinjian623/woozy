@@ -415,10 +415,16 @@ void inout_tests() {
     m.nodes[arg.value].children = {read};
   });
   invalid(f, "inout nontrivial parameter", [&](auto &m) {
+    // Owning inout is supported now, so this forgery uses a Task handle: its
+    // completion lifetime belongs to the executor and HIR has no copy/drop.
+    Type task;
+    task.kind = TypeKind::Task;
+    task.type_args = {f.i32, f.unit};
+    auto handle = m.types.intern(task);
     Type t;
     t.kind = TypeKind::Function;
     t.result = f.i32;
-    t.parameters = {{ParamMode::inout, f.signature}};
+    t.parameters = {{ParamMode::inout, handle}};
     m.types.intern(t);
   });
   {

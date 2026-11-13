@@ -1,0 +1,176 @@
+{
+  "schema": "compiler-dev/owning-inout-fixtures/1",
+  "contract": "compiler-dev/1",
+  "description": "LANG03 owning (non-POD) whole/field/element inout: replacement, precise drop, shared identity and conservative rejections.",
+  "case_count": 21,
+  "cases": [
+    {
+      "id": "vec-whole",
+      "kind": "accept",
+      "purpose": "Whole Vec inout replacement keeps shared identity, preserves an alias, and drops the old handle once.",
+      "manifest": "tests/owning_inout/vec-whole/lang.toml",
+      "source": "tests/owning_inout/vec-whole/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "vec-field",
+      "kind": "accept",
+      "purpose": "Owning struct field replacement writes through the caller storage and leaves sibling owning fields and strings intact.",
+      "manifest": "tests/owning_inout/vec-field/lang.toml",
+      "source": "tests/owning_inout/vec-field/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "vec-element",
+      "kind": "accept",
+      "purpose": "Owning Vec elements, owning fields of elements and element replacement through shared storage.",
+      "manifest": "tests/owning_inout/vec-element/lang.toml",
+      "source": "tests/owning_inout/vec-element/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "string",
+      "kind": "accept",
+      "purpose": "string whole binding and struct field replacement, including embedded NUL bytes and a live copy.",
+      "manifest": "tests/owning_inout/string/lang.toml",
+      "source": "tests/owning_inout/string/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "function",
+      "kind": "accept",
+      "purpose": "Function value replacement releases the old environment once and keeps a saved copy callable.",
+      "manifest": "tests/owning_inout/function/lang.toml",
+      "source": "tests/owning_inout/function/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "weak",
+      "kind": "accept",
+      "purpose": "Weak whole binding and struct field replacement switch the observed identity.",
+      "manifest": "tests/owning_inout/weak/lang.toml",
+      "source": "tests/owning_inout/weak/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "owning-struct-enum",
+      "kind": "accept",
+      "purpose": "Owning struct, nested struct field and owning enum payload whole replacement.",
+      "manifest": "tests/owning_inout/owning-struct-enum/lang.toml",
+      "source": "tests/owning_inout/owning-struct-enum/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "arc-handle",
+      "kind": "accept",
+      "purpose": "Box ARC handle replacement keeps the new identity and drops the old identity exactly once.",
+      "manifest": "tests/owning_inout/arc-handle/lang.toml",
+      "source": "tests/owning_inout/arc-handle/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "dyn",
+      "kind": "accept",
+      "purpose": "dyn trait object replacement drops the old boxed value once and publishes the new concrete object.",
+      "manifest": "tests/owning_inout/dyn/lang.toml",
+      "source": "tests/owning_inout/dyn/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "slice",
+      "kind": "accept",
+      "purpose": "Slice value replacement releases the old descriptor and keeps the new view readable.",
+      "manifest": "tests/owning_inout/slice/lang.toml",
+      "source": "tests/owning_inout/slice/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "self-mode",
+      "kind": "accept",
+      "purpose": "Explicit (inout self) method rewrites its own Vec field and POD field through the caller storage.",
+      "manifest": "tests/owning_inout/self-mode/lang.toml",
+      "source": "tests/owning_inout/self-mode/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "throw-cleanup",
+      "kind": "accept",
+      "purpose": "Normal and typed-throw exits publish complete new values, run defers, and drop each replaced owner once.",
+      "manifest": "tests/owning_inout/throw-cleanup/lang.toml",
+      "source": "tests/owning_inout/throw-cleanup/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "transfer",
+      "kind": "accept",
+      "purpose": "inout parameters forwarded to another callee and swapped through generic and trait-constrained generics.",
+      "manifest": "tests/owning_inout/transfer/lang.toml",
+      "source": "tests/owning_inout/transfer/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "nested-aggregate",
+      "kind": "accept",
+      "purpose": "Deeply nested owning fields inside Vec elements with disjoint siblings.",
+      "manifest": "tests/owning_inout/nested-aggregate/lang.toml",
+      "source": "tests/owning_inout/nested-aggregate/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "reject-move-out",
+      "kind": "reject",
+      "purpose": "A borrowed inout parameter cannot be moved out of the callee.",
+      "manifest": "tests/owning_inout/reject-move-out/lang.toml",
+      "source": "tests/owning_inout/reject-move-out/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-capture",
+      "kind": "reject",
+      "purpose": "An inout parameter cannot be captured by a closure.",
+      "manifest": "tests/owning_inout/reject-capture/lang.toml",
+      "source": "tests/owning_inout/reject-capture/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-overlap",
+      "kind": "reject",
+      "purpose": "The same owning storage cannot be passed to two inout parameters.",
+      "manifest": "tests/owning_inout/reject-overlap/lang.toml",
+      "source": "tests/owning_inout/reject-overlap/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-overlap-field-whole",
+      "kind": "reject",
+      "purpose": "An owning field and its whole aggregate overlap in one call.",
+      "manifest": "tests/owning_inout/reject-overlap-field-whole/lang.toml",
+      "source": "tests/owning_inout/reject-overlap-field-whole/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-alias-element",
+      "kind": "reject",
+      "purpose": "A shared container alias cannot coexist with an element address borrow.",
+      "manifest": "tests/owning_inout/reject-alias-element/lang.toml",
+      "source": "tests/owning_inout/reject-alias-element/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-task",
+      "kind": "reject",
+      "purpose": "Task inout is reported as unsupported instead of guessing its lifetime.",
+      "manifest": "tests/owning_inout/reject-task/lang.toml",
+      "source": "tests/owning_inout/reject-task/src/main.wz",
+      "expected_code": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "id": "reject-unit",
+      "kind": "reject",
+      "purpose": "Unit is not a writable value place.",
+      "manifest": "tests/owning_inout/reject-unit/lang.toml",
+      "source": "tests/owning_inout/reject-unit/src/main.wz",
+      "expected_code": "E_CAPABILITY_UNAVAILABLE"
+    }
+  ]
+}

@@ -13,6 +13,11 @@ import sys
 sys.dont_write_bytecode = True
 
 POSITIVE = ('core', 'inout', 'cross-package', 'controls')
+# Approved owning inout: these former reject sources compile and run now.
+# They are checked, built and executed on both backends, but the ownership
+# probe/allocator observation stays limited to POSITIVE.
+OWNING_POSITIVE = ('reject-index-inout', 'reject-owning-self-inout',
+                   'reject-trait-owning-inout')
 EXPECTED_EVENTS = {
     'core': [2, 3, 7, 9, 4, 5],
     'inout': [3, 7, 9, 4, 5, 6, 5],
@@ -32,11 +37,8 @@ REJECTS = {
     'reject-move-read': {'E_OWNERSHIP_USE_AFTER_MOVE'},
     'reject-let-inout': {'E_CALL_ARGUMENT'},
     'reject-param-inout': {'E_CALL_ARGUMENT'},
-    'reject-owning-self-inout': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-trait-owning-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-alias-inout': {'E_CALL_ARGUMENT'},
     'reject-field-inout': {'E_TYPE_MISMATCH'},
-    'reject-index-inout': {'E_CAPABILITY_UNAVAILABLE'},
 }
 STRING_EXPECTED = {
     'probe_inherent': '值\0😀'.encode(),
@@ -477,7 +479,8 @@ def main():
                             required=True)
     parser.add_argument('--before', type=Path)
     parser.add_argument('--only', action='append',
-                        choices=POSITIVE + tuple(REJECTS) + ('strings',))
+                        choices=(POSITIVE + OWNING_POSITIVE +
+                                 tuple(REJECTS) + ('strings',)))
     args = parser.parse_args()
     for name in ('cli', 'probe', 'string_probe', 'helper', 'root', 'clang',
                  'runtime', 'python', 'out'):
@@ -495,7 +498,7 @@ def main():
                   status='failed', python=run([args.python, '--version']),
                   runs=[])
     selected = set(args.only) if args.only else (
-        set(POSITIVE) | set(REJECTS) | {'strings'})
+        set(POSITIVE) | set(REJECTS) | set(OWNING_POSITIVE) | {'strings'})
     try:
         for case in POSITIVE:
             if case not in selected:
@@ -510,6 +513,53 @@ def main():
                 report['runs'].append(row)
             native_case(args, library, case, manifest, sources, report)
             python_case(args, library, case, manifest, sources, report)
+        for case in OWNING_POSITIVE:
+            if case not in selected:
+                continue
+            manifest = (args.root / 'tests/generics/self-modes' / case /
+                        'lang.toml')
+            sources = source_hashes(manifest.parent)
+            for backend in ('native', 'python'):
+                row = dict(case=case, kind='check', backend=backend,
+                           check=check_source(args.cli, manifest, backend,
+                                              library),
+                           source_sha256=sources, status='passed')
+                report['runs'].append(row)
+            for opt in (0, 2):
+                row = dict(case=case, kind='native', opt=opt,
+                           source_sha256=sources, status='failed')
+                report['runs'].append(row)
+                target = args.out / case / f'O{opt}'
+                shutil.rmtree(target, ignore_errors=True)
+                row['build'] = build = run(
+                    [args.cli, 'build', '--project', manifest,
+                     '--backend', 'native', '--opt', opt,
+                     '--out-dir', target / 'cli', '--format', 'json'],
+                    library=library)
+                ok(build, 'native build')
+                assert json.loads(build['stdout'])['status'] == 'ok', build
+                row['execute'] = executed = run([target / 'cli/program'],
+                                                library=library)
+                ok(executed, 'native execute')
+                assert not executed['stdout'] and not executed['stderr'], executed
+                row['status'] = 'passed'
+            row = dict(case=case, kind='python', source_sha256=sources,
+                       status='failed')
+            report['runs'].append(row)
+            destination = args.out / case / 'python'
+            shutil.rmtree(destination, ignore_errors=True)
+            row['build'] = build = run(
+                [args.cli, 'build', '--project', manifest,
+                 '--backend', 'python', '--out-dir', destination,
+                 '--format', 'json'], library=library)
+            ok(build, 'python build')
+            assert json.loads(build['stdout'])['status'] == 'ok', build
+            row['execute'] = executed = run(
+                [args.python, '-s', destination / 'program.py'],
+                library=library)
+            ok(executed, 'python execute')
+            assert not executed['stdout'] and not executed['stderr'], executed
+            row['status'] = 'passed'
         if 'strings' in selected:
             manifest = args.root / 'tests/generics/self-modes/strings/lang.toml'
             string_case(args, library, manifest, source_hashes(manifest.parent),

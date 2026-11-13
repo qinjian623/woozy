@@ -1,6 +1,7 @@
 #pragma once
 #include "lang/hir/system_operation.hpp"
 #include "lang/modules/resolve.hpp"
+#include <set>
 #include <variant>
 
 namespace lang::hir {
@@ -725,6 +726,24 @@ struct ValueOps {
 };
 // All returned TypeIds belong to module.types. No private layout IDs escape.
 ValueOps classify_value(const HirModule &, TypeId);
+// Whole-slot inout support shared by the checker, verifier and backends.
+// Owned values use their normal copy/drop; structs/enums recurse by member.
+// Unit is allowed only as a member. Task and external values stay unsupported.
+enum class InoutSlot {
+  allowed,
+  unit,
+  task,
+  external,
+  type_parameter,
+  unsupported
+};
+InoutSlot inout_slot(const HirModule &, TypeId,
+                     const std::set<uint64_t> &parameters = {});
+const char *inout_slot_reason(InoutSlot);
+inline bool inout_slot_type(const HirModule &m, TypeId t,
+                            const std::set<uint64_t> &parameters = {}) {
+  return inout_slot(m, t, parameters) == InoutSlot::allowed;
+}
 // Returns a declaration with infinite value layout, including unused templates.
 // Function signatures and unused type arguments do not contribute value fields.
 std::optional<SymbolId> infinite_value_layout(const HirModule &,

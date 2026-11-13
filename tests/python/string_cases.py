@@ -89,9 +89,10 @@ STRING_FIXTURE_PATHS = {
 CAP = 'E_CAPABILITY_UNAVAILABLE'
 TYPE = 'E_TYPE_MISMATCH'
 REJECTED = {
-    'struct-string-inout': ('struct S {s string;} func f(x inout S) {} func main() {}', CAP),
-    'vec-string-inout': ('func f(x inout Vec[string]) {} func main() {}', CAP),
-    'inout': ('func f(x inout string) {} func main() {}', CAP),
+    'struct-string-task-inout': ('struct S {s string;t Task[i32,Unit];} '
+                                 'func f(x inout S) {} func main() {}', CAP),
+    'vec-string-task-inout': ('func f(x inout Vec[Task[string,Unit]]) {} func main() {}', CAP),
+    'task-string-inout': ('func f(x inout Task[string,Unit]) {} func main() {}', CAP),
     'move-after-read': ('func main() {let x="x";let y=move x;let z=x;}',
                         'E_OWNERSHIP_USE_AFTER_MOVE'),
     'ordinary-parameter-move': ('func take(x move string) string {return move x;} '
@@ -187,19 +188,35 @@ RUN_CASES = {
     'negative-index': ('let s="中"+"😀";let rune=s[-1];', 101),
     'index-end': ('let s="中"+"😀";let rune=s[2];', 101),
     'reverse-slice': ('let s="中"+"😀";let part=s[2:1];', 101),
+    'string-inout': ('let replace=func(slot inout string){slot="after";};'
+                     'var text="before";let saved=text;replace(inout text);'
+                     'if text!="after" || saved!="before" {return 1;}', 0),
+    'vec-string-inout': ('let replace=func(slot inout Vec[string]){slot=["after"];};'
+                         'var values Vec[string]=["before"];let saved=values;'
+                         'replace(inout values);'
+                         'if values[0]!="after" || saved[0]!="before" {return 1;}', 0),
+    'struct-string-inout': ('var value=S(s:"before",n:7);let saved=value;'
+                            'replace(inout value);'
+                            'if value.s!="after" || value.n!=7 || saved.s!="before" '
+                            '{return 1;}', 0,
+                            'struct S {s string;n i32;} '
+                            'func replace(slot inout S){slot.s="after";} '),
 }
 
 
 def runtime_checks(cli, backend, out, python=None):
     rows = []
-    for ident, (body, expected) in RUN_CASES.items():
+    for ident, case in RUN_CASES.items():
+        body, expected = case[:2]
+        declarations = case[2] if len(case) > 2 else ''
         project = Path(tempfile.mkdtemp(prefix='value-' + ident + '-', dir=out))
         (project / 'src').mkdir()
         manifest = project / 'lang.toml'
         manifest.write_text('schema_version=1\n[package]\nname="strings"\n'
                             'source_root="src"\nentry="app"\n[build]\n'
                             f'backend="{backend}"\nword_bits=64\n')
-        (project / 'src/main.wz').write_text('package app;func main() i32 {' + body + 'return 0;}')
+        (project / 'src/main.wz').write_text('package app;' + declarations +
+                                            'func main() i32 {' + body + 'return 0;}')
         output = project / 'output'
         row = dict(id=ident, expected_exit=expected, status='failed')
         row['check'] = checked = command([cli, 'check', '--project', manifest,

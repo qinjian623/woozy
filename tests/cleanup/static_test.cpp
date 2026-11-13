@@ -801,8 +801,10 @@ void unsafe_probes() {
   rejected_clean("struct S{a i32;}func bump(x inout i32){}"
                  "func main(){let s=S(a:1);unsafe{bump(inout s.a);}}",
                  "E_TYPE_MISMATCH");
-  rejected_clean("func bump(x inout Vec[i32]){}"
-                 "func main(){var v Vec[i32]=[1];unsafe{bump(inout v);}}",
+  // `unsafe` does not widen the inout value rule: an owning Vec slot is legal
+  // now, while a Task handle stays an explicit capability rejection.
+  rejected_clean("func bump(x inout Task[i32,Unit]){}"
+                 "func main(){unsafe{}}",
                  "E_CAPABILITY_UNAVAILABLE");
   auto rejected_resolve = [&](const std::string &body, std::string_view code) {
     for (auto backend : {Backend::native, Backend::python}) {

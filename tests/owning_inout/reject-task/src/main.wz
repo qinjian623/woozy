@@ -1,0 +1,9 @@
+package app;
+
+// A Task handle's completion lifetime belongs to the executor; it is not a
+// writable whole value for inout.
+func replace(slot inout Task[i32, Unit]) {}
+
+func main() i32 {
+    return 0;
+}

@@ -257,44 +257,55 @@ def main():
             }
             row['status'] = 'passed'
 
-        manifest = args.root / 'tests/generics/move/constrained-reject-owning/lang.toml'
-        sources = {str(path.relative_to(manifest.parent)): digest(path)
-                   for path in sorted(manifest.parent.rglob('*'))
-                   if path.is_file()}
-        fresh = args.out / 'constrained-reject-new'
-        shutil.rmtree(fresh, ignore_errors=True)
-        rejected = run([args.cli, 'build', '--project', manifest,
-                        '--backend', 'native', '--opt', 0,
-                        '--out-dir', fresh, '--format', 'json'])
-        row = dict(case='constrained-reject-new', source_sha256=sources,
-                   build=rejected, status='failed')
+        # Approved owning inout: this former rejection source is a real
+        # constrained generic swap over owning struct values now, so it is
+        # checked, built and executed on both backends instead of rejected.
+        owning = (args.root /
+                  'tests/generics/move/constrained-reject-owning/lang.toml')
+        owning_sources = {str(path.relative_to(owning.parent)): digest(path)
+                          for path in sorted(owning.parent.rglob('*'))
+                          if path.is_file()}
+        for backend in ('native', 'python'):
+            checked = run([args.cli, 'check', '--project', owning,
+                           '--backend', backend, '--format', 'json'])
+            row = dict(case='constrained-reject-owning', backend=backend,
+                       check=checked, source_sha256=owning_sources,
+                       status='failed')
+            report['runs'].append(row)
+            check_ok(checked)
+            assert json.loads(checked['stdout'])['status'] == 'ok', checked
+            row['status'] = 'passed'
+        for opt in (0, 2):
+            row = dict(case='constrained-reject-owning', opt=opt,
+                       source_sha256=owning_sources, status='failed')
+            report['runs'].append(row)
+            target = args.out / 'constrained-reject-owning' / f'O{opt}'
+            shutil.rmtree(target, ignore_errors=True)
+            built = run([args.cli, 'build', '--project', owning,
+                         '--backend', 'native', '--opt', opt,
+                         '--out-dir', target / 'cli', '--format', 'json'])
+            row['build'] = built
+            check_ok(built)
+            assert json.loads(built['stdout'])['status'] == 'ok', built
+            row['execute'] = executed = run([target / 'cli/program'])
+            check_ok(executed)
+            assert not executed['stdout'] and not executed['stderr'], executed
+            row['status'] = 'passed'
+        row = dict(case='constrained-reject-owning', backend='python',
+                   source_sha256=owning_sources, status='failed')
         report['runs'].append(row)
-        assert rejected['exit'] != 0, rejected
-        assert json.loads(rejected['stdout'])['status'] == 'error', rejected
-        assert not (fresh / 'program').exists(), 'rejected build wrote program'
-        assert not (fresh / 'program.o').exists(), 'rejected build wrote object'
-        row['outputs'] = sorted(str(path.relative_to(fresh))
-                                for path in fresh.rglob('*') if path.is_file())
-        row['status'] = 'passed'
-
-        stale = args.out / 'constrained-reject-old'
-        stale.mkdir(parents=True, exist_ok=True)
-        sentinels = {name: b'previous output ' + name.encode()
-                     for name in ('program', 'program.o')}
-        for name, content in sentinels.items():
-            (stale / name).write_bytes(content)
-        old_hashes = {name: digest(stale / name) for name in sentinels}
-        rejected = run([args.cli, 'build', '--project', manifest,
-                        '--backend', 'native', '--opt', 0,
-                        '--out-dir', stale, '--format', 'json'])
-        row = dict(case='constrained-reject-old', source_sha256=sources,
-                   build=rejected, before_sha256=old_hashes, status='failed')
-        report['runs'].append(row)
-        assert rejected['exit'] != 0, rejected
-        assert json.loads(rejected['stdout'])['status'] == 'error', rejected
-        row['after_sha256'] = {name: digest(stale / name)
-                               for name in sentinels}
-        assert row['after_sha256'] == old_hashes, row
+        destination = args.out / 'constrained-reject-owning' / 'python'
+        shutil.rmtree(destination, ignore_errors=True)
+        built = run([args.cli, 'build', '--project', owning,
+                     '--backend', 'python', '--out-dir', destination,
+                     '--format', 'json'])
+        row['build'] = built
+        check_ok(built)
+        assert json.loads(built['stdout'])['status'] == 'ok', built
+        row['execute'] = executed = run(
+            [args.python, '-s', destination / 'program.py'])
+        check_ok(executed)
+        assert not executed['stdout'] and not executed['stderr'], executed
         row['status'] = 'passed'
         report['status'] = 'passed'
     finally:

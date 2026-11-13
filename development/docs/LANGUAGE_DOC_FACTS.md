@@ -9,7 +9,7 @@
 | --- | --- |
 | LANG01 捕获闭包、`move func`、绑定方法值（含 move-Self 重复调用） | `tests/reference_closure_frontend/` 的真实 Source/HIR/NativeIR 检查；`tests/reference_values/fixtures/closure-*`、`bound-*` 的 Native O0/O2 执行；Python 3.12 执行除已记录的线程捕获入口外均通过。 |
 | Weak 源接口 | `tests/native/weak_source/`、`tests/python/weak_source/`、`tests/reference_values/fixtures/weak-*`；目标、生命周期、空弱引用和升级失败路径已覆盖。 |
-| POD 字段/元素 inout | `tests/inout_places/cases.json` 及 21 个 Source fixture；Native/Python 检查、运行和保守别名拒绝已记录。 |
+| 字段/元素与拥有值 inout | `tests/inout_places` 原21例；`tests/owning_inout` 新21例Native O0/O2/Python及7种Python存储检查通过。Task和外部资源inout仍拒绝。 |
 | `dyn Trait` 普通 object-safe 方法 | `tests/trait_objects/cases.json` 的 22 个 Source case；包含泛型 trait 身份、泛型 impl、闭包/字段/枚举边界、空 trait、dyn 环和拒绝诊断；Native O0/O2、Python 3.12、freestanding ELF 检查。 |
 | SourceGC：Vec/Box/闭包环境强引用环 | Native O0/O2 与 Python 的 Source 回归已通过；Python 观察器在禁用宿主 GC 时验证语言收集。 |
 

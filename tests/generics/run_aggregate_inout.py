@@ -22,10 +22,32 @@ POSITIVE = ('values', 'routes', 'correction-positive',
 # These two former alias-rejection cases are now legal field/index inout places
 # and are executed as positive controls instead of being checked as rejects.
 PLACE_POSITIVE = {'reject-alias/field-place', 'reject-alias/index-place'}
-# Approved C5: Function is owning and never POD inout. This former positive
-# fixture contains a concrete Function field inside the inout aggregate.
-C5_UNSUPPORTED = ('fixed-callback-function-cycle',)
+# Approved owning inout: a concrete Function field inside the inout aggregate is
+# an ordinary owning value now, so the former C5 rejection fixture executes as a
+# positive program with the other aggregate cases.
+OWNING_POSITIVE = ('fixed-callback-function-cycle',
+                   'reject-owned/concrete-type-parameter',
+                   'reject-owned/enum-owning-payload',
+                   'reject-owned/function-root',
+                   'reject-owned/nested-owning-field',
+                   'reject-owned/string-root', 'reject-owned/vec-root',
+                   'reject-correction/owning-wrapped-self')
+C5_UNSUPPORTED = ()
+# Only Unit stays closed among the former reject-owned roots; every owning root
+# (Vec, string, function value, owning struct/enum, concrete generic) is a real
+# whole inout value now.
+OWNING_REJECT_NAMES = {'concrete-type-parameter', 'enum-owning-payload',
+                       'function-root', 'nested-owning-field',
+                       'string-root', 'vec-root'}
 REJECT_CODES = {'E_CALL_ARGUMENT', 'E_CAPABILITY_UNAVAILABLE'}
+# Owning inout no longer masks this fixture's real impl/trait signature
+# mismatch: `callback func(inout Own)` against `callback func(inout U)`. The
+# owning data itself is legal now, so the precise source error is expected.
+CASE_REJECT_CODES = {
+    'reject-correction/owning-dependent-callback': {'E_TYPE_MISMATCH'},
+}
+def reject_codes_for(case):
+    return CASE_REJECT_CODES.get(case, REJECT_CODES)
 FORBIDDEN_REJECT_CODES = {'E_IR_INVALID', 'E_INTERNAL_ERROR'}
 
 
@@ -177,6 +199,57 @@ def main():
             row['helper_metadata_sha256'] = digest(metadata / 'metadata.json')
             row['status'] = 'passed'
 
+        for case in OWNING_POSITIVE:
+            project = cases / case
+            manifest = project / 'lang.toml'
+            hashes = source_hashes(project)
+            for backend in ('native', 'python'):
+                row = dict(case=case, kind='owning-check', backend=backend,
+                           source_sha256=hashes, status='failed')
+                report['runs'].append(row)
+                row['check'] = check = run(
+                    [args.cli, 'check', '--project', manifest,
+                     '--backend', backend, '--format', 'json'],
+                    library=library)
+                require_ok(check, 'owning check ' + backend)
+                assert json.loads(check['stdout'])['status'] == 'ok', check
+                row['status'] = 'passed'
+            for opt in (0, 2):
+                row = dict(case=case, kind='owning-native', opt=opt,
+                           source_sha256=hashes, status='failed')
+                report['runs'].append(row)
+                destination = args.out / case / f'O{opt}'
+                shutil.rmtree(destination, ignore_errors=True)
+                row['build'] = build = run(
+                    [args.cli, 'build', '--project', manifest,
+                     '--backend', 'native', '--opt', opt,
+                     '--out-dir', destination / 'cli', '--format', 'json'],
+                    library=library)
+                require_ok(build, 'owning native build')
+                assert json.loads(build['stdout'])['status'] == 'ok', build
+                row['execute'] = executed = run([destination / 'cli/program'],
+                                                library=library)
+                require_ok(executed, 'owning native execute')
+                assert not executed['stdout'] and not executed['stderr'], executed
+                row['status'] = 'passed'
+            row = dict(case=case, kind='owning-python', source_sha256=hashes,
+                       status='failed')
+            report['runs'].append(row)
+            destination = args.out / case / 'python'
+            shutil.rmtree(destination, ignore_errors=True)
+            row['build'] = build = run(
+                [args.cli, 'build', '--project', manifest,
+                 '--backend', 'python', '--out-dir', destination,
+                 '--format', 'json'], library=library)
+            require_ok(build, 'owning python build')
+            assert json.loads(build['stdout'])['status'] == 'ok', build
+            row['execute'] = executed = run(
+                [args.python, '-s', destination / 'program.py'],
+                library=library)
+            require_ok(executed, 'owning python execute')
+            assert not executed['stdout'] and not executed['stderr'], executed
+            row['status'] = 'passed'
+
         for case in C5_UNSUPPORTED:
             project = cases / case
             manifest = project / 'lang.toml'
@@ -206,6 +279,13 @@ def main():
                 if case in PLACE_POSITIVE:
                     # Field/index inout is covered above as a positive case.
                     continue
+                if group == 'reject-owned' and \
+                        manifest.parent.name in OWNING_REJECT_NAMES:
+                    # Approved owning inout: covered by OWNING_POSITIVE above.
+                    continue
+                if case == 'reject-correction/owning-wrapped-self':
+                    # Approved owning inout: covered by OWNING_POSITIVE above.
+                    continue
                 project = manifest.parent
                 hashes = source_hashes(project)
                 for backend in ('native', 'python'):
@@ -219,7 +299,7 @@ def main():
                         library=library)
                     assert check['exit'] != 0, check
                     found = codes(check)
-                    assert found and set(found) <= REJECT_CODES, \
+                    assert found and set(found) <= reject_codes_for(case), \
                         (case, backend, found, check)
                     assert not (set(found) & FORBIDDEN_REJECT_CODES), check
                     row['diagnostic_codes'] = found
@@ -242,7 +322,7 @@ def main():
                     assert build['exit'] != 0, build
                     assert json.loads(build['stdout'])['status'] == 'error', build
                     found = codes(build)
-                    assert found and set(found) <= REJECT_CODES, \
+                    assert found and set(found) <= reject_codes_for(case), \
                         (case, backend, found, build)
                     assert not (set(found) & FORBIDDEN_REJECT_CODES), build
                     outputs = ['program', 'program.o', 'program.py',
@@ -278,7 +358,7 @@ def main():
                     assert build['exit'] != 0, build
                     assert json.loads(build['stdout'])['status'] == 'error', build
                     found = codes(build)
-                    assert found and set(found) <= REJECT_CODES, \
+                    assert found and set(found) <= reject_codes_for(case), \
                         (case, backend, found, build)
                     assert not (set(found) & FORBIDDEN_REJECT_CODES), build
                     row['after_sha256'] = {name: digest(stale / name)

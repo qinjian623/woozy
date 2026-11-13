@@ -465,24 +465,24 @@ class Checker {
                          return p.symbol == declaration;
                        });
   }
-  bool scalar_inout_type(TypeId t) const {
-    return integer(t) || type(t).kind == TypeKind::Bool ||
-           type(t).kind == TypeKind::Float;
-  }
-  // Numeric/bool plus finite nominal aggregates whose fields are trivial copy
-  // data. Top-level Unit/Function stay closed; they are permitted only inside
-  // an aggregate by hir::inout_data_type. The helper re-reads the real
-  // declaration and substituted field types at every check.
-  bool aggregate_inout_type(TypeId t,
-                            std::optional<SymbolId> trait_self = {}) const {
-    if (scalar_inout_type(t))
-      return true;
+  // Share the supported inout types and rejection reasons with HIR/backends.
+  bool owning_inout_type(TypeId t,
+                         std::optional<SymbolId> trait_self = {}) const {
     std::set<uint64_t> parameters = signature_parameters;
     for (const auto &p : active_params)
       parameters.insert(p.symbol.value);
     if (trait_self)
       parameters.insert(trait_self->value);
-    return inout_data_type(m, t, parameters);
+    return inout_slot_type(m, t, parameters);
+  }
+  std::string owning_inout_reason(TypeId t,
+                                  std::optional<SymbolId> trait_self = {}) const {
+    std::set<uint64_t> parameters = signature_parameters;
+    for (const auto &p : active_params)
+      parameters.insert(p.symbol.value);
+    if (trait_self)
+      parameters.insert(trait_self->value);
+    return inout_slot_reason(inout_slot(m, t, parameters));
   }
   // The trait prototype registers its real Self SymbolId only while checking
   // that declaration. This is not a method generic parameter: it never enters
@@ -1014,12 +1014,14 @@ class Checker {
               trait_self && trait_self_type(p.type, *trait_self);
           const auto data_self =
               trait_self && (depth > 0 || i > 0) ? trait_self : std::nullopt;
-          if (!aggregate_inout_type(p.type, data_self) &&
+          if (!owning_inout_type(p.type, data_self) &&
               !(allow_template && template_inout_type(p.type)) &&
               !trait_self_slot)
             unavailable(
                 r,
-                "inout accepts only trivial numeric/bool whole bindings");
+                owning_inout_reason(p.type, data_self).empty()
+                    ? "inout accepts only whole Woozy value bindings"
+                    : owning_inout_reason(p.type, data_self));
         }
         visit(p.type, depth + 1);
       }
@@ -1033,7 +1035,7 @@ class Checker {
   // substituting the real Self and all ordered trait arguments. Unresolved
   // type parameters from the surrounding template (including nominal
   // arguments such as Holder[U]) remain deferred; concrete data is checked
-  // with the same inout_data_type graph used by ordinary calls.
+  // with the same inout_slot_type graph used by ordinary calls.
   void check_trait_application_data(Ref r, const TraitRef &trait,
                                     TypeId application) {
     const auto *tr = trait_decl(trait.declaration);
@@ -1390,11 +1392,13 @@ class Checker {
           trait_self && trait_self_type(pt, *trait_self);
       const auto data_self =
           trait_self && (callback || i > 0) ? trait_self : std::nullopt;
-      if (pm == ParamMode::inout && !aggregate_inout_type(pt, data_self) &&
-          !template_inout_type(pt) && !trait_self_slot)
-        unavailable(cr,
-                    "inout accepts only trivial numeric/bool or POD aggregate "
-                    "whole bindings");
+      if (pm == ParamMode::inout && !owning_inout_type(pt, data_self) &&
+          !template_inout_type(pt) && !trait_self_slot) {
+        auto reason = owning_inout_reason(pt, data_self);
+        unavailable(cr, reason.empty() ? "inout accepts only whole Woozy value "
+                                        "bindings"
+                                      : reason);
+      }
       t.parameters.push_back({pm, pt});
     }
     if (parts.result)
@@ -2406,9 +2410,11 @@ class Checker {
     return {};
   }
   void check_inout_place_type(Ref r, TypeId t) const {
-    if (!aggregate_inout_type(t) && !template_inout_type(t))
-      unavailable(r, "inout requires a trivial numeric/bool or POD aggregate "
-                     "place");
+    if (!owning_inout_type(t) && !template_inout_type(t)) {
+      auto reason = owning_inout_reason(t);
+      unavailable(r, reason.empty() ? "inout requires a whole Woozy value place"
+                                    : reason);
+    }
   }
   struct PlacePath {
     bool index = false;

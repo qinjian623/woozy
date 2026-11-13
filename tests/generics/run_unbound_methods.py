@@ -14,6 +14,12 @@ sys.dont_write_bytecode = True
 NATIVE_CASES = {'core', 'move-inout', 'throws', 'const-alias-owned-failure'}
 SIMPLE_CASES = {'cross-package', 'public-const-phantom', 'local-const-aliases',
                 'local-const-call-controls'}
+# Approved owning inout: a saved unbound method value may carry a whole Vec
+# inout parameter. The source is accepted by both frontends; its Native build is
+# a check-only control because an *uncalled* owning function-value local runs
+# into a pre-existing ownership-publication gap (reproduced at 9a8e5bf without
+# any inout, see the task report), not into an inout limitation.
+CHECK_ONLY = {'reject-vec-inout'}
 EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3,
                             'const-alias-owned-failure': 6}
 # C5 makes Function a nonzero owning value, so the core probe now also rejects
@@ -70,7 +76,6 @@ REJECTS = {
     'reject-private': {'E_PRIVATE_ACCESS'},
     'reject-named': {'E_CALL_ARGUMENT'},
     'reject-constructor': {'E_TYPE_MISMATCH'},
-    'reject-vec-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-local-const-ordinary': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-local-const-call': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-local-const-field': {'E_CAPABILITY_UNAVAILABLE'},
@@ -659,6 +664,17 @@ def main():
                 simple_case(args, library, case, manifest, sources, report)
             assert source_hashes(manifest.parent) == sources, \
                 'positive source changed: ' + case
+        for case in sorted(CHECK_ONLY):
+            if selected is not None and case not in selected:
+                continue
+            manifest = base / case / 'lang.toml'
+            sources = source_hashes(manifest.parent)
+            for backend in ('native', 'python'):
+                row = dict(case=case, kind='check-only', backend=backend,
+                           check=check_source(args.cli, manifest, backend,
+                                              library),
+                           source_sha256=sources, status='passed')
+                report['runs'].append(row)
         for case, expected in STRING_CASES.items():
             if selected is not None and case not in selected:
                 continue

@@ -518,7 +518,7 @@ func changed() i32 {
 }
 ```
 
-`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置类型限数值、bool 和递归只含直接值的有限 struct/enum；Vec/Slice 容器本身、string、外部对象和包含 Vec 等需要清理字段的 struct/enum 仍不能作为 `inout` 实参。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
+`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置可以是数值、bool、递归只含平凡值的有限 struct/enum，也可以是 Vec/Slice 容器本身、string、函数值、Weak、dyn 和含拥有字段的聚合；被调用方可以整体替换它们，旧值恰好释放一次。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝，`Task` 与外部 C resource 的 `inout` 报 `E_CAPABILITY_UNAVAILABLE`。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
 
 转交一个拥有值时使用 `move`：
 

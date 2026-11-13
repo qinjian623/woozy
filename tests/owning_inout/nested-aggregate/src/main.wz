@@ -1,0 +1,31 @@
+package app;
+
+struct Pair { left Vec[i32]; right Vec[i32]; }
+struct Wrap { pair Pair; tag i32; }
+
+func replace(slot inout Vec[i32]) {
+    slot = [8];
+}
+
+func bump(slot inout i32) {
+    slot = slot + 1;
+}
+
+func main() i32 {
+    var rows Vec[Wrap] = [Wrap(pair: Pair(left: [1], right: [2]), tag: 1),
+                          Wrap(pair: Pair(left: [3], right: [4]), tag: 2)];
+    // Nested owning field through a Vec element, with a disjoint sibling.
+    replace(inout rows[0].pair.left);
+    if rows[0].pair.left[0] != 8 { return 1; }
+    if rows[0].pair.right[0] != 2 || rows[0].tag != 1 { return 2; }
+    if rows[1].pair.left[0] != 3 || rows[1].pair.right[0] != 4 { return 3; }
+    // Two disjoint owning fields in one call.
+    var wrap = Wrap(pair: Pair(left: [5], right: [6]), tag: 3);
+    replace(inout wrap.pair.left);
+    replace(inout wrap.pair.right);
+    if wrap.pair.left[0] != 8 || wrap.pair.right[0] != 8 { return 4; }
+    // POD field nested in an element keeps its siblings.
+    bump(inout rows[1].tag);
+    if rows[1].tag != 3 || rows[1].pair.left[0] != 3 { return 5; }
+    return 0;
+}

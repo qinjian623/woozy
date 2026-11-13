@@ -1,0 +1,12 @@
+package app;
+
+struct S { items Vec[i32]; }
+
+// A field place and its whole aggregate overlap.
+func twice(a inout Vec[i32], b inout S) {}
+
+func main() i32 {
+    var s = S(items: [1]);
+    twice(inout s.items, inout s);
+    return 0;
+}
