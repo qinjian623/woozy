@@ -41230,11 +41230,11 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "component",
       "enabled": false,
       "runner": "tests/modules/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "vendored dependency used by parent tests/modules/fixtures/cross-package-private/lang.toml; not a standalone entry in tests/modules/cases.json, no independent expectation; retained disabled and covered through the parent case",
       "tags": [
         "project"
       ]
@@ -41282,11 +41282,11 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "component",
       "enabled": false,
       "runner": "tests/modules/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "vendored dependency used by parent tests/modules/fixtures/cross-package-public/lang.toml; not a standalone entry in tests/modules/cases.json, no independent expectation; retained disabled and covered through the parent case",
       "tags": [
         "project"
       ]
@@ -41436,11 +41436,11 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "component",
       "enabled": false,
       "runner": "tests/modules/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "vendored dependency used by parent tests/modules/fixtures/import-alias-file-local/lang.toml; not a standalone entry in tests/modules/cases.json, no independent expectation; retained disabled and covered through the parent case",
       "tags": [
         "project"
       ]
@@ -41534,11 +41534,11 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "component",
       "enabled": false,
       "runner": "tests/modules/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "vendored dependency used by parent tests/modules/fixtures/package-cycle/lang.toml; not a standalone entry in tests/modules/cases.json, no independent expectation; retained disabled and covered through the parent case",
       "tags": [
         "project"
       ]
@@ -41558,11 +41558,11 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "component",
       "enabled": false,
       "runner": "tests/modules/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "vendored dependency used by parent tests/modules/fixtures/package-cycle/lang.toml; not a standalone entry in tests/modules/cases.json, no independent expectation; retained disabled and covered through the parent case",
       "tags": [
         "project"
       ]
@@ -80028,8 +80028,8 @@
     },
     {
       "path": "tests/modules/run_cases.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "explicit --project-cli mode runs the original 20 project checks with public check --project --format json; positional legacy component mode remains for CMake; five vendored dependency entries have no standalone expectation"
     },
     {
       "path": "tests/native/async_fork/run_async_fork.py",
@@ -81122,7 +81122,11 @@
       "source_semantic_differences_unchanged": true,
       "case_expectations_unchanged": true,
       "proof": "checks/module-runner-root-amendment-20261114/result.json",
-      "scope": "20 original module cases; five vendor dependency manifests remain disabled pending classification"
+      "scope": "20 original module cases; five component-only vendor dependency manifests remain disabled without independent expectations",
+      "vendor_classification": "five component-only dependency entries retained, disabled, with no independent expectation",
+      "runner_status": "public_cli",
+      "case_adaptation_required": 319,
+      "runner_adaptation_required": 98
     }
   }
 }
