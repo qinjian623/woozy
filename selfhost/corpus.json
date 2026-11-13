@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "b5ac141619627dce9d9658ea8c1e03ca42ac5ca8",
+  "git_head": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
   "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
   "frozen_at": "2026-11-14",
   "repository_roots": [
@@ -550,8 +550,8 @@
     },
     {
       "path": "runtime/native/gc.cpp",
-      "sha256": "ea330276634e86721f135520543089e25d6b9afab95d9ade827df371f6339a25",
-      "size": 13339,
+      "sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
+      "size": 15685,
       "role": "runtime_source",
       "assignment": []
     },
@@ -13901,8 +13901,8 @@
     },
     {
       "path": "tests/native/CMakeLists.txt",
-      "sha256": "d5f091c1809d3b7eb39a38efc0b49fc14d06ab74b1de3e9963d04238bf67e9c8",
-      "size": 31091,
+      "sha256": "0c666bc52675e8bc59f29ea7f65f7ce349aa7473fb69bcbb2f9cda7d4e5ab5e8",
+      "size": 31430,
       "role": "build_definition",
       "assignment": []
     },
@@ -80599,7 +80599,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "b5ac141619627dce9d9658ea8c1e03ca42ac5ca8",
+    "to_git_head": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80817,10 +80817,28 @@
         "path": "tests/selfhost/bootstrap_test.py",
         "old_sha256": "0d0f2746e00735fdb1bd529b4d4bb897798578032409ab4986e5f1392733a0ba",
         "new_sha256": "f76dc3b1cd6c1c6937769009955b699abd157e3845c6c3a07398d9458c8a33ef"
+      },
+      {
+        "path": "runtime/native/gc.cpp",
+        "old_sha256": "ea330276634e86721f135520543089e25d6b9afab95d9ade827df371f6339a25",
+        "new_sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
+        "old_size": 13339,
+        "new_size": 15685,
+        "commit": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
+        "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
+      },
+      {
+        "path": "tests/native/CMakeLists.txt",
+        "old_sha256": "d5f091c1809d3b7eb39a38efc0b49fc14d06ab74b1de3e9963d04238bf67e9c8",
+        "new_sha256": "0c666bc52675e8bc59f29ea7f65f7ce349aa7473fb69bcbb2f9cda7d4e5ab5e8",
+        "old_size": 31091,
+        "new_size": 31430,
+        "commit": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
+        "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
       }
     ],
     "new_freeze_path_count": 165,
-    "modified_freeze_path_count": 10,
+    "modified_freeze_path_count": 12,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 3
   }

@@ -623,3 +623,15 @@ index 或远端，未重编、未跑全候选、stage2/3 或 116 源构建。对
 `.work-tmp/selfhost-refreeze-20261114/verification.json`。该目录是原作者工作区的
 私有报告。Root 后续独立核对了 2837 条实际文件与提交字节、原 881 个启用用例
 和所有旧记录，并运行负控制后接受并合入；这不表示完整候选语料已通过。
+
+### GC 注册表索引提交后的增量冻结
+
+`a323069` 只修改私有 GC 索引、相应 C++ 测试及 CTest 注册。清单另外更新
+`runtime/native/gc.cpp` 和 `tests/native/CMakeLists.txt` 两条已跟踪记录的 SHA/大小，
+并记录旧、新 SHA；1250 个 case、233 个 runner 及其执行规则保持不变。
+当前 `git_head` 指向该已接受提交，tracked 库存检查为零错误；没有扫描 Root 的
+未跟踪文件，也没有因此报告完整候选或正式 Root 冻结通过。
+
+旧编译器 object 与旧库重新链接可逐字重现原二进制。仅将新 GC 对象换入库后，
+同一 compiler object 通过了导入 io/os 的 Native 源码检查（95.59 秒）。完整
+116 份编译器源码检查仍在运行；注册表微基准的倍数不作为编译性能数据。
