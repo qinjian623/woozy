@@ -1,13 +1,16 @@
 # HIRVerifier component and flow exit-identity regression
 
-This directory reproduces two independent component fixtures for the accepted
+This directory reproduces three independent component fixtures for the accepted
 HIR verifier:
 
 - the original six Wz modes (`unit`, `nonunit`, `template0`, `template1`,
   `trait`, `throw`) assembled from real lexer/parser ASTs, at O0 and O2;
 - the accepted generic `identity[i32]` / `identity[bool]` shared-source
   regression whose HIR builder is emitted by the C++ `resolve` +
-  `sema::check_types` oracle on every run.
+  `sema::check_types` oracle on every run;
+- the focused per-run lookup-index driver in `cache/`, which verifies two real
+  projects repeatedly in one process and can compare against a pre-fix
+  `hirverify` package.
 
 `run.py` stages only the explicit package/standard-library import closure into
 a private work directory. It never writes generated copies into the repository
@@ -138,10 +141,87 @@ helper and retain `label.stdout`, `label.stderr` and `label.json` for every
 command. Their staging, 47/27 assertions, `--run`/`--slim` interfaces and exit
 requirements are unchanged.
 
+## Per-run verifier lookup indexes
+
+The focused `cache/` driver checks the two whole-module scans that the HIR
+verifier previously repeated:
+
+- function symbol -> its HIR nodes, used by `source_effect_nodes` for both
+  `node_types` and the owning-node gate;
+- the exact Source `NodeRef` set for every ForIn `iterator.next` node and its
+  children, used by `ownership_sources`.
+
+The production check order is preserved statically: the indexes are built once
+after `shape`, and the consuming loops keep the original node order.  The
+existing six-mode tests pass with their recorded labels/codes, and the current
+`BAD_SOURCE` control sets `nodes[0].source.node.node = 999999` and gets
+`E_IR_INVALID` with `rejected=1 failed=1`.  This has not dynamically exercised
+every span field or every possible error-priority combination.  The entries are
+private to one `Verifier`/run.  The synthetic set is keyed by module, file and
+node, matching `same_ref`; it is not keyed by a numeric node id or span alone.
+
+`cache/driver.wz` loads two real projects through
+`project.load -> resolve -> sema.check_types`, then verifies the published HIR
+repeatedly in one process.  The first is the checked-in concrete iterator
+fixture; the second is a generated 40-function, 830-node project with the same
+real `std/iter` and `std/option` imports.  The driver also clones a module,
+breaks a Source node reference and requires `E_IR_INVALID`, and alternates the
+two modules on every pass so a stale cross-module cache would be visible.  A
+test-only staged wrapper compares NodeRef keys with equal node ids in different
+modules and equal module/node ids in different files; both must differ.  That
+is a comparator-level control, not a test of a specific collision in the
+116-source compiler input.
+
+```sh
+python3 selfhost/tests/hirverify/cache/run.py \
+  --woozyc /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
+  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
+  --work-dir /tmp/hirverify-cache-repro \
+  --iterations 2
+```
+
+Each successful pass reports the two module sizes (`105`/`830` nodes),
+`KEY module-file-node distinct`, two `BAD_SOURCE rejected=1 ...` lines, and
+exactly one `ITERATIONS 2 MODULES 2 VERIFIES 4 BAD 0` line.  For every round the
+runner checks both reports immediately and requires the new/baseline non-timing
+output to be equal; a first-round difference cannot be hidden by a later round.
+It also requires one positive integer `ELAPSED_NS` per program.  The runner
+builds only this focused driver at O0; it does not rebuild the 116-source CLI
+or run the complete corpus.  To compare the pre-fix verifier, export that
+revision's package and pass it explicitly:
+
+```sh
+git archive <pre-fix-rev> selfhost/src/wzcc/hirverify | tar -x -C /tmp/hirverify-old
+python3 selfhost/tests/hirverify/cache/run.py ... \
+  --baseline-dir /tmp/hirverify-old/selfhost/src/wzcc/hirverify \
+  --iterations 2 --repeats 3
+```
+
+`results.json` retains every bounded command record, source hashes, raw
+stdout/stderr, per-round equality, the exact positive `ELAPSED_NS` values and
+their median ratio.  The ratio is only this component driver; it is not a
+whole-compiler speedup claim.
+
+Report, elapsed and repeat-loop controls:
+
+```sh
+python3 -B selfhost/tests/hirverify/cache/test_controls.py \
+  > /tmp/hirverify-cache-controls.json
+```
+
+These use the actual runner checker/parser and bounded process helper with tiny
+fake programs.  They require first-round mismatch rejection even when later
+rounds match, reject zero/wrong/duplicate counts and zero/negative/missing/
+duplicate elapsed values, and accept a valid equal pair.  They also check
+report paths containing spaces.  They do not compile Woozy source or run the
+retained ELF drivers.
+
 ## Scope
 
 The six-mode Wz tests use real lexer/parser AST positions but intentionally
 hand-build the HIR records; they do not run Wz Sema on arbitrary source. The
-exit-identity test uses the real C++ resolve/Sema HIR export, not Wz Sema. This
-suite does not prove a complete frontend, Native/Python backend, full corpus,
-or self-hosting completion.
+exit-identity test uses the real C++ resolve/Sema HIR export, not Wz Sema. The
+cache driver does run the real Wz project/resolve/Sema pipeline, but only on
+its two focused fixtures and only for repeated verifier passes. This suite does
+not prove a complete frontend, Native/Python backend, full corpus, or
+self-hosting completion.

@@ -61,6 +61,60 @@ func node_type_add(entries Vec[NodeTypeEntry], node usize, type_id usize) {
     vec.push(entries, NodeTypeEntry(node: node, types: types));
 }
 
+// One index for the whole run.  The entries are sorted by function symbol and
+// each node list keeps the original module-node order, so source_effect_nodes
+// no longer rescans every function over the complete node table.
+func function_node_index_find(entries Vec[FunctionNodeIndex], symbol usize) i64 {
+    var low usize = 0;
+    var high = vec.len(entries);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if entries[middle].symbol < symbol {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if low < vec.len(entries) && entries[low].symbol == symbol {
+        return i64(low);
+    }
+    return -1;
+}
+
+func function_node_index_add(entries Vec[FunctionNodeIndex], symbol usize,
+                             node usize) {
+    let found = function_node_index_find(entries, symbol);
+    if found >= 0 {
+        vec.push(entries[usize(found)].nodes, node);
+        return;
+    }
+    var position usize = 0;
+    for position < vec.len(entries) && entries[position].symbol < symbol {
+        position += 1;
+    }
+    let nodes = vec.empty[usize]();
+    vec.push(nodes, node);
+    vec.push(entries, FunctionNodeIndex(symbol: symbol, nodes: nodes));
+    var index = vec.len(entries) - 1;
+    for index > position {
+        entries[index] = entries[index - 1];
+        index -= 1;
+    }
+    entries[position] = FunctionNodeIndex(symbol: symbol, nodes: nodes);
+}
+
+func build_function_node_index(state inout Verifier) {
+    let entries = vec.empty[FunctionNodeIndex]();
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        let node = state.m.nodes[index];
+        if node.scope < vec.len(state.m.scopes) {
+            function_node_index_add(entries,
+                state.m.scopes[node.scope].function, index);
+        }
+    }
+    state.function_node_index = entries;
+}
+
 func node_type_unique(entries Vec[NodeTypeEntry], node usize)
     option.Option[usize] {
     for entry in entries {
@@ -85,8 +139,11 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     let actual_foreign_reads = vec.empty[usize]();
     let actual_foreign_calls = vec.empty[usize]();
     let node_types = vec.empty[NodeTypeEntry]();
-    for node in state.m.nodes {
-        if verifier_scope(state, node.scope).function == function_value.symbol {
+    let function_nodes = function_node_index_find(state.function_node_index,
+        function_value.symbol);
+    if function_nodes >= 0 {
+        for node_id in state.function_node_index[usize(function_nodes)].nodes {
+            let node = state.m.nodes[node_id];
             node_type_add(node_types, node.source.node.node, node.type_id);
         }
     }
@@ -352,8 +409,9 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     need(count_equal(actual, expected),
         "HIR omits or duplicates source error/cleanup constructs");
     var owning = false;
-    for node in state.m.nodes {
-        if verifier_scope(state, node.scope).function == function_value.symbol {
+    if function_nodes >= 0 {
+        for node_id in state.function_node_index[usize(function_nodes)].nodes {
+            let node = state.m.nodes[node_id];
             let kind = hir.node_kind(node.data);
             if node_is(kind, hir.NodeKind.Move) ||
                node_is(kind, hir.NodeKind.ForIn) ||

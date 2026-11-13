@@ -1,0 +1,163 @@
+package app;
+
+// Focused component driver for the Verifier per-run lookup indexes.  It loads
+// real Source through the Wz project/resolve/check pipeline, then verifies the
+// published HIR repeatedly, also alternating modules in one process.
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/time" as time;
+import "std/vec" as vec;
+
+struct Loaded {
+    label string;
+    module hir.HirModule;
+}
+
+func complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func check_key_identity() bool {
+    let base = model.NodeRef(module: 1, file: 2, node: 3);
+    let other_module = model.NodeRef(module: 2, file: 2, node: 3);
+    let other_file = model.NodeRef(module: 1, file: 3, node: 3);
+    let other_node = model.NodeRef(module: 1, file: 2, node: 4);
+    return hirverify.cache_probe_compare(base, base) &&
+        !hirverify.cache_probe_compare(base, other_module) &&
+        !hirverify.cache_probe_compare(base, other_file) &&
+        !hirverify.cache_probe_compare(base, other_node);
+}
+
+func first_code(diagnostics Vec[model.Diagnostic]) string {
+    if vec.len(diagnostics) == 0 { return "none"; }
+    return diagnostics[0].code;
+}
+
+func empty_module() hir.HirModule {
+    return hir.empty_module(model.ResolvedProject(
+        project: model.empty_project(), symbols: [], occurrences: [],
+        deferred_members: [], self_parameters: []), 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}
+
+func load_one(manifest string, std_root string, label string)
+    option.Option[Loaded] throws os.Error {
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: manifest,
+        std_source_root: option.Option[string].Some(std_root),
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value {
+        io.eprintln(label + ": project load failed");
+        return option.Option[Loaded].None;
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value {
+        io.eprintln(label + ": resolve failed");
+        return option.Option[Loaded].None;
+    }
+    let typed = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    if !typed.has_value || !complete(typed.state) {
+        io.eprintln(label + ": check failed " +
+            strconv.format_u64(u64(vec.len(typed.diagnostics))));
+        for diagnostic in typed.diagnostics {
+            io.eprintln(diagnostic.code + ":" + diagnostic.message);
+        }
+        return option.Option[Loaded].None;
+    }
+    io.println("MODULE " + label + " nodes=" +
+        strconv.format_u64(u64(vec.len(typed.value.nodes))) + " functions=" +
+        strconv.format_u64(u64(vec.len(typed.value.functions))) +
+        " templates=" + strconv.format_u64(u64(vec.len(typed.value.templates))));
+    return option.Option[Loaded].Some(Loaded(label: label,
+        module: typed.value));
+}
+
+func flag(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func reject_missing_source(value hir.HirModule) bool throws os.Error {
+    var bad = empty_module();
+    try { bad = hirclone.clone_module(value); }
+    catch error model.SupportError { return false; }
+    if vec.len(bad.nodes) == 0 { return false; }
+    bad.nodes[0].source.node.node = 999999;
+    let rejected = hirverify.verify_types(bad);
+    io.println("BAD_SOURCE rejected=" + flag(!rejected.has_value) +
+        " failed=" + flag(!complete(rejected.state)) +
+        " code=" + first_code(rejected.diagnostics));
+    return !complete(rejected.state) && !rejected.has_value &&
+        first_code(rejected.diagnostics) == "E_IR_INVALID";
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 4 || (vec.len(args) - 2) % 2 != 0 {
+        io.eprintln("usage: program ITERATIONS MANIFEST STD_ROOT [MANIFEST STD_ROOT ...]");
+        return 2;
+    }
+    var iterations usize = 0;
+    try { iterations = usize(strconv.parse_u64(args[1])); }
+    catch error strconv.Error { return 2; }
+    if iterations == 0 { return 2; }
+    let loaded_values = vec.empty[Loaded]();
+    var index usize = 2;
+    for index + 1 < vec.len(args) {
+        let one = load_one(args[index], args[index + 1], args[index]);
+        switch one {
+            case option.Option.Some(value): vec.push(loaded_values, value);
+            case option.Option.None: return 3;
+        }
+        index += 2;
+    }
+    if !check_key_identity() {
+        io.println("KEY module-file-node failed");
+        return 7;
+    }
+    io.println("KEY module-file-node distinct");
+    for value in loaded_values {
+        if !reject_missing_source(value.module) { return 4; }
+    }
+    let start = time.monotonic();
+    var count usize = 0;
+    var bad usize = 0;
+    for count < iterations {
+        for value in loaded_values {
+            let checked = hirverify.verify_types(value.module);
+            if !complete(checked.state) || !checked.has_value {
+                bad += 1;
+                io.eprintln("REJECTED " + value.label + " code=" +
+                    first_code(checked.diagnostics));
+            }
+        }
+        count += 1;
+    }
+    let finish = time.monotonic();
+    let elapsed = (finish.seconds - start.seconds) * i64(1000000000) +
+        (finish.nanoseconds - start.nanoseconds);
+    let verifies = iterations * vec.len(loaded_values);
+    io.println("ELAPSED_NS " + strconv.format_i64(elapsed));
+    io.println("ITERATIONS " + strconv.format_u64(u64(iterations)) +
+        " MODULES " + strconv.format_u64(u64(vec.len(loaded_values))) +
+        " VERIFIES " + strconv.format_u64(u64(verifies)) +
+        " BAD " + strconv.format_u64(u64(bad)));
+    if bad != 0 { return 5; }
+    return 0;
+}

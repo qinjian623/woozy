@@ -75,6 +75,11 @@ struct ValidatedEntry {
     allowed Vec[usize];
 }
 
+struct FunctionNodeIndex {
+    symbol usize;
+    nodes Vec[usize];
+}
+
 struct Verifier {
     m hir.HirModule;
     functions Vec[FunctionEntry];
@@ -90,6 +95,8 @@ struct Verifier {
     nominals Vec[NominalEntry];
     instances Vec[InstanceEntry];
     all_functions Vec[AllFunction];
+    function_node_index Vec[FunctionNodeIndex];
+    synthetic_iterator_sources Vec[model.NodeRef];
     synthetic_iterator_calls Vec[usize];
     substituted types.Context;
     trait_results Vec[TraitResultEntry];
@@ -121,6 +128,7 @@ func make_verifier(module hir.HirModule) Verifier {
         leave: leave, owners: owners, scope_used: scope_used,
         parents: parents, scope_nodes: scope_nodes, clock: 0,
         templates: [], nominals: [], instances: [], all_functions: [],
+        function_node_index: [], synthetic_iterator_sources: [],
         synthetic_iterator_calls: [],
         substituted: types.clone_context(module.types), trait_results: [],
         active_constraints: [], active_trait_bounds: [],

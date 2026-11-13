@@ -254,6 +254,10 @@ func run_verification(state inout Verifier) throws Invalid {
         }
         shape(inout state, index);
     }
+    // Build the per-run lookups only after shape has checked every node scope
+    // and child identity; malformed input therefore keeps the original error.
+    build_function_node_index(inout state);
+    build_synthetic_iterator_sources(inout state);
     for function_entry in state.all_functions {
         let function_value = all_function_value(state, function_entry);
         tree(inout state, function_value);
