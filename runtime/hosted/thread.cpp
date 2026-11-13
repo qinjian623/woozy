@@ -1,6 +1,7 @@
 #include "thread.hpp"
 #include "../native/alloc.hpp"
 #include "../native/gc_program.hpp"
+#include "../native/gc_runtime.hpp"
 #include "../native/weak.hpp"
 
 #include <cerrno>
@@ -14,6 +15,7 @@
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
                                                  uint64_t) noexcept;
+#pragma weak lang_gc_runtime_defer_release_v1
 
 #if defined(__x86_64__) && defined(__linux__)
 namespace {
@@ -91,8 +93,8 @@ LangHandle *fail_spawn(HostedThreadState *state, int64_t error,
   return &state->handle;
 }
 
-void destroy_thread(LangHandle *handle) noexcept {
-  auto *state = reinterpret_cast<HostedThreadState *>(handle);
+void destroy_thread_now(void *payload) noexcept {
+  auto *state = static_cast<HostedThreadState *>(payload);
   if (__atomic_load_n(&state->created, __ATOMIC_ACQUIRE)) {
     if (__atomic_load_n(&state->process_id, __ATOMIC_RELAXED) !=
         static_cast<int32_t>(getpid())) {
@@ -105,6 +107,7 @@ void destroy_thread(LangHandle *handle) noexcept {
       // Reap the pthread's stack and libc TLS once the completion signal is
       // visible.  Joining also covers the normal "last handle released after
       // the thread completed but before any join" path.
+      lang::native::gc_program::SafeGuard safe;
       pthread_join(state->thread, nullptr);
     }
   }
@@ -112,6 +115,15 @@ void destroy_thread(LangHandle *handle) noexcept {
   if (state->mutex_ready) pthread_mutex_destroy(&state->mutex);
   if (state->context) lang_free_v1(state->context);
   lang_free_v1(state);
+}
+
+void destroy_thread(LangHandle *handle) noexcept {
+  // The runner drops the Woozy context before its own reference. At refs=0
+  // only host state remains; joining must wait until the GC world resumes.
+  if (lang_gc_runtime_defer_release_v1 &&
+      lang_gc_runtime_defer_release_v1(handle, &destroy_thread_now))
+    return;
+  destroy_thread_now(handle);
 }
 
 void *run_thread(void *pointer) noexcept {

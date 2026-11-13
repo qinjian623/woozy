@@ -498,3 +498,5 @@ endif()
 
 add_subdirectory(gc_activation)
 add_subdirectory(c_retained_static)
+
+add_subdirectory(hosted_thread_gc)

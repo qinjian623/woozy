@@ -1,0 +1,17 @@
+package app;
+import "std/thread" as thread;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func worker(value i64) i64 { return value; }
+func make_cycle() throws os.Error {
+    let actions = vec.empty[func() i64]();
+    let job = thread.spawn[i64](worker, 7);
+    if thread.join(job) != 7 { os.exit(21); }
+    let action = func() i64 {
+        let held = job;
+        return i64(vec.len(actions));
+    };
+    vec.push(actions, action);
+}
+func main() i32 throws os.Error { make_cycle(); return 0; }
