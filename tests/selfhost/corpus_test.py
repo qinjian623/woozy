@@ -987,6 +987,169 @@ def check_timeout_signal_artifacts_and_cleanup():
             time.sleep(0.05)
 
 
+def check_persisted_process_and_case_records():
+    """Real compile/case records must survive later harness failures."""
+    with tempfile.TemporaryDirectory(
+            prefix="woozy-corpus-persist-") as directory:
+        work = Path(directory)
+        context = probe_context(work)
+        context["timeout"] = 2.0
+        ok = write_fake_compiler(work, "fake-persist", ["ok"])
+        case = fake_repeat_case("persist-records")
+        variant = corpus.case_variants(case)[0]
+
+        baseline = corpus.run_case(
+            case, ok, [], work / "out-baseline", context)
+        assert baseline["status"] == "passed", baseline
+        reference = baseline["variants"][0]["reference"]
+        baseline_dir = work / "out-baseline" / reference["directory"]
+        stored = json.loads(
+            (baseline_dir / "compiler.process.json").read_text())
+        argv_record = json.loads((baseline_dir / "argv.json").read_text())
+        assert stored["case"] == case["id"], stored
+        assert stored["role"] == "reference", stored
+        assert stored["operation"] == case["operation"], stored
+        assert stored["variant"] == variant, stored
+        assert stored["argv"] == argv_record["argv"], (stored, argv_record)
+        assert stored["cwd"] == argv_record["cwd"] == str(context["root"])
+        assert stored["timeout"] == context["timeout"], stored
+        assert stored["trace_path"] == "exec.log", stored
+        for key in ("exit", "timed_out", "cleanup_complete",
+                    "abandoned_pipes", "stdout_sha256", "stderr_sha256"):
+            assert stored[key] == reference[key], (key, stored, reference)
+        stdout_bytes = (baseline_dir / stored["stdout_path"]).read_bytes()
+        stderr_bytes = (baseline_dir / stored["stderr_path"]).read_bytes()
+        assert stored["stdout_sha256"] == corpus.digest_bytes(stdout_bytes)
+        assert stored["stderr_sha256"] == corpus.digest_bytes(stderr_bytes)
+        assert json.loads(stdout_bytes)["status"] == "ok"
+
+        case_path = (work / "out-baseline" / "cases" /
+                     (corpus.safe_name(case["id"]) + ".json"))
+        persisted = json.loads(case_path.read_text())
+        assert persisted == json.loads(json.dumps(corpus.public_run(baseline)))
+        assert persisted["status"] == "passed", persisted
+        assert persisted["variants"][0]["variant"] == variant, persisted
+
+        original = corpus._artifact_info
+        intercepted = []
+
+        def broken_artifacts(*args, **kwargs):
+            intercepted.append(args)
+            raise RuntimeError("injected artifact failure")
+
+        corpus._artifact_info = broken_artifacts
+        try:
+            corpus.run_case(case, ok, [], work / "out-crash", context)
+        except RuntimeError as error:
+            assert "injected artifact failure" in str(error), error
+        else:
+            raise AssertionError(
+                "injected artifact failure did not stop the run")
+        finally:
+            corpus._artifact_info = original
+        assert intercepted, intercepted
+        crash_dir = work / "out-crash" / reference["directory"]
+        early = json.loads((crash_dir / "compiler.process.json").read_text())
+
+        def normalized_argv(record, out_root):
+            return [part.replace(str(out_root), "<OUT>")
+                    for part in record["argv"]]
+
+        assert normalized_argv(early, work / "out-crash") == [
+            part.replace(str(work / "out-baseline"), "<OUT>")
+            for part in stored["argv"]], (early["argv"], stored["argv"])
+        for key in ("case", "role", "operation", "variant", "cwd",
+                    "timeout", "exit", "timed_out", "cleanup_complete",
+                    "abandoned_pipes", "stdout_path", "stderr_path",
+                    "stdout_sha256", "stderr_sha256", "trace_path"):
+            assert early[key] == stored[key], (key, early, stored)
+        for name in ("stdout.bin", "stderr.bin", "exec.log"):
+            assert (crash_dir / name).is_file(), (crash_dir, name)
+        assert (crash_dir / "stdout.bin").read_bytes() == stdout_bytes
+        assert (crash_dir / "stderr.bin").read_bytes() == stderr_bytes
+        assert not (crash_dir / "artifacts.json").exists()
+        assert not (work / "out-crash" / "cases").exists()
+
+        # A later case failing must not touch the already completed case file.
+        broken_case = fake_repeat_case("persist-broken")
+        corpus._artifact_info = broken_artifacts
+        try:
+            corpus.run_case(
+                broken_case, ok, [], work / "out-baseline", context)
+        except RuntimeError:
+            pass
+        finally:
+            corpus._artifact_info = original
+        assert not (work / "out-baseline" / "cases" /
+                    (corpus.safe_name(broken_case["id"]) + ".json")).exists()
+        assert json.loads(case_path.read_text()) == persisted
+
+        # Real compiler failure and timeout must stay failures in both records.
+        fail_compiler = write_fixture(
+            work, "persist_compiler_failure",
+            "import sys\n"
+            "print('compiler failed', file=sys.stderr, flush=True)\n"
+            "raise SystemExit(3)\n")
+        failing = corpus.run_case(
+            fake_repeat_case("persist-compiler-failure"), fail_compiler, [],
+            work / "out-failure", context)
+        assert failing["status"] == "failed", failing
+        failing_reference = failing["variants"][0]["reference"]
+        failing_dir = work / "out-failure" / failing_reference["directory"]
+        failing_process = json.loads(
+            (failing_dir / "compiler.process.json").read_text())
+        assert failing_process["exit"] == 3, failing_process
+        assert failing_process["exit"] == failing_reference["exit"]
+        assert failing_process["timed_out"] is False, failing_process
+        assert (failing_dir / failing_process["stderr_path"]).read_bytes() == (
+            b"compiler failed\n")
+        failure_path = (work / "out-failure" / "cases" /
+                      (corpus.safe_name("persist-compiler-failure") + ".json"))
+        failure_record = json.loads(failure_path.read_text())
+        assert failure_record["status"] == "failed", failure_record
+        assert failure_record == json.loads(
+            json.dumps(corpus.public_run(failing)))
+
+        hang = write_fixture(
+            work, "persist_hang", "import time\ntime.sleep(5)\n")
+        timeout_case = {
+            "id": "persist-timeout", "operation": "syntax",
+            "source_base64": base64.b64encode(b"package x; ?").decode("ascii"),
+            "expected": {"status": "error"},
+        }
+        timed = corpus.run_case(
+            timeout_case, hang, [], work / "out-timeout",
+            dict(context, timeout=0.3))
+        assert timed["status"] == "failed", timed
+        timed_reference = timed["variants"][0]["reference"]
+        assert timed_reference["timed_out"] is True, timed_reference
+        timed_process = json.loads(
+            (work / "out-timeout" / timed_reference["directory"] /
+             "compiler.process.json").read_text())
+        assert timed_process["timed_out"] is True, timed_process
+        assert timed_process["exit"] == -9, timed_process
+        assert timed_process["exit"] == timed_reference["exit"]
+        timeout_path = (work / "out-timeout" / "cases" /
+                        (corpus.safe_name(timeout_case["id"]) + ".json"))
+        timeout_record = json.loads(timeout_path.read_text())
+        assert timeout_record["status"] == "failed", timeout_record
+        assert timeout_record == json.loads(
+            json.dumps(corpus.public_run(timed)))
+
+        # The original non-empty run evidence rejection still protects them.
+        protected = failure_path.read_bytes()
+        try:
+            corpus.run_case(
+                fake_repeat_case("persist-compiler-failure"), fail_compiler,
+                [], work / "out-failure", context)
+        except corpus.CorpusError as error:
+            assert "not empty" in str(error), error
+        else:
+            raise AssertionError(
+                "reused a non-empty run evidence directory")
+        assert failure_path.read_bytes() == protected
+
+
 def check_generated_project_controls():
     manifest = (
         'schema_version=1\n[package]\nname="app"\n'
@@ -1454,10 +1617,11 @@ check_execution_fixture_repetitions()
 check_generated_project_controls()
 check_generated_assertion_corrections()
 check_timeout_signal_artifacts_and_cleanup()
+check_persisted_process_and_case_records()
 check_runner_and_expectation_inventory_negative()
 run_harness()
 check_native_helper_guard()
 check_full_coverage_is_not_a_pass()
 print("PASS: strict JSON, timeout/signal, cleanup, artifacts, expectations, "
-      "repetitions, coverage, public-CLI harness expectations, stage0 harness, "
-      "and legacy-helper rejection")
+      "repetitions, persisted compiler/case records, coverage, public-CLI "
+      "harness expectations, stage0 harness, and legacy-helper rejection")

@@ -1272,6 +1272,24 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
     timed_out = process["timed_out"]
     (directory / "stdout.bin").write_bytes(stdout)
     (directory / "stderr.bin").write_bytes(stderr)
+    write_json(directory / "compiler.process.json", {
+        "case": case["id"],
+        "role": role,
+        "operation": case["operation"],
+        "variant": variant,
+        "cwd": str(context["root"]),
+        "argv": command,
+        "timeout": context["timeout"],
+        "exit": exit_code,
+        "timed_out": timed_out,
+        "cleanup_complete": process["cleanup_complete"],
+        "abandoned_pipes": process["abandoned_pipes"],
+        "stdout_path": "stdout.bin",
+        "stderr_path": "stderr.bin",
+        "stdout_sha256": digest_bytes(stdout),
+        "stderr_sha256": digest_bytes(stderr),
+        "trace_path": "exec.log",
+    })
     after = snapshot_case(
         case, context["root"], directory, generated_root)
     failures = []
@@ -1535,6 +1553,9 @@ def run_case(case, reference, candidates, out_root, context):
         record["variants"].append(variant_record)
     if record["failures"]:
         record["status"] = "failed"
+    write_json(
+        out_root / "cases" / (safe_name(case["id"]) + ".json"),
+        public_run(record))
     return record
 
 

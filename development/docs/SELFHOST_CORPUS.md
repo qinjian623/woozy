@@ -288,9 +288,24 @@ dirty tracked corpus files: 1 (contracts/selfhost.json)
 ```text
 <out>/result.json
 <out>/inventory.used.json
-<out>/runs/<case>/<variant>/reference/{argv,input,exec,stdout,stderr,artifacts,diagnostics,out}
+<out>/cases/<case>.json
+<out>/runs/<case>/<variant>/reference/{argv,compiler.process,input,exec,stdout,stderr,artifacts,diagnostics,out}
 <out>/runs/<case>/<variant>/candidate<N>/{同上}
 ```
+
+两处即时记录只在真实数据已落盘后写入，不预填、不推导：
+
+- `compiler.process.json` 在编译器进程真实返回且原始 stdout/stderr 写盘后立即写入，
+  记录 case/role/operation/variant/cwd/argv、实际 timeout、exit、timed_out、
+  cleanup_complete、abandoned_pipes、原始流路径与 SHA-256，以及 `exec.log` 路径。
+  失败、信号或超时按实际字段保留；后续 trace/artifacts/diagnostics 处理即使抛错，
+  该文件也已在磁盘上。它不替代 `result.json` 的判定。
+- `cases/<case>.json` 在该 case 所有 variant、参考/候选运行、原期望检查和比较都完成、
+  状态已确定后写入，内容是 `run_case` 返回记录的公开字段（与写入 `result.json` 的
+  同一结构）。case 执行中途出异常时不写该文件，也不写成 passed 或不完整记录。
+
+这两个文件只是证据，不是 resume/reuse/cache：执行器仍要求空的输出根和空的 run
+证据目录，重复使用同一目录会像以前一样被拒绝，历史 evidence 目录不会被补造字段。
 
 ## 5. 本轮实际命令与结果
 
