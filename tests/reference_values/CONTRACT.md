@@ -80,10 +80,11 @@ Out of scope for this package:
   Note: `docs/SEMANTICS.md` §7.3 still records the earlier implementation
   limit “先支持无捕获的 func(A) i64”. The capturing-entry case follows the
   later Root-reviewed handoff in `REFERENCE_VALUES.md` §5 (thread context
-  holds `LangFn` then `A`) and is planned with the rest of LANG01. It is not a
-  claim that the current base or the old §7.3 wording already permits it. If
-  the integrator decides the §7.3 restriction remains authoritative for this
-  round, this case must be marked `unsupported` until that decision changes.
+  holds `LangFn` then `A`) and is planned with the rest of LANG01. By explicit
+  user decision std/thread is Native-only for this round: the case declares
+  `backends: ["native"]`; Python does not support capturing thread entries and
+  must report the case `not_run`/`unsupported`, never passed. This is the only
+  backend-scope exception in this table.
 
 ### Bound methods
 
@@ -118,10 +119,13 @@ Out of scope for this package:
 
 ## 3 Fixtures and expected values
 
-All manifests use `backend = "native"` and `word_bits = 64`; the source is
-backend-neutral, and Python/64 is intended to use the same project through the
-existing CLI. Positive cases assert `main` return `0` and internal scalar or
-container checks; they do not parse stdout.
+All manifests use `backend = "native"` and `word_bits = 64`. Except for the
+explicit Native-only thread case, Python/64 is intended to use the same
+project through the existing CLI. `thread-capture-scalar-arg` declares
+`backends: ["native"]` because std/thread is Native-only by user decision; a
+Python run must report it `not_run`/`unsupported`, never as passed. Positive
+cases assert `main` return `0` and internal scalar or container checks; they do
+not parse stdout.
 
 | # | Fixture | Kind | Independent expectation |
 |---|---|---|---|
@@ -210,7 +214,9 @@ run.
 - Drop/cleanup observation beyond what source-level checks can express.
 
 No `passed` status is claimed for any runtime or reject case. When the feature
-lands, these cases must be run on both backends before they are counted.
+lands, these cases must be run on their declared backends before they are
+counted: both backends by default, and Native only for the explicit
+`backends: ["native"]` thread case.
 
 ## 5 Pending CABI or binding fixtures
 

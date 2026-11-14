@@ -15,7 +15,7 @@
     "project_check": "Executed after the correction as a baseline only. At Root CLI 68b3cde the closure cases report E_CAPABILITY_UNAVAILABLE (capturing a local binding is unavailable) and all Weak cases report E_IMPORT_NOT_FOUND (std/weak is not provided). Bound-method cases currently report E_TYPE_MISMATCH (unknown struct field) because method values are not implemented. These failures are not expected-negative results and are not evidence of feature support.",
     "runtime": "Not run and not claimed. No fixture has been built or executed by Native or Python because the feature is not implemented at this base. The expected results below are the future target, not a pass record.",
     "reject": "Only the cases with kind=reject are expected to fail compilation after the feature exists. A runner must require the stated rejection behavior (capture read-only/move ownership, bound inout, or Weak target eligibility) and must not mark an arbitrary compile failure as a passing negative.",
-    "backends": "All source is backend-neutral. Manifests select native/64; Python/64 is intended to run the same project through the existing CLI with --backend python. Native O0/O2 and Python results are planned, not executed.",
+    "backends": "Manifests select native/64. The default target is both native/64 and Python/64 through the existing CLI with --backend python; the explicit exception is thread-capture-scalar-arg, whose per-case backends=[\"native\"] (std/thread is Native-only by user decision). Python must report that case not_run/unsupported, not passed. Native O0/O2 and Python results are planned, not executed.",
     "timeouts": "Thread fixtures use a finite std/thread.wait_for timeout. Weak liveness assertions rely on deterministic final strong-handle drop at lexical block exit for acyclic values; they do not assume collection of strong cycles.",
     "no_io_assertions": "Positive cases assert main return 0 and scalar/container checks. They do not parse stdout. A panic or build failure is not accepted as a normal result."
   },
@@ -692,6 +692,10 @@
     {
       "id": "thread-capture-scalar-arg",
       "manifest": "tests/reference_values/fixtures/thread-capture-scalar-arg/lang.toml",
+      "backends": [
+        "native"
+      ],
+      "backend_note": "std/thread is Native-only: the Python backend does not support capturing thread entries; this case is not run or passed on Python.",
       "kind": "runtime",
       "covers": [
         "thread_capture",
@@ -715,7 +719,7 @@
         ],
         "drop_condition": "The thread context must hold both the Fn environment and the scalar A. The entry copy retains the captured Vec for the worker, and the thread release path drops the Fn environment even though A is a scalar."
       },
-      "notes": "The captured Vec is only read concurrently, so no lock is required. The finite wait prevents an unbounded hanging test; a timeout returns a nonzero main code. Planned per REFERENCE_VALUES.md §5 thread handoff. docs/SEMANTICS.md §7.3 still records the earlier non-capturing-entry limit; if the integrator keeps that limit for this round, mark this case unsupported instead of passed."
+      "notes": "The captured Vec is only read concurrently, so no lock is required. The finite wait prevents an unbounded hanging test; a timeout returns a nonzero main code. Planned per REFERENCE_VALUES.md §5 thread handoff. By explicit user decision std/thread is Native-only for this round: the case declares backends=[\"native\"], the Python backend does not support capturing thread entries, and Python runs must report it not_run/unsupported, never passed."
     },
     {
       "id": "weak-empty-upgrade-none",
