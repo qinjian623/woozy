@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
-  "previous_git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
-  "frozen_at": "2026-11-14T03:28:37.585125+00:00",
+  "git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
+  "previous_git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
+  "frozen_at": "2026-11-14T03:53:48.929363+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,8 +31,8 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1329,
-    "manifests": 1009,
+    "tracked_wz": 1330,
+    "manifests": 1010,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
@@ -19864,8 +19864,8 @@
     },
     {
       "path": "tests/native/run.py",
-      "sha256": "5fa55c9212010e62045b4a850d6722e86b02ce4c409b040189ec9717831ab212",
-      "size": 15196,
+      "sha256": "d0741b998e83cf74759dd84a4468fb1ad8a5865cadd6c8a9494eddb9680f8fd2",
+      "size": 45394,
       "role": "runner_source",
       "assignment": []
     },
@@ -26286,6 +26286,39 @@
       "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
       "sha256": "714ba66be7a4dd0e98d5a9cc43611013945a0c2419e0d8bd7223bb0297a52272",
       "size": 2332,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeobs/lang.toml",
+      "sha256": "4222ca171e5dbb547590efd3fad4ff7f5c1faad1ad670cf392b9429c00c57cf9",
+      "size": 133,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeobs/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeobs/main.wz",
+      "sha256": "2910877f6820a798d13efdb4e5b114e0fa9423f083550df0175fe32f8335cd82",
+      "size": 13961,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeobs/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeobs/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeobs/run.py",
+      "sha256": "16d34b8d8422e3dd51d4ef0282f4ca9ae6d418362a1b597b6eec921fe5ecd861",
+      "size": 19944,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeobs/test_controls.py",
+      "sha256": "ae4bfa889a947d22affa9f0145911133043debcff8168b1e82454c7f49670b88",
+      "size": 4932,
       "role": "runner_source",
       "assignment": []
     }
@@ -84036,6 +84069,25 @@
         "execute_stdout": "",
         "execute_stderr": ""
       }
+    },
+    {
+      "id": "project:selfhost/tests/nativeobs/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativeobs/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeobs/run.py",
+      "runner_status": "component",
+      "reason": "Test-only Native observation driver: the runner stages production Wz modules and the driver entry, then checks scalar CFG/LLVM/object/link/ELF execution. This manifest is component input, not an ordinary public CLI project or a main-return-zero case.",
+      "tags": [
+        "selfhost"
+      ]
     }
   ],
   "runners": [
@@ -84661,8 +84713,8 @@
     },
     {
       "path": "tests/native/run.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Native scalar reference/Wz observation component runner; preserves private CFG/LLVM/object/link/ELF checks and does not establish full Native-family or ordinary public CLI coverage."
     },
     {
       "path": "tests/native/run_chat.py",
@@ -85273,11 +85325,21 @@
       "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
       "status": "component",
       "reason": "Portable controls call the real reference_result with a patched run function: two positive and five negative exit/status inputs; no compiler or component build."
+    },
+    {
+      "path": "selfhost/tests/nativeobs/run.py",
+      "status": "component",
+      "reason": "Native observation test-only component build/validation runner; no public CLI or complete Native-family pass."
+    },
+    {
+      "path": "selfhost/tests/nativeobs/test_controls.py",
+      "status": "component",
+      "reason": "Pure-Python Native observation timeout/process rejection controls; no Woozy compile or program execution."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
+    "to_git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85470,7 +85532,11 @@
       "tests/reference_closure_frontend/run_reference_closure_controls.py",
       "selfhost/tests/sema_generic_arity/run.py",
       "selfhost/tests/sema_generic_arity/src/main.wz",
-      "selfhost/tests/sema_generic_arity/test_process_controls.py"
+      "selfhost/tests/sema_generic_arity/test_process_controls.py",
+      "selfhost/tests/nativeobs/lang.toml",
+      "selfhost/tests/nativeobs/main.wz",
+      "selfhost/tests/nativeobs/run.py",
+      "selfhost/tests/nativeobs/test_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -85676,10 +85742,20 @@
         "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
         "origin_task_prefix": "880a9683",
         "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
+      },
+      {
+        "path": "tests/native/run.py",
+        "old_sha256": "5fa55c9212010e62045b4a850d6722e86b02ce4c409b040189ec9717831ab212",
+        "old_size": 15196,
+        "new_sha256": "d0741b998e83cf74759dd84a4468fb1ad8a5865cadd6c8a9494eddb9680f8fd2",
+        "new_size": 45394,
+        "commit": "7205663ec30ebbafec8ac235231c4231751e53be",
+        "acceptance": "Root independent nativeobs amendment; original Bridge357 delivery remains rejected/rev4",
+        "review": "checks/SH12d-nativeobs-root-amendment-20261114/independent-review.md"
       }
     ],
-    "new_freeze_path_count": 192,
-    "modified_freeze_path_count": 26,
+    "new_freeze_path_count": 196,
+    "modified_freeze_path_count": 27,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -85987,6 +86063,107 @@
       "new_O2_corpus_reexecuted_due_to_patch": false,
       "compiler_or_component_rebuilt": false,
       "frozen_files_and_runners_unchanged": true
+    },
+    "nativeobs_component_delta": {
+      "code_commit": "7205663ec30ebbafec8ac235231c4231751e53be",
+      "acceptance": "Root independent amendment accepted separately",
+      "amendment_tree": "checks/SH12d-nativeobs-root-amendment-20261114/tree",
+      "review": "checks/SH12d-nativeobs-root-amendment-20261114/independent-review.md",
+      "review_sha256": "2645f9951ec6138c8df8da1376e673b9ba42a97f41cc01e9654f3c9d8e85eaee",
+      "original_bridge_delivery": {
+        "task_prefix": "357e5bfc",
+        "status": "rejected",
+        "revision": 4,
+        "event": 946334,
+        "parent_ACK": 410,
+        "original_reports_owner_and_records_unchanged": true
+      },
+      "files": {
+        "tests/native/run.py": {
+          "old_sha256": "5fa55c9212010e62045b4a850d6722e86b02ce4c409b040189ec9717831ab212",
+          "new_sha256": "d0741b998e83cf74759dd84a4468fb1ad8a5865cadd6c8a9494eddb9680f8fd2",
+          "size": 45394
+        },
+        "selfhost/tests/nativeobs/run.py": {
+          "old_sha256": null,
+          "new_sha256": "16d34b8d8422e3dd51d4ef0282f4ca9ae6d418362a1b597b6eec921fe5ecd861",
+          "size": 19944
+        },
+        "selfhost/tests/nativeobs/main.wz": {
+          "old_sha256": null,
+          "new_sha256": "2910877f6820a798d13efdb4e5b114e0fa9423f083550df0175fe32f8335cd82",
+          "size": 13961
+        },
+        "selfhost/tests/nativeobs/lang.toml": {
+          "old_sha256": null,
+          "new_sha256": "4222ca171e5dbb547590efd3fad4ff7f5c1faad1ad670cf392b9429c00c57cf9",
+          "size": 133
+        },
+        "selfhost/tests/nativeobs/README.md": {
+          "old_sha256": null,
+          "new_sha256": "2c42d01430889e111c1953960df138a63ddebdf1853086103bdda4ff9c20b60e",
+          "size": 4186
+        },
+        "selfhost/tests/nativeobs/test_controls.py": {
+          "old_sha256": null,
+          "new_sha256": "ae4bfa889a947d22affa9f0145911133043debcff8168b1e82454c7f49670b88",
+          "size": 4932
+        }
+      },
+      "frozen_input_paths_added": [
+        "selfhost/tests/nativeobs/lang.toml",
+        "selfhost/tests/nativeobs/main.wz",
+        "selfhost/tests/nativeobs/run.py",
+        "selfhost/tests/nativeobs/test_controls.py"
+      ],
+      "frozen_input_path_modified": "tests/native/run.py",
+      "new_component_runners": [
+        "selfhost/tests/nativeobs/run.py",
+        "selfhost/tests/nativeobs/test_controls.py"
+      ],
+      "top_native_runner_classification": "component",
+      "all_92_existing_native_case_fields_unchanged": true,
+      "new_case": "project:selfhost/tests/nativeobs/lang.toml",
+      "new_case_classification": "disabled/compiler_project/component/expected:null; requires component staging and driver arguments, never an ordinary main-return-zero expectation",
+      "new_cases": 1,
+      "new_enabled_cases": 0,
+      "old_case_count": 1333,
+      "all_old_cases_fields_and_order_unchanged": true,
+      "counts": {
+        "total": 1334,
+        "enabled": 962,
+        "disabled": 372,
+        "required": 319,
+        "files": 2868,
+        "runners": 249
+      },
+      "existing_accepted_execution_scope": {
+        "scalar_cases": 41,
+        "optimization_levels": [
+          0,
+          2
+        ],
+        "rows": 82,
+        "shared_preflight": 38,
+        "exec_traces": 861,
+        "sealed_build_seconds_approximately": 939,
+        "original_records": "checks/SH12d-native-observation-single-correction-20261114",
+        "scope": "Native scalar component only; no complete Native-family or async pass"
+      },
+      "root_amendment_scope": "Two runners reject non-finite/non-positive timeouts; strict process_ok is used for build, reuse, smoke and full. Four pure-Python controls check actual runner functions with in-memory process fixtures.",
+      "amendment_validation": {
+        "controls_methods": 4,
+        "status": "passed in retained independent record; not rerun during integration",
+        "record": "checks/SH12d-nativeobs-root-amendment-20261114/independent-controls.json",
+        "no_compiler_or_program_execution": true
+      },
+      "original_driver_path_typo": "Original .work/nativeobs/driver/program[.o] report typo refers to actual driver-build/program[.o]; Root amendment README records the correction without rewriting original reports.",
+      "compiler_Source116_and_stdlib_and_gold_unchanged": true,
+      "public_cli_native_family_claimed": false,
+      "async_pass_claimed": false,
+      "compiler_or_driver_rebuilt": false,
+      "scalar_rows_reexecuted": false,
+      "running_jobs_operated": false
     }
   }
 }
