@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
-  "previous_git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
-  "frozen_at": "2026-11-14T09:21:57.024000+00:00",
+  "git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
+  "previous_git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
+  "frozen_at": "2026-11-14T10:39:24.474266+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,8 +31,8 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1331,
-    "manifests": 1011,
+    "tracked_wz": 1334,
+    "manifests": 1013,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
@@ -2000,8 +2000,8 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/b_call.wz",
-      "sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
-      "size": 43761,
+      "sha256": "505335fbdbd915ffd27e4e2753886e55747366ee1af0ea0440b95b6c5bc84670",
+      "size": 43863,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -2100,8 +2100,8 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/common.wz",
-      "sha256": "1cf966423ef4b16cb24e697ac22c548a9d319971f11b6d142d74892f67dd8065",
-      "size": 11826,
+      "sha256": "52727e10048eb6d3d4de9a01cc3916c9d74f43af7f17667d35c3c6a588d492a6",
+      "size": 12863,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -2120,8 +2120,8 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/run.wz",
-      "sha256": "0237d9a2b269db68c02df5d41012139c8520143561f00a00423f5595bac40bf8",
-      "size": 11915,
+      "sha256": "a1e78e3ef67698cc6e9b7f1f81b733d37326bf237f8b844fccf3365b8c1a9e10",
+      "size": 11695,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -3272,6 +3272,39 @@
       "manifest": "selfhost/tests/nativelower/lang.toml"
     },
     {
+      "path": "selfhost/tests/nativeobs/lang.toml",
+      "sha256": "4222ca171e5dbb547590efd3fad4ff7f5c1faad1ad670cf392b9429c00c57cf9",
+      "size": 133,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeobs/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeobs/main.wz",
+      "sha256": "2910877f6820a798d13efdb4e5b114e0fa9423f083550df0175fe32f8335cd82",
+      "size": 13961,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeobs/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeobs/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeobs/run.py",
+      "sha256": "16d34b8d8422e3dd51d4ef0282f4ca9ae6d418362a1b597b6eec921fe5ecd861",
+      "size": 19944,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeobs/test_controls.py",
+      "sha256": "ae4bfa889a947d22affa9f0145911133043debcff8168b1e82454c7f49670b88",
+      "size": 4932,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "selfhost/tests/nativeverify/callidentity/controls.py",
       "sha256": "2231d31e5fbe84b38b01918fa09079ea496bcb4bbcd397ed20966a3c2f58275e",
       "size": 13127,
@@ -3550,6 +3583,32 @@
       "manifest": "selfhost/tests/pattern/lang.toml"
     },
     {
+      "path": "selfhost/tests/phase-timing/lang.toml",
+      "sha256": "8bb780d65777851181ea073d5590184b19e5cb9a5db449d7cf05d6c1646e8d75",
+      "size": 136,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/phase-timing/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/phase-timing/main.wz",
+      "sha256": "c2892341e936396c2ea58b1852e7dedb57fc3151b4f312a736a06f87cb705948",
+      "size": 18691,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/phase-timing/lang.toml"
+      ],
+      "manifest": "selfhost/tests/phase-timing/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/phase-timing/run.py",
+      "sha256": "cf7a8d12a769ae31065c58c3f4c28ad1697971dae933048fa6968d212f628dcc",
+      "size": 31445,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "selfhost/tests/project/lang.toml",
       "sha256": "ac76ef354d67761143abec549922b12032719da1d0dd9356045a7af1c62a302c",
       "size": 168,
@@ -3706,6 +3765,25 @@
       "size": 32627,
       "role": "runner_source",
       "assignment": []
+    },
+    {
+      "path": "selfhost/tests/pythonobs/lang.toml",
+      "sha256": "fc197ff7bac8f976f7bcd89c8a83d150ce9b2f5433bd894c58197db1113b9c02",
+      "size": 131,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/pythonobs/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/pythonobs/src/main.wz",
+      "sha256": "def312dafd4ea3f11512bf4f3b9f43016c330c12a37e7dd5d767012e38cd9e3a",
+      "size": 12790,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonobs/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonobs/lang.toml"
     },
     {
       "path": "selfhost/tests/render/lang.toml",
@@ -3881,8 +3959,8 @@
     },
     {
       "path": "selfhost/tests/sema_a/helpers.wz",
-      "sha256": "6a0af0623041c73bbc2059cb59e04955c844bfa55e26502750c667fd5861bbaa",
-      "size": 27984,
+      "sha256": "e2bf3d4850f67e2e7985079fd059aa709a3946f6ae7ec9b918898718c1f21bb2",
+      "size": 28619,
       "role": "woozy_source",
       "assignment": [
         "project:selfhost/tests/sema_a/lang.toml"
@@ -4015,8 +4093,8 @@
     },
     {
       "path": "selfhost/tests/sema_common/helpers.wz",
-      "sha256": "79627c4bd7241cf5eb5e96b37c8f454e8907a1c3f34ab612716af8bae2b5741f",
-      "size": 20772,
+      "sha256": "45f55e6b58c1e7c670ba503718e487c262af3f59b4a037e62db0380244342914",
+      "size": 21415,
       "role": "woozy_source",
       "assignment": [
         "project:selfhost/tests/sema_common/lang.toml"
@@ -4048,6 +4126,68 @@
         "project:selfhost/tests/sema_common/lang.toml"
       ],
       "manifest": "selfhost/tests/sema_common/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/run.py",
+      "sha256": "f76f9c191efdf848b9fb8e7f77b8f82039bb14ad0d5e669af8380f4027a42b29",
+      "size": 20640,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/src/main.wz",
+      "sha256": "245d28c99b074189655fd8aa2c61d9a680bd692b4a21bd9026e5c46a189d0abf",
+      "size": 2329,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/lang.toml"
+      ],
+      "manifest": "selfhost/lang.toml",
+      "component_runner": "selfhost/tests/sema_generic_arity/run.py",
+      "reason": "Auxiliary driver staged by the generic-arity Sema component; not a standalone CLI corpus project or full compiler proof"
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
+      "sha256": "714ba66be7a4dd0e98d5a9cc43611013945a0c2419e0d8bd7223bb0297a52272",
+      "size": 2332,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_node_index/lang.toml",
+      "sha256": "4872783a81b26546723dce96e60bc7e668a6bfc178181e47b3c97f4aef943401",
+      "size": 86,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/sema_node_index/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_node_index/node_index_test.wz",
+      "sha256": "1f9aa2c84a354e6d94670502fef21c3c45e8ab328fd7dd51fcb45679ab781a74",
+      "size": 32117,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/sema_node_index/lang.toml"
+      ],
+      "manifest": "selfhost/tests/sema_node_index/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_node_index/run.py",
+      "sha256": "61c24d9c412efbb859a1bbf2d133c5b1686ae5a79ea5292f6d034ddb6e866792",
+      "size": 20414,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_node_index/src/main.wz",
+      "sha256": "b23f16ed2869d1f8db5be94af815be1a4850cf63986c99fa8e4ce9e0919df936",
+      "size": 883,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/sema_node_index/lang.toml"
+      ],
+      "manifest": "selfhost/tests/sema_node_index/lang.toml"
     },
     {
       "path": "selfhost/tests/sema_recursion/run.py",
@@ -6629,6 +6769,13 @@
       "path": "tests/bootstrap/readiness/run.py",
       "sha256": "d91aef0c83534df8dbf16b4079860196ae3ceff6f637d0f9a9bc03a676c06af5",
       "size": 39156,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/bootstrap/readiness/test_runner_controls.py",
+      "sha256": "ef053623b27ac818bf94cd37230a05ebeebf0379976dd0b6d60484dad1dcc61f",
+      "size": 7309,
       "role": "runner_source",
       "assignment": []
     },
@@ -15646,6 +15793,13 @@
       "assignment": []
     },
     {
+      "path": "tests/native/c_retained_capturing/test_controls.py",
+      "sha256": "fe80a9bedc5e56e1d3eaebdb39a2946936cb08b0fbe7ac14afad6d8ecd8d4c74",
+      "size": 21722,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/native/c_retained_static/CMakeLists.txt",
       "sha256": "9e60857ada50da6741e6e74a8588f0f49de73863b4633d3d62cf567776360366",
       "size": 1764,
@@ -19821,8 +19975,8 @@
     },
     {
       "path": "tests/native/process/run_process.py",
-      "sha256": "55b21ddb41120d2a343bb9cfb6e3cf1c3b5c2486e2fb5cb72a2586762ed8d44f",
-      "size": 3061,
+      "sha256": "a5dc751c7c0c68a3863f43bb321751b15e5af862f80291c2af7e55dcd1d5cbb0",
+      "size": 36911,
       "role": "runner_source",
       "assignment": []
     },
@@ -19835,6 +19989,13 @@
         "project:tests/native/process/lang.toml"
       ],
       "manifest": "tests/native/process/lang.toml"
+    },
+    {
+      "path": "tests/native/process/test_controls.py",
+      "sha256": "0157e4727ef32f1492563a58e68f1fc2cadd92879deb82ec757301df55d24fc3",
+      "size": 16344,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "tests/native/reference_values_backend/fixtures/function-abi/lang.toml",
@@ -24189,6 +24350,27 @@
       "assignment": []
     },
     {
+      "path": "tests/python/slice_source/runner_controls.py",
+      "sha256": "ec13a21f31f3fa573013759e6a8431675e94f6f5e616e6dca8fff6dcc08e2db4",
+      "size": 11039,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/python/slice_source/test_runner_controls.py",
+      "sha256": "55e608cb35a27207dc76971588b3a98c5632c94e66ff15ba0623362fc7812c37",
+      "size": 3257,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/python/string_binding_controls.py",
+      "sha256": "ee93bcc9ce24866e55ec249c3f5a539826ba0269a55d54a6a2d02affb15b26b6",
+      "size": 4913,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/python/string_cases.py",
       "sha256": "c1c7e3af48da2c667787d45c4d28f67840f40b12a012283c93fdaeff5fecfc14",
       "size": 12331,
@@ -24471,6 +24653,20 @@
       "assignment": []
     },
     {
+      "path": "tests/python/weak_source/runner_controls.py",
+      "role": "runner_source",
+      "assignment": [],
+      "sha256": "9051432296a3371fcdad1d0cbe96c4120dfc21effcb78ece712634ea541c1e91",
+      "size": 8644
+    },
+    {
+      "path": "tests/python/weak_source/test_runner_controls.py",
+      "role": "runner_source",
+      "assignment": [],
+      "sha256": "a02454322d5e299a36224612fd47a60f139b0780e6247300fd42f6d6ec69b409",
+      "size": 5984
+    },
+    {
       "path": "tests/python_bindings/cases.json",
       "sha256": "151299e01a533ca5fb851b24286932aab98f671b0682bd1efb9010804ed1ec91",
       "size": 33549,
@@ -24629,6 +24825,13 @@
       "path": "tests/reference_closure_frontend/run_reference_closure_cases.py",
       "sha256": "bcb672b238d6544a73637909cff842fc59057f31416e704f0f8a352fcfa3d089",
       "size": 16437,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "sha256": "19dce463ea408d1d7bdffdca1f9ca2bdac53b02b139f0784382ceb268c706d46",
+      "size": 12877,
       "role": "runner_source",
       "assignment": []
     },
@@ -26257,140 +26460,6 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "sha256": "abe5d25af264e6ed22a20ee190b3a207b0b8af73566a67a48d1d50635f6084fa",
       "size": 9098,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
-      "sha256": "19dce463ea408d1d7bdffdca1f9ca2bdac53b02b139f0784382ceb268c706d46",
-      "size": 12877,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/sema_generic_arity/run.py",
-      "sha256": "f76f9c191efdf848b9fb8e7f77b8f82039bb14ad0d5e669af8380f4027a42b29",
-      "size": 20640,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/sema_generic_arity/src/main.wz",
-      "sha256": "245d28c99b074189655fd8aa2c61d9a680bd692b4a21bd9026e5c46a189d0abf",
-      "size": 2329,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/lang.toml"
-      ],
-      "manifest": "selfhost/lang.toml",
-      "component_runner": "selfhost/tests/sema_generic_arity/run.py",
-      "reason": "Auxiliary driver staged by the generic-arity Sema component; not a standalone CLI corpus project or full compiler proof"
-    },
-    {
-      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
-      "sha256": "714ba66be7a4dd0e98d5a9cc43611013945a0c2419e0d8bd7223bb0297a52272",
-      "size": 2332,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/nativeobs/lang.toml",
-      "sha256": "4222ca171e5dbb547590efd3fad4ff7f5c1faad1ad670cf392b9429c00c57cf9",
-      "size": 133,
-      "role": "manifest",
-      "assignment": [
-        "project:selfhost/tests/nativeobs/lang.toml"
-      ]
-    },
-    {
-      "path": "selfhost/tests/nativeobs/main.wz",
-      "sha256": "2910877f6820a798d13efdb4e5b114e0fa9423f083550df0175fe32f8335cd82",
-      "size": 13961,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/tests/nativeobs/lang.toml"
-      ],
-      "manifest": "selfhost/tests/nativeobs/lang.toml"
-    },
-    {
-      "path": "selfhost/tests/nativeobs/run.py",
-      "sha256": "16d34b8d8422e3dd51d4ef0282f4ca9ae6d418362a1b597b6eec921fe5ecd861",
-      "size": 19944,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/nativeobs/test_controls.py",
-      "sha256": "ae4bfa889a947d22affa9f0145911133043debcff8168b1e82454c7f49670b88",
-      "size": 4932,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/pythonobs/lang.toml",
-      "sha256": "fc197ff7bac8f976f7bcd89c8a83d150ce9b2f5433bd894c58197db1113b9c02",
-      "size": 131,
-      "role": "manifest",
-      "assignment": [
-        "project:selfhost/tests/pythonobs/lang.toml"
-      ]
-    },
-    {
-      "path": "selfhost/tests/pythonobs/src/main.wz",
-      "sha256": "def312dafd4ea3f11512bf4f3b9f43016c330c12a37e7dd5d767012e38cd9e3a",
-      "size": 12790,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/tests/pythonobs/lang.toml"
-      ],
-      "manifest": "selfhost/tests/pythonobs/lang.toml"
-    },
-    {
-      "path": "tests/python/slice_source/runner_controls.py",
-      "sha256": "ec13a21f31f3fa573013759e6a8431675e94f6f5e616e6dca8fff6dcc08e2db4",
-      "size": 11039,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/python/slice_source/test_runner_controls.py",
-      "sha256": "55e608cb35a27207dc76971588b3a98c5632c94e66ff15ba0623362fc7812c37",
-      "size": 3257,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/bootstrap/readiness/test_runner_controls.py",
-      "sha256": "ef053623b27ac818bf94cd37230a05ebeebf0379976dd0b6d60484dad1dcc61f",
-      "size": 7309,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/python/weak_source/runner_controls.py",
-      "role": "runner_source",
-      "assignment": [],
-      "sha256": "9051432296a3371fcdad1d0cbe96c4120dfc21effcb78ece712634ea541c1e91",
-      "size": 8644
-    },
-    {
-      "path": "tests/python/weak_source/test_runner_controls.py",
-      "role": "runner_source",
-      "assignment": [],
-      "sha256": "a02454322d5e299a36224612fd47a60f139b0780e6247300fd42f6d6ec69b409",
-      "size": 5984
-    },
-    {
-      "path": "tests/python/string_binding_controls.py",
-      "sha256": "ee93bcc9ce24866e55ec249c3f5a539826ba0269a55d54a6a2d02affb15b26b6",
-      "size": 4913,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/native/c_retained_capturing/test_controls.py",
-      "sha256": "fe80a9bedc5e56e1d3eaebdb39a2946936cb08b0fbe7ac14afad6d8ecd8d4c74",
-      "size": 21722,
       "role": "runner_source",
       "assignment": []
     }
@@ -85034,6 +85103,44 @@
         "reference_and_candidate_program_sha256": "8d30d2442ed7554f2fee197dd53ff75c6b5b7dcda416607f774c753296db8667",
         "generated_runtime_sha256": "e91cf920457a72e925684ca64be33d6bfc6ceaf464387e07ef832e7f6f17b7a5"
       }
+    },
+    {
+      "id": "project:selfhost/tests/sema_node_index/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/sema_node_index/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/sema_node_index/run.py",
+      "runner_status": "component",
+      "reason": "Test-only sema node-key index component: the runner stages production modules, test helpers and the entry. This manifest is not an ordinary public CLI main case; private assertions/benchmark observations do not enable it.",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/phase-timing/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/phase-timing/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/phase-timing/run.py",
+      "runner_status": "component",
+      "reason": "Private diagnostic phase-timing component pinned to historical da69 Source116; it cannot directly run the current ed1 Source. Its retained 60-second Source measurement timed out in HIR verification. This manifest is staging input, not an ordinary public CLI project or completed program execution.",
+      "tags": [
+        "selfhost"
+      ]
     }
   ],
   "runners": [
@@ -85193,6 +85300,16 @@
       "reason": "Native CFG lowering/dump component test; not a public CLI/corpus pass"
     },
     {
+      "path": "selfhost/tests/nativeobs/run.py",
+      "status": "component",
+      "reason": "Native observation test-only component build/validation runner; no public CLI or complete Native-family pass."
+    },
+    {
+      "path": "selfhost/tests/nativeobs/test_controls.py",
+      "status": "component",
+      "reason": "Pure-Python Native observation timeout/process rejection controls; no Woozy compile or program execution."
+    },
+    {
       "path": "selfhost/tests/nativeverify/callidentity/controls.py",
       "status": "component",
       "reason": "component negative-control helper for callidentity; not a public_cli pass"
@@ -85248,6 +85365,11 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/phase-timing/run.py",
+      "status": "component",
+      "reason": "Private diagnostic component pinned to historical da69 Source116. It rejects the current ed1 Source map; retained 60-second measurement timed out and is not a public CLI or performance pass."
+    },
+    {
       "path": "selfhost/tests/project/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -85291,6 +85413,21 @@
       "path": "selfhost/tests/sema_common/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/run.py",
+      "status": "component",
+      "reason": "Real project/resolve/Sema O0 component driver with ten cases and retained ELF/C++ twenty-command replay. Compares diagnostic fields, primary byte spans and related/fixit/note counts, not full JSON or complete CLI/corpus parity."
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
+      "status": "component",
+      "reason": "Portable controls call the real reference_result with a patched run function: two positive and five negative exit/status inputs; no compiler or component build."
+    },
+    {
+      "path": "selfhost/tests/sema_node_index/run.py",
+      "status": "component",
+      "reason": "Test-only sema node-key index component staging/benchmark runner; accepted 315 component assertions and existing common/A checks do not establish complete public compiler success."
     },
     {
       "path": "selfhost/tests/sema_recursion/run.py",
@@ -85371,6 +85508,11 @@
       "path": "tests/bootstrap/readiness/run.py",
       "status": "adaptation_required",
       "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+    },
+    {
+      "path": "tests/bootstrap/readiness/test_runner_controls.py",
+      "status": "component",
+      "reason": "Only this exact readiness test script runs nine small process/error/stdin controls; it does not compile a candidate or complete the readiness suite."
     },
     {
       "path": "tests/generics/map_budget/run.py",
@@ -85548,6 +85690,11 @@
       "reason": "Dedicated capturing-C callback component requires the original Source tests plus C-only lifecycle, exact shared-library load, runtime symbols and core ELF observations. The public compiler routes are recorded separately by role; all20 existing corpus rows remain disabled/required because ordinary schema does not express the full component assertions."
     },
     {
+      "path": "tests/native/c_retained_capturing/test_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for capturing-C callback evidence: strict process/JSON rejection, loader full-path match, actual auto/require routing, proposal fields and fixed budgets. External process and network calls are blocked; no compiler, C, LLVM or program execution."
+    },
+    {
       "path": "tests/native/c_retained_static/run_retained_static.py",
       "status": "adaptation_required",
       "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
@@ -85649,8 +85796,13 @@
     },
     {
       "path": "tests/native/process/run_process.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Accepted test runner for bounded Native process/raw-byte/ELF observations and Python capability rejection. Historical candidate build timeout and unrun program rows remain failures; no complete new CLI pass is claimed."
+    },
+    {
+      "path": "tests/native/process/test_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for the process runner record, raw-byte, exit, timeout and collision checks; no compiler or fixture-program execution."
     },
     {
       "path": "tests/native/reference_values_backend/run_reference_values_backend.py",
@@ -86158,6 +86310,21 @@
       "reason": "Slice public CLI/Wz API observation component runner, including byte comparisons and unchanged GC/ownership observers; not an ordinary public CLI or full Python-family conformance claim."
     },
     {
+      "path": "tests/python/slice_source/runner_controls.py",
+      "status": "component",
+      "reason": "Slice runner helper rejection controls, including optional real driver I/O checks; not a public CLI corpus case."
+    },
+    {
+      "path": "tests/python/slice_source/test_runner_controls.py",
+      "status": "component",
+      "reason": "Pure-Python tests of strict process fields, I/O-result validation and finite timeouts; no compiler, driver, observer or program execution."
+    },
+    {
+      "path": "tests/python/string_binding_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for the string-binding runner: strict process flags, published real symbol metadata, generated-byte comparison before host copy and refusal to overwrite evidence. No Source or compiler execution."
+    },
+    {
       "path": "tests/python/string_cases.py",
       "status": "component",
       "reason": "test helper/input/observer module; no independent compiler entrypoint"
@@ -86198,6 +86365,16 @@
       "reason": "Python Weak public CLI plus Wz API component with same-group file comparison and extra Weak/GC observer assertions; those observations require the dedicated runner and are not ordinary corpus execute checks."
     },
     {
+      "path": "tests/python/weak_source/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python rejection controls for the Weak runner; only a tiny fake-observer Python child, no Woozy Source compiler or generated Weak program."
+    },
+    {
+      "path": "tests/python/weak_source/test_runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python unit tests for strict exit/JSON/timeout fields and real .wz-file validation; no compiler or generated program execution."
+    },
+    {
       "path": "tests/python_bindings/conformance.py",
       "status": "component",
       "reason": "test helper/input/observer module; no independent compiler entrypoint"
@@ -86211,6 +86388,11 @@
       "path": "tests/reference_closure_frontend/run_reference_closure_cases.py",
       "status": "public_cli",
       "reason": "Public build/run CLI entry; accepted runner preserves negative/no-output checks, records errors and timeouts, and continues later cases. Native thread expectations remain unchanged; the metadata-excluded Python thread branch is not_run, never passed. Prior matrices and failures remain historical evidence."
+    },
+    {
+      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "status": "component",
+      "reason": "Portable function-level error, timeout, continuation and Native-only metadata controls. Build is stubbed and small child programs execute through the real process boundary; this is not an independent compiler entry."
     },
     {
       "path": "tests/run_isolated.py",
@@ -86256,71 +86438,11 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "status": "public_cli",
       "reason": "Public check/build CLI entry confirmed by SH11b. Reference completed 22 fixtures; old Wz39ac passed 9 rejects and all 13 accepts failed at the first Python check. No claim that the new Source CLI or all runtime branches passed."
-    },
-    {
-      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
-      "status": "component",
-      "reason": "Portable function-level error, timeout, continuation and Native-only metadata controls. Build is stubbed and small child programs execute through the real process boundary; this is not an independent compiler entry."
-    },
-    {
-      "path": "selfhost/tests/sema_generic_arity/run.py",
-      "status": "component",
-      "reason": "Real project/resolve/Sema O0 component driver with ten cases and retained ELF/C++ twenty-command replay. Compares diagnostic fields, primary byte spans and related/fixit/note counts, not full JSON or complete CLI/corpus parity."
-    },
-    {
-      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
-      "status": "component",
-      "reason": "Portable controls call the real reference_result with a patched run function: two positive and five negative exit/status inputs; no compiler or component build."
-    },
-    {
-      "path": "selfhost/tests/nativeobs/run.py",
-      "status": "component",
-      "reason": "Native observation test-only component build/validation runner; no public CLI or complete Native-family pass."
-    },
-    {
-      "path": "selfhost/tests/nativeobs/test_controls.py",
-      "status": "component",
-      "reason": "Pure-Python Native observation timeout/process rejection controls; no Woozy compile or program execution."
-    },
-    {
-      "path": "tests/python/slice_source/runner_controls.py",
-      "status": "component",
-      "reason": "Slice runner helper rejection controls, including optional real driver I/O checks; not a public CLI corpus case."
-    },
-    {
-      "path": "tests/python/slice_source/test_runner_controls.py",
-      "status": "component",
-      "reason": "Pure-Python tests of strict process fields, I/O-result validation and finite timeouts; no compiler, driver, observer or program execution."
-    },
-    {
-      "path": "tests/bootstrap/readiness/test_runner_controls.py",
-      "status": "component",
-      "reason": "Only this exact readiness test script runs nine small process/error/stdin controls; it does not compile a candidate or complete the readiness suite."
-    },
-    {
-      "path": "tests/python/weak_source/runner_controls.py",
-      "status": "component",
-      "reason": "Pure Python rejection controls for the Weak runner; only a tiny fake-observer Python child, no Woozy Source compiler or generated Weak program."
-    },
-    {
-      "path": "tests/python/weak_source/test_runner_controls.py",
-      "status": "component",
-      "reason": "Pure Python unit tests for strict exit/JSON/timeout fields and real .wz-file validation; no compiler or generated program execution."
-    },
-    {
-      "path": "tests/python/string_binding_controls.py",
-      "status": "component",
-      "reason": "Pure Python controls for the string-binding runner: strict process flags, published real symbol metadata, generated-byte comparison before host copy and refusal to overwrite evidence. No Source or compiler execution."
-    },
-    {
-      "path": "tests/native/c_retained_capturing/test_controls.py",
-      "status": "component",
-      "reason": "Pure Python controls for capturing-C callback evidence: strict process/JSON rejection, loader full-path match, actual auto/require routing, proposal fields and fixed budgets. External process and network calls are blocked; no compiler, C, LLVM or program execution."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
+    "to_git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86526,7 +86648,15 @@
       "tests/python/weak_source/runner_controls.py",
       "tests/python/weak_source/test_runner_controls.py",
       "tests/python/string_binding_controls.py",
-      "tests/native/c_retained_capturing/test_controls.py"
+      "tests/native/c_retained_capturing/test_controls.py",
+      "selfhost/tests/sema_node_index/lang.toml",
+      "selfhost/tests/sema_node_index/node_index_test.wz",
+      "selfhost/tests/sema_node_index/run.py",
+      "selfhost/tests/sema_node_index/src/main.wz",
+      "tests/native/process/test_controls.py",
+      "selfhost/tests/phase-timing/run.py",
+      "selfhost/tests/phase-timing/main.wz",
+      "selfhost/tests/phase-timing/lang.toml"
     ],
     "modified_freeze_paths": [
       {
@@ -86732,11 +86862,26 @@
         "path": "selfhost/src/wzcc/sema/b_call.wz",
         "old_sha256": "398b4d4c75fd2ffe867ec763753afe9906a994fd16c0b984eb87675cf40311c0",
         "old_size": 43761,
-        "new_sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
-        "new_size": 43761,
-        "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
-        "origin_task_prefix": "880a9683",
-        "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
+        "new_sha256": "505335fbdbd915ffd27e4e2753886e55747366ee1af0ea0440b95b6c5bc84670",
+        "new_size": 43863,
+        "commit": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
+        "origin_task_prefix": "11bea8c8",
+        "review_basis": "SH15 node-key index Root-controlled amendment and accepted component results; current Source hash, no new full CLI execution.",
+        "history": [
+          {
+            "path": "selfhost/src/wzcc/sema/b_call.wz",
+            "old_sha256": "398b4d4c75fd2ffe867ec763753afe9906a994fd16c0b984eb87675cf40311c0",
+            "old_size": 43761,
+            "new_sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
+            "new_size": 43761,
+            "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+            "origin_task_prefix": "880a9683",
+            "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
+          }
+        ],
+        "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b",
+        "review": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
       },
       {
         "path": "selfhost/src/wzcc/sema/b_call2.wz",
@@ -86901,10 +87046,65 @@
         "accepted_task": "633da2df-6f80-44d9-bee5-97e8f9e89877",
         "acceptance": "IO runner sole compatibility correction accepted, ACK952720,parent437. Original72dc20s candidate failures retained; no performance or full product pass claim.",
         "review": "checks/SH15-io-errors-correction-independent-review-20261114.json"
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/common.wz",
+        "old_sha256": "1cf966423ef4b16cb24e697ac22c548a9d319971f11b6d142d74892f67dd8065",
+        "old_size": 11826,
+        "new_sha256": "52727e10048eb6d3d4de9a01cc3916c9d74f43af7f17667d35c3c6a588d492a6",
+        "new_size": 12863,
+        "commit": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
+        "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b",
+        "review": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/run.wz",
+        "old_sha256": "0237d9a2b269db68c02df5d41012139c8520143561f00a00423f5595bac40bf8",
+        "old_size": 11915,
+        "new_sha256": "a1e78e3ef67698cc6e9b7f1f81b733d37326bf237f8b844fccf3365b8c1a9e10",
+        "new_size": 11695,
+        "commit": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
+        "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b",
+        "review": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
+      },
+      {
+        "path": "selfhost/tests/sema_common/helpers.wz",
+        "old_sha256": "79627c4bd7241cf5eb5e96b37c8f454e8907a1c3f34ab612716af8bae2b5741f",
+        "old_size": 20772,
+        "new_sha256": "45f55e6b58c1e7c670ba503718e487c262af3f59b4a037e62db0380244342914",
+        "new_size": 21415,
+        "commit": "f847bd1c78fee7143ecc661286963e56d3099d62",
+        "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b",
+        "review": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
+      },
+      {
+        "path": "selfhost/tests/sema_a/helpers.wz",
+        "old_sha256": "6a0af0623041c73bbc2059cb59e04955c844bfa55e26502750c667fd5861bbaa",
+        "old_size": 27984,
+        "new_sha256": "e2bf3d4850f67e2e7985079fd059aa709a3946f6ae7ec9b918898718c1f21bb2",
+        "new_size": 28619,
+        "commit": "f847bd1c78fee7143ecc661286963e56d3099d62",
+        "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b",
+        "review": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
+      },
+      {
+        "path": "tests/native/process/run_process.py",
+        "old_sha256": "55b21ddb41120d2a343bb9cfb6e3cf1c3b5c2486e2fb5cb72a2586762ed8d44f",
+        "old_size": 3061,
+        "new_sha256": "a5dc751c7c0c68a3863f43bb321751b15e5af862f80291c2af7e55dcd1d5cbb0",
+        "new_size": 36911,
+        "commit": "3f934818195973c3f9b54201232299c4db56a571",
+        "accepted_task": "e0e172f2-e9e2-404b-8aac-50463551fd78",
+        "review": "checks/SH15-process-correction-Root-amendment-20261114/Root-review.json",
+        "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
       }
     ],
-    "new_freeze_path_count": 205,
-    "modified_freeze_path_count": 40,
+    "new_freeze_path_count": 213,
+    "modified_freeze_path_count": 45,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -88164,8 +88364,8 @@
       },
       "current_modified_freeze_size": 81759
     },
-    "compiler_source_current_map_sha256": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
-    "compiler_source_current_code_commit": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+    "compiler_source_current_map_sha256": "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09",
+    "compiler_source_current_code_commit": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
     "hir_function_const_three_file_integration": {
       "base_commit": "dc7f9200e3d738157439ac864e5d075a90a2bf1d",
       "code_commit": "384328c89ec36948b403b781a42e9fab63f94069",
@@ -88766,6 +88966,274 @@
         "required": 305,
         "files": 2877,
         "runners": 256
+      }
+    },
+    "SH15_accepted_batch_integration": {
+      "base_commit": "7477e83a67d84aa7205148ce606606c5e2a41c97",
+      "code_commits": {
+        "production": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
+        "sema-tests": "f847bd1c78fee7143ecc661286963e56d3099d62",
+        "process": "3f934818195973c3f9b54201232299c4db56a571",
+        "phase": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c"
+      },
+      "Root_reviews": [
+        {
+          "path": "checks/SH15-sema-node-index-Root-amendment-20261114/Root-review.json",
+          "sha256": "e40c652b024e1dfe6a4322a157da4f374d51a9de780c51ace59485d7cfd88d5d",
+          "accepted_task": "11bea8c8-ccb3-456f-96ce-94aca519a29b"
+        },
+        {
+          "path": "checks/SH15-process-correction-Root-amendment-20261114/Root-review.json",
+          "sha256": "bd5eedfab3d3ad3a7e8ad59748f673cf17d2ec90b1709048a8bf493ac590d437",
+          "accepted_task": "e0e172f2-e9e2-404b-8aac-50463551fd78"
+        },
+        {
+          "path": "checks/SH15-private-phase-timing-Root-review-20261114/Root-review.json",
+          "sha256": "63ec0c129d1d70ded63f14da586a48035358db44d2628d9687d36cc2fd03309a",
+          "accepted_task": "68146dfe-f9d9-494c-b21d-fe7fd1d9ddb2"
+        }
+      ],
+      "files": [
+        {
+          "path": "selfhost/src/wzcc/sema/common.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": "1cf966423ef4b16cb24e697ac22c548a9d319971f11b6d142d74892f67dd8065",
+          "before_size": 11826,
+          "HEAD_tracked": true,
+          "after_sha256": "52727e10048eb6d3d4de9a01cc3916c9d74f43af7f17667d35c3c6a588d492a6",
+          "after_size": 12863,
+          "diff_lines": 53
+        },
+        {
+          "path": "selfhost/src/wzcc/sema/run.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": "0237d9a2b269db68c02df5d41012139c8520143561f00a00423f5595bac40bf8",
+          "before_size": 11915,
+          "HEAD_tracked": true,
+          "after_sha256": "a1e78e3ef67698cc6e9b7f1f81b733d37326bf237f8b844fccf3365b8c1a9e10",
+          "after_size": 11695,
+          "diff_lines": 23
+        },
+        {
+          "path": "selfhost/src/wzcc/sema/b_call.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
+          "before_size": 43761,
+          "HEAD_tracked": true,
+          "after_sha256": "505335fbdbd915ffd27e4e2753886e55747366ee1af0ea0440b95b6c5bc84670",
+          "after_size": 43863,
+          "diff_lines": 17
+        },
+        {
+          "path": "selfhost/tests/sema_common/helpers.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": "79627c4bd7241cf5eb5e96b37c8f454e8907a1c3f34ab612716af8bae2b5741f",
+          "before_size": 20772,
+          "HEAD_tracked": true,
+          "after_sha256": "45f55e6b58c1e7c670ba503718e487c262af3f59b4a037e62db0380244342914",
+          "after_size": 21415,
+          "diff_lines": 35
+        },
+        {
+          "path": "selfhost/tests/sema_a/helpers.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": "6a0af0623041c73bbc2059cb59e04955c844bfa55e26502750c667fd5861bbaa",
+          "before_size": 27984,
+          "HEAD_tracked": true,
+          "after_sha256": "e2bf3d4850f67e2e7985079fd059aa709a3946f6ae7ec9b918898718c1f21bb2",
+          "after_size": 28619,
+          "diff_lines": 42
+        },
+        {
+          "path": "selfhost/tests/sema_node_index/README.md",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "0c132a22015d99ce6e450cc68a5151c8c8da13c6eadb5520459da56d094319bf",
+          "after_size": 2933,
+          "diff_lines": 57
+        },
+        {
+          "path": "selfhost/tests/sema_node_index/lang.toml",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "4872783a81b26546723dce96e60bc7e668a6bfc178181e47b3c97f4aef943401",
+          "after_size": 86,
+          "diff_lines": 8
+        },
+        {
+          "path": "selfhost/tests/sema_node_index/node_index_test.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "1f9aa2c84a354e6d94670502fef21c3c45e8ab328fd7dd51fcb45679ab781a74",
+          "after_size": 32117,
+          "diff_lines": 761
+        },
+        {
+          "path": "selfhost/tests/sema_node_index/run.py",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "61c24d9c412efbb859a1bbf2d133c5b1686ae5a79ea5292f6d034ddb6e866792",
+          "after_size": 20414,
+          "diff_lines": 485
+        },
+        {
+          "path": "selfhost/tests/sema_node_index/src/main.wz",
+          "group": "SH15-sema-node-index-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "b23f16ed2869d1f8db5be94af815be1a4850cf63986c99fa8e4ce9e0919df936",
+          "after_size": 883,
+          "diff_lines": 34
+        },
+        {
+          "path": "tests/native/process/run_process.py",
+          "group": "SH15-process-correction-Root-amendment-20261114",
+          "before_sha256": "55b21ddb41120d2a343bb9cfb6e3cf1c3b5c2486e2fb5cb72a2586762ed8d44f",
+          "before_size": 3061,
+          "HEAD_tracked": true,
+          "after_sha256": "a5dc751c7c0c68a3863f43bb321751b15e5af862f80291c2af7e55dcd1d5cbb0",
+          "after_size": 36911,
+          "diff_lines": 937
+        },
+        {
+          "path": "tests/native/process/test_controls.py",
+          "group": "SH15-process-correction-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "0157e4727ef32f1492563a58e68f1fc2cadd92879deb82ec757301df55d24fc3",
+          "after_size": 16344,
+          "diff_lines": 384
+        },
+        {
+          "path": "tests/native/process/README.md",
+          "group": "SH15-process-correction-Root-amendment-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "17cb0c4edf2ec3fb6a7895fa41f070b4a41e9c7ea28e390420f2a09140ae3ab8",
+          "after_size": 3951,
+          "diff_lines": 77
+        },
+        {
+          "path": "selfhost/tests/phase-timing/run.py",
+          "group": "SH15-private-phase-timing-Root-review-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "cf7a8d12a769ae31065c58c3f4c28ad1697971dae933048fa6968d212f628dcc",
+          "after_size": 31445,
+          "diff_lines": 709
+        },
+        {
+          "path": "selfhost/tests/phase-timing/README.md",
+          "group": "SH15-private-phase-timing-Root-review-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "88e2e4f3849bd085e1af1ec82e2c4a63f2503dc27b1d3bd34aed28efbe8aed6c",
+          "after_size": 2746,
+          "diff_lines": 64
+        },
+        {
+          "path": "selfhost/tests/phase-timing/main.wz",
+          "group": "SH15-private-phase-timing-Root-review-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "c2892341e936396c2ea58b1852e7dedb57fc3151b4f312a736a06f87cb705948",
+          "after_size": 18691,
+          "diff_lines": 434
+        },
+        {
+          "path": "selfhost/tests/phase-timing/lang.toml",
+          "group": "SH15-private-phase-timing-Root-review-20261114",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "8bb780d65777851181ea073d5590184b19e5cb9a5db449d7cf05d6c1646e8d75",
+          "after_size": 136,
+          "diff_lines": 13
+        }
+      ],
+      "product_Source116_count": 116,
+      "product_Source116_map_sha256": "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09",
+      "only_product_Source_changes": [
+        "selfhost/src/wzcc/sema/common.wz",
+        "selfhost/src/wzcc/sema/run.wz",
+        "selfhost/src/wzcc/sema/b_call.wz"
+      ],
+      "stdlib37_unchanged": true,
+      "all1344_existing_cases_exact_in_original_order": true,
+      "new_disabled_component_cases": [
+        "project:selfhost/tests/sema_node_index/lang.toml",
+        "project:selfhost/tests/phase-timing/lang.toml"
+      ],
+      "new_frozen_paths": [
+        "selfhost/tests/sema_node_index/lang.toml",
+        "selfhost/tests/sema_node_index/node_index_test.wz",
+        "selfhost/tests/sema_node_index/run.py",
+        "selfhost/tests/sema_node_index/src/main.wz",
+        "tests/native/process/test_controls.py",
+        "selfhost/tests/phase-timing/run.py",
+        "selfhost/tests/phase-timing/main.wz",
+        "selfhost/tests/phase-timing/lang.toml"
+      ],
+      "modified_frozen_paths": [
+        "selfhost/src/wzcc/sema/common.wz",
+        "selfhost/src/wzcc/sema/run.wz",
+        "selfhost/src/wzcc/sema/b_call.wz",
+        "selfhost/tests/sema_common/helpers.wz",
+        "selfhost/tests/sema_a/helpers.wz",
+        "tests/native/process/run_process.py"
+      ],
+      "new_component_runners": [
+        "selfhost/tests/sema_node_index/run.py",
+        "tests/native/process/test_controls.py",
+        "selfhost/tests/phase-timing/run.py"
+      ],
+      "existing_process_top_level_runner_now_component": true,
+      "existing_process_case_records_unchanged": true,
+      "phase_timing_preserved_Source_pin": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+      "phase_timing_direct_run_on_current_ed1_supported": false,
+      "accepted_results_reused_without_compiler_rerun": {
+        "sema_component_assertions": 315,
+        "common_checks_per_O0_O2": 46,
+        "A_checks_per_O0_O2": 47,
+        "sema_pure_controls": 26,
+        "process_pure_controls": 56,
+        "phase_pure_controls": 42
+      },
+      "integration_actual_checks": [
+        "17 accepted byte hashes; controlled Root review hashes",
+        "4 Python files ast.parse syntax checks",
+        "tracked-only inventory hashes, clean-clone formal freeze and coverage"
+      ],
+      "no_new_compiler_Source_program_LLVM_version_or_matrix_execution": true,
+      "no_long_jobs_or_services_operated": true,
+      "historical_failures_and_unknown_resource_brackets_retained": true,
+      "scope_limits": [
+        "Component benchmark linear-oracle loops contain instrumentation; no whole-compiler speed ratio.",
+        "Process original candidate build timed out; 14 not-run records and later incomplete smoke remain unpassed.",
+        "Phase diagnostic actual 60-second run timed out during HIR verification; lower/emission/build were not reached and generated program was not run.",
+        "Current ed1 Source has not been compiled or tested through a new complete public CLI by this integration."
+      ],
+      "counts": {
+        "cases": 1346,
+        "enabled": 985,
+        "disabled": 361,
+        "required": 305,
+        "files": 2885,
+        "runners": 259
       }
     }
   }
