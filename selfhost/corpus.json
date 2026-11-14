@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "f536b84705ec361ce811834a13a64214bc44b0e4",
-  "previous_git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
-  "frozen_at": "2026-11-14T06:24:24.629077+00:00",
+  "git_head": "672e947058be36dd843d4adaacde95b45f8719bb",
+  "previous_git_head": "f536b84705ec361ce811834a13a64214bc44b0e4",
+  "frozen_at": "2026-11-14T07:27:58.198504+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -6055,8 +6055,8 @@
     },
     {
       "path": "tests/async_parameter_copy/run_parameter_copy.py",
-      "sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
-      "size": 52782,
+      "sha256": "ba9093d32eea7d22e21297314ea9e7380d575050129af63d556d6ed924b7f37b",
+      "size": 81759,
       "role": "runner_source",
       "assignment": []
     },
@@ -27702,10 +27702,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-cancel/lang.toml",
@@ -27726,10 +27727,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-dyn-await/lang.toml",
@@ -27750,10 +27752,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-fn-capture-await/lang.toml",
@@ -27774,10 +27777,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-string-await/lang.toml",
@@ -27798,10 +27802,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-struct-enum-await/lang.toml",
@@ -27822,10 +27827,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-throw/lang.toml",
@@ -27846,10 +27852,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-unstarted/lang.toml",
@@ -27870,10 +27877,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-vec-late-start/lang.toml",
@@ -27894,10 +27902,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-weak-await/lang.toml",
@@ -27918,10 +27927,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/reject-resource-copy/lang.toml",
@@ -27942,10 +27952,11 @@
       "enabled": false,
       "runner": "tests/async_parameter_copy/run_parameter_copy.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The accepted async11 component runner uses this role public Native program/object plus the original allocation observer and static ELF checks; param-string-await additionally requires real Nativeobs before.ll and fixed LLVM verification. These extra assertions are not expressed by ordinary corpus execute, so this existing row stays required/disabled with its original expectation.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12o-async-parameter-complete-eleven-new9d11-20261114: retained Cpp565/new9d11 original11 cases O0/O2,252 commands; checks/SH12o-async11-Root-review-event950001-20261114/review.json accepts the strict guard correction. No new compiler/Source/observer run during integration."
     },
     {
       "id": "project:tests/backend_common/fixtures/bitwise-integers/lang.toml",
@@ -85174,8 +85185,8 @@
     },
     {
       "path": "tests/async_parameter_copy/run_parameter_copy.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Dedicated async parameter-copy component: role public CLI object, original heap/Vec observer and static ELF assertions, plus explicit test-only Nativeobs IR for string. Accepted fixed-version11-case records do not make the generic corpus rows executable or enabled."
     },
     {
       "path": "tests/async_runtime/relink_source_fixtures.py",
@@ -86130,7 +86141,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "f536b84705ec361ce811834a13a64214bc44b0e4",
+    "to_git_head": "672e947058be36dd843d4adaacde95b45f8719bb",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86575,11 +86586,23 @@
         "path": "tests/async_parameter_copy/run_parameter_copy.py",
         "old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
         "old_size": 15874,
-        "new_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
-        "new_size": 52782,
-        "commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
-        "acceptance": "Root independent stdlib-after amendment accepted separately; original Bridge2ae remains rejected/rev2",
-        "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md"
+        "new_sha256": "ba9093d32eea7d22e21297314ea9e7380d575050129af63d556d6ed924b7f37b",
+        "new_size": 81759,
+        "commit": "672e947058be36dd843d4adaacde95b45f8719bb",
+        "acceptance": "SH12o async11 accepted rev4/event950001; current runner includes the strict process guard correction. Prior SH12g Root amendment and rejected original Bridge2ae history are retained below.",
+        "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md",
+        "history": [
+          {
+            "path": "tests/async_parameter_copy/run_parameter_copy.py",
+            "old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
+            "old_size": 15874,
+            "new_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+            "new_size": 52782,
+            "commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+            "acceptance": "Root independent stdlib-after amendment accepted separately; original Bridge2ae remains rejected/rev2",
+            "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md"
+          }
+        ]
       },
       {
         "path": "tests/bootstrap/readiness/run.py",
@@ -87754,6 +87777,109 @@
       "compiler_Source_LLVM_observer_or_business_matrix_rerun_for_publication": false,
       "existing_long_jobs_or_workers_operated": false,
       "full_Weak_or_corpus_or_three_stage_completion_claimed": false
+    },
+    "async11_reviewed_runner_integration": {
+      "base_commit": "12f4af3c3f62cd4f925ee3181c34345651bd964f",
+      "code_commit": "672e947058be36dd843d4adaacde95b45f8719bb",
+      "accepted_task": "eb5fe8cf-3af7-4b6a-808c-4184517a000f",
+      "accepted_revision": 4,
+      "acceptance_event": 950001,
+      "parent_ack_revision": 426,
+      "session_closed_revision": 5,
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH12o-async11-Root-review-event950001-20261114/review.json",
+      "Root_review_sha256": "6a980c87824104d0b1ab77b6d59b19508a2d874edf7da247495006b04a2d3ed9",
+      "peer_review": "/home/qin/Work/language-dev-20261103/checks/SH12o-async11-guard-correction-independent-review-20261114.md",
+      "peer_review_sha256": "2c431c596447000cac862c27131e0fe1a3b19b7a17efcb308d8d04877a96afca",
+      "original_complete_report": "/home/qin/Work/language-dev-20261103/checks/SH12o-async-parameter-complete-eleven-new9d11-20261114/report.md",
+      "original_complete_report_sha256": "aee8a6f926c64215eb241ea815d40c67e331a30e339d2754decbaa2578090ece",
+      "approved_catalog_proposal": "/home/qin/Work/language-dev-20261103/checks/async11-integration-20261114/catalog-proposal.json",
+      "approved_catalog_proposal_sha256": "63279fb28ccf363867dbc6b22e56d58d28fc6ebc8178153596f6445054d15022",
+      "runner": "tests/async_parameter_copy/run_parameter_copy.py",
+      "runner_old_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+      "runner_new_sha256": "ba9093d32eea7d22e21297314ea9e7380d575050129af63d556d6ed924b7f37b",
+      "README_sha256": "cb256641c8607b916fd03a1fd794fe533b7d8b0d60c8eeae079cf226247d88d6",
+      "README_not_frozen_as_new_input": true,
+      "prior_modified_freeze_record_preserved_old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
+      "same_path_new_sha256_updated_uniquely": true,
+      "top_runner_status": "component",
+      "case_ids_metadata_only": [
+        "project:tests/async_parameter_copy/fixtures/param-cancel-queued/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-cancel/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-dyn-await/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-fn-capture-await/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-string-await/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-struct-enum-await/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-throw/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-unstarted/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-vec-late-start/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/param-weak-await/lang.toml",
+        "project:tests/async_parameter_copy/fixtures/reject-resource-copy/lang.toml"
+      ],
+      "all11_case_enabled_false_adaptation_required_runner_status_retained": true,
+      "all_cases_expected_support_operations_and_order_unchanged": true,
+      "case_append_remove": 0,
+      "counts": {
+        "cases": 1344,
+        "enabled": 983,
+        "disabled": 361,
+        "required": 307,
+        "files": 2875,
+        "runners": 254
+      },
+      "original_fixed_version_evidence": {
+        "reference": "Cpp565",
+        "candidate": "new9d11",
+        "cases": 11,
+        "opt": [
+          0,
+          2
+        ],
+        "actual_commands": 252,
+        "Source_builds": 44,
+        "program_executions": 40,
+        "observer_links": 40,
+        "observer_executions": 40,
+        "readelf_checks": 80,
+        "IR_emits": 4,
+        "LLVM_verifies": 4,
+        "compiler_program_observer_limit_seconds": 180,
+        "readelf_limit_seconds": 60,
+        "reexecuted_for_integration": false
+      },
+      "small_controls_this_integration": {
+        "process_guard_controls": 23,
+        "direct_cases": 13,
+        "Popen_blocked": true,
+        "child_processes": 0
+      },
+      "required_extra_component_assertions": [
+        "heap and Vec observer balance/minima and final zero live values",
+        "program/observer static ELF EXEC, no INTERP or NEEDED",
+        "real Nativeobs string before.ll marker and fixed LLVM verification"
+      ],
+      "scope_limits": [
+        "Observer heap/Vec balances/minima, staticELF and string before.ll/LLVM verify remain dedicated runner assertions.",
+        "Metadata guard enforces status+phase only; other fields remain recorded, not separately guarded.",
+        "Historical missing parser before hash is not backfilled.",
+        "Nativeobs driver is a test-only component, not a new productCLI IR interface.",
+        "No full corpus/three-generation completion claim."
+      ],
+      "Nativeobs_dependencies_already_tracked": true,
+      "Source116_std37_fixtures_gold_unchanged": true,
+      "current_StdReady_corpus_py_kept_sha256": "d5693789bfa1c53b6448ae8be3d6ace9bc00adcf319aeef68d26309f2fac3d50",
+      "old_long_jobs_workers_or_PLAN_operated": false,
+      "full_corpus_or_three_stage_pass_claimed": false,
+      "prior_modified_freeze_record_preserved": {
+        "path": "tests/async_parameter_copy/run_parameter_copy.py",
+        "old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
+        "old_size": 15874,
+        "new_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+        "new_size": 52782,
+        "commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+        "acceptance": "Root independent stdlib-after amendment accepted separately; original Bridge2ae remains rejected/rev2",
+        "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md"
+      },
+      "current_modified_freeze_size": 81759
     }
   }
 }
