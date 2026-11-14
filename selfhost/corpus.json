@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
-  "previous_git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
-  "frozen_at": "2026-11-14T12:35:02.774158+00:00",
+  "git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
+  "previous_git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
+  "frozen_at": "2026-11-14T14:10:31.456950+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -20531,8 +20531,8 @@
     },
     {
       "path": "tests/native/slice_source/run_slice_source.py",
-      "sha256": "8dad4e8f11664f9a6353f6db63e4fa3bc5193cdf43086f219f1605465c2ca9cc",
-      "size": 14748,
+      "sha256": "0384157ea730cde9c537cf8d3dd2e5a32e110892c42439eca20e604932318ba3",
+      "size": 53855,
       "role": "runner_source",
       "assignment": []
     },
@@ -26536,6 +26536,20 @@
       "path": "selfhost/tests/cffi_forged/run.py",
       "sha256": "0d17339890b895f7567b25c82840786e74e873719c77c48b159c88014edeb591",
       "size": 39126,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
+      "sha256": "15eae14e233281c66b48cde8b3dac6ebdfd7fcc9403d6b6383b34a8fa817bb34",
+      "size": 23514,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/slice_source/test_controls.py",
+      "sha256": "8037427025253fdd340f3caa5f5dbc1070f964012939583f2691b141b42ab0dc",
+      "size": 22053,
       "role": "runner_source",
       "assignment": []
     }
@@ -86030,8 +86044,8 @@
     },
     {
       "path": "tests/native/slice_source/run_slice_source.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Root-corrected Native Slice CLI/IR/ELF and allocation/Vec observer test runner. Saved19fixture results belong to historical ed1/c142 and use the fixed-ed1 private Nativeobs builder; current0c46 has not rerun this family. Extra observer/IR checks are not represented by ordinary CLI case expectations, so no case is enabled from this delivery."
     },
     {
       "path": "tests/native/stdlib-io-errors/run_io_errors.py",
@@ -86592,11 +86606,21 @@
       "path": "selfhost/tests/cffi_forged/run.py",
       "status": "component",
       "reason": "Private C-FFI forged HIR/NativeIR component runner pinned to historical Sourceed1. Its eight saved rejection passes do not prove current0c46 or the full15-case C-FFI runner. Default current0c46 Source is intentionally rejected."
+    },
+    {
+      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
+      "status": "component",
+      "reason": "Test-only fixed-ed1 Nativeobs component builder, defaultO2 with optionalO0. New and sealed build stdout share strict finite JSON/statusok/empty-diagnostics checks. Historical ac17O2/430O0 builds do not establish current0c46 or a full compiler pass."
+    },
+    {
+      "path": "tests/native/slice_source/test_controls.py",
+      "status": "component",
+      "reason": "Sixteen guarded pure Python tests for Native Slice runner/builder decisions, including normal exit types, finite JSON, legacy/fresh outputs, process preservation and sealed stdout checks. No compiler, observer or target is started."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
+    "to_git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86819,7 +86843,9 @@
       "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
       "selfhost/tests/cffi_forged/lang.toml",
       "selfhost/tests/cffi_forged/main.wz",
-      "selfhost/tests/cffi_forged/run.py"
+      "selfhost/tests/cffi_forged/run.py",
+      "tests/native/slice_source/build_nativeobs_ed1.py",
+      "tests/native/slice_source/test_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -87353,10 +87379,20 @@
         "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
         "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
         "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim."
+      },
+      {
+        "path": "tests/native/slice_source/run_slice_source.py",
+        "old_sha256": "8dad4e8f11664f9a6353f6db63e4fa3bc5193cdf43086f219f1605465c2ca9cc",
+        "old_size": 14748,
+        "new_sha256": "0384157ea730cde9c537cf8d3dd2e5a32e110892c42439eca20e604932318ba3",
+        "new_size": 53855,
+        "commit": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
+        "acceptance": "Root-controlled final Slice runner amendment accepted separately; original and single Bridge actor correction remain rejected. Existing case enablement is unchanged.",
+        "review": "checks/SH15-native-slice-public-wz-Root-amendment-20261114/Root-final-acceptance.json"
       }
     ],
-    "new_freeze_path_count": 222,
-    "modified_freeze_path_count": 48,
+    "new_freeze_path_count": 224,
+    "modified_freeze_path_count": 49,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -89835,6 +89871,104 @@
         "required": 305,
         "files": 2894,
         "runners": 263
+      }
+    },
+    "Native_Slice_Root_controlled_runner_integration": {
+      "base_commit": "2ddaab02c68060b8a918a51047f6edc24c0bdf6c",
+      "code_commit": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
+      "Root_final_acceptance": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/Root-final-acceptance.json",
+      "Root_final_acceptance_sha256": "681a95b0f5b62c76894270e246154b289f0727dcc169db7041758013fa626269",
+      "controlled_manifest": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/manifest.json",
+      "controlled_manifest_sha256": "0b5315b34e805e2df2fb33bfd697d0d72ab3e79d1e5f758e2bdcd6cb93ce94cd",
+      "independent_Root_fix_review": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-fix-independent-review-20261114.json",
+      "independent_Root_fix_review_sha256": "d0132968e79369c78b2dcad80617c7910bce4a05ec3e25169e97fb87dad7aa34",
+      "Root_controlled_four_files_used": true,
+      "Bridge_original_and_single_correction_status": "both remain rejected; no actor acceptance or ACK changed",
+      "files": [
+        {
+          "path": "tests/native/slice_source/run_slice_source.py",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/files/tests/native/slice_source/run_slice_source.py",
+          "before_sha256": "8dad4e8f11664f9a6353f6db63e4fa3bc5193cdf43086f219f1605465c2ca9cc",
+          "before_size": 14748,
+          "after_sha256": "0384157ea730cde9c537cf8d3dd2e5a32e110892c42439eca20e604932318ba3",
+          "after_size": 53855,
+          "tracked": true
+        },
+        {
+          "path": "tests/native/slice_source/build_nativeobs_ed1.py",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/files/tests/native/slice_source/build_nativeobs_ed1.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "15eae14e233281c66b48cde8b3dac6ebdfd7fcc9403d6b6383b34a8fa817bb34",
+          "after_size": 23514,
+          "tracked": false
+        },
+        {
+          "path": "tests/native/slice_source/test_controls.py",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/files/tests/native/slice_source/test_controls.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "8037427025253fdd340f3caa5f5dbc1070f964012939583f2691b141b42ab0dc",
+          "after_size": 22053,
+          "tracked": false
+        },
+        {
+          "path": "tests/native/slice_source/README.md",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-native-slice-public-wz-Root-amendment-20261114/files/tests/native/slice_source/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "d73ad0b38e3132b06926429a4e045af477d8cc1f4cf31b42ca69d9831eef2154",
+          "after_size": 7141,
+          "tracked": false
+        }
+      ],
+      "all1348_existing_cases_exact_in_original_order": true,
+      "no_existing_case_reason_evidence_status_enabled_adaptation_expected_operations_change": true,
+      "no_case_append_remove_or_enable": true,
+      "nineteen_Native_fixtures_and_twentieth_Python_manifest_and_fifteen_forged_entries_unchanged": true,
+      "top_level_main_runner_component": true,
+      "new_frozen_paths": [
+        "tests/native/slice_source/build_nativeobs_ed1.py",
+        "tests/native/slice_source/test_controls.py"
+      ],
+      "new_component_runners": [
+        "tests/native/slice_source/build_nativeobs_ed1.py",
+        "tests/native/slice_source/test_controls.py"
+      ],
+      "README_metadata_only_not_frozen": true,
+      "actual_publication_Python_AST_checks": 3,
+      "accepted_Root_and_independent_pure_tests_reused_without_rerun": 16,
+      "previous_F2a_F2b_counterexamples_fixed_by_Root_copies": true,
+      "real_saved_O0_O2_stdout_accepted_without_report_rewrite_in_independent_review": true,
+      "Source116_count": 116,
+      "Source116_map_sha256": "0c46f7ea6ad2487f574f91147bca062708ef2cdefd0b76fdc1d068eb8a5bcd76",
+      "Source116_stdlib37_CMake_fixtures_gold_budgets_unchanged": true,
+      "fixed_old_ed1_private_builder_preserved": true,
+      "current0c46_NativeSlice_matrix_not_run": true,
+      "historical_scope": {
+        "selected_Native_fixtures": 19,
+        "final_reference_commands": 107,
+        "final_candidate_commands": 147,
+        "final_pair_not_whole_session": true,
+        "total_matrix_commands": 605,
+        "component_builds": 2,
+        "total_nonpure_records": 607,
+        "final_O2_driver_sha256": "ac17da47784efef72370447362acfab5fcef51d68d6804d443d52c60bcb0e807",
+        "old_O0_driver_sha256": "430ae2f6bd35daf198c6160c488e7507ccc75524117d888961751cfc29d9ea17",
+        "all607_historical_process_timeout_fields_absent_unmodified": true,
+        "Cpp_seed_compiled_Source_history": "unknown; reference Wz source snapshot is not Cpp seed Source identity",
+        "historical_missing_resource_brackets_and_later_copied_summary_limits_retained": true,
+        "before_after_LLVM_object_equivalence_not_claimed": true
+      },
+      "no_new_Source_compiler_C_LLVM_program_observer_or_version_runs": true,
+      "no_existing_long_job_worker_service_PLAN_STATE_operated": true,
+      "counts": {
+        "cases": 1348,
+        "enabled": 985,
+        "disabled": 363,
+        "required": 305,
+        "files": 2896,
+        "runners": 265
       }
     }
   }
