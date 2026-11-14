@@ -1,0 +1,337 @@
+// Test-only Native observation driver for tests/native/run.py.
+//
+// This program is not a product CLI and adds no compiler API.  It executes the
+// real self-hosted pipeline on one project manifest:
+//
+//   project.load -> resolve -> sema.check_project(Backend)
+//                -> nativelower.lower -> nativeverify.snapshot
+//                -> nativeirdump.dump (Native CFG text)
+//                -> nativeemit.emit   (pre-optimization LLVM text)
+//
+// The snapshot is used only for the CFG dump.  nativeemit.emit receives the
+// VerifiedModule published by nativelower, never the snapshot.  The driver does
+// not run LLVM and does not write an object; the Python runner owns the fixed
+// opt/llc/link/execute steps and their assertions.
+//
+// The manifest's word_bits is preserved.  Backend selection is forced to native
+// exactly as the old C++ helper did, so a python manifest still exercises the
+// native pipeline while its word_bits remains the manifest value.
+package app;
+
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativeirdump" as nativeirdump;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/project" as project;
+import "app/wzcc/render" as render;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct Invocation {
+    project string;
+    stdlib option.Option[string];
+    check_only bool;
+    optimization u32;
+    out_llvm_before string;
+    out_native string;
+    json bool;
+    valid bool;
+    message string;
+}
+
+func number(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func boolean(value bool) string {
+    if value {
+        return "true";
+    }
+    return "false";
+}
+
+func usage() throws os.Error {
+    io.eprintln("usage: nativeobs-driver --project MANIFEST [--stdlib DIR]");
+    io.eprintln("  [--check-only] [--opt 0|2] [--out-llvm-before FILE]");
+    io.eprintln("  [--out-native FILE] [--format json]");
+}
+
+func invalid(result Invocation, message string) Invocation {
+    var rejected = result;
+    rejected.valid = false;
+    rejected.message = message;
+    return rejected;
+}
+
+// This parser is deliberately small.  It accepts only the options the test
+// runner passes and never guesses a default output path.
+func parse_args(args Vec[string]) Invocation {
+    var result = Invocation(project: "", stdlib: option.Option[string].None,
+        check_only: false, optimization: 0, out_llvm_before: "",
+        out_native: "", json: false, valid: true, message: "");
+    var index usize = 1;
+    for true {
+        if index >= vec.len(args) {
+            break;
+        }
+        let key = args[index];
+        if key == "--check-only" {
+            result.check_only = true;
+            index += 1;
+            continue;
+        }
+        if key == "--format" {
+            if index + 1 >= vec.len(args) || args[index + 1] != "json" {
+                return invalid(result, "--format must be json");
+            }
+            result.json = true;
+            index += 2;
+            continue;
+        }
+        var known = false;
+        if key == "--project" || key == "--stdlib" ||
+           key == "--opt" || key == "--out-llvm-before" ||
+           key == "--out-native" {
+            known = true;
+        }
+        if !known {
+            return invalid(result, "unknown option: " + key);
+        }
+        if index + 1 >= vec.len(args) {
+            return invalid(result, "missing value for " + key);
+        }
+        let value = args[index + 1];
+        if value == "" || text.starts_with(value, "--") {
+            return invalid(result, "missing or invalid value for " + key);
+        }
+        if key == "--project" {
+            result.project = value;
+        } else if key == "--stdlib" {
+            result.stdlib = option.Option[string].Some(value);
+        } else if key == "--opt" {
+            if value == "0" {
+                result.optimization = 0;
+            } else if value == "2" {
+                result.optimization = 2;
+            } else {
+                return invalid(result, "--opt must be 0 or 2");
+            }
+        } else if key == "--out-llvm-before" {
+            result.out_llvm_before = value;
+        } else {
+            result.out_native = value;
+        }
+        index += 2;
+    }
+    if result.project == "" {
+        return invalid(result, "--project is required");
+    }
+    if !result.check_only {
+        if result.out_llvm_before == "" || result.out_native == "" {
+            return invalid(result, "--out-llvm-before and --out-native are required unless --check-only");
+        }
+    }
+    return result;
+}
+
+func failure_document(manager source.Manager, state model.PhaseState,
+                      failure model.FailureKind, has_value bool,
+                      diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    try {
+        io.eprintln(render.document(manager.snapshots, state, failure,
+            has_value, diagnostics));
+    } catch error render.Error {
+        io.eprintln("{\"status\":\"internal_error\",\"diagnostics\":[]}");
+        return 3;
+    }
+    return render.exit_code(state, failure, has_value, diagnostics);
+}
+
+func internal_diagnostic(code string, message string) model.Diagnostic {
+    var result = model.diagnostic(code, "codegen", message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    result.has_primary = false;
+    return result;
+}
+
+// The entry selector is intentionally the same 10-line public-symbol scan as
+// cli/project.wz.  It reads only resolved.symbols; it does not construct a
+// VerifiedModule or expose a new compiler API.
+func native_entry(resolved model.ResolvedProject) option.Option[usize] throws model.SupportError {
+    var entry = option.Option[usize].None;
+    for symbol in resolved.symbols {
+        var function = false;
+        switch symbol.kind {
+            case model.SymbolKind.Function: function = true;
+            default: {}
+        }
+        if function && symbol.module == resolved.project.entry && symbol.name == "main" {
+            if option.is_some(entry) {
+                throw model.SupportError.Invalid("ambiguous entry name");
+            }
+            entry = option.Option[usize].Some(symbol.id);
+        }
+    }
+    return entry;
+}
+
+func metadata(output nativeemit.Output, entry usize, word_bits u32,
+              hosted bool, cfg_verified bool) string {
+    var runtime = "freestanding";
+    if hosted {
+        runtime = "hosted";
+    }
+    return "{\"status\":\"passed\",\"phase\":\"object\",\"llvm\":\"22.1.8\"," +
+        "\"contract\":\"compiler-dev/1\",\"runtime_abi\":\"" +
+        nativeemit.RUNTIME_ABI + "\",\"triple\":\"" + output.triple +
+        "\",\"data_layout\":\"" + output.data_layout + "\",\"runtime\":\"" +
+        runtime + "\",\"c_adapter\":" +
+        boolean(output.c_adapter_source != "") + ",\"entry_symbol\":" +
+        number(entry) + ",\"word_bits\":" + number(usize(word_bits)) +
+        ",\"has_async\":" + boolean(output.has_async) +
+        ",\"cfg_verified\":" + boolean(cfg_verified) + "}";
+}
+
+func run_built(manager source.Manager, resolved model.ResolvedProject,
+               verified hirverify.VerifiedHirModule, invocation Invocation,
+               word_bits u32, hosted bool) i32 throws os.Error {
+    var entry = option.Option[usize].None;
+    try {
+        entry = native_entry(resolved);
+    } catch error model.SupportError {
+        var diagnostic = internal_diagnostic("E_INTERNAL_ERROR",
+            "ambiguous entry name");
+        return failure_document(manager, model.PhaseState.Failed,
+            model.FailureKind.Internal, false, [diagnostic]);
+    }
+    switch entry {
+        case option.Option.None: {
+            var diagnostic = internal_diagnostic("E_CAPABILITY_UNAVAILABLE",
+                "executable build requires main in the entry module");
+            return failure_document(manager, model.PhaseState.Failed,
+                model.FailureKind.Unsupported, false, [diagnostic]);
+        }
+        case option.Option.Some(entry_symbol): {
+            let lowered = nativelower.lower(verified);
+            let has_lowered = option.is_some(lowered.value);
+            if !render.succeeded(lowered.state, has_lowered, lowered.diagnostics) {
+                return failure_document(manager, lowered.state, lowered.failure,
+                    has_lowered, lowered.diagnostics);
+            }
+            switch lowered.value {
+                case option.Option.None:
+                    return failure_document(manager, lowered.state, lowered.failure,
+                        false, lowered.diagnostics);
+                case option.Option.Some(built): {
+                    // The snapshot is used only for the CFG dump.  The emitter
+                    // below receives the VerifiedModule, not this snapshot.
+                    var native_text = "";
+                    var cfg_verified = false;
+                    try {
+                        native_text = nativeirdump.dump(nativeverify.snapshot(built));
+                        cfg_verified = true;
+                    } catch error model.SupportError {
+                        var diagnostic = internal_diagnostic("E_IR_INVALID",
+                            "native CFG snapshot failed");
+                        return failure_document(manager, model.PhaseState.Failed,
+                            model.FailureKind.Internal, false, [diagnostic]);
+                    }
+                    var settings = nativeemit.default_options();
+                    settings.optimization = invocation.optimization;
+                    let emitted = nativeemit.emit(built, entry_symbol, settings);
+                    let has_output = option.is_some(emitted.value);
+                    if !render.succeeded(emitted.state, has_output, emitted.diagnostics) {
+                        return failure_document(manager, emitted.state,
+                            emitted.failure, has_output, emitted.diagnostics);
+                    }
+                    switch emitted.value {
+                        case option.Option.None:
+                            return failure_document(manager, emitted.state,
+                                emitted.failure, false, emitted.diagnostics);
+                        case option.Option.Some(output): {
+                            try {
+                                fs.write_text(invocation.out_llvm_before,
+                                    text.join(output.llvm_sections, ""), 0o666);
+                                fs.write_text(invocation.out_native,
+                                    native_text, 0o666);
+                            } catch problem os.Error {
+                                var diagnostic = internal_diagnostic("E_INPUT_IO",
+                                    "cannot write observation output");
+                                return failure_document(manager,
+                                    model.PhaseState.Failed,
+                                    model.FailureKind.Environment, false,
+                                    [diagnostic]);
+                            }
+                            io.println(metadata(output, entry_symbol, word_bits,
+                                hosted, cfg_verified));
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    let invocation = parse_args(args);
+    if !invocation.valid {
+        usage();
+        io.eprintln(invocation.message);
+        return 2;
+    }
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: invocation.project,
+        std_source_root: invocation.stdlib,
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
+        return failure_document(manager, loaded.state, loaded.failure,
+            loaded.has_value, loaded.diagnostics);
+    }
+    // Force the native pipeline but keep the manifest's word_bits.  This is the
+    // same explicit selection the old helper performed before resolving.
+    var original = loaded.value;
+    original.backend = "native";
+    let resolved = resolve.resolve_project(original);
+    if !render.succeeded(resolved.state, resolved.has_value, resolved.diagnostics) {
+        return failure_document(manager, resolved.state, resolved.failure,
+            resolved.has_value, resolved.diagnostics);
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None,
+        hirverify.VerifyMode.Backend);
+    let has_checked = option.is_some(checked.value);
+    if !render.succeeded(checked.state, has_checked, checked.diagnostics) {
+        return failure_document(manager, checked.state, checked.failure,
+            has_checked, checked.diagnostics);
+    }
+    switch checked.value {
+        case option.Option.None:
+            return failure_document(manager, checked.state, checked.failure,
+                false, checked.diagnostics);
+        case option.Option.Some(verified): {
+            let config = hirverify.config(verified);
+            if invocation.check_only {
+                io.println("{\"status\":\"passed\",\"phase\":\"check\"," +
+                    "\"backend\":\"native\",\"word_bits\":" +
+                    number(usize(config.word_bits)) + "}");
+                return 0;
+            }
+            return run_built(manager, resolved.value, verified, invocation,
+                config.word_bits, original.hosted);
+        }
+    }
+}
