@@ -1,0 +1,237 @@
+// Component driver for the public Python emission API.
+//
+// This is a test-only front end for the real Wz packages.  It loads a
+// manifest with project.load, selects the Python backend before resolution,
+// runs resolve.resolve_project and sema.check_project(Backend), takes the
+// real VerifiedHirModule returned by the checker, finds the entry `main` by
+// resolved identity, and calls pythonemit.emit with entrypoint=true and the
+// frozen unicode18.py/langrt.py runtime.  It never calls a C++ helper and it
+// never fabricates a HIR module or a Python program.
+//
+// Resource paths use resources.directory()/standard_library(), exactly like the
+// product CLI.  Callers stage matching stdlib/runtime bytes next to the driver
+// executable so this driver and the candidate read the same frozen inputs.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/project" as project;
+import "app/wzcc/pythonemit" as pythonemit;
+import "app/wzcc/render" as render;
+import "app/wzcc/resources" as resources;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func os_text(problem os.Error) string {
+    switch problem {
+        case os.Error.Interrupted(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.System(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed): return "no progress";
+    }
+}
+
+func support_text(problem model.SupportError) string {
+    switch problem {
+        case model.SupportError.Invalid(message): return message;
+        case model.SupportError.Limit(message): return message;
+    }
+}
+
+// Print the same diagnostic document as the product CLI.  This is the only
+// failure channel: a rejected project never creates the output directory.
+func report(sources Vec[model.Source], state model.PhaseState,
+            failure model.FailureKind, has_value bool,
+            diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    try {
+        io.println(render.document(sources, state, failure, has_value, diagnostics));
+    } catch error render.Error {
+        io.eprintln("E_INTERNAL_ERROR: invalid diagnostic document");
+        return 3;
+    }
+    return render.exit_code(state, failure, has_value, diagnostics);
+}
+
+func failure(code string, phase string, message string,
+             failure_kind model.FailureKind) i32 throws os.Error {
+    var diagnostic = model.diagnostic(code, phase, message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return report(vec.empty[model.Source](), model.PhaseState.Failed,
+        failure_kind, false, [diagnostic]);
+}
+
+// The entry is selected from the resolved symbols of the entry module, not
+// guessed from a generated _f name or a source file order.
+func python_entry(module hir.HirModule) option.Option[usize] {
+    var entry = option.Option[usize].None;
+    for function in module.functions {
+        if function.symbol >= vec.len(module.resolved.symbols) {
+            continue;
+        }
+        let symbol = module.resolved.symbols[function.symbol];
+        if symbol.module == module.identity && symbol.name == "main" {
+            entry = option.Option[usize].Some(symbol.id);
+        }
+    }
+    return entry;
+}
+
+func run() i32 throws os.Error {
+    let argv = process.args();
+    var manifest = "";
+    var out = "";
+    var index usize = 1;
+    for index < vec.len(argv) {
+        let argument = argv[index];
+        if argument == "--project" && index + 1 < vec.len(argv) {
+            index += 1;
+            manifest = argv[index];
+        } else if argument == "--out-dir" && index + 1 < vec.len(argv) {
+            index += 1;
+            out = argv[index];
+        } else if argument == "--format" && index + 1 < vec.len(argv) {
+            index += 1;
+            if argv[index] != "json" {
+                return failure("E_DRIVER_ARGUMENT", "toolchain",
+                    "only --format json is supported",
+                    model.FailureKind.Environment);
+            }
+        } else {
+            return failure("E_DRIVER_ARGUMENT", "toolchain",
+                "usage: pythonobs --project MANIFEST --out-dir DIR [--format json]",
+                model.FailureKind.Environment);
+        }
+        index += 1;
+    }
+    if manifest == "" || out == "" {
+        return failure("E_DRIVER_ARGUMENT", "toolchain",
+            "--project and --out-dir are required",
+            model.FailureKind.Environment);
+    }
+
+    let directory = resources.directory();
+    let library = resources.standard_library();
+    var manager = source.manager();
+    let project_options = model.ProjectOptions(manifest: manifest,
+        std_source_root: option.Option[string].Some(library),
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(project_options, inout manager);
+    if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
+        return report(manager.snapshots, loaded.state, loaded.failure,
+            loaded.has_value, loaded.diagnostics);
+    }
+
+    // Select the backend after loading and before resolution, matching the
+    // public CLI's --backend python path.
+    var original = loaded.value;
+    original.backend = "python";
+    let resolved = resolve.resolve_project(original);
+    if !render.succeeded(resolved.state, resolved.has_value,
+                         resolved.diagnostics) {
+        return report(manager.snapshots, resolved.state, resolved.failure,
+            resolved.has_value, resolved.diagnostics);
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None,
+        hirverify.VerifyMode.Backend);
+    let has_checked = option.is_some(checked.value);
+    if !render.succeeded(checked.state, has_checked, checked.diagnostics) {
+        return report(manager.snapshots, checked.state, checked.failure,
+            has_checked, checked.diagnostics);
+    }
+
+    switch checked.value {
+        case option.Option.None:
+            return report(manager.snapshots, checked.state, checked.failure,
+                false, checked.diagnostics);
+        case option.Option.Some(verified): {
+            var entry = option.Option[usize].None;
+            try {
+                let module = hirverify.snapshot(verified);
+                entry = python_entry(module);
+            } catch problem model.SupportError {
+                return failure("E_INTERNAL_ERROR", "toolchain",
+                    support_text(problem), model.FailureKind.Internal);
+            }
+            switch entry {
+                case option.Option.None:
+                    return failure("E_CAPABILITY_UNAVAILABLE", "codegen",
+                        "executable build requires main in the entry module",
+                        model.FailureKind.Unsupported);
+                case option.Option.Some(entry_symbol): {
+                    let runtime = fs.read_text(
+                        directory + "/runtime/python/unicode18.py") + "\n" +
+                        fs.read_text(directory + "/runtime/python/langrt.py");
+                    let emitted = pythonemit.emit(verified, entry_symbol,
+                        pythonemit.Options(entrypoint: true), runtime);
+                    let has_output = option.is_some(emitted.value);
+                    if !render.succeeded(emitted.state, has_output,
+                                         emitted.diagnostics) {
+                        return report(manager.snapshots, emitted.state,
+                            emitted.failure, has_output, emitted.diagnostics);
+                    }
+                    switch emitted.value {
+                        case option.Option.None:
+                            return report(manager.snapshots, emitted.state,
+                                emitted.failure, false, emitted.diagnostics);
+                        case option.Option.Some(output): {
+                            try {
+                                // Same private staging and paired publish as
+                                // cli/project.wz: both files are complete
+                                // before either target is replaced.
+                                var staging = toolio.stage(out, "python");
+                                defer { toolio.cleanup(staging); }
+                                let staged = staging.path;
+                                fs.write_text(staged + "/program.py",
+                                    output.code, 0o666);
+                                fs.write_text(staged + "/langrt.py",
+                                    output.runtime, 0o666);
+                                toolio.publish_pair(inout staging,
+                                    "langrt.py", "program.py");
+                            } catch problem toolio.Error {
+                                switch problem {
+                                    case toolio.Error.System(error):
+                                        return failure("E_INPUT_IO",
+                                            "toolchain", os_text(error),
+                                            model.FailureKind.Environment);
+                                    case toolio.Error.Rollback(backup, error):
+                                        return failure("E_INPUT_IO",
+                                            "toolchain",
+                                            "output recovery failed; retained at " +
+                                            backup + ": " + os_text(error),
+                                            model.FailureKind.Environment);
+                                }
+                            }
+                            io.println("{\"status\":\"ok\",\"entry\":" +
+                                strconv.format_u64(u64(entry_symbol)) + "}");
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    try {
+        return run();
+    } catch problem model.SupportError {
+        return failure("E_INTERNAL_ERROR", "toolchain", support_text(problem),
+            model.FailureKind.Internal);
+    } catch problem os.Error {
+        io.eprintln("E_INPUT_IO: " + os_text(problem));
+        return 2;
+    }
+}

@@ -1,0 +1,49 @@
+# Python emission API observer driver
+
+This component is the test-only second entry point for
+`tests/python/slice_source/run_slice_source.py`.  It is not a product CLI and
+it does not call a C++ helper or a C++ frontend at runtime.
+
+The driver is built once from Wz Source with the C++ seed compiler at `-O0`.
+At runtime it:
+
+1. creates `source.manager()`;
+2. calls `project.load(ProjectOptions(manifest, stdlib, None), inout manager)`;
+3. selects `backend = "python"` after loading and before resolution;
+4. calls `resolve.resolve_project`;
+5. calls `sema.check_project(..., None, hirverify.VerifyMode.Backend)` and only
+   uses the real `VerifiedHirModule` returned there;
+6. takes `hirverify.snapshot`, finds the entry `main` using the resolved symbol
+   identity/module (never a guessed `_f` number);
+7. reads `resources.directory()/runtime/python/unicode18.py + "\n" +
+   runtime/python/langrt.py` and calls
+   `pythonemit.emit(verified, entry, Options(entrypoint: true), runtime)`;
+8. uses the production `toolio.stage`/`cleanup`/`publish_pair` path from
+   `cli/project.wz`: writes both files completely in a private staging
+   directory, then publishes `langrt.py`/`program.py` as a pair.  A real
+   `toolio.Error` is mapped to `E_INPUT_IO` and leaves the previous target
+   files untouched; a write failure also cleans the private stage.
+
+Failure prints the same diagnostic document as the product CLI and exits
+non-zero without creating an output program.  Resource paths are based on the
+real executable directory, so the runner stages the candidate's frozen
+`stdlib` and `runtime` next to the copied driver binary.
+
+## Reproduce
+
+The runner builds this project automatically when given
+`--driver-compiler` (the C++ seed) and no `--api-driver`:
+
+```sh
+python3 tests/python/slice_source/run_slice_source.py \
+  --candidate-cli /path/to/candidate/stage1/woozyc \
+  --driver-compiler /path/to/cpp-seed/woozyc \
+  --candidate-resources /path/to/candidate/stage1 \
+  --root /path/to/compiler \
+  --out /new/evidence/dir \
+  --python /path/to/python3.12.15
+```
+
+Use `--api-driver /path/to/prebuilt/pythonobs` to reuse an already built
+driver.  The runner still copies it into the new evidence directory and links
+the candidate resources beside it, and it records the source/build/tool hashes.
