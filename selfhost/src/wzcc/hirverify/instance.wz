@@ -244,7 +244,7 @@ func instance_body(state inout Verifier, origin hir.HirFunction,
                         "instance capture source/type differs from template");
                     let dependent = type_contains_parameter(state.m,
                         after_capture.type_id);
-                    let owning = dependent || classify_needs_drop(state.m,
+                    let owning = dependent || classify_needs_drop(inout state,
                         after_capture.type_id);
                     need(after_capture.is_move ==
                          (after.move_capture && owning),

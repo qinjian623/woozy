@@ -92,14 +92,25 @@ func weak_target(module hir.HirModule, id usize) bool {
     return valueops.weak_target(module, id);
 }
 
-func classify_needs_drop(module hir.HirModule, id usize) bool
+func classify_needs_drop(state inout Verifier, id usize) bool
     throws Invalid {
+    if id > 0 && id <= vec.len(state.drop_known) {
+        if state.drop_known[id - 1] {
+            return state.drop_result[id - 1];
+        }
+    }
+    var result = false;
     try {
-        return valueops.classify_value(module, id).needs_drop;
+        result = valueops.classify_value(state.m, id).needs_drop;
     } catch error model.SupportError {
         support_error(error);
         return false;
     }
+    if id > 0 && id <= vec.len(state.drop_known) {
+        state.drop_result[id - 1] = result;
+        state.drop_known[id - 1] = true;
+    }
+    return result;
 }
 
 func ordinary_copyable(module hir.HirModule, id usize) bool

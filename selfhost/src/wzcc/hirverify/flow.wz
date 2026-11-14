@@ -181,7 +181,7 @@ func ownership_sources(state inout Verifier) throws Invalid {
         if node_is(kind, hir.NodeKind.Move) ||
            node_is(kind, hir.NodeKind.ForIn) ||
            (!node_is(kind, hir.NodeKind.FunctionValue) &&
-            classify_needs_drop(state.m, node.type_id)) {
+            classify_needs_drop(inout state, node.type_id)) {
             ids_insert(owning_functions,
                 verifier_scope(state, node.scope).function);
         }
@@ -215,7 +215,7 @@ func ownership_sources(state inout Verifier) throws Invalid {
         }
         var read = option.Option[usize].None;
         if node_is(node_kind, hir.NodeKind.Read) &&
-           classify_needs_drop(state.m, node.type_id) {
+           classify_needs_drop(inout state, node.type_id) {
             switch node.data {
                 case hir.NodeData.Read(value):
                     read = option.Option[usize].Some(value.symbol);

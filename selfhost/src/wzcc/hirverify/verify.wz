@@ -103,6 +103,8 @@ struct Verifier {
     active_constraints Vec[TraitKey];
     active_trait_bounds Vec[TraitKey];
     validated_types Vec[ValidatedEntry];
+    drop_known Vec[bool];
+    drop_result Vec[bool];
 }
 
 func make_verifier(module hir.HirModule) Verifier {
@@ -124,6 +126,8 @@ func make_verifier(module hir.HirModule) Verifier {
     }
     let enter = vec.make[usize](vec.len(module.nodes), 0);
     let leave = vec.make[usize](vec.len(module.nodes), 0);
+    let drop_known = vec.make[bool](types.size(module.types), false);
+    let drop_result = vec.make[bool](types.size(module.types), false);
     return Verifier(m: module, functions: [], locals: [], enter: enter,
         leave: leave, owners: owners, scope_used: scope_used,
         parents: parents, scope_nodes: scope_nodes, clock: 0,
@@ -132,7 +136,8 @@ func make_verifier(module hir.HirModule) Verifier {
         synthetic_iterator_calls: [],
         substituted: types.clone_context(module.types), trait_results: [],
         active_constraints: [], active_trait_bounds: [],
-        validated_types: []);
+        validated_types: [], drop_known: drop_known,
+        drop_result: drop_result);
 }
 
 func verifier_type(state Verifier, id usize) model.Type throws Invalid {

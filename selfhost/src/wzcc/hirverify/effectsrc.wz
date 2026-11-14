@@ -416,7 +416,7 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
             if node_is(kind, hir.NodeKind.Move) ||
                node_is(kind, hir.NodeKind.ForIn) ||
                (!node_is(kind, hir.NodeKind.FunctionValue) &&
-                classify_needs_drop(state.m, node.type_id)) {
+                classify_needs_drop(inout state, node.type_id)) {
                 owning = true;
             }
         }

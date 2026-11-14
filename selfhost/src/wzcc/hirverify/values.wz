@@ -253,7 +253,8 @@ func check_literal_function_value(state inout Verifier, node hir.HirNode,
         need(source.origin == binding.origin && source.type_id == binding.type_id,
             "function value capture order/origin/type differs from the lambda entry");
         let dependent = type_contains_parameter(state.m, source.type_id);
-        let owning = dependent || classify_needs_drop(state.m, source.type_id);
+        let owning = dependent || classify_needs_drop(inout state,
+            source.type_id);
         let expected_move = value.move_capture && owning;
         need(source.is_move == expected_move,
             "capture move intent differs from the real function value mode");
