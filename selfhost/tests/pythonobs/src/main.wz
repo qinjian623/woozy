@@ -26,6 +26,7 @@ import "app/wzcc/source" as source;
 import "app/wzcc/toolio" as toolio;
 import "std/fs" as fs;
 import "std/io" as io;
+import "std/json" as json;
 import "std/option" as option;
 import "std/os" as os;
 import "std/process" as process;
@@ -87,10 +88,41 @@ func python_entry(module hir.HirModule) option.Option[usize] {
     return entry;
 }
 
+func quoted(value string) string throws model.SupportError {
+    try {
+        return json.serialize(json.Value.String(value));
+    } catch error json.Error {
+        throw model.SupportError.Invalid("symbol metadata is not valid UTF-8");
+    }
+}
+
+// source_name comes from the same snapshot HIR that pythonemit verified;
+// generated comes from Output.symbols.  Nothing here derives a _f/_s name.
+func symbol_metadata(module hir.HirModule,
+                     output pythonemit.Output) string throws model.SupportError {
+    var result = "[";
+    for var index usize = 0; index < vec.len(output.symbols); index += 1 {
+        let emitted = output.symbols[index];
+        if emitted.symbol >= vec.len(module.resolved.symbols) {
+            throw model.SupportError.Invalid(
+                "emitted symbol index is outside resolved symbols");
+        }
+        let origin = module.resolved.symbols[emitted.symbol];
+        if index != 0 {
+            result += ",";
+        }
+        result += "{\"symbol\":" + strconv.format_u64(u64(emitted.symbol)) +
+            ",\"source_name\":" + quoted(origin.name) +
+            ",\"generated\":" + quoted(emitted.name) + "}";
+    }
+    return result + "]";
+}
+
 func run() i32 throws os.Error {
     let argv = process.args();
     var manifest = "";
     var out = "";
+    var binding = "";
     var index usize = 1;
     for index < vec.len(argv) {
         let argument = argv[index];
@@ -100,6 +132,9 @@ func run() i32 throws os.Error {
         } else if argument == "--out-dir" && index + 1 < vec.len(argv) {
             index += 1;
             out = argv[index];
+        } else if argument == "--std-binding" && index + 1 < vec.len(argv) {
+            index += 1;
+            binding = argv[index];
         } else if argument == "--format" && index + 1 < vec.len(argv) {
             index += 1;
             if argv[index] != "json" {
@@ -109,7 +144,7 @@ func run() i32 throws os.Error {
             }
         } else {
             return failure("E_DRIVER_ARGUMENT", "toolchain",
-                "usage: pythonobs --project MANIFEST --out-dir DIR [--format json]",
+                "usage: pythonobs --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--format json]",
                 model.FailureKind.Environment);
         }
         index += 1;
@@ -121,11 +156,16 @@ func run() i32 throws os.Error {
     }
 
     let directory = resources.directory();
-    let library = resources.standard_library();
+    var library = option.Option[string].Some(resources.standard_library());
+    var binding_bundle = option.Option[string].None;
+    if binding != "" {
+        library = option.Option[string].None;
+        binding_bundle = option.Option[string].Some(binding);
+    }
     var manager = source.manager();
     let project_options = model.ProjectOptions(manifest: manifest,
-        std_source_root: option.Option[string].Some(library),
-        std_binding_bundle: option.Option[string].None);
+        std_source_root: library,
+        std_binding_bundle: binding_bundle);
     let loaded = project.load(project_options, inout manager);
     if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
         return report(manager.snapshots, loaded.state, loaded.failure,
@@ -156,69 +196,72 @@ func run() i32 throws os.Error {
             return report(manager.snapshots, checked.state, checked.failure,
                 false, checked.diagnostics);
         case option.Option.Some(verified): {
-            var entry = option.Option[usize].None;
             try {
                 let module = hirverify.snapshot(verified);
-                entry = python_entry(module);
-            } catch problem model.SupportError {
-                return failure("E_INTERNAL_ERROR", "toolchain",
-                    support_text(problem), model.FailureKind.Internal);
-            }
-            switch entry {
-                case option.Option.None:
-                    return failure("E_CAPABILITY_UNAVAILABLE", "codegen",
-                        "executable build requires main in the entry module",
-                        model.FailureKind.Unsupported);
-                case option.Option.Some(entry_symbol): {
-                    let runtime = fs.read_text(
-                        directory + "/runtime/python/unicode18.py") + "\n" +
-                        fs.read_text(directory + "/runtime/python/langrt.py");
-                    let emitted = pythonemit.emit(verified, entry_symbol,
-                        pythonemit.Options(entrypoint: true), runtime);
-                    let has_output = option.is_some(emitted.value);
-                    if !render.succeeded(emitted.state, has_output,
-                                         emitted.diagnostics) {
-                        return report(manager.snapshots, emitted.state,
-                            emitted.failure, has_output, emitted.diagnostics);
-                    }
-                    switch emitted.value {
-                        case option.Option.None:
+                let entry = python_entry(module);
+                switch entry {
+                    case option.Option.None:
+                        return failure("E_CAPABILITY_UNAVAILABLE", "codegen",
+                            "executable build requires main in the entry module",
+                            model.FailureKind.Unsupported);
+                    case option.Option.Some(entry_symbol): {
+                        let runtime = fs.read_text(
+                            directory + "/runtime/python/unicode18.py") + "\n" +
+                            fs.read_text(directory + "/runtime/python/langrt.py");
+                        let emitted = pythonemit.emit(verified, entry_symbol,
+                            pythonemit.Options(entrypoint: true), runtime);
+                        let has_output = option.is_some(emitted.value);
+                        if !render.succeeded(emitted.state, has_output,
+                                             emitted.diagnostics) {
                             return report(manager.snapshots, emitted.state,
-                                emitted.failure, false, emitted.diagnostics);
-                        case option.Option.Some(output): {
-                            try {
-                                // Same private staging and paired publish as
-                                // cli/project.wz: both files are complete
-                                // before either target is replaced.
-                                var staging = toolio.stage(out, "python");
-                                defer { toolio.cleanup(staging); }
-                                let staged = staging.path;
-                                fs.write_text(staged + "/program.py",
-                                    output.code, 0o666);
-                                fs.write_text(staged + "/langrt.py",
-                                    output.runtime, 0o666);
-                                toolio.publish_pair(inout staging,
-                                    "langrt.py", "program.py");
-                            } catch problem toolio.Error {
-                                switch problem {
-                                    case toolio.Error.System(error):
-                                        return failure("E_INPUT_IO",
-                                            "toolchain", os_text(error),
-                                            model.FailureKind.Environment);
-                                    case toolio.Error.Rollback(backup, error):
-                                        return failure("E_INPUT_IO",
-                                            "toolchain",
-                                            "output recovery failed; retained at " +
-                                            backup + ": " + os_text(error),
-                                            model.FailureKind.Environment);
+                                emitted.failure, has_output, emitted.diagnostics);
+                        }
+                        switch emitted.value {
+                            case option.Option.None:
+                                return report(manager.snapshots, emitted.state,
+                                    emitted.failure, false, emitted.diagnostics);
+                            case option.Option.Some(output): {
+                                // Validate and encode the real Output.symbols
+                                // map before creating any output file.
+                                let metadata = symbol_metadata(module, output);
+                                try {
+                                    // Same private staging and paired publish as
+                                    // cli/project.wz: both files are complete
+                                    // before either target is replaced.
+                                    var staging = toolio.stage(out, "python");
+                                    defer { toolio.cleanup(staging); }
+                                    let staged = staging.path;
+                                    fs.write_text(staged + "/program.py",
+                                        output.code, 0o666);
+                                    fs.write_text(staged + "/langrt.py",
+                                        output.runtime, 0o666);
+                                    toolio.publish_pair(inout staging,
+                                        "langrt.py", "program.py");
+                                } catch problem toolio.Error {
+                                    switch problem {
+                                        case toolio.Error.System(error):
+                                            return failure("E_INPUT_IO",
+                                                "toolchain", os_text(error),
+                                                model.FailureKind.Environment);
+                                        case toolio.Error.Rollback(backup, error):
+                                            return failure("E_INPUT_IO",
+                                                "toolchain",
+                                                "output recovery failed; retained at " +
+                                                backup + ": " + os_text(error),
+                                                model.FailureKind.Environment);
+                                    }
                                 }
+                                io.println("{\"status\":\"ok\",\"entry\":" +
+                                    strconv.format_u64(u64(entry_symbol)) +
+                                    ",\"symbols\":" + metadata + "}");
+                                return 0;
                             }
-                            io.println("{\"status\":\"ok\",\"entry\":" +
-                                strconv.format_u64(u64(entry_symbol)) + "}");
-                            return 0;
                         }
                     }
                 }
+            } catch problem model.SupportError {
+                return failure("E_INTERNAL_ERROR", "toolchain",
+                    support_text(problem), model.FailureKind.Internal);
             }
         }
     }
