@@ -1,0 +1,31 @@
+package app;
+
+import "app/wzcc/sema" as sema;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    var small usize = 4096;
+    var large usize = 16384;
+    if vec.len(args) == 3 {
+        try {
+            small = usize(strconv.parse_u64(args[1]));
+            large = usize(strconv.parse_u64(args[2]));
+        } catch error strconv.Error {
+            io.eprintln("invalid scale arguments");
+            return 2;
+        }
+    } else if vec.len(args) != 1 {
+        io.eprintln("usage: program [SMALL_SCALE LARGE_SCALE]");
+        return 2;
+    }
+    if small == 0 || large <= small {
+        io.eprintln("scales must be positive and increasing");
+        return 2;
+    }
+    return sema.run_node_index_tests(small, large);
+}

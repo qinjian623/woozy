@@ -104,6 +104,21 @@ func a_test_build() model.ResolveResult {
         "func use_fn(cb func(inout i32,move i32) Unit) {}";
     return a_test_build_text(body);
 }
+// Test staging only: preserve the product's sorted NodeKey invariant while
+// building the same tables without staging run.wz.
+func a_test_put_node_symbol(entries Vec[NodeSymbolEntry],key NodeKey,
+    id usize,replace bool) {
+    let position=node_symbol_position(entries,key);
+    if position<vec.len(entries)&&same_node_key(entries[position].key,key) {
+        if replace {entries[position].symbol=id;}
+        return;
+    }
+    let entry=NodeSymbolEntry(key:key,symbol:id);
+    vec.push(entries,entry);
+    var index=vec.len(entries)-1;
+    for index>position {entries[index]=entries[index-1];index-=1;}
+    entries[position]=entry;
+}
 func a_test_prepare_resolved(resolved model.ResolveResult,environment Vec[usize],
     run_declarations bool) Checker throws Error {
     var resolved_ok=false;
@@ -115,13 +130,14 @@ func a_test_prepare_resolved(resolved model.ResolveResult,environment Vec[usize]
         model.CheckConfig(backend:model.Backend.Native,word_bits:64)));
     for value in resolved.value.symbols {
         switch value.definition {
-            case option.Option.Some(r):vec.push(state.definitions,
-                NodeSymbolEntry(key:node_key(r),symbol:value.id));
+            case option.Option.Some(r):a_test_put_node_symbol(state.definitions,
+                node_key(r),value.id,false);
             case option.Option.None: {}
         }
     }
     for value in resolved.value.occurrences {
-        vec.push(state.occurrences,NodeSymbolEntry(key:node_key(value.source),symbol:value.symbol));
+        a_test_put_node_symbol(state.occurrences,node_key(value.source),
+            value.symbol,true);
     }
     state.unit=scalar(inout state,model.TypeKind.Unit,0);
     state.boolean=scalar(inout state,model.TypeKind.Bool,0);
