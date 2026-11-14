@@ -254,7 +254,9 @@ if build_step "freestanding gc_world object" "$COMPILER" "${FREESTANDING[@]}" \
     -c "$ROOT/runtime/native/gc_world.cpp" -o "$BUILD_DIR/gc_world.o"; then
   UNDEFINED=$BUILD_DIR/gc_world_undefined.txt
   nm -u "$BUILD_DIR/gc_world.o" >"$UNDEFINED" 2>&1
-  if grep -Ev '^[[:space:]]*(U[[:space:]]+)?(lang_alloc_v1|lang_free_v1)$' \
+  # The freestanding object intentionally leaves the private tid-cache hooks
+  # weak; core start.cpp supplies the strong hidden definitions.
+  if grep -Ev '^[[:space:]]*(U[[:space:]]+)?(lang_alloc_v1|lang_free_v1)$|^[[:space:]]*w[[:space:]]+lang_native_(cached_tid|clear_tid_cache)$' \
       "$UNDEFINED" | grep -q .; then
     fail "freestanding object has unexpected undefined symbols"
     show_log "$UNDEFINED"

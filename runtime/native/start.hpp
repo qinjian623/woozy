@@ -2,6 +2,10 @@
 #include <cstdint>
 
 namespace lang_runtime {
+// Private TCB slots used only by the runtime's own FS base. Slot 1 caches the
+// current kernel tid and slot 2 marks that the slots are owned by this runtime;
+// external pthreads and hosted libc TLS never match this cookie.
+inline constexpr uintptr_t kTcbTidCacheCookie = uintptr_t{0x575a544944763031ULL};
 // Linux places argc, argv, envp and the auxiliary vector on the initial stack.
 __attribute__((no_stack_protector)) inline uintptr_t startup_canary(const uintptr_t *stack) noexcept {
   if (!stack) return 0;

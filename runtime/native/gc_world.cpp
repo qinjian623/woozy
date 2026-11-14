@@ -7,6 +7,14 @@
 #error "lang-gc-world/1 is implemented only for Linux x86_64"
 #endif
 
+// Private per-thread tid cache hooks. start.cpp provides strong hidden
+// definitions in the core link; a hosted CRT link leaves these weak
+// references null and current_tid keeps using the raw syscall.
+extern "C" uintptr_t lang_native_cached_tid() noexcept
+    __attribute__((weak, visibility("hidden")));
+extern "C" void lang_native_clear_tid_cache() noexcept
+    __attribute__((weak, visibility("hidden")));
+
 // lang-gc-world/1. See tests/native/gc_world/CONTRACT.md for the protocol and
 // for the integration work that this translation unit deliberately does not
 // perform. Nothing here uses libc, libstdc++, pthreads, TLS, or dynamic
@@ -185,7 +193,9 @@ gc_panic(const char *reason) noexcept {
 }
 
 int32_t current_tid() noexcept {
-  const int64_t tid = raw_current_tid();
+  const int64_t tid = lang_native_cached_tid
+                          ? static_cast<int64_t>(lang_native_cached_tid())
+                          : raw_current_tid();
   if (tid <= 0)
     gc_panic_with_tid("gettid-failed", 0);
   return static_cast<int32_t>(tid);
@@ -1305,6 +1315,9 @@ extern "C" void lang_gc_world_fork_parent_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
+  // The child inherits the forking thread's cached parent tid. Clear only an
+  // owned TCB before current_tid obtains and caches the new child tid.
+  if (lang_native_clear_tid_cache) lang_native_clear_tid_cache();
   const int32_t child_tid = current_tid();
   if (!g_fork_prepared)
     gc_panic("fork-hook-misuse");

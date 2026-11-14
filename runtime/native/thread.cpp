@@ -3,7 +3,13 @@
 #include <cstdint>
 
 #include "gc_program.hpp"
+#include "start.hpp"
 #include "weak.hpp"
+
+extern "C" uintptr_t lang_native_cached_tid() noexcept
+    __attribute__((weak, visibility("hidden")));
+extern "C" void lang_native_clear_tid_cache() noexcept
+    __attribute__((weak, visibility("hidden")));
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
                                                  uint64_t) noexcept;
@@ -304,6 +310,8 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
     lang_native_panic_v1(5, 0, 0, 0);
   auto *tcb = reinterpret_cast<uintptr_t *>(stack + kStackBytes);
   tcb[0] = reinterpret_cast<uintptr_t>(tcb);
+  tcb[1] = 0; // Per-thread tid cache starts empty; only current_tid fills it.
+  tcb[2] = lang_runtime::kTcbTidCacheCookie;
   __asm__ volatile("movq %%fs:0x28, %0" : "=r"(tcb[5]));
   tcb[6] = reinterpret_cast<uintptr_t>(state);
   tcb[7] = 0x575a544342763031ULL;
@@ -384,6 +392,9 @@ extern "C" int64_t lang_thread_result_v1(LangHandle *handle) noexcept {
   return state->result;
 }
 extern "C" void lang_thread_fork_child_v1() noexcept {
+  // A child inherits the parent's cached tid. Clear only a TCB owned by this
+  // runtime before the first post-fork gettid; main and external TLS stay as-is.
+  if (lang_native_clear_tid_cache) lang_native_clear_tid_cache();
   // This slot belongs to our own TCB only. The main startup TCB has zero here.
   uintptr_t marker;
   __asm__ volatile("movq %%fs:0x38, %0" : "=r"(marker));

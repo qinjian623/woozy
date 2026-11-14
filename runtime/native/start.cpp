@@ -27,11 +27,48 @@ __attribute__((no_stack_protector, noreturn)) static void startup_failure() noex
   __builtin_trap();
 }
 
+// Private hidden hooks used by gc_world/thread. They are deliberately not part
+// of the public _v1 ABI. A hosted link has no start.cpp and therefore leaves
+// its weak references null.
+extern "C" __attribute__((no_stack_protector, visibility("hidden")))
+uintptr_t lang_native_cached_tid() noexcept {
+  uintptr_t cookie;
+  __asm__ volatile("movq %%fs:0x10, %0" : "=r"(cookie));
+  if (cookie != lang_runtime::kTcbTidCacheCookie) {
+    // Never write a foreign pthread/libc TLS block. The caller still gets the
+    // raw tid so a core program can use externally-created threads.
+    long tid;
+    __asm__ volatile("syscall" : "=a"(tid) : "a"(__NR_gettid)
+                     : "rcx", "r11", "memory");
+    return tid > 0 ? static_cast<uintptr_t>(tid) : 0;
+  }
+  uintptr_t cached;
+  __asm__ volatile("movq %%fs:0x8, %0" : "=r"(cached));
+  if (cached > 0 && cached <= 0x7fffffffU) return cached;
+  long tid;
+  __asm__ volatile("syscall" : "=a"(tid) : "a"(__NR_gettid)
+                   : "rcx", "r11", "memory");
+  if (tid <= 0) return 0;
+  const uintptr_t value = static_cast<uintptr_t>(tid);
+  __asm__ volatile("movq %0, %%fs:0x8" : : "r"(value) : "memory");
+  return value;
+}
+
+extern "C" __attribute__((no_stack_protector, visibility("hidden")))
+void lang_native_clear_tid_cache() noexcept {
+  uintptr_t cookie;
+  __asm__ volatile("movq %%fs:0x10, %0" : "=r"(cookie));
+  if (cookie != lang_runtime::kTcbTidCacheCookie) return;
+  __asm__ volatile("movq $0, %%fs:0x8" ::: "memory");
+}
+
 extern "C" __attribute__((no_stack_protector, visibility("hidden")))
 void lang_init_tcb(const uintptr_t *stack) noexcept {
   const uintptr_t canary = lang_runtime::startup_canary(stack);
   if (!canary) startup_failure();
   initial_tcb[0] = reinterpret_cast<uintptr_t>(initial_tcb);
+  initial_tcb[1] = 0;
+  initial_tcb[2] = lang_runtime::kTcbTidCacheCookie;
   initial_tcb[5] = canary; // x86_64 stack protector reads FS:0x28.
   __stack_chk_guard = canary;
   long result;

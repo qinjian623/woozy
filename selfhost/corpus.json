@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "0d20de3edcc9ac6f17aecfa154328d203625756d",
-  "previous_git_head": "4a2090a3ab0ba0548a58624082506c969a6212c4",
-  "frozen_at": "2026-11-14T21:18:36.815518+00:00",
+  "git_head": "679ff16f489c74d46ee882c93556511db1ab4b5c",
+  "previous_git_head": "0d20de3edcc9ac6f17aecfa154328d203625756d",
+  "frozen_at": "2026-11-14T22:38:35.063812+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Owned uncommitted integration snapshot based on 0d20de3edcc9ac6f17aecfa154328d203625756d; explicit20 overlays staged, inventory refreshed. Formal freeze remains false until an authorized commit; no Source tests executed.",
+  "freeze_basis": "Runtime tid-cache update based on 679ff16f489c74d46ee882c93556511db1ab4b5c. Existing cases unchanged; refresh runtime/runner hashes and register two internal component runners. Formal readiness is determined from the actual worktree and frozen inputs.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -592,8 +592,8 @@
     },
     {
       "path": "runtime/native/gc_world.cpp",
-      "sha256": "5bc6c54d4121fe2494ead08f1dbe55a8b238cb22cc99544e7a577bdd6eab92c0",
-      "size": 41621,
+      "sha256": "0db30c2229e2a5a796c671f1d27ce558909df0e9aeb525a975558fa2e702bed8",
+      "size": 42377,
       "role": "runtime_source",
       "assignment": []
     },
@@ -809,15 +809,15 @@
     },
     {
       "path": "runtime/native/start.cpp",
-      "sha256": "21b65b551f060810b32f4069386703ab584f74c942da2e79e218c74fb2de985a",
-      "size": 2183,
+      "sha256": "8fe01a13bbc8a0c4c4651314874f892cea71821c1aa18a76965e5e468250460c",
+      "size": 3745,
       "role": "runtime_source",
       "assignment": []
     },
     {
       "path": "runtime/native/start.hpp",
-      "sha256": "b801dcf38d23f8e40b0f7c82d5c88c9d0f1ab203bf67ae48e2f58a1f68fb0e07",
-      "size": 665,
+      "sha256": "5da42a1b53f643041677d7241caa6a1b58f1907c22cec0512f1e427932491d12",
+      "size": 973,
       "role": "runtime_source",
       "assignment": []
     },
@@ -872,8 +872,8 @@
     },
     {
       "path": "runtime/native/thread.cpp",
-      "sha256": "66ad167c89c928e24599d5ceeb45154d6dcde9ca115b2f84dba88ba3de1690ac",
-      "size": 15517,
+      "sha256": "bfd2554ab5e7317c2fc0c8b9924953cdd5dba43e78eb4a8369fed4fb28a66c24",
+      "size": 16097,
       "role": "runtime_source",
       "assignment": []
     },
@@ -18251,9 +18251,23 @@
       "assignment": []
     },
     {
+      "path": "tests/native/gc_tid_cache/check_helpers_test.sh",
+      "sha256": "903257c0cbbeb4024367d1042049d33f212ce3cee529bd0ed0df81ef36512ac8",
+      "size": 3014,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/gc_tid_cache/run.sh",
+      "sha256": "f340e5934b7e8a8f04bdf937583144ee31a07fe4daab3d962dfc124784372481",
+      "size": 6790,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/native/gc_world/run_all.sh",
-      "sha256": "ef52fe833c78f648d7324665b1289d71976d7f584a4cc22e4c9efdedaecfebf9",
-      "size": 10095,
+      "sha256": "ed8a0ad75b3c9fad6dfb489686514a1eb4600454e7bd7b975ea597e361fdda78",
+      "size": 10305,
       "role": "runner_source",
       "assignment": []
     },
@@ -86066,6 +86080,16 @@
       "path": "tests/native/gc_runtime/run_all.sh",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "tests/native/gc_tid_cache/check_helpers_test.sh",
+      "status": "component",
+      "reason": "Internal C++ core/hosted TCB tid-cache test or shell helper controls; no Woozy Source manifest, public candidate compilation, new language requirement or corpus pass is implied."
+    },
+    {
+      "path": "tests/native/gc_tid_cache/run.sh",
+      "status": "component",
+      "reason": "Internal C++ core/hosted TCB tid-cache test or shell helper controls; no Woozy Source manifest, public candidate compilation, new language requirement or corpus pass is implied."
     },
     {
       "path": "tests/native/gc_world/run_all.sh",
