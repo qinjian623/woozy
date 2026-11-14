@@ -11,18 +11,13 @@ import "std/option" as option;
 import "std/vec" as vec;
 
 func run_key_less(left NodeKey, right NodeKey) bool {
-    if left.module != right.module { return left.module < right.module; }
-    if left.file != right.file { return left.file < right.file; }
-    return left.node < right.node;
+    return node_key_less(left, right);
 }
 
 // emplace keeps the first definition; occurrence assignment keeps the last.
 func run_put_node_symbol(entries Vec[NodeSymbolEntry], key NodeKey,
                          id usize, replace bool) {
-    var position usize = 0;
-    for position < vec.len(entries) && run_key_less(entries[position].key, key) {
-        position += 1;
-    }
+    let position = node_symbol_position(entries, key);
     if position < vec.len(entries) && same_node_key(entries[position].key, key) {
         if replace { entries[position].symbol = id; }
         return;

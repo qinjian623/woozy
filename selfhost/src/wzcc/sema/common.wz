@@ -17,6 +17,23 @@ func same_node_key(left NodeKey, right NodeKey) bool {
 func node_key(r model.NodeRef) NodeKey {
     return NodeKey(module:r.module,file:r.file,node:r.node);
 }
+// One private (module,file,node) lower_bound shared by the index builder and
+// its readers. The table never stores duplicate keys; callers still compare
+// the returned entry so an absent neighbouring key is not treated as a hit.
+func node_key_less(left NodeKey,right NodeKey) bool {
+    if left.module!=right.module {return left.module<right.module;}
+    if left.file!=right.file {return left.file<right.file;}
+    return left.node<right.node;
+}
+func node_symbol_position(entries Vec[NodeSymbolEntry],key NodeKey) usize {
+    var low usize=0;var high usize=vec.len(entries);
+    for low<high {
+        let middle=low+(high-low)/2;
+        if node_key_less(entries[middle].key,key) {low=middle+1;}
+        else {high=middle;}
+    }
+    return low;
+}
 func parsed_file(state inout Checker, r model.NodeRef) model.ParseResult throws Error {
     let project=state.m.resolved.project;
     if r.module>=vec.len(project.modules) {throw internal_error("invalid sema module reference");}
@@ -84,9 +101,10 @@ func private_type_leak(state inout Checker, r model.NodeRef, private_type usize)
     return Error.Rejected(diagnostic:diagnostic,failure:model.FailureKind.Source);
 }
 func definition(state inout Checker, r model.NodeRef) usize throws Error {
-    let key=node_key(r);
-    for entry in state.definitions {if same_node_key(entry.key,key) {return entry.symbol;}}
-    throw internal_error("missing sema definition");
+    let key=node_key(r);let position=node_symbol_position(state.definitions,key);
+    if position>=vec.len(state.definitions) {throw internal_error("missing sema definition");}
+    if !same_node_key(state.definitions[position].key,key) {throw internal_error("missing sema definition");}
+    return state.definitions[position].symbol;
 }
 func occurrence(state inout Checker, r model.NodeRef) option.Option[usize] throws Error {
     var value=r;
@@ -96,8 +114,10 @@ func occurrence(state inout Checker, r model.NodeRef) option.Option[usize] throw
         if !parenthesized {break;}
         value=child(inout state,value,0);
     }
-    let key=node_key(value);
-    for entry in state.occurrences {if same_node_key(entry.key,key) {return option.Option[usize].Some(entry.symbol);}}
+    let key=node_key(value);let position=node_symbol_position(state.occurrences,key);
+    if position<vec.len(state.occurrences) && same_node_key(state.occurrences[position].key,key) {
+        return option.Option[usize].Some(state.occurrences[position].symbol);
+    }
     return option.Option[usize].None;
 }
 func symbol(state inout Checker, id usize) model.Symbol throws Error {

@@ -13,10 +13,10 @@ func b_occurrence_raw(state inout Checker, r model.NodeRef)
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let key = node_key(r);
-    for entry in state.occurrences {
-        if same_node_key(entry.key, key) {
-            return option.Option[usize].Some(entry.symbol);
-        }
+    let position = node_symbol_position(state.occurrences, key);
+    if position < vec.len(state.occurrences) &&
+       same_node_key(state.occurrences[position].key, key) {
+        return option.Option[usize].Some(state.occurrences[position].symbol);
     }
     return option.Option[usize].None;
 }
