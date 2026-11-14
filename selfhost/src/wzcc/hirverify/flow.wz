@@ -231,9 +231,9 @@ func ownership_sources(state inout Verifier) throws Invalid {
                 case hir.NodeData.Read(value): payload = value.symbol;
                 default: {}
             }
-            let origin = origin_symbol(state, payload);
+            payload = origin_symbol(state, payload);
             let source_symbol = resolved_source(state, node.source.node);
-            let payload_constant = symbol_is(verifier_symbol(state, origin).kind,
+            let payload_constant = symbol_is(verifier_symbol(state, payload).kind,
                 model.SymbolKind.Constant);
             var source_constant = false;
             if option.is_some(source_symbol) {

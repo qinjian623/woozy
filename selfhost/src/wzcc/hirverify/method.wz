@@ -809,8 +809,14 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
     value hir.FunctionValue, source SourceMethodCall, has_source_module bool,
     source_module usize, has_source_owner bool, source_owner usize)
     throws Invalid {
-    let owner = verifier_scope(state, node.scope).function;
-    let module = node.source.node.module;
+    var owner = verifier_scope(state, node.scope).function;
+    if has_source_owner {
+        owner = source_owner;
+    }
+    var module = node.source.node.module;
+    if has_source_module {
+        module = source_module;
+    }
     let bounded = source_template_bound(inout state, source, owner);
     var type_parameter = false;
     if source.has_base_symbol {

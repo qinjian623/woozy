@@ -488,7 +488,7 @@ func function_value_source(state inout Verifier, node hir.HirNode)
             "trait prototype method value source is not a bounded T method");
         check_concrete_method_value_source(inout state, node, value,
             source_method_call_value(source), true,
-            source_method_call_value(source).base.module, false, 0);
+            source_method_call_value(source).base.module, true, 0);
         return;
     }
     var source_symbol = option.Option[usize].None;
