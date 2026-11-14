@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
-  "previous_git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
-  "frozen_at": "2026-11-14T02:01:02.741579+00:00",
+  "git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
+  "previous_git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+  "frozen_at": "2026-11-14T03:28:37.585125+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -85277,7 +85277,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+    "to_git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85930,6 +85930,63 @@
       "current_running_jobs_touched": false,
       "full_corpus_or_bootstrap_reexecuted": false,
       "historical_stage1_semantic_difference_list": "Cumulative pre-existing comparison plus these three later Source changes; do not read it as the current running 2c11 delta."
+    },
+    "persist_compiler_case_records_delta": {
+      "code_commit": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
+      "accepted_task": "94cdf9d4-a81f-4a03-a745-c19c63a159d9",
+      "files": [
+        {
+          "path": "selfhost/corpus.py",
+          "old_sha256": "c18d93aa36cc75e68831178329af15c30e6eadaa3fdb36253e014601a6ec711c",
+          "new_sha256": "2d207afb2ed1d5e968a65161d68e2836d1fe4b22ff5664ccd93b4239ee423a1e",
+          "size": 92645,
+          "frozen_corpus_entry": false,
+          "reason": "executor harness exclusion"
+        },
+        {
+          "path": "tests/selfhost/corpus_test.py",
+          "old_sha256": "b49ab8877898758cd0a721ace631ca4d16e6fc1782da7ba1d54ab28677136fd9",
+          "new_sha256": "d7f399817c2a7e28086af6cce0ea836cca01c1a1a98ec82913457d2c894468f5",
+          "size": 73606,
+          "frozen_corpus_entry": false,
+          "reason": "executor harness exclusion"
+        },
+        {
+          "path": "development/docs/SELFHOST_CORPUS.md",
+          "old_sha256": "450a445a3727f815185f8931ee9da511bc21802e85ccd55cb939800891327081",
+          "new_sha256": "85ec877270f8dafbe527d28890ff14e3134dbd40723b2ff6dbb1b5f88494840a",
+          "size": 40025,
+          "frozen_corpus_entry": false,
+          "reason": "documentation outside frozen corpus paths"
+        }
+      ],
+      "review": "checks/SH12h-persist-records-independent-review-20261114.md",
+      "retained_evidence": "checks/SH12h-persist-compiler-case-records-20261114/summary.json",
+      "retained_evidence_sha256": "917f4c271ec7289c90c696cad5a22b5868c718ffb80e4d5ae98b58ef050b6022",
+      "executor_change_scope": "Two record writes only: compiler.process.json after the actual child returns and raw streams are saved; cases/<case>.json after the existing complete case classification.",
+      "execution_comparison_expectations_unchanged": true,
+      "all_original_cases_and_order_unchanged": true,
+      "runner_classifications_unchanged": true,
+      "original_cases": 1333,
+      "enabled": 962,
+      "disabled": 371,
+      "adaptation_required": 319,
+      "validation": {
+        "standard_test": "passed; existing retained tool result, not repeated during publication",
+        "harness_process_records": 18,
+        "harness_complete_case_records": 6,
+        "actual_Cpp_sha256": "6e6a436fd52fdec8c8fba678b983d58b3f010eea1daa4280cd92e32a1478f4f1",
+        "Cpp565_claimed": false,
+        "harness_complete": false,
+        "full_corpus_executed": false,
+        "selfhost_claimed": false,
+        "portable_failure_scope": "real Python child fixtures and injected later artifact processing exception; no claim of a real Woozy compile failure for that fixture"
+      },
+      "compiler_Source116_unchanged": true,
+      "old_Root_script_reader": "Root stopped the old O0 stage2 job and confirmed completion before this integration; this publisher did not operate that or other long-running jobs.",
+      "new_O2_corpus_reexecuted_due_to_patch": false,
+      "compiler_or_component_rebuilt": false,
+      "frozen_files_and_runners_unchanged": true
     }
   }
 }
