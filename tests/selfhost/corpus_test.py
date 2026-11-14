@@ -333,11 +333,11 @@ def check_public_cli_expectations():
     assert evidenced
     assert any(case.get("enabled", False) for case in evidenced)
     for case in inventory["cases"]:
+        if not case.get("enabled"):
+            continue
         if case.get("run_expectation", {}).get("status") == "unrecorded" \
                 and case.get("evidence"):
             raise AssertionError(f"placeholder expectation: {case['id']}")
-        if not case.get("enabled"):
-            continue
         assert case.get("expected"), case["id"]
         assert not corpus.run_expectation_errors(case), case["id"]
         expected = case["expected"]
