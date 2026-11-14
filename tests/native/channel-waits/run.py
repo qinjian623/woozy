@@ -31,25 +31,84 @@ def digest(path):
 
 
 def command(argv, env, cwd, timeout):
+    import base64
+    import importlib.util
+
     started = time.monotonic()
+    argv = [str(item) for item in argv]
+
+    def elapsed():
+        return round(time.monotonic() - started, 3)
+
+    def as_text(data):
+        return data.decode("utf-8", "backslashreplace")
+
+    def as_base64(data):
+        return base64.b64encode(data).decode("ascii")
+
+    runner = getattr(command, "_run_process_impl", None)
     try:
-        result = subprocess.run([str(item) for item in argv], capture_output=True,
-                                text=True, timeout=timeout, env=env, cwd=cwd)
-        return dict(argv=[str(item) for item in argv], status="exited",
-                    exit=result.returncode, stdout=result.stdout,
-                    stderr=result.stderr,
-                    elapsed_seconds=round(time.monotonic() - started, 3))
-    except subprocess.TimeoutExpired as error:
-        return dict(argv=[str(item) for item in argv], status="timeout",
-                    exit=None,
-                    stdout=(error.stdout or "") if isinstance(error.stdout, str) else "",
-                    stderr=(error.stderr or "") if isinstance(error.stderr, str) else "",
-                    timeout_seconds=timeout,
-                    elapsed_seconds=round(time.monotonic() - started, 3))
+        if runner is None:
+            corpus_path = Path(__file__).resolve().parents[3] / "selfhost/corpus.py"
+            spec = importlib.util.spec_from_file_location(
+                "channel_waits_corpus", corpus_path)
+            if spec is None or spec.loader is None:
+                raise OSError(f"cannot load process runner: {corpus_path}")
+            corpus = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(corpus)
+            runner = corpus._run_process_impl
+            command._run_process_impl = runner
+        result = runner(argv, cwd, env, timeout)
+        stdout_bytes = result["stdout"]
+        stderr_bytes = result["stderr"]
+        exit_code = result["exit"]
+        timed_out = result["timed_out"]
+        cleanup_complete = result["cleanup_complete"]
+        abandoned_pipes = result["abandoned_pipes"]
     except OSError as error:
-        return dict(argv=[str(item) for item in argv], status="launch_failed",
-                    exit=None, stdout="", stderr=str(error),
-                    elapsed_seconds=round(time.monotonic() - started, 3))
+        # Popen failed before a child existed, so there is nothing to clean up.
+        return dict(argv=argv, status="launch_failed", exit=None,
+                    stdout="", stderr=str(error),
+                    timed_out=False, cleanup_complete=True,
+                    abandoned_pipes=False, stdout_base64="", stderr_base64="",
+                    elapsed_seconds=elapsed())
+
+    stdout = as_text(stdout_bytes)
+    stderr = as_text(stderr_bytes)
+    raw = dict(stdout_base64=as_base64(stdout_bytes),
+               stderr_base64=as_base64(stderr_bytes))
+    invalid_fields = []
+    if type(exit_code) is not int or type(exit_code) is bool:
+        invalid_fields.append("exit")
+    if type(timed_out) is not bool:
+        invalid_fields.append("timed_out")
+    if type(cleanup_complete) is not bool:
+        invalid_fields.append("cleanup_complete")
+    if type(abandoned_pipes) is not bool:
+        invalid_fields.append("abandoned_pipes")
+    if invalid_fields:
+        return dict(argv=argv, status="invalid_process_result", exit=None,
+                    stdout=stdout, stderr=stderr,
+                    timed_out=None, cleanup_complete=None,
+                    abandoned_pipes=None,
+                    invalid_process_fields=invalid_fields, **raw,
+                    elapsed_seconds=elapsed())
+    if timed_out:
+        status = "timeout"
+    elif abandoned_pipes:
+        status = "abandoned_pipes"
+    elif not cleanup_complete:
+        status = "cleanup_incomplete"
+    else:
+        status = "exited"
+    row = dict(argv=argv, status=status, exit=exit_code,
+               stdout=stdout, stderr=stderr,
+               timed_out=timed_out, cleanup_complete=cleanup_complete,
+               abandoned_pipes=abandoned_pipes, **raw,
+               elapsed_seconds=elapsed())
+    if status == "timeout":
+        row["timeout_seconds"] = timeout
+    return row
 
 
 def write_text(path, text):
@@ -58,12 +117,49 @@ def write_text(path, text):
 
 
 def static_elf(program, env, cwd):
+    import re
+
+    def shape_errors(kind, text):
+        errors = []
+        if not text:
+            return ["readelf produced empty stdout"]
+        for marker in ("Format: elf", "Arch: ", "ElfHeader {",
+                       "ProgramHeaders [", "DynamicSection ["):
+            if marker in text:
+                errors.append(f"llvm-readobj marker {marker!r}")
+        if kind == "headers":
+            for marker in ("Elf file type is ", "Entry point ",
+                           "Program Headers:", "Type", "Offset", "VirtAddr"):
+                if marker not in text:
+                    errors.append(f"missing GNU header marker {marker!r}")
+            if re.search(
+                    r"There are [0-9]+ program headers, starting at offset "
+                    r"[0-9]+", text) is None:
+                errors.append("missing GNU program-header count line")
+        elif kind == "dynamic":
+            no_dynamic = "There is no dynamic section in this file." in text
+            dynamic_section = ("Dynamic section at offset" in text
+                               and "Tag" in text and "Name" in text)
+            if not (no_dynamic or dynamic_section):
+                errors.append("missing GNU dynamic-section shape")
+        else:
+            errors.append(f"unknown readelf output kind {kind!r}")
+        return errors
+
     headers = command(["readelf", "-l", program], env, cwd, 30)
     dynamic = command(["readelf", "-d", program], env, cwd, 30)
-    assert headers["status"] == "exited" and headers["exit"] == 0, headers
-    assert dynamic["status"] == "exited" and dynamic["exit"] == 0, dynamic
+    for row in (headers, dynamic):
+        assert row["status"] == "exited" and row["exit"] == 0, row
+        assert type(row["exit"]) is int and type(row["exit"]) is not bool, row
+        assert row["timed_out"] is False, row
+        assert row["cleanup_complete"] is True, row
+        assert row["abandoned_pipes"] is False, row
     assert "INTERP" not in headers["stdout"], headers
     assert "(NEEDED)" not in dynamic["stdout"], dynamic
+    header_errors = shape_errors("headers", headers["stdout"])
+    dynamic_errors = shape_errors("dynamic", dynamic["stdout"])
+    assert not header_errors, (header_errors, headers)
+    assert not dynamic_errors, (dynamic_errors, dynamic)
     return dict(program_headers=headers, dynamic_section=dynamic,
                 has_interp=False, has_needed=False)
 
