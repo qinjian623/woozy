@@ -138,16 +138,21 @@ REJECT_BY_ID = {case["id"]: case for case in REJECTS}
 # allocation observer from that object.  The candidate Source therefore never
 # goes through a C++ frontend or the old helper.
 #
-# The tenth case stays out of this mode: its own assertion reads the
-# pre-optimization ``lang_text_concat_v1`` text from before.ll, which a
-# published object cannot prove.  ``param-string-await`` is pending, not passed.
-PUBLIC_POSITIVE_IDS = tuple(
-    case["id"] for case in CASES if case["id"] != "param-string-await")
+# The original string case also needs its private ``before.ll`` assertion
+# containing ``lang_text_concat_v1``.  A published object cannot prove that, so
+# the public-object mode accepts the case only together with an explicit
+# test-only Native observation driver.  The driver is not a product CLI and is
+# never used to build ``program`` or ``program.o``.
+PUBLIC_POSITIVE_IDS = tuple(case["id"] for case in CASES)
 PUBLIC_REJECT_IDS = tuple(case["id"] for case in REJECTS)
 PUBLIC_CASE_IDS = PUBLIC_POSITIVE_IDS + PUBLIC_REJECT_IDS
-PUBLIC_PENDING_IDS = ("param-string-await",)
+PUBLIC_IR_REQUIRED_IDS = ("param-string-await",)
+PUBLIC_MIGRATED_POSITIVE_IDS = tuple(
+    case_id for case_id in PUBLIC_POSITIVE_IDS
+    if case_id not in PUBLIC_IR_REQUIRED_IDS)
 LLVM_TRACE_TOOLS = ("clang", "clang++", "ld.lld", "opt", "llc")
 PUBLIC_SCHEMA = "woozy/native-async-parameter-copy-public-object/1"
+IR_SCHEMA = "woozy/native-async-parameter-copy-ir-observation/1"
 
 
 def load_public_corpus(root: Path):
@@ -161,17 +166,46 @@ def load_public_corpus(root: Path):
     return module
 
 
-def public_selection(only):
+def public_selection(only, ir_driver=None):
     selected = list(dict.fromkeys(only or ()))
     need(bool(selected),
          "public-object selection is empty; refusing a vacuous pass")
-    pending = sorted(set(selected) & set(PUBLIC_PENDING_IDS))
-    need(not pending,
-         "param-string-await keeps its private before.ll lang_text_concat_v1 "
-         "assertion and is not migrated: " + ", ".join(pending))
     unknown = sorted(set(selected) - set(PUBLIC_CASE_IDS))
     need(not unknown, "not migrated to public objects: " + ", ".join(unknown))
+    needs_ir = sorted(set(selected) & set(PUBLIC_IR_REQUIRED_IDS))
+    if needs_ir and ir_driver is None:
+        raise RuntimeError(
+            "param-string-await keeps its private before.ll "
+            "lang_text_concat_v1 assertion; pass --ir-driver with the "
+            "test-only Native observation driver: " + ", ".join(needs_ir))
+    if ir_driver is not None and not needs_ir:
+        raise RuntimeError(
+            "--ir-driver is only used by param-string-await; add that case "
+            "to --only or remove --ir-driver")
     return selected
+
+
+def resolve_ir_driver(args):
+    """Validate the explicit test-only before.ll emitter for string."""
+    path = Path(args.ir_driver)
+    need(path.is_file(), f"IR driver does not exist: {path}")
+    need(os.access(path, os.X_OK), f"IR driver is not executable: {path}")
+    name = path.name.lower()
+    need("helper" not in name and "frontend" not in name,
+         "IR driver must be the test-only Native observation driver, not a "
+         f"C++ helper/frontend: {path}")
+    if args.cli is not None:
+        need(path.resolve() != Path(args.cli).resolve(),
+             "IR driver must not be the public compiler CLI")
+    if args.ir_driver_sha256:
+        expected = args.ir_driver_sha256.lower()
+        need(len(expected) == 64 and all(c in "0123456789abcdef"
+                                         for c in expected),
+             "IR driver SHA-256 must be 64 lowercase hex digits")
+        actual = MEMORY.digest(path)
+        need(actual == expected,
+             f"IR driver SHA-256 mismatch: expected {expected}, got {actual}")
+    return path.resolve()
 
 
 def text_of(data: bytes) -> str:
@@ -208,6 +242,17 @@ def make_public_context(args, corpus):
     for name in args.trace_allow:
         if name.exists():
             allowed.add(str(name.resolve()))
+    link_allowed = set()
+    if args.clang is not None:
+        link_allowed.add(str(Path(args.clang).resolve()))
+    if args.toolchain is not None:
+        for name in ("clang", "clang-22", "clang++", "ld.lld", "lld"):
+            path = Path(args.toolchain) / name
+            if path.exists():
+                link_allowed.add(str(path.resolve()))
+    ir_allowed = set()
+    if getattr(args, "ir_driver", None) is not None:
+        ir_allowed.add(str(Path(args.ir_driver).resolve()))
     return {
         "corpus": corpus,
         "env": env,
@@ -215,6 +260,8 @@ def make_public_context(args, corpus):
         "strace": args.strace,
         "role": args.role,
         "allowed_executables": allowed,
+        "observer_link_allowed_executables": link_allowed,
+        "ir_allowed_executables": ir_allowed,
         "out": args.out,
         "commands": [],
         "hashes": {},
@@ -242,9 +289,13 @@ def run_command(ctx, argv, timeout, phase, label, command_root, cwd=None):
         "cwd": str(cwd),
         "exit": result["exit"],
         "signalled": result["exit"] is not None and result["exit"] < 0,
+        "status": ("timed_out" if result["timed_out"] else
+                   "signalled" if result["exit"] is not None
+                   and result["exit"] < 0 else "exited"),
         "timed_out": result["timed_out"],
         "cleanup_complete": result["cleanup_complete"],
         "abandoned_pipes": result["abandoned_pipes"],
+        "timeout_s": timeout,
         "elapsed_s": elapsed,
         "stdout_path": evidence_path(record_dir / "stdout.bin", ctx["out"]),
         "stderr_path": evidence_path(record_dir / "stderr.bin", ctx["out"]),
@@ -258,39 +309,144 @@ def run_command(ctx, argv, timeout, phase, label, command_root, cwd=None):
 
 
 def require_clean_command(result, label):
+    """Require one process record with exact integer/boolean field types.
+
+    Truthiness is deliberately not enough: ``False``, ``0.0``, ``0`` and
+    ``None`` must not be accepted as a clean exit or as a clean process flag.
+    Missing fields fail explicitly through the same RuntimeError path.
+    """
     record = result["record"]
-    need(not record["timed_out"], f"{label} timed out")
-    need(record["exit"] is not None and record["exit"] >= 0,
-         f"{label} terminated by signal: exit {record['exit']}")
-    need(record["cleanup_complete"], f"{label} cleanup incomplete")
-    need(not record["abandoned_pipes"], f"{label} left abandoned pipes")
+    exit_code = record.get("exit")
+    need(type(exit_code) is int,
+         f"{label} exit is not an int (missing or wrong type): {exit_code!r}")
+    need(exit_code >= 0,
+         f"{label} terminated by signal: exit {exit_code}")
+    timed_out = record.get("timed_out")
+    need(timed_out is False,
+         f"{label} timed_out is not exactly False: {timed_out!r}")
+    cleanup_complete = record.get("cleanup_complete")
+    need(cleanup_complete is True,
+         f"{label} cleanup_complete is not exactly True: "
+         f"{cleanup_complete!r}")
+    abandoned_pipes = record.get("abandoned_pipes")
+    need(abandoned_pipes is False,
+         f"{label} abandoned_pipes is not exactly False: "
+         f"{abandoned_pipes!r}")
     return record
 
 
-def audit_public_trace(ctx, trace_path: Path, label):
-    """Fail closed unless the Source compile ran only the allowed programs."""
+def process_guard_controls():
+    """Pure in-memory controls for require_clean_command; no subprocesses."""
+    checks = {}
+    safe = {
+        "exit": 0,
+        "timed_out": False,
+        "cleanup_complete": True,
+        "abandoned_pipes": False,
+    }
+
+    def record(**overrides):
+        value = dict(safe)
+        value.update(overrides)
+        return {"record": value}
+
+    def missing(field):
+        value = dict(safe)
+        del value[field]
+        return {"record": value}
+
+    def accepted(name, result):
+        try:
+            require_clean_command(result, name)
+        except Exception as error:  # noqa: BLE001 - control boundary
+            checks[name] = {"status": "failed", "error": str(error)}
+        else:
+            checks[name] = {"status": "passed"}
+
+    def rejected(name, result):
+        try:
+            require_clean_command(result, name)
+        except Exception as error:  # noqa: BLE001 - control boundary
+            checks[name] = {"status": "passed", "rejected": str(error)}
+        else:
+            checks[name] = {"status": "failed",
+                            "error": "control was accepted"}
+
+    accepted("guard_valid_exit0_accepted", record())
+    accepted("guard_valid_positive_exit_accepted", record(exit=1))
+    rejected("guard_false_exit_rejected", record(exit=False))
+    rejected("guard_true_exit_rejected", record(exit=True))
+    rejected("guard_float_exit_rejected", record(exit=0.0))
+    rejected("guard_none_exit_rejected", record(exit=None))
+    rejected("guard_negative_exit_rejected", record(exit=-1))
+    rejected("guard_missing_exit_rejected", missing("exit"))
+    for flag in ("timed_out", "cleanup_complete", "abandoned_pipes"):
+        for value in (0, 1):
+            rejected(f"guard_{flag}_int_{value}_rejected",
+                     record(**{flag: value}))
+        rejected(f"guard_{flag}_none_rejected", record(**{flag: None}))
+        rejected(f"guard_{flag}_missing_rejected", missing(flag))
+    rejected("guard_timed_out_true_rejected", record(timed_out=True))
+    rejected("guard_cleanup_complete_false_rejected",
+             record(cleanup_complete=False))
+    rejected("guard_abandoned_pipes_true_rejected",
+             record(abandoned_pipes=True))
+    return checks
+
+
+def audit_exec_trace(ctx, trace_path: Path, label, allowed, policy,
+                     forbid_source_helper=False):
+    """Fail closed unless one command ran only its exact allowed programs."""
     corpus = ctx["corpus"]
     try:
         observed = corpus.parse_trace(trace_path)
     except corpus.TraceError as error:
-        raise RuntimeError(f"{label} Source trace unparseable: {error}")
-    unexpected = sorted(set(observed) - set(ctx["allowed_executables"]))
+        raise RuntimeError(f"{label} trace unparseable: {error}")
+    unexpected = sorted(set(observed) - set(allowed))
     need(not unexpected,
-         f"{label} Source trace ran outside the allowed set: {unexpected}")
-    if ctx["role"] == "candidate":
+         f"{label} trace ran outside the allowed set: {unexpected}")
+    if forbid_source_helper:
         forbidden = [path for path in observed
                      if "helper" in Path(path).name.lower()
                      or "frontend" in Path(path).name.lower()]
         need(not forbidden,
              f"{label} candidate Source used a C++ helper/frontend: {forbidden}")
+    return {"status": "ok", "observed": sorted(observed),
+            "allowed": sorted(allowed),
+            "trace_path": evidence_path(trace_path, ctx["out"]),
+            "policy": policy}
+
+
+def audit_public_trace(ctx, trace_path: Path, label):
+    """Fail closed unless the Source compile ran only the allowed programs."""
+    if ctx["role"] == "candidate":
         policy = "candidate Source compile: this role's CLI + fixed LLVM only"
     else:
         policy = ("reference Source compile: reference CLI + its compiled-in "
                   "stage0 helper + fixed LLVM")
-    return {"status": "ok", "observed": sorted(observed),
-            "allowed": sorted(ctx["allowed_executables"]),
-            "trace_path": evidence_path(trace_path, ctx["out"]),
-            "policy": policy}
+    return audit_exec_trace(
+        ctx, trace_path, label, ctx["allowed_executables"], policy,
+        forbid_source_helper=ctx["role"] == "candidate")
+
+
+def run_traced_command(ctx, argv, timeout, phase, label, command_root,
+                       trace_path: Path, allowed, policy,
+                       forbid_source_helper=False):
+    """Run one command under exec-only strace and audit its exact set."""
+    trace = None
+    wrapped = [str(part) for part in argv]
+    if ctx["strace"]:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        wrapped = [str(ctx["strace"]), "--seccomp-bpf", "-f", "-qq",
+                   "-s", "16384", "-e", "trace=execve,execveat",
+                   "-o", str(trace_path), *wrapped]
+    result = run_command(ctx, wrapped, timeout, phase, label, command_root)
+    record = require_clean_command(result, label)
+    if ctx["strace"]:
+        trace = audit_exec_trace(ctx, trace_path, label, allowed, policy,
+                                 forbid_source_helper=forbid_source_helper)
+        MEMORY.record_hash(ctx["hashes"], ctx["out"], trace_path)
+    return result, record, trace
 
 
 def public_static_elf(path: Path, args, ctx, command_root, label):
@@ -382,21 +538,154 @@ def public_source_build(case, opt, args, ctx, directory, command_root):
         "--opt", str(opt), "--out-dir", directory / "cli",
         "--format", "json",
     ]
-    trace_path = None
-    if ctx["strace"]:
-        trace_path = directory / "trace" / f"source-build.O{opt}.exec.log"
-        trace_path.parent.mkdir()
-        build_argv = [ctx["strace"], "--seccomp-bpf", "-f", "-qq",
-                      "-s", "16384", "-e", "trace=execve,execveat",
-                      "-o", trace_path, *build_argv]
-    built = run_command(ctx, build_argv, args.timeout, "source-build",
-                        f"{label} public Source build", command_root)
-    record = require_clean_command(built, f"{label} public Source build")
-    trace = None
-    if trace_path is not None:
-        trace = audit_public_trace(ctx, trace_path, f"{label} public Source build")
-        MEMORY.record_hash(ctx["hashes"], ctx["out"], trace_path)
+    trace_path = directory / "trace" / f"source-build.O{opt}.exec.log"
+    policy = ("candidate Source compile: this role's CLI + fixed LLVM only"
+              if ctx["role"] == "candidate" else
+              "reference Source compile: reference CLI + its compiled-in "
+              "stage0 helper + fixed LLVM")
+    built, record, trace = run_traced_command(
+        ctx, build_argv, args.timeout, "source-build",
+        f"{label} public Source build", command_root, trace_path,
+        ctx["allowed_executables"], policy,
+        forbid_source_helper=ctx["role"] == "candidate")
     return built, record, trace
+
+
+def validate_ir_metadata(metadata, label):
+    """The original helper check required status=passed; keep it, record all."""
+    need(isinstance(metadata, dict), f"{label} emitted no IR metadata object")
+    need(metadata.get("status") == "passed",
+         f"{label} IR metadata is not passed: {metadata}")
+    need(metadata.get("phase") == "object",
+         f"{label} IR metadata phase is not object: {metadata}")
+    return {
+        key: metadata.get(key)
+        for key in ("status", "phase", "llvm", "contract", "runtime_abi",
+                    "triple", "data_layout", "runtime", "c_adapter",
+                    "entry_symbol", "word_bits", "has_async", "cfg_verified")
+    }
+
+
+def validate_before_ir(path: Path, label):
+    """Keep the original literal marker assertion, without adding counts."""
+    need(path.is_file() and path.stat().st_size > 0,
+         f"{label} emitted no nonempty before.ll")
+    text = path.read_text(encoding="utf-8")
+    need("lang_text_concat_v1" in text,
+         f"{label} before.ll lacks the original lang_text_concat_v1 marker")
+    return text
+
+
+def public_ir_emit(case, opt, args, ctx, directory, command_root):
+    """Generate the original private before.ll with the sealed Wz driver.
+
+    The driver receives the real manifest and matching stdlib, and executes
+    only itself.  Its output is evidence only: ``program`` and ``program.o``
+    still come from this role's public build, and the observer links that
+    object rather than this before.ll.
+    """
+    case_id = case["id"]
+    label = f"{case_id} O{opt} IR"
+    need(case_id in PUBLIC_IR_REQUIRED_IDS,
+         f"{label} IR emitter is only defined for param-string-await")
+    need(args.ir_driver is not None, f"{label} missing --ir-driver")
+    need(args.ir_stdlib is not None, f"{label} missing --ir-stdlib")
+    manifest = HERE / "fixtures" / case_id / "lang.toml"
+    need(manifest.is_file(), f"{label} missing fixture manifest: {manifest}")
+    need(args.ir_stdlib.is_dir(),
+         f"{label} IR stdlib is missing: {args.ir_stdlib}")
+    ir_dir = directory / "ir"
+    need(not ir_dir.exists(), f"{label} IR evidence already exists: {ir_dir}")
+    ir_dir.mkdir()
+    before_path = ir_dir / f"O{opt}.before.ll"
+    native_path = ir_dir / f"O{opt}.nir"
+    metadata_path = ir_dir / f"O{opt}.metadata.json"
+    driver_argv = [
+        args.ir_driver, "--project", manifest, "--stdlib", args.ir_stdlib,
+        "--opt", str(opt), "--out-llvm-before", before_path,
+        "--out-native", native_path, "--format", "json",
+    ]
+    trace_path = directory / "trace" / f"ir-emit.O{opt}.exec.log"
+    emitted, emit_record, emit_trace = run_traced_command(
+        ctx, driver_argv, args.timeout, "ir-emit",
+        f"{label} real before.ll emit", command_root, trace_path,
+        ctx["ir_allowed_executables"],
+        "IR observation: only the sealed test-only Nativeobs driver")
+    need(emit_record["exit"] == 0,
+         f"{label} driver failed: exit {emit_record['exit']}")
+    metadata = None
+    if emitted["stdout"]:
+        try:
+            metadata = json.loads(text_of(emitted["stdout"]))
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"{label} metadata is not JSON: {error}")
+    metadata_record = validate_ir_metadata(metadata, label)
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n",
+                             encoding="utf-8")
+    validate_before_ir(before_path, label)
+    need(native_path.is_file() and native_path.stat().st_size > 0,
+         f"{label} emitted no nonempty Native CFG")
+    # The flags must be the real paths this function asked for, not a
+    # post-hoc metadata or stdout claim.
+    need("--out-llvm-before" in driver_argv
+         and str(before_path) == str(driver_argv[driver_argv.index(
+             "--out-llvm-before") + 1]),
+         f"{label} --out-llvm-before path is not the observed file")
+    need("--out-native" in driver_argv
+         and str(native_path) == str(driver_argv[driver_argv.index(
+             "--out-native") + 1]),
+         f"{label} --out-native path is not the observed file")
+    opt_path = args.toolchain / "opt"
+    need(opt_path.is_file(), f"{label} missing fixed opt: {opt_path}")
+    verify_trace = directory / "trace" / f"ir-verify.O{opt}.exec.log"
+    verified, verify_record, verify_trace = run_traced_command(
+        ctx, [opt_path, "-passes=verify", "-disable-output", before_path],
+        args.timeout, "ir-verify", f"{label} LLVM verify", command_root,
+        verify_trace, {str(opt_path.resolve())},
+        "IR verify: fixed LLVM opt only")
+    need(verify_record["exit"] == 0,
+         f"{label} opt verify failed: exit {verify_record['exit']}")
+    for path in (before_path, native_path, metadata_path):
+        MEMORY.record_hash(ctx["hashes"], ctx["out"], path)
+    return {
+        "schema": IR_SCHEMA,
+        "status": "passed",
+        "driver": str(args.ir_driver),
+        "driver_sha256": MEMORY.digest(args.ir_driver),
+        "driver_sha256_expected": args.ir_driver_sha256,
+        "stdlib": str(args.ir_stdlib),
+        "stdlib_tree_sha256": tree_digest(args.ir_stdlib),
+        "manifest": str(manifest),
+        "manifest_sha256": MEMORY.digest(manifest),
+        "source_sha256": MEMORY.digest(
+            HERE / "fixtures" / case_id / "src/main.wz"),
+        "opt": opt,
+        "driver_argv": [str(part) for part in driver_argv],
+        "emit": {"command": emit_record["index"],
+                 "exit": emit_record["exit"],
+                 "argv": emit_record["argv"],
+                 "cwd": emit_record["cwd"],
+                 "timeout_s": emit_record["timeout_s"],
+                 "elapsed_s": emit_record["elapsed_s"],
+                 "timed_out": emit_record["timed_out"],
+                 "cleanup_complete": emit_record["cleanup_complete"],
+                 "abandoned_pipes": emit_record["abandoned_pipes"],
+                 "stdout_sha256": emit_record["stdout_sha256"],
+                 "stderr_sha256": emit_record["stderr_sha256"],
+                 "trace": emit_trace},
+        "verify": {"command": verify_record["index"],
+                   "exit": verify_record["exit"],
+                   "argv": verify_record["argv"],
+                   "trace": verify_trace},
+        "metadata": metadata_record,
+        "before": {"path": evidence_path(before_path, ctx["out"]),
+                   "sha256": MEMORY.digest(before_path),
+                   "size": before_path.stat().st_size,
+                   "lang_text_concat_v1": True},
+        "native": {"path": evidence_path(native_path, ctx["out"]),
+                   "sha256": MEMORY.digest(native_path),
+                   "size": native_path.stat().st_size},
+    }
 
 
 def public_positive(case, opt, args, ctx):
@@ -426,9 +715,12 @@ def public_positive(case, opt, args, ctx):
     program_elf = public_static_elf(program, args, ctx, command_root,
                                     f"{label} program")
 
-    executed = run_command(ctx, [program], args.timeout, "program-execute",
-                           f"{label} program execution", command_root)
-    execute_record = require_clean_command(executed, f"{label} program execution")
+    program_trace = directory / "trace" / f"program-execute.O{opt}.exec.log"
+    executed, execute_record, program_trace_record = run_traced_command(
+        ctx, [program], args.timeout, "program-execute",
+        f"{label} program execution", command_root, program_trace,
+        {str(program.resolve())},
+        "program execution: the published static ELF only")
     validate_program_streams(execute_record["exit"], text_of(executed["stdout"]),
                              text_of(executed["stderr"]), case, opt)
 
@@ -442,20 +734,30 @@ def public_positive(case, opt, args, ctx):
         args.runtime, "-o", observer, "-nostdlib", "-static",
         "-Wl,--wrap=lang_alloc_v1", "-Wl,--wrap=lang_free_v1",
     ]
-    linked = run_command(ctx, link_argv, args.timeout, "observer-link",
-                         f"{label} observer link", command_root)
-    link_record = require_clean_command(linked, f"{label} observer link")
+    link_trace_path = directory / "trace" / f"observer-link.O{opt}.exec.log"
+    linked, link_record, link_trace = run_traced_command(
+        ctx, link_argv, args.timeout, "observer-link",
+        f"{label} observer link", command_root, link_trace_path,
+        ctx["observer_link_allowed_executables"],
+        "test-only observer link: fixed clang + ld.lld only")
     need(link_record["exit"] == 0,
          f"{label} observer link failed: exit {link_record['exit']}")
     observer_elf = public_static_elf(observer, args, ctx, command_root,
                                      f"{label} observer")
 
-    observed = run_command(ctx, [observer], args.timeout, "observer-execute",
-                           f"{label} observer execution", command_root)
-    observe_record = require_clean_command(observed, f"{label} observer execution")
+    observer_trace = directory / "trace" / f"observer-execute.O{opt}.exec.log"
+    observed, observe_record, observer_trace_record = run_traced_command(
+        ctx, [observer], args.timeout, "observer-execute",
+        f"{label} observer execution", command_root, observer_trace,
+        {str(observer.resolve())},
+        "observer execution: the linked static observer ELF only")
     metrics = validate_observer_streams(
         observe_record["exit"], text_of(observed["stdout"]),
         text_of(observed["stderr"]), case, opt)
+
+    ir = None
+    if case_id in PUBLIC_IR_REQUIRED_IDS:
+        ir = public_ir_emit(case, opt, args, ctx, directory, command_root)
 
     for path in (program, program_object, observer):
         MEMORY.record_hash(ctx["hashes"], ctx["out"], path)
@@ -468,18 +770,22 @@ def public_positive(case, opt, args, ctx):
                          "stderr_path": build_record["stderr_path"]},
         "candidate_source_trace": trace,
         "program": {"command": execute_record["index"],
-                    "exit": execute_record["exit"]},
+                    "exit": execute_record["exit"],
+                    "trace": program_trace_record},
         "observer_link": {
             "command": link_record["index"],
             "trace_scope": ("test-only clang observer shim link; not part "
                             "of the candidate Source trace whitelist"),
+            "trace": link_trace,
             "program_object": evidence_path(program_object, ctx["out"]),
             "program_object_sha256": MEMORY.digest(program_object),
             "observer_source_sha256": MEMORY.digest(args.observer),
             "runtime_sha256": MEMORY.digest(args.runtime),
         },
         "observer": {"command": observe_record["index"],
-                     "exit": observe_record["exit"]},
+                     "exit": observe_record["exit"],
+                     "trace": observer_trace_record},
+        "ir": ir,
         "metrics": metrics,
         "elf": program_elf,
         "observer_elf": observer_elf,
@@ -543,8 +849,12 @@ def public_input_paths(args):
     ]
     if args.strace is not None:
         paths.append(("toolchain/strace", args.strace))
+    if getattr(args, "ir_driver", None) is not None:
+        paths.append(("ir-driver/nativeobs", args.ir_driver))
     for name in args.trace_allow:
         paths.append((f"trace-allow/{name.name}", name))
+    for label, path in getattr(args, "extra_input_pairs", []):
+        paths.append((f"extra/{label}", path))
     for fixture in sorted((HERE / "fixtures").iterdir()):
         for path in sorted(fixture.rglob("*")):
             if path.is_file():
@@ -569,6 +879,44 @@ def record_stdlib_after(resource_root: Path, resources):
     resources["stdlib_tree_unchanged"] = before is not None and before == after
     need(resources["stdlib_tree_unchanged"],
          "stdlib bytes changed during the run or the tree is missing")
+
+
+def tree_snapshot(path: Path):
+    """Return a real per-file SHA map for a stable source/resource tree."""
+    need(path.is_dir(), f"snapshot root is missing: {path}")
+    mapping = {}
+    for child in sorted(path.rglob("*")):
+        if child.is_file():
+            mapping[str(child.relative_to(path))] = MEMORY.digest(child)
+    need(bool(mapping), f"snapshot root contains no files: {path}")
+    return mapping
+
+
+def snapshot_digest(mapping):
+    return sha256_bytes(json.dumps(mapping, sort_keys=True,
+                                   separators=(",", ":")).encode())
+
+
+def write_snapshots(out: Path, snapshots, phase):
+    directory = out / "snapshots"
+    directory.mkdir(parents=True, exist_ok=True)
+    records = {}
+    for label, (root, mapping) in snapshots.items():
+        path = directory / f"{label}.{phase}.json"
+        path.write_text(json.dumps({
+            "root": str(root),
+            "files": len(mapping),
+            "map_sha256": snapshot_digest(mapping),
+            "map": mapping,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        records[label] = {
+            "root": str(root),
+            "files": len(mapping),
+            "map_sha256": snapshot_digest(mapping),
+            "path": evidence_path(path, out),
+            "sha256": MEMORY.digest(path),
+        }
+    return records
 
 
 def write_proposal(path: Path, summary, selected, options):
@@ -608,19 +956,51 @@ def write_proposal(path: Path, summary, selected, options):
                 "detail": result,
             }
         rows.append(entry)
+    runner_only = []
+    for row in rows:
+        case_id = row["id"]
+        item = {
+            "id": case_id,
+            "observer": {
+                "source": "tests/native/language_gc_source/observe_gc.cpp",
+                "linked_from": "this role's published program.o",
+                "assertions": [
+                    "observer exit 0 and exact stdout",
+                    "parse_observer accepts the complete stderr",
+                    "zero final live heap count/bytes and payload",
+                    "balanced heap and Vec allocations/frees",
+                    "original per-case allocation minima",
+                ],
+            },
+            "static_elf": ["program: EXEC, no INTERP/NEEDED",
+                           "observer: EXEC, no INTERP/NEEDED"],
+            "not_expressible_by_corpus_schema": True,
+        }
+        if case_id in PUBLIC_IR_REQUIRED_IDS:
+            item["ir"] = {
+                "driver": "test-only Nativeobs Wz driver",
+                "output": "O{0,2}.before.ll + O{0,2}.nir",
+                "assertion": "literal lang_text_concat_v1 in real before.ll",
+                "llvm_verify": "fixed opt -passes=verify -disable-output",
+                "not_a_product_cli_ir_export": True,
+            }
+        runner_only.append(item)
     document = {
         "schema": "woozy/native-async-parameter-copy-proposal/1",
-        "source": "SH12g async parameter copy public-object run",
+        "source": "SH12o async parameter copy public-object run",
         "enabled": False,
         "notes": [
-            "Proposal only: update the ten existing case ids; do not add "
+            "Proposal only: update the eleven existing case ids; do not add "
             "duplicate cases and do not enable them from this file.",
-            "param-string-await stays disabled; its private before.ll "
-            "lang_text_concat_v1 assertion is still pending.",
-            "The generic corpus schema does not express the observer or "
-            "static-ELF evidence recorded here.",
+            "param-string-await row is backed by the original before.ll "
+            "lang_text_concat_v1 observation through the explicit test-only "
+            "Nativeobs driver, but it remains disabled here.",
+            "The generic corpus schema does not express the observer, "
+            "static-ELF or before.ll evidence recorded by this runner.",
+            "These rows are not written to Root, catalog or PLAN.",
         ],
         "cases": rows,
+        "runner_only_evidence": runner_only,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
@@ -650,6 +1030,7 @@ def public_self_test(args):
         "FREE:0x3\n"
     )
     checks = {}
+    checks.update(process_guard_controls())
 
     def rejected(name, function):
         try:
@@ -686,6 +1067,106 @@ def public_self_test(args):
     rejected("empty_selection_rejected", lambda: public_selection([]))
     rejected("string_selection_rejected",
              lambda: public_selection(["param-string-await"]))
+
+    # IR-driver controls.  The driver identity is a real SHA-256 check, not a
+    # forbidden-word substitute for the exec trace used by a real run.
+    fake_driver = base / "fake-nativeobs"
+    fake_driver.write_text(
+        """#!/bin/sh
+out_llvm=''
+out_nir=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out-llvm-before) out_llvm="$2"; shift 2;;
+    --out-native) out_nir="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+printf '; lang_text_concat_v1\ndefine i32 @main() { ret i32 0 }\n' > "$out_llvm"
+printf 'cfg\n' > "$out_nir"
+printf '{"status":"passed","phase":"object","has_async":true,"cfg_verified":true}\n'
+""",
+        encoding="utf-8")
+    fake_driver.chmod(0o755)
+    accepted("string_with_ir_driver_selected",
+             lambda: public_selection(["param-string-await"], fake_driver))
+    rejected("ir_driver_without_string_rejected",
+             lambda: public_selection(["param-vec-late-start"], fake_driver))
+    driver_args = argparse.Namespace(
+        ir_driver=fake_driver, ir_driver_sha256=MEMORY.digest(fake_driver),
+        cli=base / "fake-cli")
+    accepted("real_ir_driver_sha_accepted",
+             lambda: resolve_ir_driver(driver_args))
+    wrong_sha_args = argparse.Namespace(
+        ir_driver=fake_driver, ir_driver_sha256="0" * 64,
+        cli=base / "fake-cli")
+    rejected("wrong_ir_driver_sha_rejected",
+             lambda: resolve_ir_driver(wrong_sha_args))
+    helper_driver = base / "lang_native_helper"
+    helper_driver.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    helper_driver.chmod(0o755)
+    helper_args = argparse.Namespace(
+        ir_driver=helper_driver, ir_driver_sha256=None,
+        cli=base / "fake-cli")
+    rejected("candidate_helper_ir_driver_rejected",
+             lambda: resolve_ir_driver(helper_args))
+
+    good_ir = base / "good.before.ll"
+    good_ir.write_text("; lang_text_concat_v1\n"
+                       "define i32 @main() { ret i32 0 }\n",
+                       encoding="utf-8")
+    bad_ir = base / "bad.before.ll"
+    bad_ir.write_text("define i32 @main() { ret i32 0 }\n",
+                      encoding="utf-8")
+    empty_ir = base / "empty.before.ll"
+    empty_ir.write_bytes(b"")
+    accepted("real_before_with_concat_accepted",
+             lambda: validate_before_ir(good_ir, "control"))
+    rejected("before_missing_concat_rejected",
+             lambda: validate_before_ir(bad_ir, "control"))
+    rejected("before_empty_rejected",
+             lambda: validate_before_ir(empty_ir, "control"))
+    rejected("before_missing_path_rejected",
+             lambda: validate_before_ir(base / "absent.before.ll", "control"))
+    accepted("ir_metadata_passed_accepted",
+             lambda: validate_ir_metadata(
+                 {"status": "passed", "phase": "object"}, "control"))
+    rejected("ir_metadata_failed_rejected",
+             lambda: validate_ir_metadata(
+                 {"status": "failed", "phase": "object"}, "control"))
+
+    fake_toolchain = base / "toolchain"
+    fake_toolchain.mkdir()
+    fake_opt = fake_toolchain / "opt"
+    fake_opt.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_opt.chmod(0o755)
+    ir_out = base / "ir-out"
+    ir_out.mkdir()
+    ir_args = argparse.Namespace(
+        ir_driver=fake_driver, ir_driver_sha256=MEMORY.digest(fake_driver),
+        ir_stdlib=stdlib, toolchain=fake_toolchain,
+        cli=base / "fake-cli", root=root, out=ir_out, trace_allow=[],
+        strace=None, timeout=30, role="candidate", libxml2_lib=None,
+        clang=fake_toolchain / "clang")
+    ir_ctx = make_public_context(ir_args, corpus)
+    ir_case = CASE_BY_ID["param-string-await"]
+    ir_dir = ir_out / "param-string-await" / "O0"
+    ir_dir.mkdir(parents=True)
+    def real_ir_control():
+        result = public_ir_emit(ir_case, 0, ir_args, ir_ctx, ir_dir,
+                                ir_dir / "commands")
+        need(result["before"]["path"].endswith("O0.before.ll"),
+             "IR control used the wrong before.ll path")
+        need(result["driver_argv"][
+                 result["driver_argv"].index("--out-llvm-before") + 1]
+             == str(ir_dir / "ir" / "O0.before.ll"),
+             "IR control flags do not name the observed before.ll")
+        need(result["before"]["sha256"] == MEMORY.digest(
+            ir_dir / "ir" / "O0.before.ll"), "IR control hash mismatch")
+        need(result["driver_sha256_expected"] == MEMORY.digest(fake_driver),
+             "IR control did not record the expected driver SHA")
+    accepted("real_before_flags_hash_accepted", real_ir_control)
+
     rejected("program_wrong_stdout_rejected",
              lambda: validate_program_streams(0, "41\n", "", case, 0))
     rejected("program_stderr_rejected",
@@ -790,6 +1271,39 @@ def public_self_test(args):
     return 0 if result["status"] == "passed" else 1
 
 
+def parse_label_paths(values, option):
+    result = []
+    seen = set()
+    for value in values or []:
+        need("=" in value, f"{option} must be LABEL=PATH: {value!r}")
+        label, raw = value.split("=", 1)
+        need(label and "/" not in label and "\\" not in label,
+             f"{option} label is not a simple name: {label!r}")
+        need(label not in seen, f"duplicate {option} label: {label}")
+        seen.add(label)
+        result.append((label, Path(raw).resolve()))
+    return result
+
+
+def write_case_record(out: Path, case_id: str, summary):
+    directory = out / case_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "case.json"
+    path.write_text(json.dumps({
+        "id": case_id,
+        "status": summary.get("status", "failed"),
+        "O0": summary.get("O0", {}),
+        "O2": summary.get("O2", {}),
+    }, indent=2) + "\n", encoding="utf-8")
+
+
+def command_counts(commands):
+    counts = {}
+    for record in commands:
+        counts[record["phase"]] = counts.get(record["phase"], 0) + 1
+    return counts
+
+
 def main_public(args, parser):
     if args.helper is not None:
         parser.error("--public-object does not accept --helper; the observer "
@@ -799,13 +1313,42 @@ def main_public(args, parser):
     if args.role == "candidate" and args.trace_allow:
         parser.error("--trace-allow is reference-only; a candidate Source "
                      "trace allows only the CLI and fixed LLVM")
-    selected = public_selection(
-        args.only if args.only else list(PUBLIC_CASE_IDS))
+    if args.ir_driver is not None:
+        try:
+            args.ir_driver = resolve_ir_driver(args)
+        except Exception as error:  # noqa: BLE001 - command-line boundary
+            parser.error(str(error))
+    else:
+        args.ir_driver = None
+    try:
+        selected = public_selection(
+            args.only if args.only else list(PUBLIC_CASE_IDS),
+            ir_driver=args.ir_driver)
+    except Exception as error:  # noqa: BLE001 - command-line boundary
+        parser.error(str(error))
+    needs_ir = bool(set(selected) & set(PUBLIC_IR_REQUIRED_IDS))
+    if needs_ir and args.ir_stdlib is None:
+        parser.error("param-string-await requires --ir-stdlib with the same "
+                     "37-file stdlib used by the test-only IR driver")
+    if not needs_ir and args.ir_stdlib is not None:
+        parser.error("--ir-stdlib is only used with param-string-await")
 
     required = ("cli", "runtime", "toolchain", "root", "out")
     missing = [name for name in required if getattr(args, name) is None]
     if missing:
         parser.error("missing required arguments: " + ", ".join(missing))
+    try:
+        extra_inputs = parse_label_paths(args.extra_input, "--extra-input")
+        snapshot_roots = parse_label_paths(args.snapshot_root,
+                                          "--snapshot-root")
+    except Exception as error:  # noqa: BLE001 - command-line boundary
+        parser.error(str(error))
+    for label, path in extra_inputs:
+        if not path.is_file():
+            parser.error(f"--extra-input {label} is not a file: {path}")
+    for label, path in snapshot_roots:
+        if not path.is_dir():
+            parser.error(f"--snapshot-root {label} is not a directory: {path}")
 
     args.root = args.root.resolve()
     args.out = args.out.resolve()
@@ -818,8 +1361,13 @@ def main_public(args, parser):
     args.readelf = (args.readelf or args.toolchain / "llvm-readelf").absolute()
     args.observer = (args.root / OBSERVER).resolve()
     args.trace_allow = [path.resolve() for path in args.trace_allow]
+    args.extra_input_pairs = extra_inputs
     if args.strace is not None:
         args.strace = args.strace.resolve()
+    if args.ir_stdlib is not None:
+        args.ir_stdlib = args.ir_stdlib.resolve()
+        if not args.ir_stdlib.is_dir():
+            parser.error(f"--ir-stdlib is not a directory: {args.ir_stdlib}")
     if args.out.exists() and any(args.out.iterdir()):
         parser.error("output directory is not empty; refusing to overwrite "
                      f"evidence: {args.out}")
@@ -829,15 +1377,22 @@ def main_public(args, parser):
     ctx = make_public_context(args, corpus)
     inputs = public_input_paths(args)
     before = snapshot_inputs(inputs)
+    snapshot_before = {label: (root, tree_snapshot(root))
+                       for label, root in snapshot_roots}
+    snapshot_records_before = write_snapshots(args.out, snapshot_before,
+                                              "before")
     options = args.opt or [0, 2]
     failures = []
     summary = {
         "schema": PUBLIC_SCHEMA,
         "status": "failed",
         "role": args.role,
-        "scope": ("the nine non-string positive async parameter copies plus "
-                  "the resource-copy rejection; Source built by this role's "
-                  "public CLI and observed through the published program.o"),
+        "scope": ("the ten positive async parameter copies plus the "
+                  "resource-copy rejection; Source built and observed "
+                  "through this role's public program.o"
+                  + ("; param-string-await uses an explicit test-only "
+                     "Nativeobs driver for the original before.ll marker"
+                     if needs_ir else "")),
         "selection": selected,
         "options": options,
         "cases": {},
@@ -846,12 +1401,14 @@ def main_public(args, parser):
             "min(timeout, 60).",
             "The observer is the unchanged test-only observe_gc.cpp linked "
             "with this role's program.o and matching runtime archive.",
-            "param-string-await is not run here: its private before.ll "
-            "lang_text_concat_v1 assertion is still pending.",
-            "This range does not complete the parameter-copy runner or the "
-            "three-stage bootstrap.",
-            "The generic corpus schema does not express observer or static "
-            "ELF assertions.",
+            ("param-string-await's before.ll comes from the explicit "
+             "test-only Nativeobs driver; the driver is not a product CLI "
+             "and does not publish program or program.o."
+             if needs_ir else
+             "param-string-await is not selected; its private before.ll "
+             "assertion was not run in this invocation."),
+            "IR, observer and static-ELF evidence are runner-only; the "
+            "generic corpus schema does not express them.",
         ],
         "resources": {
             "cli": str(args.cli),
@@ -866,6 +1423,23 @@ def main_public(args, parser):
             "clang": str(args.clang),
             "ld_lld": str(args.toolchain / "ld.lld"),
             "readelf": str(args.readelf),
+        },
+        "ir": ({
+            "driver": str(args.ir_driver),
+            "driver_sha256": MEMORY.digest(args.ir_driver),
+            "driver_sha256_expected": args.ir_driver_sha256,
+            "stdlib": str(args.ir_stdlib),
+            "stdlib_tree_sha256": tree_digest(args.ir_stdlib),
+            "emits": [],
+        } if needs_ir else None),
+        "extra_inputs": {
+            label: {"path": str(path), "sha256": MEMORY.digest(path)}
+            for label, path in extra_inputs
+        },
+        "snapshots": {
+            label: {"root": str(root),
+                    "before": snapshot_records_before[label]}
+            for label, root in snapshot_roots
         },
         "hashes": {},
     }
@@ -884,16 +1458,30 @@ def main_public(args, parser):
             runner = public_positive if case_id in CASE_BY_ID else public_reject
             for opt in options:
                 try:
-                    summary["cases"][case_id][f"O{opt}"] = runner(
-                        case, opt, args, ctx)
+                    result = runner(case, opt, args, ctx)
+                    summary["cases"][case_id][f"O{opt}"] = result
+                    if result.get("ir"):
+                        summary["ir"]["emits"].append({
+                            "case": case_id,
+                            "opt": opt,
+                            "before": result["ir"]["before"],
+                            "native": result["ir"]["native"],
+                            "driver_sha256": result["ir"]["driver_sha256"],
+                            "metadata": result["ir"]["metadata"],
+                        })
                 except Exception as error:  # noqa: BLE001 - keep evidence
                     summary["cases"][case_id][f"O{opt}"] = {
                         "status": "failed", "error": str(error)}
                     failures.append({"id": case_id, "opt": opt,
                                      "error": str(error)})
                     case_ok = False
+                summary["cases"][case_id]["status"] = (
+                    "current" if case_ok else "failed")
+                write_case_record(args.out, case_id,
+                                  summary["cases"][case_id])
             summary["cases"][case_id]["status"] = (
                 "passed" if case_ok else "failed")
+            write_case_record(args.out, case_id, summary["cases"][case_id])
         after = snapshot_inputs(inputs)
         summary["inputs"] = {
             "before": before,
@@ -918,6 +1506,26 @@ def main_public(args, parser):
                 record_stdlib_after(resource_root, summary["resources"])
             except Exception as error:  # noqa: BLE001 - preserve the summary
                 failures.append({"error": str(error)})
+        if snapshot_before:
+            try:
+                snapshot_after = {label: (root, tree_snapshot(root))
+                                  for label, root in snapshot_roots}
+                snapshot_records_after = write_snapshots(
+                    args.out, snapshot_after, "after")
+                for label in snapshot_before:
+                    before_map = snapshot_before[label][1]
+                    after_map = snapshot_after[label][1]
+                    unchanged = before_map == after_map
+                    summary["snapshots"][label]["after"] = (
+                        snapshot_records_after[label])
+                    summary["snapshots"][label]["unchanged"] = unchanged
+                    if not unchanged:
+                        failures.append({
+                            "error": f"snapshot root changed during the run: "
+                                     f"{label}"})
+            except Exception as error:  # noqa: BLE001
+                failures.append({"error": f"snapshot failure: {error}"})
+        summary["counts"] = command_counts(ctx["commands"])
         summary["status"] = (
             "passed" if not failures and error_text is None else "failed")
         summary["commands"] = ctx["commands"]
@@ -937,6 +1545,7 @@ def main_public(args, parser):
             "expected": len(selected) * len(options),
             "failed": len(failures),
             "failures": failures,
+            "counts": summary["counts"],
             "out": str(args.out),
         }))
     return 0 if summary["status"] == "passed" else 1
@@ -1127,7 +1736,23 @@ def main():
     parser.add_argument("--resource-root", type=Path, default=None,
                         help="role resource root whose stdlib tree is hashed")
     parser.add_argument("--proposal-out", type=Path, default=None,
-                        help="write the ten existing case ids as a proposal")
+                        help="write the eleven existing case ids as a proposal")
+    parser.add_argument("--ir-driver", type=Path, default=None,
+                        help="explicit test-only Nativeobs driver used only "
+                             "for param-string-await before.ll; not a product "
+                             "CLI and not the public build")
+    parser.add_argument("--ir-driver-sha256", default=None,
+                        help="optional exact SHA-256 pin for --ir-driver")
+    parser.add_argument("--ir-stdlib", type=Path, default=None,
+                        help="stdlib tree passed to --ir-driver")
+    parser.add_argument("--snapshot-root", action="append", default=[],
+                        metavar="LABEL=PATH",
+                        help="record a real per-file SHA map of this tree "
+                             "before and after the run")
+    parser.add_argument("--extra-input", action="append", default=[],
+                        metavar="LABEL=PATH",
+                        help="record one additional input file SHA before "
+                             "and after the run")
     parser.add_argument("--self-test", action="store_true",
                         help="run short negative controls for --public-object")
     args = parser.parse_args()
@@ -1137,6 +1762,14 @@ def main():
 
     if args.public_object:
         return main_public(args, parser)
+
+    public_only = ("ir_driver", "ir_driver_sha256", "ir_stdlib",
+                   "snapshot_root", "extra_input")
+    leftover = [name for name in public_only if getattr(args, name)]
+    if leftover:
+        parser.error("these options require --public-object: "
+                     + ", ".join("--" + name.replace("_", "-")
+                                 for name in leftover))
 
     required = ("cli", "helper", "runtime", "toolchain", "root", "out")
     missing = [name for name in required if getattr(args, name) is None]
