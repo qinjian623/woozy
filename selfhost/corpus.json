@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "cee3ffb6badea9d9d7a17699c2e20d9513687288",
-  "previous_git_head": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
-  "frozen_at": "2026-11-14T00:12:15.154988+00:00",
+  "git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+  "previous_git_head": "cee3ffb6badea9d9d7a17699c2e20d9513687288",
+  "frozen_at": "2026-11-14T00:28:35.081218+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,7 +31,7 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1326,
+    "tracked_wz": 1328,
     "manifests": 1009,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
@@ -1360,8 +1360,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/verify.wz",
-      "sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
-      "size": 18189,
+      "sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
+      "size": 17992,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -2621,6 +2621,44 @@
         "project:selfhost/tests/hirverify/lang.toml"
       ],
       "manifest": "selfhost/tests/hirverify/exit_identity/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/expression_kinds/driver.wz",
+      "sha256": "867aaaa50e250a32aae3858ff545e5820ff00cd2b8fd789e0ec8f22f026251b1",
+      "size": 5366,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml",
+      "component_runner": "selfhost/tests/hirverify/expression_kinds/run.py",
+      "reason": "Driver or package-internal forwarder staged by expression-kind component; not an independent corpus project"
+    },
+    {
+      "path": "selfhost/tests/hirverify/expression_kinds/probe.wz",
+      "sha256": "500eb53f56e78dc3015c8fa6500c14381fbc8586f03cba240b13f071195ebd41",
+      "size": 874,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml",
+      "component_runner": "selfhost/tests/hirverify/expression_kinds/run.py",
+      "reason": "Driver or package-internal forwarder staged by expression-kind component; not an independent corpus project"
+    },
+    {
+      "path": "selfhost/tests/hirverify/expression_kinds/run.py",
+      "sha256": "3c61dcc73f9f4d9f42621a08c99d0a8b1ba4118d8c91d936f3a5e1f6940ab095",
+      "size": 12607,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/expression_kinds/test_report_controls.py",
+      "sha256": "d62d20c3504dd74dd41c3383e13b300d13c68262cfb25dfa570e6eace14f3a56",
+      "size": 1090,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "selfhost/tests/hirverify/fixture.wz",
@@ -83875,6 +83913,16 @@
       "reason": "Per-run HIR verifier cache correctness, repeated old/new comparisons or strict report controls; component evidence, not complete compiler or corpus parity"
     },
     {
+      "path": "selfhost/tests/hirverify/expression_kinds/run.py",
+      "status": "component",
+      "reason": "Real HIR expression/statement predicate component and complete baseline/fixed report controls; not complete CLI/corpus parity"
+    },
+    {
+      "path": "selfhost/tests/hirverify/expression_kinds/test_report_controls.py",
+      "status": "component",
+      "reason": "Real HIR expression/statement predicate component and complete baseline/fixed report controls; not complete CLI/corpus parity"
+    },
+    {
       "path": "selfhost/tests/hirverify/run.py",
       "status": "component",
       "reason": "HIR verifier/exit-identity component test; not evidence a candidate passed public CLI or the full corpus"
@@ -85012,7 +85060,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "cee3ffb6badea9d9d7a17699c2e20d9513687288",
+    "to_git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85197,7 +85245,11 @@
       "selfhost/tests/hirverify/cache/test_controls.py",
       "selfhost/tests/sema_recursion/run.py",
       "selfhost/tests/sema_recursion/src/main.wz",
-      "selfhost/tests/sema_recursion/test_process_controls.py"
+      "selfhost/tests/sema_recursion/test_process_controls.py",
+      "selfhost/tests/hirverify/expression_kinds/driver.wz",
+      "selfhost/tests/hirverify/expression_kinds/probe.wz",
+      "selfhost/tests/hirverify/expression_kinds/run.py",
+      "selfhost/tests/hirverify/expression_kinds/test_report_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -85308,10 +85360,16 @@
         "path": "selfhost/src/wzcc/hirverify/verify.wz",
         "old_sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
         "old_size": 17955,
-        "new_sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
-        "new_size": 18189,
-        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
-        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+        "new_sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
+        "new_size": 17992,
+        "commit": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+        "accepted_task": "db5304e4-c5ff-47db-aa00-dab2f2d0985b",
+        "previous_revision": {
+          "new_sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
+          "new_size": 18189,
+          "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+          "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+        }
       },
       {
         "path": "selfhost/src/wzcc/sema/a_instantiate.wz",
@@ -85324,7 +85382,7 @@
         "review_basis": "Root static comparison, formal component r2 nine commands, independent strict seven-command replay and six integrated controls; original task intentionally interrupted during redundant old-Source check"
       }
     ],
-    "new_freeze_path_count": 184,
+    "new_freeze_path_count": 188,
     "modified_freeze_path_count": 18,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
@@ -85378,6 +85436,18 @@
       "proof": "checks/SH10z-aggregate-corpus-single-correction-20261114/run-summary-v2.json",
       "Root_integrated_harness": "checks/generated-corpus-integrated-unit-20261114.ev5olmtt/stdout-v3.log",
       "scope": "generator family only; full corpus and stages not passed"
+    },
+    "expression_kind_delta": {
+      "commit": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+      "source_sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
+      "accepted_task": "db5304e4-c5ff-47db-aa00-dab2f2d0985b",
+      "fixed_checks": 17,
+      "baseline_expected_failures": 3,
+      "production_rule": "explicit switch whitelist and foreign-place restrictions; no numeric id gate",
+      "Root_baseline_parser_controls": "checks/hir-expression-root-parser-amendment-20261114.json",
+      "independent_review": "checks/SH11c-hir-expression-gate-independent-review-20261114.md",
+      "manual_real_pipeline_supplement": "13 trait projects and async/basic; manual commands, not corpus per-command process flags",
+      "corpus_expectations_unchanged": true
     }
   }
 }
