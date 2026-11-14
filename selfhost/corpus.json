@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
-  "previous_git_head": "384328c89ec36948b403b781a42e9fab63f94069",
-  "frozen_at": "2026-11-14T08:05:20.306720+00:00",
+  "git_head": "2243d30bb6b0e450a2a36305bf040a33d6eec9d9",
+  "previous_git_head": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+  "frozen_at": "2026-11-14T08:48:12.389821+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -5768,8 +5768,8 @@
     },
     {
       "path": "tests/async/run_async_cases.py",
-      "sha256": "a3dcf392acaf91f569c32a8689da25373eb8a82c09d0f73667be69742823c437",
-      "size": 15337,
+      "sha256": "2eb5318003efb7a9a54f1f700cc9e4aad00865416ae35ed4775241fba99907c1",
+      "size": 79474,
       "role": "runner_source",
       "assignment": []
     },
@@ -27102,10 +27102,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/bare-main/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/basic/lang.toml",
@@ -27126,10 +27127,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/basic/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/cancel-main/lang.toml",
@@ -27150,10 +27152,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/cancel-main/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/cancel-queued-move-vec/lang.toml",
@@ -27174,10 +27177,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/cancel-queued-move-vec/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/cancel/lang.toml",
@@ -27198,10 +27202,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/cancel/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/io/lang.toml",
@@ -27222,10 +27227,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 pending. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/io/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/nested/lang.toml",
@@ -27246,10 +27252,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/nested/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/never-started-body/lang.toml",
@@ -27270,10 +27277,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/never-started-body/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/never-started-move-fn/lang.toml",
@@ -27294,10 +27302,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/never-started-move-fn/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/never-started-move-struct/lang.toml",
@@ -27318,10 +27327,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/never-started-move-struct/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/never-started-move-vec/lang.toml",
@@ -27342,10 +27352,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/never-started-move-vec/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/never-started/lang.toml",
@@ -27366,10 +27377,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/never-started/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/order/lang.toml",
@@ -27390,10 +27402,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/order/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/owned-error-entry/lang.toml",
@@ -27414,10 +27427,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/owned-error-entry/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/owned-error-repeat/lang.toml",
@@ -27438,10 +27452,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/owned-error-repeat/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/async-inout/lang.toml",
@@ -27462,10 +27477,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/async-inout/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/async-method/lang.toml",
@@ -27486,10 +27502,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/async-method/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/async-value/lang.toml",
@@ -27510,10 +27527,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/async-value/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/await-not-task/lang.toml",
@@ -27534,10 +27552,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/await-not-task/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/await-outside/lang.toml",
@@ -27558,10 +27577,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/await-outside/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/reject/undeclared-error/lang.toml",
@@ -27582,10 +27602,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/reject/undeclared-error/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/repeat-await/lang.toml",
@@ -27606,10 +27627,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 ready. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/repeat-await/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/shutdown-fd/lang.toml",
@@ -27630,10 +27652,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 pending. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/shutdown-fd/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/tcp-loopback/lang.toml",
@@ -27654,10 +27677,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 pending. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/tcp-loopback/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async/udp-loopback/lang.toml",
@@ -27678,10 +27702,11 @@
       "enabled": false,
       "runner": "tests/async/run_async_cases.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Dedicated public-object component keeps ordinary/reject results and exact future/frame/Vec/Task observer checks. The ordinary corpus schema does not express the full assertions; keep this existing row disabled/required. Retained case results: Cpp565 ready, 9d11 pending. The overall old 9d11 run remains 56/68 with four pending projects and eight compile timeouts; the Source-identity amendment was checked without new Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json; proposal-candidate-9d11-derived.json: actual summary/case-derived states for project:tests/async/udp-loopback/lang.toml; checks/SH12s-async-source-all25-public-objects-20261114/evidence/{reference-cpp565,candidate-9d11}; checks/SH14-async25-source-identity-amendment-20261114/independent-review.json. Historical candidate 9d11/Source727b only; not a current da69 compiler result."
     },
     {
       "id": "project:tests/async_parameter_copy/fixtures/param-cancel-queued/lang.toml",
@@ -85290,8 +85315,8 @@
     },
     {
       "path": "tests/async/run_async_cases.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Dedicated async public-object component: role public CLI builds feed the original exact COUNTS observer, then separate links and executions. Default CMake helper mode is retained. Historical Cpp56568/68 and 9d11 56/68 with four pending projects remain; this runner does not enable the ordinary catalog rows."
     },
     {
       "path": "tests/async_parameter_copy/run_parameter_copy.py",
@@ -86251,7 +86276,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+    "to_git_head": "2243d30bb6b0e450a2a36305bf040a33d6eec9d9",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86775,10 +86800,21 @@
         "accepted_task": "e876b33c-cb84-4404-b4a7-51c5b1310831",
         "acceptance": "SH13 function-constant HIR source correction accepted rev2/event950696, parent429; three production files only, retained O0 component evidence, no full new CLI claim.",
         "review": "checks/SH13-function-const-single-correction-Root-review-20261114/review.json"
+      },
+      {
+        "path": "tests/async/run_async_cases.py",
+        "old_sha256": "a3dcf392acaf91f569c32a8689da25373eb8a82c09d0f73667be69742823c437",
+        "old_size": 15337,
+        "new_sha256": "2eb5318003efb7a9a54f1f700cc9e4aad00865416ae35ed4775241fba99907c1",
+        "new_size": 79474,
+        "commit": "2243d30bb6b0e450a2a36305bf040a33d6eec9d9",
+        "accepted_task_prefix": "b712",
+        "acceptance": "Async25 single correction accepted, ACK950506/closed; Root Source-identity amendment separately accepted by independent review. Component runner only; retained old candidate incomplete results are not changed.",
+        "review": "checks/SH14-async25-source-identity-amendment-20261114/independent-review.json"
       }
     ],
     "new_freeze_path_count": 203,
-    "modified_freeze_path_count": 35,
+    "modified_freeze_path_count": 36,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -88220,6 +88256,94 @@
       "old_jobs_or_workers_PLAN_state_operated": false,
       "async25_not_integrated": true,
       "new_fixed_Source_CLI_build_deferred_to_Root": true
+    },
+    "async25_Root_source_identity_amendment": {
+      "base_commit": "e7f9a45bab4bf2c6764158576a13707fbbfd8396",
+      "code_commit": "2243d30bb6b0e450a2a36305bf040a33d6eec9d9",
+      "accepted_task_prefix": "b712",
+      "accepted_ACK_event": 950506,
+      "owner4d0567_not_copied": true,
+      "Root_amendment_directory": "/home/qin/Work/language-dev-20261103/checks/SH14-async25-source-identity-amendment-20261114",
+      "independent_review": "/home/qin/Work/language-dev-20261103/checks/SH14-async25-source-identity-amendment-20261114/independent-review.json",
+      "independent_review_sha256": "0bc633e0b0883938deecaae90fc5a675c9a7f9b61fa524216c3fade3e1633752",
+      "independent_review_decision": "accept",
+      "files": [
+        {
+          "path": "tests/async/run_async_cases.py",
+          "before_sha256": "a3dcf392acaf91f569c32a8689da25373eb8a82c09d0f73667be69742823c437",
+          "before_size": 15337,
+          "HEAD_tracked": true,
+          "after_sha256": "2eb5318003efb7a9a54f1f700cc9e4aad00865416ae35ed4775241fba99907c1",
+          "after_size": 79474
+        },
+        {
+          "path": "tests/async/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "01efca67ae54a66d960bf73493b0c583e76b5b7882e694463969c0cf3d3cfdfd",
+          "after_size": 5911
+        }
+      ],
+      "README_new_and_not_a_frozen_corpus_input": true,
+      "runner_before": {
+        "path": "tests/async/run_async_cases.py",
+        "status": "adaptation_required",
+        "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      },
+      "runner_after": {
+        "path": "tests/async/run_async_cases.py",
+        "status": "component",
+        "reason": "Dedicated async public-object component: role public CLI builds feed the original exact COUNTS observer, then separate links and executions. Default CMake helper mode is retained. Historical Cpp56568/68 and 9d11 56/68 with four pending projects remain; this runner does not enable the ordinary catalog rows."
+      },
+      "proposal_reference": "/home/qin/Work/language-dev-20261103/checks/SH12s-async25-single-correction-20261114/proposal-reference-cpp565-derived.json",
+      "proposal_reference_sha256": "32a2408cfa82f991ba6f01f3f222a56a1fd2b0ce0b00ac11768c1160e47647a3",
+      "proposal_candidate": "/home/qin/Work/language-dev-20261103/checks/SH12s-async25-single-correction-20261114/proposal-candidate-9d11-derived.json",
+      "proposal_candidate_sha256": "a6350eada323013fdf0add941d404ce8a2e5e35afb29363abc897882a9504f5a",
+      "proposal_states_checked_against_actual_case_results": true,
+      "retained_reference_ready": 25,
+      "retained_candidate_ready": 21,
+      "retained_candidate_pending": 4,
+      "retained_candidate_pending_ids": [
+        "project:tests/async/io/lang.toml",
+        "project:tests/async/shutdown-fd/lang.toml",
+        "project:tests/async/tcp-loopback/lang.toml",
+        "project:tests/async/udp-loopback/lang.toml"
+      ],
+      "retained_reference_checks": "68/68",
+      "retained_candidate_checks": "56/68",
+      "retained_candidate_compile_timeouts": 8,
+      "retained_candidate_compile_timeout_seconds": 180,
+      "retained_25case_rows_all_disabled_required": true,
+      "case_fields_changed_only": [
+        "reason",
+        "evidence"
+      ],
+      "other1319cases_and_case_order_unchanged": true,
+      "no_case_append_remove_or_enable": true,
+      "case_runner_statuses_unchanged": true,
+      "top_level_runner_component": true,
+      "ordinary_schema_does_not_cover_exact_COUNTS_GC_assertions": true,
+      "original1161_files_manifest_sha256": "19daf50cc972846a71396e253f4b79db3fca6acb4d131a5fd58ecfcf72b43886",
+      "original1161_files_rehashed_unchanged": true,
+      "Root_amendment_retained_pure_selftests": 60,
+      "Root_amendment_retained_actual_caller_pure_controls": 13,
+      "integration_pure_selftests": 60,
+      "integration_current_Source_identity_matching_mismatch_missing_checks": true,
+      "current_Source116_count": 116,
+      "current_Source116_map_sha256": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+      "current_Source116_and_stdlib37_unchanged": true,
+      "historical_Source727b_field_is_informational": true,
+      "no_new_Source_CLI_or_observer_execution": true,
+      "no_existing_long_job_operated": true,
+      "counts": {
+        "cases": 1344,
+        "enabled": 985,
+        "disabled": 359,
+        "required": 305,
+        "files": 2875,
+        "runners": 254
+      }
     }
   }
 }
