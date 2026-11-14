@@ -52,6 +52,20 @@ def require_ok(row, what):
         raise RuntimeError(f"{what} failed: {row}")
 
 
+def require_gnu_readelf(text, what):
+    """Fail closed unless the tool really produced GNU readelf -l output.
+
+    llvm-readelf chooses GNU output from argv[0].  Calling the resolved
+    llvm-readobj binary still exits 0, but its own format contains neither
+    INTERP nor NEEDED, so the negative checks below would pass vacuously.
+    """
+    if "Elf file type is" not in text or "Program Headers:" not in text:
+        raise RuntimeError(
+            f"{what}: expected GNU readelf output ('Elf file type is', "
+            "'Program Headers:'); invoke llvm-readelf (argv[0] selects GNU "
+            "mode), not llvm-readobj")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", type=Path, required=True)
@@ -205,6 +219,7 @@ def main() -> int:
                 elf = run([readelf, "-l", "-d", native / "program"])
                 require_ok(elf, f"{case['id']} readelf")
                 text = elf["stdout"]
+                require_gnu_readelf(text, f"{case['id']} native O{opt} readelf")
                 assert "INTERP" not in text, (case["id"], text)
                 assert "NEEDED" not in text, (case["id"], text)
 
