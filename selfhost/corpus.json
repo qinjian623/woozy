@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
-  "previous_git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
-  "frozen_at": "2026-11-14T04:25:47.097731+00:00",
+  "git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
+  "previous_git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
+  "frozen_at": "2026-11-14T05:05:51.324020+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -50228,19 +50228,42 @@
       ],
       "backend": "native",
       "manifest": "tests/native/stdlib-collections/hash/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 build and execute exit 0 with empty stdout/stderr",
       "tags": [
-        "project"
-      ]
+        "project",
+        "collections"
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_timeout_seconds": 20,
+      "evidence": "tests/native/run_collections.py static fixture loop; one logical Native row with opt [0,2]",
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/hash",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "6c5bbd15325b888407121574e69accf6d03758d94642a9e60b8ba1acf0070937",
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/stdlib-collections/json/lang.toml",
@@ -50252,19 +50275,42 @@
       ],
       "backend": "native",
       "manifest": "tests/native/stdlib-collections/json/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 build and execute exit 0 with empty stdout/stderr",
       "tags": [
-        "project"
-      ]
+        "project",
+        "collections"
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_timeout_seconds": 20,
+      "evidence": "tests/native/run_collections.py static fixture loop; one logical Native row with opt [0,2]",
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/json",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "320be52a42c973adb75808798760e0ad17943b838d5cc5c2b14f60bcc4939d13",
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/stdlib-collections/map-values/lang.toml",
@@ -50276,19 +50322,42 @@
       ],
       "backend": "native",
       "manifest": "tests/native/stdlib-collections/map-values/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 build and execute exit 0 with empty stdout/stderr",
       "tags": [
-        "project"
-      ]
+        "project",
+        "collections"
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_timeout_seconds": 20,
+      "evidence": "tests/native/run_collections.py static fixture loop; one logical Native row with opt [0,2]",
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/map-values",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "133a1ed91685412f6cdd340c5160ddf8211bc08e6de07df242f8eed06e47dc15",
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/stdlib-collections/map/lang.toml",
@@ -50300,19 +50369,42 @@
       ],
       "backend": "native",
       "manifest": "tests/native/stdlib-collections/map/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 build and execute exit 0 with empty stdout/stderr",
       "tags": [
-        "project"
-      ]
+        "project",
+        "collections"
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_timeout_seconds": 20,
+      "evidence": "tests/native/run_collections.py static fixture loop; one logical Native row with opt [0,2]",
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/map",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "af43bbde518e46b410f4852fcd5cd2b6189da003a985670f80dd10a204966d53",
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/stdlib-collections/set/lang.toml",
@@ -50324,19 +50416,42 @@
       ],
       "backend": "native",
       "manifest": "tests/native/stdlib-collections/set/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 build and execute exit 0 with empty stdout/stderr",
       "tags": [
-        "project"
-      ]
+        "project",
+        "collections"
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_timeout_seconds": 20,
+      "evidence": "tests/native/run_collections.py static fixture loop; one logical Native row with opt [0,2]",
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/set",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "48639a61ae79f0bfbec9f418cfa85ebfcac48b4db8e2b6ab218e44451768b1dc",
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/stdlib-io-errors/lang.toml",
@@ -84188,6 +84303,314 @@
       "tags": [
         "selfhost"
       ]
+    },
+    {
+      "id": "project-python:tests/native/stdlib-collections/hash/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-collections/hash/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/hash",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "6c5bbd15325b888407121574e69accf6d03758d94642a9e60b8ba1acf0070937",
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py static fixture Python mode"
+    },
+    {
+      "id": "project-python:tests/native/stdlib-collections/json/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-collections/json/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/json",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "320be52a42c973adb75808798760e0ad17943b838d5cc5c2b14f60bcc4939d13",
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py static fixture Python mode"
+    },
+    {
+      "id": "project-python:tests/native/stdlib-collections/map/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-collections/map/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/map",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "af43bbde518e46b410f4852fcd5cd2b6189da003a985670f80dd10a204966d53",
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py static fixture Python mode"
+    },
+    {
+      "id": "project-python:tests/native/stdlib-collections/map-values/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-collections/map-values/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/map-values",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "133a1ed91685412f6cdd340c5160ddf8211bc08e6de07df242f8eed06e47dc15",
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py static fixture Python mode"
+    },
+    {
+      "id": "project-python:tests/native/stdlib-collections/set/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-collections/set/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "source_provenance": {
+        "fixture": "tests/native/stdlib-collections/set",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "48639a61ae79f0bfbec9f418cfa85ebfcac48b4db8e2b6ab218e44451768b1dc",
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py static fixture Python mode"
+    },
+    {
+      "id": "generated:tests/native/stdlib-collections/json-oracle",
+      "kind": "generated_project",
+      "operation": "build_native",
+      "operations": [
+        "build_native"
+      ],
+      "backend": "native",
+      "manifest": "lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "generated_files": {
+        "lang.toml": "c2NoZW1hX3ZlcnNpb24gPSAxCltwYWNrYWdlXQpuYW1lID0gImFwcCIKc291cmNlX3Jvb3QgPSAic3JjIgplbnRyeSA9ICJhcHAiCltidWlsZF0KYmFja2VuZCA9ICJuYXRpdmUiCndvcmRfYml0cyA9IDY0Cg==",
+        "src/main.wz": "cGFja2FnZSBhcHA7CmltcG9ydCAic3RkL2pzb24iIGFzIGpzb247CmltcG9ydCAic3RkL3N0cmNvbnYiIGFzIHN0cmNvbnY7CmltcG9ydCAic3RkL3RleHQiIGFzIHRleHQ7CmltcG9ydCAic3RkL3ZlYyIgYXMgdmVjOwpmdW5jIGVycm9yX25hbWUodmFsdWUganNvbi5FcnJvcikgc3RyaW5nIHsKICAgIHN3aXRjaCB2YWx1ZSB7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLlN5bnRheChvZmZzZXQpOiByZXR1cm4gInN5bnRheDoiICsgc3RyY29udi5mb3JtYXRfdTY0KHU2NChvZmZzZXQpKTsKICAgICAgICBjYXNlIGpzb24uRXJyb3IuRGVwdGhMaW1pdDogcmV0dXJuICJkZXB0aCI7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLkludmFsaWROdW1iZXI6IHJldHVybiAiaW52YWxpZCI7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLk51bWJlclJhbmdlOiByZXR1cm4gInJhbmdlIjsKICAgIH0KfQpmdW5jIHJ1bl9jYXNlKHNvdXJjZSBzdHJpbmcpIHN0cmluZyB7CiAgICB0cnkgewogICAgICAgIGxldCB2YWx1ZSA9IGpzb24ucGFyc2Uoc291cmNlKTsKICAgICAgICB0cnkgeyByZXR1cm4gIk9LfCIgKyBqc29uLnNlcmlhbGl6ZSh2YWx1ZSk7IH0KICAgICAgICBjYXRjaCBlcnJvciBqc29uLkVycm9yIHsgcmV0dXJuICJFUlJ8c2VyOiIgKyBlcnJvcl9uYW1lKGVycm9yKTsgfQogICAgfSBjYXRjaCBlcnJvciBqc29uLkVycm9yIHsKICAgICAgICByZXR1cm4gIkVSUnwiICsgZXJyb3JfbmFtZShlcnJvcik7CiAgICB9Cn0KZnVuYyBtYXRjaGVzKGFjdHVhbCBzdHJpbmcsIGV4cGVjdGVkIHN0cmluZykgYm9vbCB7CiAgICBpZiBleHBlY3RlZCA9PSAiRVJSfHN5bnRheCIgeyByZXR1cm4gdGV4dC5zdGFydHNfd2l0aChhY3R1YWwsIGV4cGVjdGVkKTsgfQogICAgcmV0dXJuIGFjdHVhbCA9PSBleHBlY3RlZDsKfQpmdW5jIG1haW4oKSBpMzIgewogICAgbGV0IHNvdXJjZXMgPSBbIm51bGwiLCJ0cnVlIiwiZmFsc2UiLCIwIiwiLTAiLCIxIiwiLTEiLCIxLjUiLCIyLjUwIiwiMWUxMCIsIjFFKzEwIiwiMWUtMTAiLCIxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MCIsIjAuMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxIiwiMWU0MDAiLCItMS43OTc2OTMxMzQ4NjIzMTU3ZTMwOCIsIlwiXCIiLCJcImFiY1wiIiwiXCJcXFwiXCIiLCJcIlxcXFxcIiIsIlwiXFwvXCIiLCJcIlxcYlxcZlxcblxcclxcdFwiIiwiXCJcXHUwMDAwXFx1MDAxZlwiIiwiXCJow6nwn5iAXCIiLCJcIlxcdUQ4M0RcXHVERTAwXCIiLCJcIlxcdTAwNDFcXHUwMGU5XFx1MjBhY1xcdUQ4MzRcXHVERDFFXCIiLCJcIlxcdTAwN2ZcIiIsIlwiXFx1MjAyOFwiIiwiW10iLCJbMSwyLDNdIiwiW1tbXV1dIiwie30iLCJ7XCJhXCI6MX0iLCJ7XCJiXCI6MSxcImFcIjoyfSIsIntcImFcIjoxLFwiYlwiOjIsXCJhXCI6M30iLCJbXCJhXCIsbnVsbCx0cnVlLGZhbHNlLHt9LFtdXSIsIiBcdFxyXG4geyBcImFcIiA6IFsgMSAsIDIgLCB7XCJ4XCI6XCJ5XCJ9IF0gfSBcbiIsIlwibGluZVxcbm5leHRcIiIsIiIsIiAiLCIrIiwiKzEiLCIuNSIsIjAxIiwiMS4iLCIxZSIsIjFlKyIsIi0iLCItLTEiLCJOYU4iLCJJbmZpbml0eSIsIi1JbmZpbml0eSIsInRydSIsIm51bGx4IiwiW114IiwiWzEsXSIsIlssMV0iLCJbMSAyXSIsIntcImFcIjp9Iiwie1wiYVwiIDF9Iiwie1wiYVwiOjEsfSIsIntcImFcIjoxIFwiYlwiOjJ9IiwiXCJ1bnRlcm1pbmF0ZWQiLCJcIlxceDAxXCIiLCJcIlxcdVpaWlpcIiIsIlwiXFx1RDgwMFwiIiwiXCJcXHVEQzAwXCIiLCJcIlxcdUQ4MDBcXHUwMDQxXCIiLCJcImFcbmJcIiIsIltcIvCfmIBcIiwgeF0iLCLvu78xIiwiW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXSJdOwogICAgbGV0IGV4cGVjdGVkID0gWyJPS3xudWxsIiwiT0t8dHJ1ZSIsIk9LfGZhbHNlIiwiT0t8MCIsIk9LfC0wIiwiT0t8MSIsIk9LfC0xIiwiT0t8MS41IiwiT0t8Mi41MCIsIk9LfDFlMTAiLCJPS3wxRSsxMCIsIk9LfDFlLTEwIiwiT0t8MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAiLCJPS3wwLjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMSIsIk9LfDFlNDAwIiwiT0t8LTEuNzk3NjkzMTM0ODYyMzE1N2UzMDgiLCJPS3xcIlwiIiwiT0t8XCJhYmNcIiIsIk9LfFwiXFxcIlwiIiwiT0t8XCJcXFxcXCIiLCJPS3xcIi9cIiIsIk9LfFwiXFxiXFxmXFxuXFxyXFx0XCIiLCJPS3xcIlxcdTAwMDBcXHUwMDFmXCIiLCJPS3xcImjDqfCfmIBcIiIsIk9LfFwi8J+YgFwiIiwiT0t8XCJBw6nigqzwnYSeXCIiLCJPS3xcIlx1ezdGfVwiIiwiT0t8XCLigKhcIiIsIk9LfFtdIiwiT0t8WzEsMiwzXSIsIk9LfFtbW11dXSIsIk9LfHt9IiwiT0t8e1wiYVwiOjF9IiwiT0t8e1wiYlwiOjEsXCJhXCI6Mn0iLCJPS3x7XCJhXCI6MyxcImJcIjoyfSIsIk9LfFtcImFcIixudWxsLHRydWUsZmFsc2Use30sW11dIiwiT0t8e1wiYVwiOlsxLDIse1wieFwiOlwieVwifV19IiwiT0t8XCJsaW5lXFxubmV4dFwiIiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4OjEiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXg6MyIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXg6NyIsIkVSUnxzeW50YXg6NyIsIkVSUnxzeW50YXg6MTMiLCJFUlJ8c3ludGF4OjIiLCJFUlJ8c3ludGF4OjYiLCJFUlJ8c3ludGF4IiwiRVJSfGRlcHRoIl07CiAgICBpZiB2ZWMubGVuKHNvdXJjZXMpICE9IHZlYy5sZW4oZXhwZWN0ZWQpIHsgcmV0dXJuIDEyMDsgfQogICAgZm9yIHZhciBpbmRleCB1c2l6ZSA9IDA7IGluZGV4IDwgdmVjLmxlbihzb3VyY2VzKTsgaW5kZXggKz0gMSB7CiAgICAgICAgaWYgIW1hdGNoZXMocnVuX2Nhc2Uoc291cmNlc1tpbmRleF0pLCBleHBlY3RlZFtpbmRleF0pIHsKICAgICAgICAgICAgcmV0dXJuIGkzMihpbmRleCkgKyAxOwogICAgICAgIH0KICAgIH0KICAgIHJldHVybiAwOwp9Cg=="
+      },
+      "opt": [
+        0,
+        2
+      ],
+      "source_provenance": {
+        "fixture": "generated by run_collections.make_oracle",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "5b32673679eb90c5ed3da68cabac6e31032aac06e94b66cb39731530f1f865b8",
+        "python_expected_sha256": "54f73b0e019430338fdef4a3998a893b3d55f7e132732d21b5934bfc5762e118",
+        "python_legal": 38,
+        "python_illegal": 34,
+        "python_oracle_rejections": [],
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py generated JSON oracle native modes"
+    },
+    {
+      "id": "generated-python:tests/native/stdlib-collections/json-oracle",
+      "kind": "generated_project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_collections.py",
+      "runner_status": "public_cli",
+      "reason": "run_collections public CLI: native O0/O2 and Python build, execute exit 0 with empty stdout/stderr",
+      "tags": [
+        "project",
+        "collections"
+      ],
+      "generated_files": {
+        "lang.toml": "c2NoZW1hX3ZlcnNpb24gPSAxCltwYWNrYWdlXQpuYW1lID0gImFwcCIKc291cmNlX3Jvb3QgPSAic3JjIgplbnRyeSA9ICJhcHAiCltidWlsZF0KYmFja2VuZCA9ICJuYXRpdmUiCndvcmRfYml0cyA9IDY0Cg==",
+        "src/main.wz": "cGFja2FnZSBhcHA7CmltcG9ydCAic3RkL2pzb24iIGFzIGpzb247CmltcG9ydCAic3RkL3N0cmNvbnYiIGFzIHN0cmNvbnY7CmltcG9ydCAic3RkL3RleHQiIGFzIHRleHQ7CmltcG9ydCAic3RkL3ZlYyIgYXMgdmVjOwpmdW5jIGVycm9yX25hbWUodmFsdWUganNvbi5FcnJvcikgc3RyaW5nIHsKICAgIHN3aXRjaCB2YWx1ZSB7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLlN5bnRheChvZmZzZXQpOiByZXR1cm4gInN5bnRheDoiICsgc3RyY29udi5mb3JtYXRfdTY0KHU2NChvZmZzZXQpKTsKICAgICAgICBjYXNlIGpzb24uRXJyb3IuRGVwdGhMaW1pdDogcmV0dXJuICJkZXB0aCI7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLkludmFsaWROdW1iZXI6IHJldHVybiAiaW52YWxpZCI7CiAgICAgICAgY2FzZSBqc29uLkVycm9yLk51bWJlclJhbmdlOiByZXR1cm4gInJhbmdlIjsKICAgIH0KfQpmdW5jIHJ1bl9jYXNlKHNvdXJjZSBzdHJpbmcpIHN0cmluZyB7CiAgICB0cnkgewogICAgICAgIGxldCB2YWx1ZSA9IGpzb24ucGFyc2Uoc291cmNlKTsKICAgICAgICB0cnkgeyByZXR1cm4gIk9LfCIgKyBqc29uLnNlcmlhbGl6ZSh2YWx1ZSk7IH0KICAgICAgICBjYXRjaCBlcnJvciBqc29uLkVycm9yIHsgcmV0dXJuICJFUlJ8c2VyOiIgKyBlcnJvcl9uYW1lKGVycm9yKTsgfQogICAgfSBjYXRjaCBlcnJvciBqc29uLkVycm9yIHsKICAgICAgICByZXR1cm4gIkVSUnwiICsgZXJyb3JfbmFtZShlcnJvcik7CiAgICB9Cn0KZnVuYyBtYXRjaGVzKGFjdHVhbCBzdHJpbmcsIGV4cGVjdGVkIHN0cmluZykgYm9vbCB7CiAgICBpZiBleHBlY3RlZCA9PSAiRVJSfHN5bnRheCIgeyByZXR1cm4gdGV4dC5zdGFydHNfd2l0aChhY3R1YWwsIGV4cGVjdGVkKTsgfQogICAgcmV0dXJuIGFjdHVhbCA9PSBleHBlY3RlZDsKfQpmdW5jIG1haW4oKSBpMzIgewogICAgbGV0IHNvdXJjZXMgPSBbIm51bGwiLCJ0cnVlIiwiZmFsc2UiLCIwIiwiLTAiLCIxIiwiLTEiLCIxLjUiLCIyLjUwIiwiMWUxMCIsIjFFKzEwIiwiMWUtMTAiLCIxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MCIsIjAuMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxIiwiMWU0MDAiLCItMS43OTc2OTMxMzQ4NjIzMTU3ZTMwOCIsIlwiXCIiLCJcImFiY1wiIiwiXCJcXFwiXCIiLCJcIlxcXFxcIiIsIlwiXFwvXCIiLCJcIlxcYlxcZlxcblxcclxcdFwiIiwiXCJcXHUwMDAwXFx1MDAxZlwiIiwiXCJow6nwn5iAXCIiLCJcIlxcdUQ4M0RcXHVERTAwXCIiLCJcIlxcdTAwNDFcXHUwMGU5XFx1MjBhY1xcdUQ4MzRcXHVERDFFXCIiLCJcIlxcdTAwN2ZcIiIsIlwiXFx1MjAyOFwiIiwiW10iLCJbMSwyLDNdIiwiW1tbXV1dIiwie30iLCJ7XCJhXCI6MX0iLCJ7XCJiXCI6MSxcImFcIjoyfSIsIntcImFcIjoxLFwiYlwiOjIsXCJhXCI6M30iLCJbXCJhXCIsbnVsbCx0cnVlLGZhbHNlLHt9LFtdXSIsIiBcdFxyXG4geyBcImFcIiA6IFsgMSAsIDIgLCB7XCJ4XCI6XCJ5XCJ9IF0gfSBcbiIsIlwibGluZVxcbm5leHRcIiIsIiIsIiAiLCIrIiwiKzEiLCIuNSIsIjAxIiwiMS4iLCIxZSIsIjFlKyIsIi0iLCItLTEiLCJOYU4iLCJJbmZpbml0eSIsIi1JbmZpbml0eSIsInRydSIsIm51bGx4IiwiW114IiwiWzEsXSIsIlssMV0iLCJbMSAyXSIsIntcImFcIjp9Iiwie1wiYVwiIDF9Iiwie1wiYVwiOjEsfSIsIntcImFcIjoxIFwiYlwiOjJ9IiwiXCJ1bnRlcm1pbmF0ZWQiLCJcIlxceDAxXCIiLCJcIlxcdVpaWlpcIiIsIlwiXFx1RDgwMFwiIiwiXCJcXHVEQzAwXCIiLCJcIlxcdUQ4MDBcXHUwMDQxXCIiLCJcImFcbmJcIiIsIltcIvCfmIBcIiwgeF0iLCLvu78xIiwiW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXSJdOwogICAgbGV0IGV4cGVjdGVkID0gWyJPS3xudWxsIiwiT0t8dHJ1ZSIsIk9LfGZhbHNlIiwiT0t8MCIsIk9LfC0wIiwiT0t8MSIsIk9LfC0xIiwiT0t8MS41IiwiT0t8Mi41MCIsIk9LfDFlMTAiLCJPS3wxRSsxMCIsIk9LfDFlLTEwIiwiT0t8MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAiLCJPS3wwLjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMSIsIk9LfDFlNDAwIiwiT0t8LTEuNzk3NjkzMTM0ODYyMzE1N2UzMDgiLCJPS3xcIlwiIiwiT0t8XCJhYmNcIiIsIk9LfFwiXFxcIlwiIiwiT0t8XCJcXFxcXCIiLCJPS3xcIi9cIiIsIk9LfFwiXFxiXFxmXFxuXFxyXFx0XCIiLCJPS3xcIlxcdTAwMDBcXHUwMDFmXCIiLCJPS3xcImjDqfCfmIBcIiIsIk9LfFwi8J+YgFwiIiwiT0t8XCJBw6nigqzwnYSeXCIiLCJPS3xcIlx1ezdGfVwiIiwiT0t8XCLigKhcIiIsIk9LfFtdIiwiT0t8WzEsMiwzXSIsIk9LfFtbW11dXSIsIk9LfHt9IiwiT0t8e1wiYVwiOjF9IiwiT0t8e1wiYlwiOjEsXCJhXCI6Mn0iLCJPS3x7XCJhXCI6MyxcImJcIjoyfSIsIk9LfFtcImFcIixudWxsLHRydWUsZmFsc2Use30sW11dIiwiT0t8e1wiYVwiOlsxLDIse1wieFwiOlwieVwifV19IiwiT0t8XCJsaW5lXFxubmV4dFwiIiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4OjEiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXg6MyIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXgiLCJFUlJ8c3ludGF4IiwiRVJSfHN5bnRheCIsIkVSUnxzeW50YXg6NyIsIkVSUnxzeW50YXg6NyIsIkVSUnxzeW50YXg6MTMiLCJFUlJ8c3ludGF4OjIiLCJFUlJ8c3ludGF4OjYiLCJFUlJ8c3ludGF4IiwiRVJSfGRlcHRoIl07CiAgICBpZiB2ZWMubGVuKHNvdXJjZXMpICE9IHZlYy5sZW4oZXhwZWN0ZWQpIHsgcmV0dXJuIDEyMDsgfQogICAgZm9yIHZhciBpbmRleCB1c2l6ZSA9IDA7IGluZGV4IDwgdmVjLmxlbihzb3VyY2VzKTsgaW5kZXggKz0gMSB7CiAgICAgICAgaWYgIW1hdGNoZXMocnVuX2Nhc2Uoc291cmNlc1tpbmRleF0pLCBleHBlY3RlZFtpbmRleF0pIHsKICAgICAgICAgICAgcmV0dXJuIGkzMihpbmRleCkgKyAxOwogICAgICAgIH0KICAgIH0KICAgIHJldHVybiAwOwp9Cg=="
+      },
+      "source_provenance": {
+        "fixture": "generated by run_collections.make_oracle",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "5b32673679eb90c5ed3da68cabac6e31032aac06e94b66cb39731530f1f865b8",
+        "python_expected_sha256": "54f73b0e019430338fdef4a3998a893b3d55f7e132732d21b5934bfc5762e118",
+        "python_legal": 38,
+        "python_illegal": 34,
+        "python_oracle_rejections": [],
+        "original_modes": [
+          "python"
+        ]
+      },
+      "evidence": "tests/native/run_collections.py generated JSON oracle Python mode"
     }
   ],
   "runners": [
@@ -85449,7 +85872,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
+    "to_git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86630,6 +87053,116 @@
       "matrix_or_full_Source_reexecuted": false,
       "new_full965_started": false,
       "existing_full962_pin_or_three_stage_jobs_operated": false,
+      "full_corpus_or_bootstrap_pass_claimed": false
+    },
+    "collections_case_delta": {
+      "base_commit": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
+      "accepted_task_prefix": "67",
+      "accepted_revision": 10,
+      "ACK_event": 947840,
+      "parent_ACK": 415,
+      "session_closed_revision": 11,
+      "proposal": "/home/qin/Work/language-dev-20261103/checks/SH12a-collections-single-correction-20261114/proposal/catalog-12.json",
+      "proposal_sha256": "e3487398bfd2798e1b5ad4638213eb1464f9ae2242c530419f31ee6650b8aeeb",
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH12a-collections-Root-correction-review-20261114.json",
+      "Root_review_sha256": "4e520051fb476d84c15a46f7eb93efa968818fce57657cb1bc2fbf89aa3a0612",
+      "independent_review": "/home/qin/Work/language-dev-20261103/checks/SH12a-collections-single-correction-independent-review-20261114.md",
+      "independent_review_sha256": "1e68ab402f0e0291cfd2e7aca661c41f2ec2f4963bdfbf247176eaca72644f1d",
+      "updated_existing_case_ids": [
+        "project:tests/native/stdlib-collections/hash/lang.toml",
+        "project:tests/native/stdlib-collections/json/lang.toml",
+        "project:tests/native/stdlib-collections/map/lang.toml",
+        "project:tests/native/stdlib-collections/map-values/lang.toml",
+        "project:tests/native/stdlib-collections/set/lang.toml"
+      ],
+      "appended_case_ids": [
+        "project-python:tests/native/stdlib-collections/hash/lang.toml",
+        "project-python:tests/native/stdlib-collections/json/lang.toml",
+        "project-python:tests/native/stdlib-collections/map/lang.toml",
+        "project-python:tests/native/stdlib-collections/map-values/lang.toml",
+        "project-python:tests/native/stdlib-collections/set/lang.toml",
+        "generated:tests/native/stdlib-collections/json-oracle",
+        "generated-python:tests/native/stdlib-collections/json-oracle"
+      ],
+      "preserved_native_operations": [
+        "check",
+        "build_native"
+      ],
+      "operations_note": "The registration is preserved; the accepted new18-variant evidence actually executes build modes, not a separate check command.",
+      "proposal_action_removed": true,
+      "Python_alias_duplicate_cases_added": false,
+      "other_1330_case_fields_and_order_unchanged": true,
+      "files_runners_classifications_and_SHA_unchanged": true,
+      "counts_recomputed_from_current_catalog": {
+        "cases": 1342,
+        "enabled": 977,
+        "disabled": 365,
+        "required": 311,
+        "files": 2872,
+        "runners": 251
+      },
+      "not_using_proposal_old_1333_counts": true,
+      "generated_oracles": [
+        {
+          "id": "generated:tests/native/stdlib-collections/json-oracle",
+          "bytes_sha256": {
+            "lang.toml": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+            "src/main.wz": "5b32673679eb90c5ed3da68cabac6e31032aac06e94b66cb39731530f1f865b8"
+          },
+          "sizes": {
+            "lang.toml": 118,
+            "src/main.wz": 3736
+          }
+        },
+        {
+          "id": "generated-python:tests/native/stdlib-collections/json-oracle",
+          "bytes_sha256": {
+            "lang.toml": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+            "src/main.wz": "5b32673679eb90c5ed3da68cabac6e31032aac06e94b66cb39731530f1f865b8"
+          },
+          "sizes": {
+            "lang.toml": 118,
+            "src/main.wz": 3736
+          }
+        }
+      ],
+      "oracle_proof": {
+        "legal": 38,
+        "illegal": 34,
+        "expected_count": 72,
+        "expected_sha256": "54f73b0e019430338fdef4a3998a893b3d55f7e132732d21b5934bfc5762e118",
+        "manifest_sha256": "6eaea5042bd9176d231c3edea6d1b6b21ac87cf35b07795059f1db27232a0a4a",
+        "source_sha256": "5b32673679eb90c5ed3da68cabac6e31032aac06e94b66cb39731530f1f865b8",
+        "NumberToken_canonical_original_gold_preserved": true
+      },
+      "unrepresented_assertions": [
+        "whole static fixture-tree hash unchanged before/after the runner",
+        "separate Python NumberToken/canonical expectation array is not a case field; it is embedded in the generated oracle source and kept in oracle-proof.json"
+      ],
+      "retained_new_evidence": {
+        "variants": 18,
+        "compiler_process_records": 36,
+        "program_executions": 36,
+        "reference": "Cpp565",
+        "candidate": "new9d11 full CLI",
+        "compiler_timeout_seconds": 1200,
+        "original_runner_compile_timeout_seconds": 180,
+        "original_180_second_limit_claimed_passed": false,
+        "program_execution_timeout_seconds": 20,
+        "strict_process_fields_raw_streams_and_trace_checked": true
+      },
+      "history_preserved": {
+        "old28_compiler_flags": "unknown",
+        "old_first_partial": "deleted before this correction; cannot be restored or backfilled",
+        "old_history_at_least_compiler_runs": 38,
+        "old_history_at_least_program_executions": 37,
+        "new36_by36_does_not_replace_old_history": true
+      },
+      "Source116_std37_fixtures_gold_unchanged": true,
+      "owner_executor_docs_tests_snapshot_copied": false,
+      "matrix_or_standard_or_full_Source_reexecuted": false,
+      "existing_full962_or_three_stage_jobs_operated": false,
+      "new_full977_started": false,
       "full_corpus_or_bootstrap_pass_claimed": false
     }
   }
