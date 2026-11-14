@@ -1808,7 +1808,7 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
     let generic = b_generic_params(inout state, id);
     if vec.len(n.children) - 1 != vec.len(generic) {
         throw reject(inout state, r, "wrong number of generic arguments",
-            "E_CALL_ARGUMENT");
+            "E_TYPE_MISMATCH");
     }
     let args = vec.empty[usize]();
     var substitutions = vec.empty[model.Substitution]();

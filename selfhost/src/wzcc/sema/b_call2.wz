@@ -524,7 +524,7 @@ func call(state inout Checker, r model.NodeRef,
                 if callee_is_bracket {
                     if vec.len(explicit_args) != vec.len(generic) {
                         throw reject(inout state, r,
-                            "wrong number of generic arguments", "E_CALL_ARGUMENT");
+                            "wrong number of generic arguments", "E_TYPE_MISMATCH");
                     }
                     for var index usize = 0; index < vec.len(generic); index += 1 {
                         vec.push(substitutions, model.Substitution(
@@ -821,7 +821,7 @@ func b_explicit_method_sub(state inout Checker, location model.NodeRef,
     let ps = b_generic_params(inout state, method);
     if vec.len(refs) != vec.len(ps) {
         throw reject(inout state, location,
-            "wrong number of method type arguments", "E_CALL_ARGUMENT");
+            "wrong number of method type arguments", "E_TYPE_MISMATCH");
     }
     for var index usize = 0; index < vec.len(ps); index += 1 {
         let type_id = parse_type(inout state, refs[index],
@@ -849,7 +849,7 @@ func b_method_subs(state inout Checker, location model.NodeRef,
     }
     if vec.len(unbound) != vec.len(refs) {
         throw reject(inout state, location,
-            "wrong number of method type arguments", "E_CALL_ARGUMENT");
+            "wrong number of method type arguments", "E_TYPE_MISMATCH");
     }
     for var index usize = 0; index < vec.len(unbound); index += 1 {
         let type_id = parse_type(inout state, refs[index],

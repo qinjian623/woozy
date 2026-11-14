@@ -476,7 +476,7 @@ func method_value(state inout Checker, r model.NodeRef,
         if vec.len(explicit_refs) != 0 {
             if vec.len(explicit_refs) != vec.len(own) {
                 throw reject(inout state, r,
-                    "wrong number of method type arguments", "E_CALL_ARGUMENT");
+                    "wrong number of method type arguments", "E_TYPE_MISMATCH");
             }
             for var index usize = 0; index < vec.len(own); index += 1 {
                 let type_id = parse_type(inout state, explicit_refs[index],
@@ -512,7 +512,7 @@ func method_value(state inout Checker, r model.NodeRef,
     if vec.len(explicit_refs) != 0 {
         if vec.len(explicit_refs) != vec.len(own) {
             throw reject(inout state, r,
-                "wrong number of method type arguments", "E_CALL_ARGUMENT");
+                "wrong number of method type arguments", "E_TYPE_MISMATCH");
         }
         for var index usize = 0; index < vec.len(own); index += 1 {
             let type_id = parse_type(inout state, explicit_refs[index],
