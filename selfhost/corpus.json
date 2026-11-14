@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
-  "previous_git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
-  "frozen_at": "2026-11-14T05:05:51.324020+00:00",
+  "git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
+  "previous_git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
+  "frozen_at": "2026-11-14T05:19:52.865568+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -26587,19 +26587,39 @@
       ],
       "backend": "native",
       "manifest": "examples/hello/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "SGVsbG8sIHdvcmxkIQo=",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/run.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Accepted Cpp565/new9d11 public Native builds and executions at O0/O2 for examples/hello. The registered operations are retained; no separate check command was run. tests/native/run.py does not select this project, so its runner_status remains adaptation_required.",
       "tags": [
         "project"
-      ]
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 1200,
+      "evidence": "/home/qin/Work/language-dev-20261103/checks/selfhost-opt2-stage1-public-acceptance-20261114/final.json; Native-only subset of hello/summary.json: four builds and four executions; original overall failed/Python capability rejections preserved.",
+      "source_provenance": {
+        "manifest_sha256": "999e13dca9edaecf9a035be4ff63c16a29c9e017536e8ec8cb273c162f0f9a75",
+        "source_sha256": "06ba0aab7273d5027216d820db5e0800ea50d28e9fc835a3ab0ae0135b40c450",
+        "reference_sha256": "565da3f6aa0b7f342ac5ba9523b5495643c1e44daaa5ecbb072e5906bd1a1fe4",
+        "candidate_sha256": "9d11f01536091a2ca51a7814dd3a0a9a0f1f3311b6345d97d963e21d25155122"
+      }
     },
     {
       "id": "project:selfhost/lang.toml",
@@ -85872,7 +85892,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
+    "to_git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -87163,6 +87183,55 @@
       "matrix_or_standard_or_full_Source_reexecuted": false,
       "existing_full962_or_three_stage_jobs_operated": false,
       "new_full977_started": false,
+      "full_corpus_or_bootstrap_pass_claimed": false
+    },
+    "hello_native_existing_case": {
+      "base_commit": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
+      "proposal": "/home/qin/Work/language-dev-20261103/checks/hello-native-existing-row-proposal-20261114/proposal.json",
+      "proposal_sha256": "781799ccf58bcf86899533cae22b10ae56dbf272b6c682f8416125c8f54a8546",
+      "approved_after_sha256": "3874ca3e97093d7b6e9afe15848d6145ff2677d32ba6be44afc7a674c8ce6a0f",
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/hello-native-existing-row-proposal-20261114/Root-review.json",
+      "Root_review_sha256": "c34a7e40ee5fd0f892352c1f7b53a68d7ea0c2f444b05cada63c5a423965591e",
+      "updated_case_id": "project:examples/hello/lang.toml",
+      "other_1341_cases_fields_and_order_unchanged": true,
+      "operations_retained": [
+        "check",
+        "build_native"
+      ],
+      "separate_check_command_executed": false,
+      "runner_and_runner_status_retained": true,
+      "main_Native_runner_selects_Hello": false,
+      "accepted_actual_Native_commands": {
+        "reference": "Cpp565",
+        "candidate": "new9d11 full O2 stage1",
+        "opt": [
+          0,
+          2
+        ],
+        "build_commands": 4,
+        "program_executions": 4,
+        "stdout_hex": "48656c6c6f2c20776f726c64210a",
+        "exit": 0,
+        "stderr_hex": "",
+        "timeout_seconds": 1200
+      },
+      "manifest_sha256": "999e13dca9edaecf9a035be4ff63c16a29c9e017536e8ec8cb273c162f0f9a75",
+      "Source_sha256": "06ba0aab7273d5027216d820db5e0800ea50d28e9fc835a3ab0ae0135b40c450",
+      "Python_both_rejected": "E_CAPABILITY_UNAVAILABLE/type at stdlib/os/os.wz 1258:1292; run not_run",
+      "original_Hello_summary_failed_preserved": true,
+      "tests_native_os_hello_different_Source_not_covered": true,
+      "files_runners_classifications_and_SHA_unchanged": true,
+      "Source116_std37_fixtures_gold_unchanged": true,
+      "counts": {
+        "cases": 1342,
+        "enabled": 978,
+        "disabled": 364,
+        "required": 310,
+        "files": 2872,
+        "runners": 251
+      },
+      "compiler_or_program_reexecuted": false,
+      "existing_jobs_operated": false,
       "full_corpus_or_bootstrap_pass_claimed": false
     }
   }
