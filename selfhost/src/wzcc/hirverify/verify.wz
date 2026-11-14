@@ -267,47 +267,43 @@ func foreign_access_place(node hir.HirNode) bool {
 
 func verifier_expression(state Verifier, node hir.HirNode) bool {
     let kind = hir.node_kind(node.data);
-    let id = hir.node_kind_id(kind);
-    // unit_literal..call plus the aggregate/value forms listed by the C++
-    // expression() helper.  Keep the numeric range explicit so new NodeKind
-    // entries cannot silently become expressions.
-    if id <= 41 {
-        var candidate = false;
-        switch kind {
-            case hir.NodeKind.UnitLiteral: candidate = true;
-            case hir.NodeKind.ConstantLiteral: candidate = true;
-            case hir.NodeKind.BoolLiteral: candidate = true;
-            case hir.NodeKind.IntegerLiteral: candidate = true;
-            case hir.NodeKind.FloatLiteral: candidate = true;
-            case hir.NodeKind.StringLiteral: candidate = true;
-            case hir.NodeKind.Read: candidate = true;
-            case hir.NodeKind.FunctionValue: candidate = true;
-            case hir.NodeKind.Unary: candidate = true;
-            case hir.NodeKind.Binary: candidate = true;
-            case hir.NodeKind.ShortCircuit: candidate = true;
-            case hir.NodeKind.IntegerConvert: candidate = true;
-            case hir.NodeKind.Call: candidate = true;
-            case hir.NodeKind.StructInit: candidate = true;
-            case hir.NodeKind.EnumInit: candidate = true;
-            case hir.NodeKind.FieldRead: candidate = true;
-            case hir.NodeKind.ConstraintCall: candidate = true;
-            case hir.NodeKind.Move: candidate = true;
-            case hir.NodeKind.VecInit: candidate = true;
-            case hir.NodeKind.IndexRead: candidate = true;
-            case hir.NodeKind.VecSlice: candidate = true;
-            case hir.NodeKind.ForeignRead: candidate = true;
-            case hir.NodeKind.CFieldRead: candidate = true;
-            case hir.NodeKind.Await: candidate = true;
-            case hir.NodeKind.TraitObjectInit: candidate = true;
-            case hir.NodeKind.TraitDispatch: candidate = true;
-            default: candidate = false;
-        }
-        if !candidate {
-            return false;
-        }
-        return foreign_access_read(node) || !foreign_access_place(node);
+    // This explicit switch is the complete expression whitelist.  Do not add a
+    // numeric range gate: Await/TraitObjectInit/TraitDispatch are kinds 42-44
+    // and the C++ expression() helper lists them explicitly.
+    var candidate = false;
+    switch kind {
+        case hir.NodeKind.UnitLiteral: candidate = true;
+        case hir.NodeKind.ConstantLiteral: candidate = true;
+        case hir.NodeKind.BoolLiteral: candidate = true;
+        case hir.NodeKind.IntegerLiteral: candidate = true;
+        case hir.NodeKind.FloatLiteral: candidate = true;
+        case hir.NodeKind.StringLiteral: candidate = true;
+        case hir.NodeKind.Read: candidate = true;
+        case hir.NodeKind.FunctionValue: candidate = true;
+        case hir.NodeKind.Unary: candidate = true;
+        case hir.NodeKind.Binary: candidate = true;
+        case hir.NodeKind.ShortCircuit: candidate = true;
+        case hir.NodeKind.IntegerConvert: candidate = true;
+        case hir.NodeKind.Call: candidate = true;
+        case hir.NodeKind.StructInit: candidate = true;
+        case hir.NodeKind.EnumInit: candidate = true;
+        case hir.NodeKind.FieldRead: candidate = true;
+        case hir.NodeKind.ConstraintCall: candidate = true;
+        case hir.NodeKind.Move: candidate = true;
+        case hir.NodeKind.VecInit: candidate = true;
+        case hir.NodeKind.IndexRead: candidate = true;
+        case hir.NodeKind.VecSlice: candidate = true;
+        case hir.NodeKind.ForeignRead: candidate = true;
+        case hir.NodeKind.CFieldRead: candidate = true;
+        case hir.NodeKind.Await: candidate = true;
+        case hir.NodeKind.TraitObjectInit: candidate = true;
+        case hir.NodeKind.TraitDispatch: candidate = true;
+        default: candidate = false;
     }
-    return false;
+    if !candidate {
+        return false;
+    }
+    return foreign_access_read(node) || !foreign_access_place(node);
 }
 
 func verifier_expr(state Verifier, id usize) hir.HirNode throws Invalid {

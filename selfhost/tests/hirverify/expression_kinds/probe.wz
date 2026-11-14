@@ -1,0 +1,22 @@
+// Test-only package-internal forwarder.  The component runner stages this file
+// inside the real hirverify package so the driver calls the production
+// verifier_expression/verifier_statement helpers instead of copying them.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+
+func expression_probe_state() Verifier {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    return make_verifier(hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+}
+
+pub func expression_probe(node hir.HirNode) bool {
+    return verifier_expression(expression_probe_state(), node);
+}
+
+pub func statement_probe(node hir.HirNode) bool {
+    return verifier_statement(expression_probe_state(), node);
+}

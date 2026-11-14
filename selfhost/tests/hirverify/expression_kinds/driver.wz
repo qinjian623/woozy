@@ -1,0 +1,132 @@
+// Focused HIR verifier expression-classification driver.  It builds real Wz
+// HirNode values and asks the staged production hirverify package whether they
+// are expressions/statements.  It does not reproduce the predicate here.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+func check(condition bool, label string) i32 throws os.Error {
+    if condition {
+        io.println("CHECK " + label + " ok");
+        return 0;
+    }
+    io.println("CHECK " + label + " FAIL");
+    return 1;
+}
+
+func make_node(data hir.NodeData) hir.HirNode {
+    return hir.HirNode(type_id: 0,
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 1, begin_byte: 0, end_byte: 0)),
+        scope: 0, children: [], data: data, errors: [], exits: []);
+}
+
+func foreign_node(access option.Option[hir.ForeignAccessKind]) hir.HirNode {
+    return make_node(hir.NodeData.ForeignRead(hir.ForeignRead(binding: 0,
+        access: access, start: option.Option[usize].None,
+        end: option.Option[usize].None)));
+}
+
+func foreign_access(access hir.ForeignAccessKind) option.Option[hir.ForeignAccessKind] {
+    return option.Option[hir.ForeignAccessKind].Some(access);
+}
+
+func kind_id(node hir.HirNode) u32 {
+    return hir.node_kind_id(hir.node_kind(node.data));
+}
+
+func main() i32 throws os.Error {
+    var failures i32 = 0;
+    let trait_ref = hir.TraitRef(declaration: 0, args: []);
+
+    let await_node = make_node(hir.NodeData.Await(hir.Await()));
+    failures += check(kind_id(await_node) == u32(42) &&
+        hirverify.expression_probe(await_node), "await-42-expression");
+
+    let trait_object_node = make_node(hir.NodeData.TraitObjectInit(
+        hir.TraitObjectInit(trait_ref: trait_ref, concrete: 0, methods: [],
+            method_args: [])));
+    failures += check(kind_id(trait_object_node) == u32(43) &&
+        hirverify.expression_probe(trait_object_node),
+        "trait-object-init-43-expression");
+
+    let trait_dispatch_node = make_node(hir.NodeData.TraitDispatch(
+        hir.TraitDispatch(trait_ref: trait_ref, method: 0, signature: 0,
+            index: 0, args: [])));
+    failures += check(kind_id(trait_dispatch_node) == u32(44) &&
+        hirverify.expression_probe(trait_dispatch_node),
+        "trait-dispatch-44-expression");
+
+    let block_node = make_node(hir.NodeData.Block(hir.Block()));
+    failures += check(kind_id(block_node) == u32(15) &&
+        !hirverify.expression_probe(block_node), "block-15-not-expression");
+    failures += check(hirverify.statement_probe(block_node),
+        "block-statement");
+
+    let statement_node = make_node(hir.NodeData.ExpressionStatement(
+        hir.ExpressionStatement()));
+    failures += check(kind_id(statement_node) == u32(16) &&
+        !hirverify.expression_probe(statement_node),
+        "expression-statement-16-not-expression");
+    failures += check(hirverify.statement_probe(statement_node),
+        "expression-statement-statement");
+
+    let noop_node = make_node(hir.NodeData.Noop(hir.Noop()));
+    failures += check(kind_id(noop_node) == u32(19) &&
+        !hirverify.expression_probe(noop_node), "noop-19-not-expression");
+    failures += check(hirverify.statement_probe(noop_node), "noop-statement");
+
+    let property_read = foreign_node(foreign_access(
+        hir.ForeignAccessKind.PropertyRead));
+    failures += check(kind_id(property_read) == u32(39) &&
+        hirverify.expression_probe(property_read),
+        "foreign-property-read-0-expression");
+
+    let index_read = foreign_node(foreign_access(
+        hir.ForeignAccessKind.IndexRead));
+    failures += check(kind_id(index_read) == u32(39) &&
+        hirverify.expression_probe(index_read),
+        "foreign-index-read-2-expression");
+
+    let slice_read = foreign_node(foreign_access(
+        hir.ForeignAccessKind.SliceRead));
+    failures += check(kind_id(slice_read) == u32(39) &&
+        hirverify.expression_probe(slice_read),
+        "foreign-slice-read-4-expression");
+
+    let no_access = foreign_node(option.Option[hir.ForeignAccessKind].None);
+    failures += check(hirverify.expression_probe(no_access),
+        "foreign-no-access-expression");
+
+    let property_place = foreign_node(foreign_access(
+        hir.ForeignAccessKind.PropertyPlace));
+    failures += check(kind_id(property_place) == u32(39) &&
+        !hirverify.expression_probe(property_place),
+        "foreign-property-place-1-not-expression");
+    failures += check(!hirverify.statement_probe(property_place),
+        "foreign-property-place-statement-rejected");
+
+    let index_place = foreign_node(foreign_access(
+        hir.ForeignAccessKind.IndexPlace));
+    failures += check(kind_id(index_place) == u32(39) &&
+        !hirverify.expression_probe(index_place),
+        "foreign-index-place-3-not-expression");
+
+    let slice_place = foreign_node(foreign_access(
+        hir.ForeignAccessKind.SlicePlace));
+    failures += check(kind_id(slice_place) == u32(39) &&
+        !hirverify.expression_probe(slice_place),
+        "foreign-slice-place-5-not-expression");
+
+    io.println("SUMMARY failures=" + strconv.format_u64(u64(failures)));
+    if failures != 0 {
+        return 1;
+    }
+    return 0;
+}

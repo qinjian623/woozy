@@ -216,6 +216,18 @@ duplicate elapsed values, and accept a valid equal pair.  They also check
 report paths containing spaces.  They do not compile Woozy source or run the
 retained ELF drivers.
 
+## Expression-kind gate
+
+`expression_kinds/run.py` is a smaller component check for the production
+`hirverify.verifier_expression`/`verifier_statement` helpers.  It injects only a
+package-internal forwarder (`expression_kinds/probe.wz`) and builds one O0
+driver.  The driver checks the `Await` (42), `TraitObjectInit` (43) and
+`TraitDispatch` (44) kinds are expressions; `ExpressionStatement` (16), `Noop`
+(19) and `Block` (15) are not; and foreign place accesses remain rejected.  A
+pre-fix package directory is run once with `--expect-exit 1` to retain the
+observed three failures.  This does not build the 116-source CLI, the C++
+oracle/probe, or run the complete corpus.  See `expression_kinds/README.md`.
+
 ## Scope
 
 The six-mode Wz tests use real lexer/parser AST positions but intentionally
