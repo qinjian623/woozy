@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "384328c89ec36948b403b781a42e9fab63f94069",
-  "previous_git_head": "672e947058be36dd843d4adaacde95b45f8719bb",
-  "frozen_at": "2026-11-14T07:44:36.037770+00:00",
+  "git_head": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+  "previous_git_head": "384328c89ec36948b403b781a42e9fab63f94069",
+  "frozen_at": "2026-11-14T08:05:20.306720+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -2220,8 +2220,8 @@
     },
     {
       "path": "selfhost/src/wzcc/valueops/valueops.wz",
-      "sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3",
-      "size": 65252,
+      "sha256": "90af32a0e9e9a59363c15893a2dcfca5c303bbfaea19aca0558522d552b1d2a8",
+      "size": 65598,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -29025,19 +29025,74 @@
       ],
       "backend": "native",
       "manifest": "tests/fixtures/core/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": null,
       "runner_status": "unmapped",
       "reason": "no runner mapping for this manifest",
       "tags": [
         "project"
-      ]
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 15,
+      "evidence": "checks/SH14-core-numeric-public-projects-20261114: public check + Native O0/O2 build + one execution per build, both Cpp565 and 9d11; see run-summary.json, record-audit.json, resource-map.before/after.json",
+      "source_provenance": {
+        "manifest": "tests/fixtures/core/lang.toml",
+        "manifest_sha256": "443b652ad6631dedee4949d5c6d15d37404bb876996fa65b65d446f3b2764994",
+        "source": "tests/fixtures/core/src/main.wz",
+        "source_sha256": "9d76c0b428eefbdad297ae7ffde23b124424fcd4a0ba752e309fde1cc722be65",
+        "source_lines": 19,
+        "program_exit": 0,
+        "reference_cli_sha256": "565da3f6aa0b7f342ac5ba9523b5495643c1e44daaa5ecbb072e5906bd1a1fe4",
+        "candidate_cli_sha256": "9d11f01536091a2ca51a7814dd3a0a9a0f1f3311b6345d97d963e21d25155122",
+        "source116_map_sha256": "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef",
+        "stdlib37_map_sha256": "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47",
+        "standalone_assertion_sha256": {
+          "tests/native/run_cli.py": "6e9ee0e6a92274742101bee0394c218bcdf36e621615206cd0e5799390b74b6b",
+          "tests/native/run.py": "d0741b998e83cf74759dd84a4468fb1ad8a5865cadd6c8a9494eddb9680f8fd2",
+          "tests/python/run_cases.py": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c"
+        },
+        "original_catalog_row": {
+          "id": "project:tests/fixtures/core/lang.toml",
+          "kind": "project",
+          "operation": "build_native",
+          "operations": [
+            "check",
+            "build_native"
+          ],
+          "backend": "native",
+          "manifest": "tests/fixtures/core/lang.toml",
+          "expected": null,
+          "run_expectation": {
+            "status": "unrecorded"
+          },
+          "support": "existing_runner",
+          "adaptation": "required",
+          "enabled": false,
+          "runner": null,
+          "runner_status": "unmapped",
+          "reason": "no runner mapping for this manifest",
+          "tags": [
+            "project"
+          ]
+        }
+      }
     },
     {
       "id": "project:tests/fixtures/numeric/lang.toml",
@@ -29049,19 +29104,74 @@
       ],
       "backend": "native",
       "manifest": "tests/fixtures/numeric/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": null,
       "runner_status": "unmapped",
       "reason": "no runner mapping for this manifest",
       "tags": [
         "project"
-      ]
+      ],
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 15,
+      "evidence": "checks/SH14-core-numeric-public-projects-20261114: public check + Native O0/O2 build + one execution per build, both Cpp565 and 9d11; see run-summary.json, record-audit.json, resource-map.before/after.json",
+      "source_provenance": {
+        "manifest": "tests/fixtures/numeric/lang.toml",
+        "manifest_sha256": "e032907968f92a3646fcc4bd317e36dd1654d7cd50ffa85b449857863265c990",
+        "source": "tests/fixtures/numeric/src/main.wz",
+        "source_sha256": "00ac26f45b869871d47b234b0053887f758620b9e18448bddb432c5606418ff3",
+        "source_lines": 22,
+        "program_exit": 0,
+        "reference_cli_sha256": "565da3f6aa0b7f342ac5ba9523b5495643c1e44daaa5ecbb072e5906bd1a1fe4",
+        "candidate_cli_sha256": "9d11f01536091a2ca51a7814dd3a0a9a0f1f3311b6345d97d963e21d25155122",
+        "source116_map_sha256": "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef",
+        "stdlib37_map_sha256": "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47",
+        "standalone_assertion_sha256": {
+          "tests/native/run_cli.py": "6e9ee0e6a92274742101bee0394c218bcdf36e621615206cd0e5799390b74b6b",
+          "tests/native/run.py": "d0741b998e83cf74759dd84a4468fb1ad8a5865cadd6c8a9494eddb9680f8fd2",
+          "tests/python/run_cases.py": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c"
+        },
+        "original_catalog_row": {
+          "id": "project:tests/fixtures/numeric/lang.toml",
+          "kind": "project",
+          "operation": "build_native",
+          "operations": [
+            "check",
+            "build_native"
+          ],
+          "backend": "native",
+          "manifest": "tests/fixtures/numeric/lang.toml",
+          "expected": null,
+          "run_expectation": {
+            "status": "unrecorded"
+          },
+          "support": "existing_runner",
+          "adaptation": "required",
+          "enabled": false,
+          "runner": null,
+          "runner_status": "unmapped",
+          "reason": "no runner mapping for this manifest",
+          "tags": [
+            "project"
+          ]
+        }
+      }
     },
     {
       "id": "project:tests/floating/fixtures/baseline-01-basics/lang.toml",
@@ -86141,7 +86251,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "384328c89ec36948b403b781a42e9fab63f94069",
+    "to_git_head": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86381,7 +86491,19 @@
       {
         "path": "selfhost/src/wzcc/valueops/valueops.wz",
         "old_sha256": "19149ef4e0cb4a76d6dfd52425eb4c3a552004bf04d84577aa9dd7785723a460",
-        "new_sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3"
+        "new_sha256": "90af32a0e9e9a59363c15893a2dcfca5c303bbfaea19aca0558522d552b1d2a8",
+        "history": [
+          {
+            "path": "selfhost/src/wzcc/valueops/valueops.wz",
+            "old_sha256": "19149ef4e0cb4a76d6dfd52425eb4c3a552004bf04d84577aa9dd7785723a460",
+            "new_sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3"
+          }
+        ],
+        "new_size": 65598,
+        "commit": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+        "accepted_task": "4b003e44-eb64-4cf5-9d2f-6834a3fb0abc",
+        "acceptance": "Valueops private classifier scratch correction accepted rev2/event950955,parent432; fresh ActiveNominal and per-call private state, retained component-only evidence.",
+        "review": "checks/SH13-valueops-scratch-Root-amendment-20261114/review.json"
       },
       {
         "path": "selfhost/tests/ownership/src/main.wz",
@@ -87916,8 +88038,8 @@
       },
       "current_modified_freeze_size": 81759
     },
-    "compiler_source_current_map_sha256": "951991d205e37305f17be3818bcf6afbf685260aaa555c48dcbaeb6c3eacde14",
-    "compiler_source_current_code_commit": "384328c89ec36948b403b781a42e9fab63f94069",
+    "compiler_source_current_map_sha256": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+    "compiler_source_current_code_commit": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
     "hir_function_const_three_file_integration": {
       "base_commit": "dc7f9200e3d738157439ac864e5d075a90a2bf1d",
       "code_commit": "384328c89ec36948b403b781a42e9fab63f94069",
@@ -88018,6 +88140,86 @@
       "Root_plans_single_later_CLI_build_after_other_Source_acceptance": true,
       "old_historical_stage1_difference_metadata_retained_as_history": true,
       "existing_jobs_workers_PLAN_or_state_operated": false
+    },
+    "valueops_scratch_and_core_numeric_integration": {
+      "base_commit": "91e9583885d2f695dc522b18fd9440e1f74469c6",
+      "code_commit": "4a8cfd5abfc01a5f55155f2fe3439d4197196399",
+      "valueops_task": "4b003e44-eb64-4cf5-9d2f-6834a3fb0abc",
+      "valueops_accepted_revision": 2,
+      "valueops_ACK_event": 950955,
+      "valueops_ACK_parent": 432,
+      "valueops_Root_review": "/home/qin/Work/language-dev-20261103/checks/SH13-valueops-scratch-Root-amendment-20261114/review.json",
+      "valueops_Root_review_sha256": "473cd5cb68a604c918bde9e2653d5280437cd1e0c67245cc07d813a5f560b5cc",
+      "valueops_independent_review": "/home/qin/Work/language-dev-20261103/checks/SH13-valueops-scratch-correction-independent-review-20261114.json",
+      "valueops_independent_review_sha256": "39beb3026e584ccb03163801657bcacee4d6730048365387dd40e0ed61d8dd86",
+      "only_production_path": "selfhost/src/wzcc/valueops/valueops.wz",
+      "production_before_sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3",
+      "production_after_sha256": "90af32a0e9e9a59363c15893a2dcfca5c303bbfaea19aca0558522d552b1d2a8",
+      "production_after_size": 65598,
+      "private_scratch_fresh_ActiveNominal_no_public_table_write_or_cross_call_cache": true,
+      "previous_Source116_map_sha256": "951991d205e37305f17be3818bcf6afbf685260aaa555c48dcbaeb6c3eacde14",
+      "current_Source116_map_sha256": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+      "Source116_file_count": 116,
+      "valueops_retained_evidence": {
+        "actual_commands": 48,
+        "Root_reparsed_raw_traces": 48,
+        "raw_streams": 96,
+        "SEM_lines": 468,
+        "INV_lines": 96,
+        "TIME_records": 12,
+        "original_pure_controls": 22,
+        "Root_parser_pure_controls": 8,
+        "component_ratio_O0": 1.797,
+        "component_ratio_O2": 2.0551,
+        "full_CLI_Channel_or_bootstrap_speedup_claimed": false
+      },
+      "private_validator_execveat_amendment_not_copied_into_repo": true,
+      "old_validator_and_raw_evidence_unchanged": true,
+      "core_numeric_task": "091c984a-32c9-49d5-a23f-e362ca7c6b44",
+      "core_numeric_accepted_revision": 2,
+      "core_numeric_ACK_event": 951236,
+      "core_numeric_ACK_parent": 431,
+      "core_numeric_Root_review": "/home/qin/Work/language-dev-20261103/checks/SH14-core-numeric-Root-review-20261114/review.json",
+      "core_numeric_Root_review_sha256": "9e8bce20a390dc929feff986ef06cad410f710a6ad5d57b4f9f746ae2ed2f68e",
+      "approved_proposal": "/home/qin/Work/language-dev-20261103/checks/SH14-core-numeric-public-projects-20261114/proposal.json",
+      "approved_proposal_sha256": "7740049dd85ec5173cbf5e9d8965c55eeeab8578f634da94391a64176f0f86cc",
+      "exact_two_updated_case_ids": [
+        "project:tests/fixtures/core/lang.toml",
+        "project:tests/fixtures/numeric/lang.toml"
+      ],
+      "other1342cases_and_case_order_unchanged": true,
+      "case_append_remove": 0,
+      "runner_mapping_stays_null_unmapped": true,
+      "no_new_runner_or_frozen_paths": true,
+      "files_runners_count_unchanged": true,
+      "core_numeric_historical_proof": {
+        "candidate": "9d11",
+        "Source116_map_sha256": "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef",
+        "reference": "Cpp565",
+        "commands": 20,
+        "compiler_invocations": 12,
+        "checks": 4,
+        "builds": 8,
+        "program_executions": 8,
+        "Root_raw_trace_files": 60,
+        "Root_artifacts": 16,
+        "source_timeout_seconds": 180,
+        "program_timeout_seconds": 15,
+        "claimed_as_new_current_Source_CLI_proof": false
+      },
+      "counts": {
+        "cases": 1344,
+        "enabled": 985,
+        "disabled": 359,
+        "required": 305,
+        "files": 2875,
+        "runners": 254
+      },
+      "stdlib37_fixtures_gold_and_all_other_Source_bytes_unchanged": true,
+      "new_complete_CLI_Sourcecheck_matrix_or_three_stage_executed": false,
+      "old_jobs_or_workers_PLAN_state_operated": false,
+      "async25_not_integrated": true,
+      "new_fixed_Source_CLI_build_deferred_to_Root": true
     }
   }
 }
