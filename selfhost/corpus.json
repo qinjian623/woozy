@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
-  "previous_git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
-  "frozen_at": "2026-11-14T10:39:24.474266+00:00",
+  "git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
+  "previous_git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
+  "frozen_at": "2026-11-14T11:04:00.020360+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -23537,8 +23537,8 @@
     },
     {
       "path": "tests/python/language_gc/run_language_gc.py",
-      "sha256": "687cd3da9110187729f2e51ac7cd5fc3187ef8aa15b5ac9caff6e9268aa44978",
-      "size": 4323,
+      "sha256": "cf504290eb267324a7b503b6488ca930e398fa96eb5d5563059a39e9a0ffa5c8",
+      "size": 63418,
       "role": "runner_source",
       "assignment": []
     },
@@ -26460,6 +26460,13 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "sha256": "abe5d25af264e6ed22a20ee190b3a207b0b8af73566a67a48d1d50635f6084fa",
       "size": 9098,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/python/language_gc/runner_controls.py",
+      "sha256": "6263c57e0fb15687324aa04a0dafa337feb9c26f87d664c1a6a43ebbefbb0541",
+      "size": 18249,
       "role": "runner_source",
       "assignment": []
     }
@@ -61467,11 +61474,31 @@
       "adaptation": "required",
       "enabled": false,
       "runner": "tests/python/language_gc/run_language_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "component",
+      "reason": "Eight internal Python language-GC observer modes remain disabled/required: ordinary CLI exit assertions cannot express their Weak handles and language collector statistics. The accepted bounded runner and Root atomic command-record correction preserve the observer. Retained 48 main commands/16 observations belong to historical72dc/da69; f90 helper compiled Source is unknown and old727b API is only a symbols aid after exact program.py/langrt.py equality, not current ed1 API proof.",
       "tags": [
         "runner_group"
-      ]
+      ],
+      "evidence": {
+        "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH15-python-language-gc-correction-Root-review-20261114/Root-review.json",
+        "Root_review_sha256": "c7b641ffb299409d3cfa3c53a08911a2f2bc186779eb9f7afe9d933b104ba1a6",
+        "accepted_task": "b6092241-237c-451e-a1fc-10b3e54ab297",
+        "ACK_event": 953782,
+        "ACK_parent": 443,
+        "pure_groups": 11,
+        "pure_controls_external_launch_attempts": 0,
+        "historical_main_commands": 48,
+        "historical_observer_documents": 16,
+        "historical_all_official_records": 49,
+        "historical_relevant_records": 74,
+        "historical_input_files": 327,
+        "historical_generated_files": 64,
+        "historical_metadata_files": 16,
+        "new_Source_compiler_program_executions": 0,
+        "current_Source_same_API_proof": false,
+        "reference_compiled_Source_history": "unknown",
+        "scope": "GC observer checks are outside ordinary CLI execution schema; no case enabled. Producer correction also ran three disallowed Python version probes, not validation and not part of the guarded zero-launch pure controls."
+      }
     },
     {
       "id": "runner:tests/python/run_cleanup_regressions.py",
@@ -86161,8 +86188,8 @@
     },
     {
       "path": "tests/python/language_gc/run_language_gc.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Language GC observer runner: real CLI/API emission and exact generated-byte comparison precede eight GC-specific observations. Historical 72dc/da69 results and old727b symbol aid do not establish a new ed1 API or ordinary public-CLI exit test."
     },
     {
       "path": "tests/python/language_gc/runtime_gc_test.py",
@@ -86438,11 +86465,16 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "status": "public_cli",
       "reason": "Public check/build CLI entry confirmed by SH11b. Reference completed 22 fixtures; old Wz39ac passed 9 rejects and all 13 accepts failed at the first Python check. No claim that the new Source CLI or all runtime branches passed."
+    },
+    {
+      "path": "tests/python/language_gc/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python checks for strict process flags, metadata, GC observation, trace failure persistence and atomic command-record replacement; no compiler, helper, observer or program is started."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
+    "to_git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86656,7 +86688,8 @@
       "tests/native/process/test_controls.py",
       "selfhost/tests/phase-timing/run.py",
       "selfhost/tests/phase-timing/main.wz",
-      "selfhost/tests/phase-timing/lang.toml"
+      "selfhost/tests/phase-timing/lang.toml",
+      "tests/python/language_gc/runner_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -87101,10 +87134,21 @@
         "accepted_task": "e0e172f2-e9e2-404b-8aac-50463551fd78",
         "review": "checks/SH15-process-correction-Root-amendment-20261114/Root-review.json",
         "acceptance": "Root-controlled SH15 accepted bytes; retained component/pure-control evidence only, no new complete CLI pass."
+      },
+      {
+        "path": "tests/python/language_gc/run_language_gc.py",
+        "old_sha256": "687cd3da9110187729f2e51ac7cd5fc3187ef8aa15b5ac9caff6e9268aa44978",
+        "old_size": 4323,
+        "new_sha256": "cf504290eb267324a7b503b6488ca930e398fa96eb5d5563059a39e9a0ffa5c8",
+        "new_size": 63418,
+        "commit": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
+        "accepted_task": "b6092241-237c-451e-a1fc-10b3e54ab297",
+        "review": "checks/SH15-python-language-gc-correction-Root-review-20261114/Root-review.json",
+        "acceptance": "Accepted rev2/event953782 parent443 plus Root atomic record-replacement amendment; original74 historical records preserved; no current-ed1 API or Source execution claim."
       }
     ],
-    "new_freeze_path_count": 213,
-    "modified_freeze_path_count": 45,
+    "new_freeze_path_count": 214,
+    "modified_freeze_path_count": 46,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -89234,6 +89278,89 @@
         "required": 305,
         "files": 2885,
         "runners": 259
+      }
+    },
+    "Python_language_GC_record_correction_integration": {
+      "base_commit": "a399998c6b92595d007213f42c1282952b5c09ce",
+      "code_commit": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH15-python-language-gc-correction-Root-review-20261114/Root-review.json",
+      "Root_review_sha256": "c7b641ffb299409d3cfa3c53a08911a2f2bc186779eb9f7afe9d933b104ba1a6",
+      "accepted_task": "b6092241-237c-451e-a1fc-10b3e54ab297",
+      "ACK_event": 953782,
+      "ACK_parent": 443,
+      "Root_controlled_atomic_amendment_used": true,
+      "actor_direct_write_version_not_used": true,
+      "files": [
+        {
+          "path": "tests/python/language_gc/run_language_gc.py",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-python-language-gc-correction-Root-review-20261114/files/tests/python/language_gc/run_language_gc.py",
+          "before_sha256": "687cd3da9110187729f2e51ac7cd5fc3187ef8aa15b5ac9caff6e9268aa44978",
+          "before_size": 4323,
+          "after_sha256": "cf504290eb267324a7b503b6488ca930e398fa96eb5d5563059a39e9a0ffa5c8",
+          "after_size": 63418
+        },
+        {
+          "path": "tests/python/language_gc/runner_controls.py",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-python-language-gc-correction-Root-review-20261114/files/tests/python/language_gc/runner_controls.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "6263c57e0fb15687324aa04a0dafa337feb9c26f87d664c1a6a43ebbefbb0541",
+          "after_size": 18249
+        },
+        {
+          "path": "tests/python/language_gc/README.md",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-python-language-gc-correction-Root-review-20261114/files/tests/python/language_gc/README.md",
+          "before_sha256": "79a52e71232cfd328daa2f80fc44f00c4c333a54037d0d18d0968a9ca697c63d",
+          "before_size": 1551,
+          "after_sha256": "6c5cb408b816845ccc7c907224c82e3a0bfc9f429cfafe07e8c2b4ef39c2c91b",
+          "after_size": 5902
+        }
+      ],
+      "new_control_registration": "tests/python/language_gc/runner_controls.py",
+      "only_existing_case_id": "runner:tests/python/language_gc/run_language_gc.py",
+      "case_fields_changed_only": [
+        "runner_status",
+        "reason",
+        "evidence"
+      ],
+      "other1345cases_exact_and_all_case_order_enabled_required_unchanged": true,
+      "eight_GC_modes_are_internal_not_eight_new_project_cases": true,
+      "seven_Native_language_gc_source_cases_unchanged": true,
+      "README_metadata_only_not_frozen": true,
+      "Root_and_independent_pure_groups_reused": 11,
+      "pure_controls_external_launch_attempts": 0,
+      "actual_publication_syntax_checks": 2,
+      "new_Source_compiler_program_version_or_observer_executions": 0,
+      "historical_actuals": {
+        "main_commands": 48,
+        "official_records": 49,
+        "observer_documents": 16,
+        "input_files": 327,
+        "generated_files": 64,
+        "metadata_files": 16,
+        "Root_read_assertions": 1245,
+        "Root_read_errors": [],
+        "selected_historical_relevant_records": 74,
+        "candidate": "72dc/da69",
+        "reference_f90_compiled_Source_history": "unknown",
+        "old55d_API_Source": "727b; symbols aid only after exact output byte equality"
+      },
+      "producer_correction_scope_violation": {
+        "Python_version_probes": 3,
+        "used_as_validation": false,
+        "not_in_guarded_zero_launch_pure_scope": true
+      },
+      "source116_and_stdlib37_unchanged": true,
+      "current_Source116_map_sha256": "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09",
+      "no_complete_new_ed1_API_CLI_CTest180_selfhosting_or_corpus_claim": true,
+      "no_existing_long_jobs_services_workers_PLAN_STATE_operated": true,
+      "counts": {
+        "cases": 1346,
+        "enabled": 985,
+        "disabled": 361,
+        "required": 305,
+        "files": 2886,
+        "runners": 260
       }
     }
   }
