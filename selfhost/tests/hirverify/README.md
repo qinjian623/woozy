@@ -216,6 +216,16 @@ duplicate elapsed values, and accept a valid equal pair.  They also check
 report paths containing spaces.  They do not compile Woozy source or run the
 retained ELF drivers.
 
+## Per-Verifier needs_drop bool cache
+
+The focused `cache/needs_drop/` component adds the same-package cache probe
+described in `cache/needs_drop/README.md`.  It checks successful true/false
+results, invalid-id failures, independent modules and Verifiers, same-module
+sharing, fresh Verifiers after a TypeContext change, real Source alternating
+verification and warm-cache HIR tamper rejection.  Its runner builds one O2
+component and records the fixed seed/tool/runtime hashes and a separate
+exec-only trace.
+
 ## Expression-kind gate
 
 `expression_kinds/run.py` is a smaller component check for the production

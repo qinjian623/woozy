@@ -1,0 +1,645 @@
+// Test-only C-FFI forged-HIR/NativeIR rejection driver.
+//
+// This program is not a product CLI and adds no compiler API.  It runs the
+// real self-hosted pipeline on tests/native/c_ffi/forged-project:
+//
+//   project.load -> resolve.resolve_project
+//                -> sema.check_project(Backend)
+//                -> hirverify.snapshot / hirverify.verify(Backend)
+//                -> nativelower.lower
+//                -> nativeverify.snapshot / nativeverify.verify
+//
+// The original C++ forged test (tests/native/c_ffi/forged_test.cpp) makes four
+// HIR mutations and four NativeIR mutations, each from a fresh unmodified
+// snapshot, and requires every mutation to fail as Internal with a first
+// E_IR_INVALID diagnostic.  This driver performs the same eight independent
+// assertions in the Woozy compiler's actual Wz modules.  It never constructs a
+// VerifiedHirModule or VerifiedModule itself.
+//
+// A missing mutation target is a failure, never an expected rejection.  After
+// every mutation the untouched legal snapshot is verified again, so a shared
+// Vec alias cannot make a later case pass.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct HirCounts {
+    foreign_calls usize;
+    c_fields usize;
+}
+
+struct NativeCounts {
+    foreign_calls usize;
+    c_fields usize;
+    c_ptr_writes usize;
+}
+
+struct NativeTarget {
+    function usize;
+    block usize;
+    instruction usize;
+}
+
+enum HirMutation {
+    CCallable;
+    SignatureTypeId;
+    ArgIndices;
+    CField;
+}
+
+enum NativeMutation {
+    CCallable;
+    OriginForeignCall;
+    CField;
+    OriginCPtrWrite;
+}
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func option_word(value bool) string {
+    if value {
+        return "some";
+    }
+    return "none";
+}
+
+func hir_mutation_name(value HirMutation) string {
+    switch value {
+        case HirMutation.CCallable: return "hir_c_callable";
+        case HirMutation.SignatureTypeId: return "hir_signature_type_id";
+        case HirMutation.ArgIndices: return "hir_arg_indices";
+        case HirMutation.CField: return "hir_c_field";
+    }
+}
+
+func native_mutation_name(value NativeMutation) string {
+    switch value {
+        case NativeMutation.CCallable: return "native_c_callable";
+        case NativeMutation.OriginForeignCall: return "native_origin_foreign_call";
+        case NativeMutation.CField: return "native_c_field";
+        case NativeMutation.OriginCPtrWrite: return "native_origin_c_ptr_write";
+    }
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_id(kind model.FailureKind) u32 {
+    switch kind {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func first_code(values Vec[model.Diagnostic]) string {
+    if vec.len(values) == 0 {
+        return "";
+    }
+    return values[0].code;
+}
+
+func print_diagnostics(values Vec[model.Diagnostic]) throws os.Error {
+    for value in values {
+        io.eprintln(value.code + " " + value.phase + " " + value.severity +
+            ": " + value.message);
+    }
+}
+
+func count_hir(module hir.HirModule) HirCounts {
+    var result = HirCounts(foreign_calls: 0, c_fields: 0);
+    for node in module.nodes {
+        switch node.data {
+            case hir.NodeData.Call(call): {
+                switch call.kind {
+                    case hir.CalleeKind.CForeign: result.foreign_calls += 1;
+                    default: {}
+                }
+            }
+            case hir.NodeData.CFieldRead(field): result.c_fields += 1;
+            default: {}
+        }
+    }
+    return result;
+}
+
+func count_native(module nativeir.Module) NativeCounts {
+    var result = NativeCounts(foreign_calls: 0, c_fields: 0, c_ptr_writes: 0);
+    for function_value in module.functions {
+        for block in function_value.blocks {
+            for instruction in block.instructions {
+                if nativeir.op_id(instruction.op) ==
+                   nativeir.op_id(nativeir.Op.ForeignCall) {
+                    result.foreign_calls += 1;
+                }
+                if nativeir.op_id(instruction.op) ==
+                   nativeir.op_id(nativeir.Op.CFieldRead) {
+                    result.c_fields += 1;
+                }
+                if nativeir.op_id(instruction.op) ==
+                   nativeir.op_id(nativeir.Op.CPtrWrite) {
+                    result.c_ptr_writes += 1;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+func empty_hir() hir.HirModule {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    return hir.empty_module(resolved, 1,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}
+
+func fresh_hir(verified hirverify.VerifiedHirModule)
+    option.Option[hir.HirModule] {
+    try {
+        return option.Option[hir.HirModule].Some(
+            hirverify.snapshot(verified));
+    } catch error model.SupportError {
+        return option.Option[hir.HirModule].None;
+    }
+}
+
+func fresh_native(built nativeverify.VerifiedModule)
+    option.Option[nativeir.Module] {
+    try {
+        return option.Option[nativeir.Module].Some(
+            nativeverify.snapshot(built));
+    } catch error model.SupportError {
+        return option.Option[nativeir.Module].None;
+    }
+}
+
+func accepted_hir(result hirverify.VerifyResult) bool {
+    return phase_id(result.state) == 0 && option.is_some(result.value) &&
+        vec.len(result.diagnostics) == 0;
+}
+
+func accepted_native(result nativeverify.VerifyResult) bool {
+    return phase_id(result.state) == 0 && option.is_some(result.value) &&
+        vec.len(result.diagnostics) == 0;
+}
+
+func hir_baseline_ok(module hir.HirModule, expected HirCounts) bool {
+    let result = hirverify.verify(module, hirverify.VerifyMode.Backend);
+    if !accepted_hir(result) {
+        return false;
+    }
+    let now = count_hir(module);
+    return now.foreign_calls == expected.foreign_calls &&
+        now.c_fields == expected.c_fields;
+}
+
+func native_baseline_ok(module nativeir.Module, expected NativeCounts) bool {
+    let result = nativeverify.verify(module);
+    if !accepted_native(result) {
+        return false;
+    }
+    let now = count_native(module);
+    return now.foreign_calls == expected.foreign_calls &&
+        now.c_fields == expected.c_fields &&
+        now.c_ptr_writes == expected.c_ptr_writes;
+}
+
+func finish_hir_case(name string, result hirverify.VerifyResult,
+                     baseline hir.HirModule, expected HirCounts,
+                     passed inout usize, failed inout usize) throws os.Error {
+    let rejected = phase_id(result.state) == 2 &&
+        failure_id(result.failure) == 3 &&
+        !option.is_some(result.value) &&
+        vec.len(result.diagnostics) > 0 &&
+        first_code(result.diagnostics) == "E_IR_INVALID";
+    let baseline_ok = hir_baseline_ok(baseline, expected);
+    if rejected && baseline_ok {
+        passed += 1;
+        io.println("CASE " + name +
+            " rejected=E_IR_INVALID baseline=ok");
+        return;
+    }
+    failed += 1;
+    if !rejected {
+        io.eprintln("FAIL " + name + " expected Internal rejection: state=" +
+            num(usize(phase_id(result.state))) + " failure=" +
+            num(usize(failure_id(result.failure))) + " value=" +
+            option_word(option.is_some(result.value)) +
+            " code=" + first_code(result.diagnostics));
+        print_diagnostics(result.diagnostics);
+    }
+    if !baseline_ok {
+        io.eprintln("FAIL " + name +
+            " untouched legal HIR snapshot did not verify after the case");
+    }
+}
+
+func finish_native_case(name string, result nativeverify.VerifyResult,
+                        baseline nativeir.Module, expected NativeCounts,
+                        passed inout usize, failed inout usize)
+    throws os.Error {
+    let rejected = phase_id(result.state) == 2 &&
+        failure_id(result.failure) == 3 &&
+        !option.is_some(result.value) &&
+        vec.len(result.diagnostics) > 0 &&
+        first_code(result.diagnostics) == "E_IR_INVALID";
+    let baseline_ok = native_baseline_ok(baseline, expected);
+    if rejected && baseline_ok {
+        passed += 1;
+        io.println("CASE " + name +
+            " rejected=E_IR_INVALID baseline=ok");
+        return;
+    }
+    failed += 1;
+    if !rejected {
+        io.eprintln("FAIL " + name + " expected Internal rejection: state=" +
+            num(usize(phase_id(result.state))) + " failure=" +
+            num(usize(failure_id(result.failure))) + " value=" +
+            option_word(option.is_some(result.value)) +
+            " code=" + first_code(result.diagnostics));
+        print_diagnostics(result.diagnostics);
+    }
+    if !baseline_ok {
+        io.eprintln("FAIL " + name +
+            " untouched legal NativeIR snapshot did not verify after the case");
+    }
+}
+
+func find_hir_call(module hir.HirModule) option.Option[usize] {
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        let node = module.nodes[index];
+        switch node.data {
+            case hir.NodeData.Call(call): {
+                switch call.kind {
+                    case hir.CalleeKind.CForeign:
+                        return option.Option[usize].Some(index);
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func find_hir_call_with_args(module hir.HirModule) option.Option[usize] {
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        let node = module.nodes[index];
+        switch node.data {
+            case hir.NodeData.Call(call): {
+                switch call.kind {
+                    case hir.CalleeKind.CForeign: {
+                        if vec.len(call.args) > 0 {
+                            return option.Option[usize].Some(index);
+                        }
+                    }
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func find_hir_c_field(module hir.HirModule) option.Option[usize] {
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        let node = module.nodes[index];
+        switch node.data {
+            case hir.NodeData.CFieldRead(field):
+                return option.Option[usize].Some(index);
+            default: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func find_native_op(module nativeir.Module, op nativeir.Op)
+    option.Option[NativeTarget] {
+    for var function_index usize = 0;
+        function_index < vec.len(module.functions); function_index += 1 {
+        for var block_index usize = 0;
+            block_index < vec.len(module.functions[function_index].blocks);
+            block_index += 1 {
+            let block_value = module.functions[function_index].blocks[block_index];
+            for var instruction_index usize = 0;
+                instruction_index < vec.len(block_value.instructions);
+                instruction_index += 1 {
+                let instruction = block_value.instructions[instruction_index];
+                if nativeir.op_id(instruction.op) == nativeir.op_id(op) {
+                    return option.Option[NativeTarget].Some(NativeTarget(
+                        function: function_index, block: block_index,
+                        instruction: instruction_index));
+                }
+            }
+        }
+    }
+    return option.Option[NativeTarget].None;
+}
+
+func mutate_hir_c_callable(module inout hir.HirModule, index usize) {
+    var node = module.nodes[index];
+    switch node.data {
+        case hir.NodeData.Call(call): {
+            var changed = call;
+            changed.c_callable = option.Option[u32].Some(999999);
+            node.data = hir.NodeData.Call(value: changed);
+        }
+        default: {}
+    }
+    module.nodes[index] = node;
+}
+
+func mutate_hir_signature(module inout hir.HirModule, index usize) {
+    var node = module.nodes[index];
+    switch node.data {
+        case hir.NodeData.Call(call): {
+            var changed = call;
+            changed.signature = 999999;
+            node.data = hir.NodeData.Call(value: changed);
+        }
+        default: {}
+    }
+    module.nodes[index] = node;
+}
+
+func mutate_hir_arg_indices(module inout hir.HirModule, index usize) {
+    var node = module.nodes[index];
+    switch node.data {
+        case hir.NodeData.Call(call): {
+            var changed = call;
+            let argument = changed.args[0];
+            var swapped = argument;
+            swapped.source_index = argument.parameter_index;
+            swapped.parameter_index = 7;
+            changed.args[0] = swapped;
+            node.data = hir.NodeData.Call(value: changed);
+        }
+        default: {}
+    }
+    module.nodes[index] = node;
+}
+
+func mutate_hir_c_field(module inout hir.HirModule, index usize) {
+    var node = module.nodes[index];
+    switch node.data {
+        case hir.NodeData.CFieldRead(field): {
+            var changed = field;
+            changed.field = 999999;
+            node.data = hir.NodeData.CFieldRead(value: changed);
+        }
+        default: {}
+    }
+    module.nodes[index] = node;
+}
+
+func mutate_native_c_callable(module inout nativeir.Module,
+                              target NativeTarget) {
+    module.functions[target.function].blocks[target.block].instructions[target.instruction].c_callable = option.Option[u32].Some(999999);
+}
+
+func mutate_native_origin(module inout nativeir.Module, target NativeTarget) {
+    module.functions[target.function].blocks[target.block].instructions[target.instruction].origin = option.Option[usize].None;
+}
+
+func mutate_native_c_field(module inout nativeir.Module,
+                           target NativeTarget) {
+    module.functions[target.function].blocks[target.block].instructions[target.instruction].c_field = 999999;
+}
+
+func run_hir_case(mutation HirMutation,
+                  verified hirverify.VerifiedHirModule,
+                  baseline hir.HirModule, expected HirCounts,
+                  passed inout usize, failed inout usize) throws os.Error {
+    let name = hir_mutation_name(mutation);
+    switch fresh_hir(verified) {
+        case option.Option.None: {
+            failed += 1;
+            io.eprintln("FAIL " + name + " fresh HIR snapshot failed");
+        }
+        case option.Option.Some(mutant): {
+            var changed = mutant;
+            var target = option.Option[usize].None;
+            switch mutation {
+                case HirMutation.ArgIndices:
+                    target = find_hir_call_with_args(changed);
+                case HirMutation.CField:
+                    target = find_hir_c_field(changed);
+                default:
+                    target = find_hir_call(changed);
+            }
+            switch target {
+                case option.Option.None: {
+                    failed += 1;
+                    io.eprintln("FAIL " + name + " target_not_found");
+                }
+                case option.Option.Some(index): {
+                    switch mutation {
+                        case HirMutation.CCallable:
+                            mutate_hir_c_callable(inout changed, index);
+                        case HirMutation.SignatureTypeId:
+                            mutate_hir_signature(inout changed, index);
+                        case HirMutation.ArgIndices:
+                            mutate_hir_arg_indices(inout changed, index);
+                        case HirMutation.CField:
+                            mutate_hir_c_field(inout changed, index);
+                    }
+                    finish_hir_case(name,
+                        hirverify.verify(changed, hirverify.VerifyMode.Backend),
+                        baseline, expected, inout passed, inout failed);
+                }
+            }
+        }
+    }
+}
+
+func run_native_case(mutation NativeMutation,
+                     built nativeverify.VerifiedModule,
+                     baseline nativeir.Module, expected NativeCounts,
+                     passed inout usize, failed inout usize) throws os.Error {
+    let name = native_mutation_name(mutation);
+    switch fresh_native(built) {
+        case option.Option.None: {
+            failed += 1;
+            io.eprintln("FAIL " + name + " fresh NativeIR snapshot failed");
+        }
+        case option.Option.Some(mutant): {
+            var changed = mutant;
+            var operation = nativeir.Op.ForeignCall;
+            switch mutation {
+                case NativeMutation.CField:
+                    operation = nativeir.Op.CFieldRead;
+                case NativeMutation.OriginCPtrWrite:
+                    operation = nativeir.Op.CPtrWrite;
+                default: {}
+            }
+            switch find_native_op(changed, operation) {
+                case option.Option.None: {
+                    failed += 1;
+                    io.eprintln("FAIL " + name + " target_not_found");
+                }
+                case option.Option.Some(found): {
+                    switch mutation {
+                        case NativeMutation.CCallable:
+                            mutate_native_c_callable(inout changed, found);
+                        case NativeMutation.CField:
+                            mutate_native_c_field(inout changed, found);
+                        default:
+                            mutate_native_origin(inout changed, found);
+                    }
+                    finish_native_case(name, nativeverify.verify(changed),
+                        baseline, expected, inout passed, inout failed);
+                }
+            }
+        }
+    }
+}
+
+func run_pipeline(verified hirverify.VerifiedHirModule) i32 throws os.Error {
+    var passed usize = 0;
+    var failed usize = 0;
+    var baseline = empty_hir();
+    try {
+        baseline = hirverify.snapshot(verified);
+    } catch error model.SupportError {
+        io.eprintln("FAIL legal HIR snapshot failed");
+        return 1;
+    }
+    let expected = count_hir(baseline);
+    io.println("COVERAGE HIR foreign_calls=" + num(expected.foreign_calls) +
+        " c_fields=" + num(expected.c_fields));
+    if expected.foreign_calls == 0 || expected.c_fields == 0 {
+        io.eprintln("FAIL legal HIR lacks C foreign call/field coverage");
+        return 1;
+    }
+    if !accepted_hir(hirverify.verify(baseline,
+            hirverify.VerifyMode.Backend)) {
+        io.eprintln("FAIL legal HIR did not verify");
+        return 1;
+    }
+    io.println("BASELINE HIR legal");
+
+    run_hir_case(HirMutation.CCallable, verified, baseline, expected,
+        inout passed, inout failed);
+    run_hir_case(HirMutation.SignatureTypeId, verified, baseline, expected,
+        inout passed, inout failed);
+    run_hir_case(HirMutation.ArgIndices, verified, baseline, expected,
+        inout passed, inout failed);
+    run_hir_case(HirMutation.CField, verified, baseline, expected,
+        inout passed, inout failed);
+
+    let lowered = nativelower.lower(verified);
+    switch lowered.value {
+        case option.Option.None: {
+            failed += 1;
+            io.eprintln("FAIL nativelower.lower did not publish a CFG");
+            print_diagnostics(lowered.diagnostics);
+        }
+        case option.Option.Some(built): {
+            var cfg = nativeir.empty_module(empty_hir());
+            try {
+                cfg = nativeverify.snapshot(built);
+            } catch error model.SupportError {
+                io.eprintln("FAIL legal NativeIR snapshot failed");
+                return 1;
+            }
+            let native_expected = count_native(cfg);
+            io.println("COVERAGE NativeIR foreign_calls=" +
+                num(native_expected.foreign_calls) + " c_fields=" +
+                num(native_expected.c_fields) + " c_ptr_writes=" +
+                num(native_expected.c_ptr_writes));
+            if native_expected.foreign_calls == 0 ||
+               native_expected.c_fields == 0 ||
+               native_expected.c_ptr_writes == 0 {
+                io.eprintln("FAIL legal NativeIR lacks C call/field/pointer-write coverage");
+                return 1;
+            }
+            if !accepted_native(nativeverify.verify(cfg)) {
+                io.eprintln("FAIL legal NativeIR did not verify");
+                return 1;
+            }
+            io.println("BASELINE NativeIR legal");
+
+            run_native_case(NativeMutation.CCallable, built, cfg,
+                native_expected, inout passed, inout failed);
+            run_native_case(NativeMutation.OriginForeignCall, built, cfg,
+                native_expected, inout passed, inout failed);
+            run_native_case(NativeMutation.CField, built, cfg,
+                native_expected, inout passed, inout failed);
+            run_native_case(NativeMutation.OriginCPtrWrite, built, cfg,
+                native_expected, inout passed, inout failed);
+        }
+    }
+
+    io.println("TOTAL " + num(passed) + "passed " + num(failed) + "failed");
+    if failed > 0 || passed != 8 {
+        return 1;
+    }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 2 {
+        io.eprintln("usage: cffi-forged-driver MANIFEST [STDLIB_ROOT]");
+        return 2;
+    }
+    let manifest = args[1];
+    var std_root = option.Option[string].None;
+    if vec.len(args) >= 3 {
+        std_root = option.Option[string].Some(args[2]);
+    }
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: manifest,
+        std_source_root: std_root,
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value {
+        print_diagnostics(loaded.diagnostics);
+        io.eprintln("project load failed");
+        return 1;
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value {
+        print_diagnostics(resolved.diagnostics);
+        io.eprintln("resolve failed");
+        return 1;
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None,
+        hirverify.VerifyMode.Backend);
+    switch checked.value {
+        case option.Option.None: {
+            print_diagnostics(checked.diagnostics);
+            io.eprintln("HIR verification did not publish a value");
+            return 1;
+        }
+        case option.Option.Some(verified):
+            return run_pipeline(verified);
+    }
+}

@@ -1,0 +1,336 @@
+// Test-only same-package probe for the private needs_drop cache.
+//
+// The runner stages this file inside a private copy of the real hirverify
+// package.  It calls the production make_verifier/classify_needs_drop and the
+// real valueops.classify_value path; it does not replace either with a test
+// model and it does not add a public product entry point.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/os" as os;
+import "std/time" as time;
+import "std/vec" as vec;
+
+pub struct NeedsDropBench {
+    pub trial usize;
+    pub cached_ns i64;
+    pub uncached_ns i64;
+    pub queries usize;
+    pub cached_sum u64;
+    pub uncached_sum u64;
+    pub mismatches usize;
+}
+
+pub struct NeedsDropCacheResult {
+    pub checks usize;
+    pub failures usize;
+    pub failed Vec[string];
+    pub benches Vec[NeedsDropBench];
+}
+
+struct NeedsDropProbe {
+    checks usize;
+    failures usize;
+    failed Vec[string];
+}
+
+func needs_drop_check(t inout NeedsDropProbe, ok bool, label string) {
+    t.checks += 1;
+    if !ok {
+        t.failures += 1;
+        vec.push(t.failed, label);
+    }
+}
+
+func needs_drop_intern(ctx inout types.Context, value model.Type) usize
+    throws Invalid {
+    try {
+        return types.intern(inout ctx, value);
+    } catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message): fail(message);
+        }
+        return 0;
+    }
+}
+
+func needs_drop_module_with_context(ctx types.Context) hir.HirModule {
+    let resolved = model.ResolvedProject(
+        project: model.empty_project(), symbols: [], occurrences: [],
+        deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = ctx;
+    return module;
+}
+
+func needs_drop_context_one(kind model.TypeKind) types.Context
+    throws Invalid {
+    var ctx = types.context();
+    let ignored = needs_drop_intern(inout ctx, model.empty_type(kind));
+    return ctx;
+}
+
+func needs_drop_module_one(kind model.TypeKind) hir.HirModule
+    throws Invalid {
+    return needs_drop_module_with_context(needs_drop_context_one(kind));
+}
+
+func needs_drop_failure(state inout Verifier, id usize) string {
+    try {
+        let ignored = classify_needs_drop(inout state, id);
+        return "";
+    } catch error Invalid {
+        return error.message;
+    }
+}
+
+func needs_drop_uncached(module hir.HirModule, id usize) bool
+    throws Invalid {
+    try {
+        return valueops.classify_value(module, id).needs_drop;
+    } catch error model.SupportError {
+        support_error(error);
+        return false;
+    }
+}
+
+func needs_drop_any_known(values Vec[bool]) bool {
+    for value in values {
+        if value { return true; }
+    }
+    return false;
+}
+
+func needs_drop_monotonic() os.Timespec throws Invalid {
+    try {
+        return time.monotonic();
+    } catch error os.Error {
+        fail("monotonic clock unavailable");
+        return os.Timespec(seconds: 0, nanoseconds: 0);
+    }
+}
+
+func needs_drop_elapsed(start os.Timespec, finish os.Timespec) i64 {
+    return (finish.seconds - start.seconds) * 1000000000 +
+        (finish.nanoseconds - start.nanoseconds);
+}
+
+func needs_drop_direct_tests(t inout NeedsDropProbe) throws Invalid {
+    var false_state = make_verifier(needs_drop_module_one(model.TypeKind.Unit));
+    let false_first = classify_needs_drop(inout false_state, 1);
+    needs_drop_check(inout t, !false_first, "false first result");
+    needs_drop_check(inout t, vec.len(false_state.drop_known) == 1,
+        "false cache size");
+    needs_drop_check(inout t, false_state.drop_known[0], "false known bit");
+    needs_drop_check(inout t, !false_state.drop_result[0], "false result bit");
+    let false_second = classify_needs_drop(inout false_state, 1);
+    needs_drop_check(inout t, !false_second, "false second result");
+
+    var true_state = make_verifier(needs_drop_module_one(model.TypeKind.String));
+    let true_first = classify_needs_drop(inout true_state, 1);
+    needs_drop_check(inout t, true_first, "true first result");
+    needs_drop_check(inout t, true_state.drop_known[0], "true known bit");
+    needs_drop_check(inout t, true_state.drop_result[0], "true result bit");
+    let true_second = classify_needs_drop(inout true_state, 1);
+    needs_drop_check(inout t, true_second, "true second result");
+
+    var invalid_state = make_verifier(needs_drop_module_one(model.TypeKind.Unit));
+    let invalid_len = vec.len(invalid_state.drop_known);
+    let zero_first = needs_drop_failure(inout invalid_state, 0);
+    let zero_second = needs_drop_failure(inout invalid_state, 0);
+    let above_first = needs_drop_failure(inout invalid_state, invalid_len + 1);
+    let above_second = needs_drop_failure(inout invalid_state, invalid_len + 1);
+    let huge usize = 18446744073709551615;
+    let huge_first = needs_drop_failure(inout invalid_state, huge);
+    let huge_second = needs_drop_failure(inout invalid_state, huge);
+    needs_drop_check(inout t, zero_first != "" && zero_first == zero_second,
+        "id 0 repeated failure text");
+    needs_drop_check(inout t, above_first != "" && above_first == above_second,
+        "id size+1 repeated failure text");
+    needs_drop_check(inout t, huge_first != "" && huge_first == huge_second,
+        "huge id repeated failure text");
+    needs_drop_check(inout t, zero_first == above_first &&
+        above_first == huge_first, "invalid id error text stable");
+    needs_drop_check(inout t, vec.len(invalid_state.drop_known) == invalid_len,
+        "invalid id does not resize cache");
+    needs_drop_check(inout t, !needs_drop_any_known(invalid_state.drop_known),
+        "invalid id not cached");
+
+    let left_module = needs_drop_module_one(model.TypeKind.Unit);
+    let right_module = needs_drop_module_one(model.TypeKind.String);
+    var left = make_verifier(left_module);
+    var right = make_verifier(right_module);
+    for var round usize = 0; round < 3; round += 1 {
+        let left_value = classify_needs_drop(inout left, 1);
+        if round == 0 {
+            needs_drop_check(inout t, !right.drop_known[0],
+                "independent verifier not warmed by peer");
+        }
+        let right_value = classify_needs_drop(inout right, 1);
+        needs_drop_check(inout t, !left_value && right_value,
+            "alternating module results");
+        needs_drop_check(inout t, !left.drop_result[0] &&
+            right.drop_result[0], "alternating cache bits");
+    }
+
+    var shared = make_verifier(needs_drop_module_one(model.TypeKind.String));
+    let shared_first = classify_needs_drop(inout shared, 1);
+    var alias = shared;
+    needs_drop_check(inout t, shared_first && alias.drop_known[0] &&
+        alias.drop_result[0], "same module alias sees cache");
+    let alias_value = classify_needs_drop(inout alias, 1);
+    needs_drop_check(inout t, alias_value, "same module alias result");
+    needs_drop_check(inout t, shared.drop_known[0] &&
+        shared.drop_result[0], "same module primary cache remains");
+
+    var mutable = needs_drop_module_one(model.TypeKind.Unit);
+    var old_state = make_verifier(mutable);
+    let old_value = classify_needs_drop(inout old_state, 1);
+    mutable.types = needs_drop_context_one(model.TypeKind.String);
+    var fresh_state = make_verifier(mutable);
+    let fresh_value = classify_needs_drop(inout fresh_state, 1);
+    needs_drop_check(inout t, !old_value,
+        "modified module old verifier value");
+    needs_drop_check(inout t, fresh_value,
+        "modified module fresh verifier value");
+    needs_drop_check(inout t, !old_state.drop_result[0] &&
+        fresh_state.drop_result[0], "modified module cache bits");
+    needs_drop_check(inout t, vec.len(old_state.drop_known) == 1 &&
+        vec.len(fresh_state.drop_known) == 1, "modified module cache sizes");
+}
+
+func needs_drop_bench_scalar(ctx inout types.Context, kind model.TypeKind,
+                             bits u32) usize throws Invalid {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    return needs_drop_intern(inout ctx, value);
+}
+
+func needs_drop_bench_module() hir.HirModule throws Invalid {
+    var ctx = types.context();
+    let scalars = vec.empty[usize]();
+    vec.push(scalars, needs_drop_intern(inout ctx,
+        model.empty_type(model.TypeKind.Unit)));
+    vec.push(scalars, needs_drop_intern(inout ctx,
+        model.empty_type(model.TypeKind.Bool)));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.SignedInt, 8));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.SignedInt, 16));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.SignedInt, 32));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.SignedInt, 64));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.UnsignedInt, 8));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.UnsignedInt, 16));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.UnsignedInt, 32));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.UnsignedInt, 64));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.Float, 32));
+    vec.push(scalars, needs_drop_bench_scalar(inout ctx,
+        model.TypeKind.Float, 64));
+    vec.push(scalars, needs_drop_intern(inout ctx,
+        model.empty_type(model.TypeKind.Isize)));
+    vec.push(scalars, needs_drop_intern(inout ctx,
+        model.empty_type(model.TypeKind.Usize)));
+    vec.push(scalars, needs_drop_intern(inout ctx,
+        model.empty_type(model.TypeKind.String)));
+    for scalar in scalars {
+        var container = model.empty_type(model.TypeKind.Vec);
+        container.type_args = [scalar];
+        let ignored = needs_drop_intern(inout ctx, container);
+    }
+    var slice_unit = model.empty_type(model.TypeKind.Slice);
+    slice_unit.type_args = [scalars[0]];
+    let ignored_unit = needs_drop_intern(inout ctx, slice_unit);
+    var slice_bool = model.empty_type(model.TypeKind.Slice);
+    slice_bool.type_args = [scalars[1]];
+    let ignored_bool = needs_drop_intern(inout ctx, slice_bool);
+    return needs_drop_module_with_context(ctx);
+}
+
+func needs_drop_bench(t inout NeedsDropProbe) Vec[NeedsDropBench]
+    throws Invalid {
+    let module = needs_drop_bench_module();
+    let ids usize = 32;
+    let passes usize = 64;
+    let queries = ids * passes;
+    let benches = vec.empty[NeedsDropBench]();
+    for var trial usize = 0; trial < 3; trial += 1 {
+        var cached_state = make_verifier(module);
+        var expected_sum u64 = 0;
+        var mismatches usize = 0;
+        for var id usize = 1; id <= ids; id += 1 {
+            let cached = classify_needs_drop(inout cached_state, id);
+            let actual = needs_drop_uncached(module, id);
+            if cached != actual { mismatches += 1; }
+            if actual { expected_sum += 1; }
+        }
+        var cached_sum u64 = 0;
+        var start = needs_drop_monotonic();
+        for var pass usize = 0; pass < passes; pass += 1 {
+            for var id usize = 1; id <= ids; id += 1 {
+                if classify_needs_drop(inout cached_state, id) {
+                    cached_sum += 1;
+                }
+            }
+        }
+        var finish = needs_drop_monotonic();
+        let cached_ns = needs_drop_elapsed(start, finish);
+        var uncached_sum u64 = 0;
+        start = needs_drop_monotonic();
+        for var pass usize = 0; pass < passes; pass += 1 {
+            for var id usize = 1; id <= ids; id += 1 {
+                if needs_drop_uncached(module, id) {
+                    uncached_sum += 1;
+                }
+            }
+        }
+        finish = needs_drop_monotonic();
+        let uncached_ns = needs_drop_elapsed(start, finish);
+        let expected_total = expected_sum * u64(passes);
+        needs_drop_check(inout t, mismatches == 0,
+            "bench warm results match");
+        needs_drop_check(inout t, cached_ns > 0, "bench cached ns positive");
+        needs_drop_check(inout t, uncached_ns > 0,
+            "bench uncached ns positive");
+        needs_drop_check(inout t, cached_sum == uncached_sum &&
+            cached_sum == expected_total, "bench result checksum");
+        vec.push(benches, NeedsDropBench(trial: trial, cached_ns: cached_ns,
+            uncached_ns: uncached_ns, queries: queries,
+            cached_sum: cached_sum, uncached_sum: uncached_sum,
+            mismatches: mismatches));
+    }
+    return benches;
+}
+
+pub func needs_drop_cache_probe_compare(left model.NodeRef,
+                                        right model.NodeRef) bool {
+    return source_ref_compare(left, right) == 0;
+}
+
+pub func needs_drop_cache_probe() NeedsDropCacheResult {
+    var t = NeedsDropProbe(checks: 0, failures: 0, failed: vec.empty[string]());
+    var benches = vec.empty[NeedsDropBench]();
+    try {
+        needs_drop_direct_tests(inout t);
+    } catch error Invalid {
+        needs_drop_check(inout t, false,
+            "direct probe error: " + error.message);
+    }
+    try {
+        benches = needs_drop_bench(inout t);
+    } catch error Invalid {
+        needs_drop_check(inout t, false, "bench probe error: " + error.message);
+    }
+    return NeedsDropCacheResult(checks: t.checks, failures: t.failures,
+        failed: t.failed, benches: benches);
+}

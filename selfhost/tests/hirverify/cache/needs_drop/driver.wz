@@ -1,0 +1,242 @@
+package app;
+
+// Focused component driver for the private per-Verifier needs_drop bool cache.
+// It loads real Source through project.load -> resolve -> sema.check_types,
+// verifies the published HIR repeatedly and alternately, runs the same-package
+// cache probe, and requires warm verification not to hide HIR tampering.
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/time" as time;
+import "std/vec" as vec;
+
+struct Loaded {
+    label string;
+    module hir.HirModule;
+}
+
+func complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func flag(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func first_code(diagnostics Vec[model.Diagnostic]) string {
+    if vec.len(diagnostics) == 0 { return "none"; }
+    return diagnostics[0].code;
+}
+
+func empty_module() hir.HirModule {
+    return hir.empty_module(model.ResolvedProject(
+        project: model.empty_project(), symbols: [], occurrences: [],
+        deferred_members: [], self_parameters: []), 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}
+
+func check_key_identity() bool {
+    let base = model.NodeRef(module: 1, file: 2, node: 3);
+    let other_module = model.NodeRef(module: 2, file: 2, node: 3);
+    let other_file = model.NodeRef(module: 1, file: 3, node: 3);
+    let other_node = model.NodeRef(module: 1, file: 2, node: 4);
+    return hirverify.needs_drop_cache_probe_compare(base, base) &&
+        !hirverify.needs_drop_cache_probe_compare(base, other_module) &&
+        !hirverify.needs_drop_cache_probe_compare(base, other_file) &&
+        !hirverify.needs_drop_cache_probe_compare(base, other_node);
+}
+
+func load_one(manifest string, std_root string, label string)
+    option.Option[Loaded] throws os.Error {
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: manifest,
+        std_source_root: option.Option[string].Some(std_root),
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value {
+        io.eprintln(label + ": project load failed");
+        return option.Option[Loaded].None;
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value {
+        io.eprintln(label + ": resolve failed");
+        return option.Option[Loaded].None;
+    }
+    let typed = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    if !typed.has_value || !complete(typed.state) {
+        io.eprintln(label + ": check failed " +
+            strconv.format_u64(u64(vec.len(typed.diagnostics))));
+        for diagnostic in typed.diagnostics {
+            io.eprintln(diagnostic.code + ":" + diagnostic.message);
+        }
+        return option.Option[Loaded].None;
+    }
+    io.println("MODULE " + label + " nodes=" +
+        strconv.format_u64(u64(vec.len(typed.value.nodes))) + " functions=" +
+        strconv.format_u64(u64(vec.len(typed.value.functions))) +
+        " templates=" + strconv.format_u64(u64(vec.len(typed.value.templates))));
+    return option.Option[Loaded].Some(Loaded(label: label,
+        module: typed.value));
+}
+
+func reject_missing_source(value hir.HirModule) bool throws os.Error {
+    var bad = empty_module();
+    try { bad = hirclone.clone_module(value); }
+    catch error model.SupportError { return false; }
+    if vec.len(bad.nodes) == 0 { return false; }
+    bad.nodes[0].source.node.node = 999999;
+    let rejected = hirverify.verify_types(bad);
+    io.println("BAD_SOURCE rejected=" + flag(!rejected.has_value) +
+        " failed=" + flag(!complete(rejected.state)) +
+        " code=" + first_code(rejected.diagnostics));
+    return !complete(rejected.state) && !rejected.has_value &&
+        first_code(rejected.diagnostics) == "E_IR_INVALID";
+}
+
+func tamper_reject(value hir.HirModule, mode u32) bool throws os.Error {
+    var bad = empty_module();
+    var label = "type";
+    if mode == 2 { label = "scope"; }
+    try { bad = hirclone.clone_module(value); }
+    catch error model.SupportError {
+        io.println("TAMPER kind=" + label +
+            " rejected=0 failed=0 code=none");
+        return false;
+    }
+    if vec.len(bad.nodes) == 0 {
+        io.println("TAMPER kind=" + label +
+            " rejected=0 failed=0 code=none");
+        return false;
+    }
+    if mode == 1 {
+        bad.nodes[0].type_id = types.size(value.types) + 1;
+    } else {
+        bad.nodes[0].scope = vec.len(bad.scopes);
+    }
+    let rejected = hirverify.verify_types(bad);
+    io.println("TAMPER kind=" + label +
+        " rejected=" + flag(!rejected.has_value) +
+        " failed=" + flag(!complete(rejected.state)) +
+        " code=" + first_code(rejected.diagnostics));
+    return !complete(rejected.state) && !rejected.has_value &&
+        first_code(rejected.diagnostics) == "E_IR_INVALID";
+}
+
+func warm_module(value hir.HirModule) bool throws os.Error {
+    for var count usize = 0; count < 2; count += 1 {
+        let checked = hirverify.verify_types(value);
+        if !complete(checked.state) || !checked.has_value {
+            io.println("WARM verified=0 code=" +
+                first_code(checked.diagnostics));
+            return false;
+        }
+    }
+    io.println("WARM verified=2");
+    return true;
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 4 || (vec.len(args) - 2) % 2 != 0 {
+        io.eprintln("usage: program ITERATIONS MANIFEST STD_ROOT [MANIFEST STD_ROOT ...]");
+        return 2;
+    }
+    var iterations usize = 0;
+    try { iterations = usize(strconv.parse_u64(args[1])); }
+    catch error strconv.Error { return 2; }
+    if iterations == 0 { return 2; }
+    let loaded_values = vec.empty[Loaded]();
+    var index usize = 2;
+    for index + 1 < vec.len(args) {
+        let one = load_one(args[index], args[index + 1], args[index]);
+        switch one {
+            case option.Option.Some(value): vec.push(loaded_values, value);
+            case option.Option.None: return 3;
+        }
+        index += 2;
+    }
+    var checks usize = 1;
+    var failures usize = 0;
+    if !check_key_identity() {
+        io.println("KEY module-file-node failed");
+        io.println("NEEDS_DROP passed=0 failed=1");
+        return 7;
+    }
+    io.println("KEY module-file-node distinct");
+    for value in loaded_values {
+        checks += 1;
+        if !reject_missing_source(value.module) { failures += 1; }
+    }
+    let cache = hirverify.needs_drop_cache_probe();
+    checks += cache.checks;
+    failures += cache.failures;
+    for label in cache.failed {
+        io.println("FAIL " + label);
+    }
+    io.println("CACHE_PROBE passed=" +
+        strconv.format_u64(u64(cache.checks - cache.failures)) +
+        " failed=" + strconv.format_u64(u64(cache.failures)));
+    for bench in cache.benches {
+        io.println("BENCH trial=" + strconv.format_u64(u64(bench.trial)) +
+            " cached_ns=" + strconv.format_i64(bench.cached_ns) +
+            " uncached_ns=" + strconv.format_i64(bench.uncached_ns) +
+            " queries=" + strconv.format_u64(u64(bench.queries)) +
+            " cached_sum=" + strconv.format_u64(bench.cached_sum) +
+            " uncached_sum=" + strconv.format_u64(bench.uncached_sum) +
+            " mismatches=" + strconv.format_u64(u64(bench.mismatches)));
+    }
+    for value in loaded_values {
+        checks += 1;
+        if !warm_module(value.module) { failures += 1; }
+        checks += 1;
+        if !tamper_reject(value.module, 1) { failures += 1; }
+        checks += 1;
+        if !tamper_reject(value.module, 2) { failures += 1; }
+    }
+    let start = time.monotonic();
+    var count usize = 0;
+    var bad usize = 0;
+    for count < iterations {
+        for value in loaded_values {
+            let checked = hirverify.verify_types(value.module);
+            if !complete(checked.state) || !checked.has_value {
+                bad += 1;
+                io.eprintln("REJECTED " + value.label + " code=" +
+                    first_code(checked.diagnostics));
+            }
+        }
+        count += 1;
+    }
+    let finish = time.monotonic();
+    let elapsed = (finish.seconds - start.seconds) * i64(1000000000) +
+        (finish.nanoseconds - start.nanoseconds);
+    let verifies = iterations * vec.len(loaded_values);
+    io.println("ELAPSED_NS " + strconv.format_i64(elapsed));
+    io.println("ITERATIONS " + strconv.format_u64(u64(iterations)) +
+        " MODULES " + strconv.format_u64(u64(vec.len(loaded_values))) +
+        " VERIFIES " + strconv.format_u64(u64(verifies)) +
+        " BAD " + strconv.format_u64(u64(bad)));
+    checks += 1;
+    if bad != 0 { failures += 1; }
+    io.println("NEEDS_DROP passed=" +
+        strconv.format_u64(u64(checks - failures)) +
+        " failed=" + strconv.format_u64(u64(failures)));
+    if failures != 0 { return 5; }
+    return 0;
+}
