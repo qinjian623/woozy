@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
-  "previous_git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
-  "frozen_at": "2026-11-14T04:00:13.440108+00:00",
+  "git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
+  "previous_git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
+  "frozen_at": "2026-11-14T04:08:18.357804+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,8 +31,8 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1330,
-    "manifests": 1010,
+    "tracked_wz": 1331,
+    "manifests": 1011,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
@@ -24181,8 +24181,8 @@
     },
     {
       "path": "tests/python/slice_source/run_slice_source.py",
-      "sha256": "70ce6726221a6cb0bf0d48d36bfa5bdc31f2d4968f69d8099a6d260d6282adb4",
-      "size": 12656,
+      "sha256": "b4def62023fd627d7d0ab9bdffc5c2d2f5f186441b5e388a1af52cfa7f2d7385",
+      "size": 44593,
       "role": "runner_source",
       "assignment": []
     },
@@ -26319,6 +26319,39 @@
       "path": "selfhost/tests/nativeobs/test_controls.py",
       "sha256": "ae4bfa889a947d22affa9f0145911133043debcff8168b1e82454c7f49670b88",
       "size": 4932,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/pythonobs/lang.toml",
+      "sha256": "fc197ff7bac8f976f7bcd89c8a83d150ce9b2f5433bd894c58197db1113b9c02",
+      "size": 131,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/pythonobs/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/pythonobs/src/main.wz",
+      "sha256": "e304169bfbe5de1ba54ca10f4d2be59daefc9093dbd3c81f91241c560638b9bb",
+      "size": 10727,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonobs/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonobs/lang.toml"
+    },
+    {
+      "path": "tests/python/slice_source/runner_controls.py",
+      "sha256": "ec13a21f31f3fa573013759e6a8431675e94f6f5e616e6dca8fff6dcc08e2db4",
+      "size": 11039,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/python/slice_source/test_runner_controls.py",
+      "sha256": "55e608cb35a27207dc76971588b3a98c5632c94e66ff15ba0623362fc7812c37",
+      "size": 3257,
       "role": "runner_source",
       "assignment": []
     }
@@ -84088,6 +84121,25 @@
       "tags": [
         "selfhost"
       ]
+    },
+    {
+      "id": "project:selfhost/tests/pythonobs/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/pythonobs/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "tests/python/slice_source/run_slice_source.py",
+      "runner_status": "component",
+      "reason": "Test-only Python emission observer driver. The Slice runner stages production Wz packages and matching resources, then compares public CLI/API output and observer facts. This requires component driver arguments and is not an ordinary public CLI or main-return-zero case.",
+      "tags": [
+        "selfhost"
+      ]
     }
   ],
   "runners": [
@@ -85208,8 +85260,8 @@
     },
     {
       "path": "tests/python/slice_source/run_slice_source.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Slice public CLI/Wz API observation component runner, including byte comparisons and unchanged GC/ownership observers; not an ordinary public CLI or full Python-family conformance claim."
     },
     {
       "path": "tests/python/string_cases.py",
@@ -85335,11 +85387,21 @@
       "path": "selfhost/tests/nativeobs/test_controls.py",
       "status": "component",
       "reason": "Pure-Python Native observation timeout/process rejection controls; no Woozy compile or program execution."
+    },
+    {
+      "path": "tests/python/slice_source/runner_controls.py",
+      "status": "component",
+      "reason": "Slice runner helper rejection controls, including optional real driver I/O checks; not a public CLI corpus case."
+    },
+    {
+      "path": "tests/python/slice_source/test_runner_controls.py",
+      "status": "component",
+      "reason": "Pure-Python tests of strict process fields, I/O-result validation and finite timeouts; no compiler, driver, observer or program execution."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
+    "to_git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85536,7 +85598,11 @@
       "selfhost/tests/nativeobs/lang.toml",
       "selfhost/tests/nativeobs/main.wz",
       "selfhost/tests/nativeobs/run.py",
-      "selfhost/tests/nativeobs/test_controls.py"
+      "selfhost/tests/nativeobs/test_controls.py",
+      "selfhost/tests/pythonobs/lang.toml",
+      "selfhost/tests/pythonobs/src/main.wz",
+      "tests/python/slice_source/runner_controls.py",
+      "tests/python/slice_source/test_runner_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -85762,10 +85828,20 @@
         "commit": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
         "accepted_correction_prefix": "88f1c67d",
         "review": "checks/SH12e-channel-correction-Root-review-20261114/review.json"
+      },
+      {
+        "path": "tests/python/slice_source/run_slice_source.py",
+        "old_sha256": "70ce6726221a6cb0bf0d48d36bfa5bdc31f2d4968f69d8099a6d260d6282adb4",
+        "old_size": 12656,
+        "new_sha256": "b4def62023fd627d7d0ab9bdffc5c2d2f5f186441b5e388a1af52cfa7f2d7385",
+        "new_size": 44593,
+        "commit": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
+        "acceptance": "Root independent Pythonobs amendment; original Bridge98 delivery remains rejected/rev4",
+        "review": "checks/SH12f-pythonobs-root-amendment-20261114/independent-review.md"
       }
     ],
-    "new_freeze_path_count": 196,
-    "modified_freeze_path_count": 28,
+    "new_freeze_path_count": 200,
+    "modified_freeze_path_count": 29,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -86225,6 +86301,118 @@
       "new_9d11_Channel_cases_tested_in_this_integration": false,
       "compiler_Source116_stdlib_fixtures_gold_unchanged": true,
       "Source_or_18_row_matrix_reexecuted": false,
+      "existing_jobs_operated": false
+    },
+    "pythonobs_component_delta": {
+      "code_commit": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
+      "acceptance": "Root independent private-tree amendment accepted separately",
+      "amendment_tree": "checks/SH12f-pythonobs-root-amendment-20261114/tree",
+      "review": "checks/SH12f-pythonobs-root-amendment-20261114/independent-review.md",
+      "review_sha256": "49831f2901eef6b1c27667489014fdc46020ad1fa7099b8ac8befe1d9b4383d0",
+      "original_bridge_delivery": {
+        "task_prefix": "98",
+        "status": "rejected",
+        "revision": 4,
+        "event": 946826,
+        "parent_ACK": 413,
+        "unrelated_Async_event_946457_not_used": true,
+        "owner_and_original_reports_unchanged": true
+      },
+      "files": {
+        "tests/python/slice_source/run_slice_source.py": {
+          "old_sha256": "70ce6726221a6cb0bf0d48d36bfa5bdc31f2d4968f69d8099a6d260d6282adb4",
+          "old_size": 12656,
+          "new_sha256": "b4def62023fd627d7d0ab9bdffc5c2d2f5f186441b5e388a1af52cfa7f2d7385",
+          "new_size": 44593
+        },
+        "tests/python/slice_source/runner_controls.py": {
+          "old_sha256": null,
+          "old_size": null,
+          "new_sha256": "ec13a21f31f3fa573013759e6a8431675e94f6f5e616e6dca8fff6dcc08e2db4",
+          "new_size": 11039
+        },
+        "tests/python/slice_source/test_runner_controls.py": {
+          "old_sha256": null,
+          "old_size": null,
+          "new_sha256": "55e608cb35a27207dc76971588b3a98c5632c94e66ff15ba0623362fc7812c37",
+          "new_size": 3257
+        },
+        "selfhost/tests/pythonobs/src/main.wz": {
+          "old_sha256": null,
+          "old_size": null,
+          "new_sha256": "e304169bfbe5de1ba54ca10f4d2be59daefc9093dbd3c81f91241c560638b9bb",
+          "new_size": 10727
+        },
+        "selfhost/tests/pythonobs/lang.toml": {
+          "old_sha256": null,
+          "old_size": null,
+          "new_sha256": "fc197ff7bac8f976f7bcd89c8a83d150ce9b2f5433bd894c58197db1113b9c02",
+          "new_size": 131
+        },
+        "selfhost/tests/pythonobs/README.md": {
+          "old_sha256": null,
+          "old_size": null,
+          "new_sha256": "fd1ee4230d4a2d6750bd1669a2ddbd38899f447818fce951bf26caa04f7e349e",
+          "new_size": 2298
+        }
+      },
+      "private_tree_corpus_support_copied": false,
+      "Root_executor_sha256_unchanged": "2d207afb2ed1d5e968a65161d68e2836d1fe4b22ff5664ccd93b4239ee423a1e",
+      "frozen_input_paths_added": [
+        "selfhost/tests/pythonobs/lang.toml",
+        "selfhost/tests/pythonobs/src/main.wz",
+        "tests/python/slice_source/runner_controls.py",
+        "tests/python/slice_source/test_runner_controls.py"
+      ],
+      "frozen_input_path_modified": "tests/python/slice_source/run_slice_source.py",
+      "new_component_runners": [
+        "tests/python/slice_source/runner_controls.py",
+        "tests/python/slice_source/test_runner_controls.py"
+      ],
+      "top_slice_runner_classification": "component",
+      "new_case": "project:selfhost/tests/pythonobs/lang.toml",
+      "new_case_classification": "disabled/compiler_project/component/expected:null; requires staged real Wz emission driver and matching resources, not ordinary main-return-zero",
+      "new_cases": 1,
+      "new_enabled_cases": 0,
+      "old_case_count": 1334,
+      "all_old_cases_fields_and_order_unchanged": true,
+      "old_slice_cases": 56,
+      "old_slice_enabled_cases": 28,
+      "all_56_old_slice_case_fields_unchanged": true,
+      "counts": {
+        "total": 1335,
+        "enabled": 962,
+        "disabled": 373,
+        "required": 319,
+        "files": 2872,
+        "runners": 251
+      },
+      "retained_execution_scope": {
+        "cases": 28,
+        "commands": 84,
+        "compile_exec_traces": 56,
+        "observer_runs": 27,
+        "generated_byte_comparison_pairs": 54,
+        "sealed_build_seconds": 493.72,
+        "original_records": "checks/SH12f-python-slice-single-correction-20261114",
+        "scope": "Existing Slice component records; no new execution during integration or whole Python-family claim"
+      },
+      "Root_amendment_scope": "require_ok requires true int expected exit and strict false/true/false process flags; both I/O controls require exit2, status=error and E_INPUT_IO; control timeout reuses finite_timeout.",
+      "retained_independent_validation": {
+        "record": "checks/SH12f-pythonobs-root-amendment-20261114/independent-actualcontrols.json",
+        "record_sha256": "0fa5b1d7076105a42c9e4843eefc87f9b57c274111ae49c5c88707610248014c",
+        "pure_Python_test_methods": 3,
+        "existing_real_IO_records_rechecked": 2,
+        "status": "passed; retained independent record, not rerun during integration",
+        "no_compiler_driver_observer_or_program_execution": true
+      },
+      "old_POSITIVE_PANIC_NEGATIVE_EXPECTED_constants_AST_equal": true,
+      "observer_Source_and_gold_unchanged": true,
+      "compiler_Source116_and_stdlib_unchanged": true,
+      "Source_production_changed": false,
+      "driver_or_compiler_rebuilt": false,
+      "old_reference_or_28_case_matrix_reexecuted": false,
+      "entire_Slice_family_newly_enabled_or_claimed": false,
       "existing_jobs_operated": false
     }
   }
