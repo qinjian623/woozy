@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "47b9b17c2c99c8a5460673dc9b91a4624b5ea41d",
-  "previous_git_head": "2243d30bb6b0e450a2a36305bf040a33d6eec9d9",
-  "frozen_at": "2026-11-14T08:59:30.770163+00:00",
+  "git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
+  "previous_git_head": "47b9b17c2c99c8a5460673dc9b91a4624b5ea41d",
+  "frozen_at": "2026-11-14T09:08:14.069400+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -15640,8 +15640,8 @@
     },
     {
       "path": "tests/native/c_retained_capturing/run_capturing.py",
-      "sha256": "52806b08d827f92cd297e54a7ae59b91f0d4cd5c91e5de01d9d43280d00e0572",
-      "size": 21809,
+      "sha256": "19780c9d1435c6701fa03a57c620b085eeb11b6317de016f70a31c7e55d4f448",
+      "size": 87724,
       "role": "runner_source",
       "assignment": []
     },
@@ -26384,6 +26384,13 @@
       "path": "tests/python/string_binding_controls.py",
       "sha256": "ee93bcc9ce24866e55ec249c3f5a539826ba0269a55d54a6a2d02affb15b26b6",
       "size": 4913,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/c_retained_capturing/test_controls.py",
+      "sha256": "fe80a9bedc5e56e1d3eaebdb39a2946936cb08b0fbe7ac14afad6d8ecd8d4c74",
+      "size": 21722,
       "role": "runner_source",
       "assignment": []
     }
@@ -43399,10 +43406,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/mode/lang.toml",
@@ -43423,20 +43431,20 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/python_static_unsupported/lang.toml",
       "kind": "project",
-      "operation": "build_native",
+      "operation": "check",
       "operations": [
-        "check",
-        "build_native"
+        "check"
       ],
-      "backend": "native",
+      "backend": "python",
       "manifest": "tests/native/c_retained_capturing/negative/python_static_unsupported/lang.toml",
       "expected": null,
       "run_expectation": {
@@ -43447,20 +43455,20 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution. This is the original check-only Python rejection, not a Python build/program.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/python_unsupported/lang.toml",
       "kind": "project",
-      "operation": "build_native",
+      "operation": "check",
       "operations": [
-        "check",
-        "build_native"
+        "check"
       ],
-      "backend": "native",
+      "backend": "python",
       "manifest": "tests/native/c_retained_capturing/negative/python_unsupported/lang.toml",
       "expected": null,
       "run_expectation": {
@@ -43471,10 +43479,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution. This is the original check-only Python rejection, not a Python build/program.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/signature/lang.toml",
@@ -43495,10 +43504,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/static_capture/lang.toml",
@@ -43519,10 +43529,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/throws/lang.toml",
@@ -43543,10 +43554,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/c_thread/lang.toml",
@@ -43567,10 +43579,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/captures_escape/lang.toml",
@@ -43591,10 +43604,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/cleanup_observation/lang.toml",
@@ -43615,10 +43629,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/close_modes/lang.toml",
@@ -43639,10 +43654,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/failure_cleanup/lang.toml",
@@ -43663,10 +43679,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/gc_cleanup/lang.toml",
@@ -43687,10 +43704,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/move_capture/lang.toml",
@@ -43711,10 +43729,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/probe/lang.toml",
@@ -43735,10 +43754,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/returns_and_units/lang.toml",
@@ -43759,10 +43779,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/sync_register/lang.toml",
@@ -43783,10 +43804,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/two_resource_borrow/lang.toml",
@@ -43807,10 +43829,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/typed_errors/lang.toml",
@@ -43831,10 +43854,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_capturing/projects/userdata_positions/lang.toml",
@@ -43855,10 +43879,11 @@
       "enabled": false,
       "runner": "tests/native/c_retained_capturing/run_capturing.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "Retained capturing-C callback component keeps the13-project O0/O2 Source assertions, seven rejections, two no-output builds, exact private-library lifecycle load, hosted symbols and freestanding ELF checks. Ordinary corpus fields do not express the complete lifecycle/Weak/cleanup assertions; keep this existing row disabled/required. Historical main140 uses9d11/727b; the corrected runner has only pure110 controls, with no new da69 or72dc Source execution.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json; checks/SH14-c-retained-capturing-single-correction-20261114.json/proposal; checks/SH14-c-retained-capturing-public-records-20261114/proposal-{candidate,reference}.json and {candidate,reference}/run/report.json. Retained main140/280raw/140trace; separate4+43+70+7+11 selected routes total275, not whole-session count. OriginalSource/binding/gold/C/C++/header/lifecycle/CMake unchanged; C-only lifecycle does not test Woozy typed-error unwinding."
     },
     {
       "id": "project:tests/native/c_retained_static/negative/capturing/lang.toml",
@@ -85518,8 +85543,8 @@
     },
     {
       "path": "tests/native/c_retained_capturing/run_capturing.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Dedicated capturing-C callback component requires the original Source tests plus C-only lifecycle, exact shared-library load, runtime symbols and core ELF observations. The public compiler routes are recorded separately by role; all20 existing corpus rows remain disabled/required because ordinary schema does not express the full component assertions."
     },
     {
       "path": "tests/native/c_retained_static/run_retained_static.py",
@@ -86285,11 +86310,16 @@
       "path": "tests/python/string_binding_controls.py",
       "status": "component",
       "reason": "Pure Python controls for the string-binding runner: strict process flags, published real symbol metadata, generated-byte comparison before host copy and refusal to overwrite evidence. No Source or compiler execution."
+    },
+    {
+      "path": "tests/native/c_retained_capturing/test_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for capturing-C callback evidence: strict process/JSON rejection, loader full-path match, actual auto/require routing, proposal fields and fixed budgets. External process and network calls are blocked; no compiler, C, LLVM or program execution."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "47b9b17c2c99c8a5460673dc9b91a4624b5ea41d",
+    "to_git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86494,7 +86524,8 @@
       "tests/bootstrap/readiness/test_runner_controls.py",
       "tests/python/weak_source/runner_controls.py",
       "tests/python/weak_source/test_runner_controls.py",
-      "tests/python/string_binding_controls.py"
+      "tests/python/string_binding_controls.py",
+      "tests/native/c_retained_capturing/test_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -86847,10 +86878,21 @@
         "accepted_task": "1aed3ce2-2daf-4805-b103-b468faea0ee9",
         "acceptance": "String-binding test delivery accepted; ACK951658,parent434, with historical oldSource, timeout and helper-provenance limits retained. No new product Source/API changes.",
         "review": "checks/SH14-string-binding-independent-review-20261114.json"
+      },
+      {
+        "path": "tests/native/c_retained_capturing/run_capturing.py",
+        "old_sha256": "52806b08d827f92cd297e54a7ae59b91f0d4cd5c91e5de01d9d43280d00e0572",
+        "old_size": 21809,
+        "new_sha256": "19780c9d1435c6701fa03a57c620b085eeb11b6317de016f70a31c7e55d4f448",
+        "new_size": 87724,
+        "commit": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
+        "accepted_task_prefix": "bdd262",
+        "acceptance": "Capturing-C callback runner sole correction accepted, ACK952153,parent435; final Root small amendments accepted separately. Historical main140 retained; no new Source/C/LLVM execution.",
+        "review": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json"
       }
     ],
-    "new_freeze_path_count": 204,
-    "modified_freeze_path_count": 38,
+    "new_freeze_path_count": 205,
+    "modified_freeze_path_count": 39,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -88490,6 +88532,125 @@
         "required": 305,
         "files": 2876,
         "runners": 255
+      }
+    },
+    "C_capturing_Root_amended_test_integration": {
+      "base_commit": "4e13be0a40b46a0d193de0b14f07abbeb332d751",
+      "code_commit": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
+      "accepted_task_prefix": "bdd262",
+      "ACK_event": 952153,
+      "ACK_parent": 435,
+      "Root_amended_files_used": true,
+      "worker_original_files_not_copied": true,
+      "Root_amendment_review": "/home/qin/Work/language-dev-20261103/checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json",
+      "Root_amendment_review_sha256": "430bc7b02593b65e1d3a39ff084a1e7a611d83387ab8609d8b54bd7e8b0e8256",
+      "original_single_correction_report": "/home/qin/Work/language-dev-20261103/checks/SH14-c-retained-capturing-single-correction-20261114.json",
+      "original_single_correction_report_sha256": "36cf36200238737bb78bc96af99c9210675f8031344b34cf7e98869ad5f21573",
+      "original_independent_review": "/home/qin/Work/language-dev-20261103/checks/SH14-c-retained-capturing-independent-review-20261114.json",
+      "raw_resource_Root_review": "/home/qin/Work/language-dev-20261103/checks/SH14-c-retained-capturing-Root-review-20261114/review.json",
+      "files": [
+        {
+          "path": "tests/native/c_retained_capturing/run_capturing.py",
+          "before_sha256": "52806b08d827f92cd297e54a7ae59b91f0d4cd5c91e5de01d9d43280d00e0572",
+          "before_size": 21809,
+          "HEAD_tracked": true,
+          "after_sha256": "19780c9d1435c6701fa03a57c620b085eeb11b6317de016f70a31c7e55d4f448",
+          "after_size": 87724,
+          "diff_lines": 2773
+        },
+        {
+          "path": "tests/native/c_retained_capturing/test_controls.py",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "fe80a9bedc5e56e1d3eaebdb39a2946936cb08b0fbe7ac14afad6d8ecd8d4c74",
+          "after_size": 21722,
+          "diff_lines": 675
+        },
+        {
+          "path": "tests/native/c_retained_capturing/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "35297d5390b32f5c4f79643bba76e0a625900ffdb1bba3af329d75dae50725e1",
+          "after_size": 11576,
+          "diff_lines": 213
+        }
+      ],
+      "README_new_not_frozen": true,
+      "20_existing_ids": [
+        "project:tests/native/c_retained_capturing/negative/bad_metadata/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/mode/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/python_static_unsupported/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/python_unsupported/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/signature/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/static_capture/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/throws/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/c_thread/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/captures_escape/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/cleanup_observation/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/close_modes/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/failure_cleanup/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/gc_cleanup/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/move_capture/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/probe/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/returns_and_units/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/sync_register/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/two_resource_borrow/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/typed_errors/lang.toml",
+        "project:tests/native/c_retained_capturing/projects/userdata_positions/lang.toml"
+      ],
+      "case_fields_changed_only_reason_evidence_except_two_Python_placeholders": true,
+      "two_Python_check_only_ids": [
+        "project:tests/native/c_retained_capturing/negative/python_static_unsupported/lang.toml",
+        "project:tests/native/c_retained_capturing/negative/python_unsupported/lang.toml"
+      ],
+      "two_Python_backend_python_operation_check_operations_check": true,
+      "all20_disabled_required_original_expected_Source_order_unchanged": true,
+      "other1324cases_exact_including_previously_enabled_core": true,
+      "no_case_append_enable_or_rename": true,
+      "case_runner_status_unchanged": true,
+      "top_level_main_and_new_controls_runners_component": true,
+      "new_control_runner_registered": "tests/native/c_retained_capturing/test_controls.py",
+      "proposal_candidate_sha256": "e9608cf78b367e52ab96a8e89110f4de1c51245ab2bd74cf1b413878898e2955",
+      "proposal_reference_sha256": "7e77880bfcf279dd69a155fc4a6581e4047229d46be9c75ecb63661e89da1e5d",
+      "retained_main_commands": 140,
+      "retained_main_raw_files": 280,
+      "retained_main_traces": 140,
+      "per_role_case_records": 35,
+      "retained_historical936file_map": "c7b89cba27a081988807031e22a61351f6663508d678a17d398ca2f33b5e05da",
+      "historical936files_rehashed_unchanged": true,
+      "selected_historical_routes": {
+        "main": 140,
+        "lifecycle_construction": 4,
+        "missing_fixture_prior_runner_O0": 43,
+        "CMake_like_untraced": 70,
+        "legacy_skip_untraced": 7,
+        "version_probes": 11,
+        "selected_total": 275,
+        "whole_session_total": "not_counted"
+      },
+      "legacy_skip33not_run_retained": true,
+      "C_only_lifecycle_Woozy_typed_error_unwind_claimed": false,
+      "unchanged_typed_errors_Source_retains_its_own_assertions": true,
+      "Root_final_auto_core_skip_only_once_and_README_scope_fix": true,
+      "integration_pure_controls": 110,
+      "integration_pure_controls_failed": [],
+      "pure_control_external_launches": 0,
+      "no_Source_C_CPP_fixture_program_LLVM_network_reruns": true,
+      "historical_candidate": "9d11/Source727b",
+      "new72dc_da69_CLI_result_claimed": false,
+      "current_Source116_count": 116,
+      "current_Source116_map": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+      "product_Source116_stdlib37_fixture_binding_gold_header_C_CPP_lifecycle_CMake_unchanged": true,
+      "no_long_jobs_services_workers_operated": true,
+      "counts": {
+        "cases": 1344,
+        "enabled": 985,
+        "disabled": 359,
+        "required": 305,
+        "files": 2877,
+        "runners": 256
       }
     }
   }
