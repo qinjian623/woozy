@@ -808,6 +808,9 @@ func gather(analysis inout Analysis, id usize, parent option.Option[usize])
             let initializer = node_at(analysis, child_at(node, 0));
             local_add(inout analysis, data.symbol, node.scope,
                 initializer.type_id, model.ParamMode.Move, false);
+            if owned(inout analysis, initializer.type_id) {
+                ids_insert(analysis.enabled, analysis.function.symbol);
+            }
         case option.Option.None: {}
     }
 }

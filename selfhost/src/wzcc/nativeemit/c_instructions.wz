@@ -145,11 +145,12 @@ func c_emit_vec_init(instruction nativeir.Instruction, args Vec[Value],
     // evaluated, so copy each element directly and publish the initialized
     // prefix one element at a time.  The scratch byte for Unit and other
     // zero-sized elements stays zero.  Ownership is already arranged by
-    // NativeIR; no extra retain or drop belongs here.
+    // NativeIR; no extra retain or drop belongs here.  This prefix only writes
+    // stack scratch, element bytes, and the initialized count; it has no
+    // callback or safepoint.  The Vec is not registered until the prefix is
+    // complete, so no critical window is needed here.  This reasoning does not
+    // extend to set/push/resize/clear.
     let data = vec_field(object, 5, "ptr", inout state);
-    // Publish the initialized prefix as one graph-stable interval.  The Vec is
-    // not registered until the prefix is complete.
-    let critical = gc_enter_critical(inout state);
     for var index usize = 0; index < vec.len(args); index += 1 {
         let address = element_storage(element, args[index], inout state);
         var target = data;
@@ -165,7 +166,6 @@ func c_emit_vec_init(instruction nativeir.Instruction, args Vec[Value],
         append("store i64 " + number(index + 1) + ", ptr " + header.reference +
             suffix, inout state);
     }
-    gc_leave_critical(critical, inout state);
     let registered = gc_register_vec(object, element, inout state);
     return object;
 }

@@ -1,0 +1,80 @@
+package app;
+
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/weak" as weak;
+
+// A Node owns a Vec[Node] back edge, so every ring below is a real strong
+// cycle and plain ARC cannot reclaim it.
+struct Node {
+    marker i32;
+    children Vec[Node];
+}
+
+// Returns a freshly constructed, already owned Vec[Node] whose single element
+// points back at the same Vec. The caller receives the only external strong
+// reference; the element's own edge is the second one.
+func make_ring(marker i32) Vec[Node] {
+    var ring Vec[Node] = [Node(marker: marker, children: [])];
+    ring[0] = Node(marker: marker, children: ring);
+    return ring;
+}
+
+// The probe target: one dynamic Vec[Vec[Node]] of length three whose inputs are
+// the just-returned rings. The element stride is one pointer, so the
+// length-three plus pointer-stride signature identifies exactly this fresh
+// object and nothing else in this program.
+func build_rings() Vec[Vec[Node]] {
+    return [make_ring(11), make_ring(22), make_ring(33)];
+}
+
+// The empty strong-edge control: one real allocation and one registration with
+// length == initialized == 0 and no element storage.
+func build_empty() Vec[Vec[Node]] {
+    var spare Vec[Vec[Node]] = [];
+    return spare;
+}
+
+func main() i32 throws os.Error {
+    // Positive reclaim control: this ring is unreachable before the target is
+    // constructed, so a real collection must report at least one candidate.
+    {
+        var dead Vec[Node] = make_ring(99);
+        if dead[0].marker != 99 { os.exit(1); }
+    }
+    var link Weak[Vec[Node]] = weak.empty[Vec[Node]]();
+    {
+        var rings Vec[Vec[Node]] = build_rings();
+        var spare Vec[Vec[Node]] = build_empty();
+        if vec.len(rings) != 3 { os.exit(2); }
+        if vec.len(spare) != 0 { os.exit(3); }
+        if rings[0][0].marker != 11 { os.exit(4); }
+        if rings[1][0].marker != 22 { os.exit(5); }
+        if rings[2][0].marker != 33 { os.exit(6); }
+        if rings[0][0].children[0].marker != 11 { os.exit(7); }
+        if rings[1][0].children[0].marker != 22 { os.exit(8); }
+        if rings[2][0].children[0].marker != 33 { os.exit(9); }
+        link = weak.downgrade[Vec[Node]](rings[1]);
+        switch weak.upgrade(link) {
+        case option.Option.Some(strong):
+            if strong[0].marker != 22 { os.exit(10); }
+        case option.Option.None:
+            os.exit(11);
+        }
+    }
+    // Plain garbage cycles build the existing pressure budget. The three rings
+    // have no external owner now, so this is the real final reclamation and the
+    // Weak below must not be upgradable afterwards.
+    for var i i32 = 0; i < 512; i += 1 {
+        var junk Vec[Node] = [Node(marker: i, children: [])];
+        junk[0] = Node(marker: i + 1, children: junk);
+        if junk[0].children[0].marker != i + 1 { os.exit(12); }
+    }
+    switch weak.upgrade(link) {
+    case option.Option.Some(ignored):
+        os.exit(13);
+    case option.Option.None:
+    }
+    return 0;
+}

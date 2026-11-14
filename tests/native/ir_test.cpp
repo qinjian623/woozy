@@ -1,5 +1,6 @@
 #include "lang/backend/native.hpp"
 #include "lang/sema/check.hpp"
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -238,6 +239,148 @@ int main(int argc, char **argv) {
                 throw std::runtime_error("alternate enum variant missing");
               }
         throw std::runtime_error("enum payload instruction missing");
+      });
+    }
+    // A binding freezes its own owning local even when the initializer is an
+    // inert noncapturing function value. NativeIR must name the binding for
+    // that slot and must not invent a temporary owner for the initializer.
+    const std::string binding_body =
+        "func plain_i32() i32 {return 0;} "
+        "func alternate(flag bool) bool {return flag;} "
+        "func store_fn() i32 {let value func() i32=plain_i32;return 0;} "
+        "func store_lambda() i32 {let value func() i32=func() i32 {return "
+        "7;};return 0;} "
+        "func scalar_only() i32 {let n i32=3;return n-3;} "
+        "func main() i32 {return store_fn()+store_lambda()+scalar_only();}";
+    SourceManager binding_sources;
+    auto binding_source = binding_sources.update(
+        binding_sources.add_file("native-fn-binding.wz"),
+        "package app; " + binding_body);
+    auto binding_tokens = lex(binding_source);
+    require(binding_tokens.success(), "function-binding lex failed");
+    auto binding_ast = parse(*binding_tokens.value);
+    require(binding_ast.success(), "function-binding parse failed");
+    auto binding_project = std::make_shared<modules::Project>();
+    binding_project->backend = "native";
+    binding_project->word_bits = 64;
+    modules::Module binding_decl;
+    binding_decl.id = ModuleId{0};
+    binding_decl.logical_path = "app";
+    binding_decl.files.push_back(
+        std::make_shared<const AstFile>(std::move(*binding_ast.value)));
+    binding_project->modules.push_back(std::move(binding_decl));
+    auto binding_names = modules::resolve_project(binding_project);
+    require(binding_names.success(), "function-binding resolve failed");
+    auto binding_resolved = std::make_shared<const modules::ResolvedProject>(
+        std::move(*binding_names.value));
+    auto binding_checked = sema::check_project(binding_resolved);
+    require(binding_checked.success(), "function-binding check failed");
+    auto binding_lowered = ir::lower(*binding_checked.value);
+    require(binding_lowered.success(),
+            "function-binding NativeIR lower failed");
+    auto binding_ir = binding_lowered.value->module();
+    require(ir::verify(binding_ir).success(),
+            "function-binding NativeIR verify failed");
+    const auto &binding_hir = binding_ir.hir.module();
+    for (auto name : {"store_fn", "store_lambda"}) {
+      std::optional<SymbolId> target;
+      for (const auto &s : binding_resolved->symbols)
+        if (s.name == name && s.kind == modules::SymbolKind::function)
+          target = s.id;
+      require(target.has_value(), std::string(name) + " symbol missing");
+      size_t function_index = binding_ir.functions.size();
+      for (size_t i = 0; i < binding_ir.functions.size(); ++i)
+        if (binding_ir.functions[i].symbol == *target)
+          function_index = i;
+      require(function_index < binding_ir.functions.size(),
+              std::string(name) + " native function missing");
+      const auto &native_function = binding_ir.functions[function_index];
+      std::optional<HirNodeId> binding_node;
+      for (size_t i = 0; i < binding_hir.nodes.size(); ++i) {
+        const auto &n = binding_hir.nodes[i];
+        if (n.kind() == hir::NodeKind::binding &&
+            binding_hir.scopes.at(n.scope.value).function == *target) {
+          require(!binding_node, std::string(name) + " has two bindings");
+          binding_node = HirNodeId{i};
+        }
+      }
+      require(binding_node.has_value(), std::string(name) + " binding missing");
+      auto local_symbol =
+          std::get<hir::Binding>(binding_hir.nodes[binding_node->value].data)
+              .symbol;
+      auto initializer =
+          binding_hir.nodes[binding_node->value].children.at(0);
+      auto init_type = binding_hir.nodes[initializer.value].type;
+      size_t slot_index = native_function.slots.size();
+      for (size_t i = 0; i < native_function.slots.size(); ++i) {
+        const auto &s = native_function.slots[i];
+        if (s.binding && *s.binding == local_symbol) {
+          require(slot_index == native_function.slots.size(),
+                  std::string(name) + " has two binding slots");
+          slot_index = i;
+        }
+      }
+      require(slot_index < native_function.slots.size(),
+              std::string(name) + " binding slot missing");
+      const auto &slot = native_function.slots[slot_index];
+      require(slot.type == init_type,
+              std::string(name) + " slot type differs from HIR");
+      require(slot.owner.has_value() &&
+                  slot.owner->kind == hir::OwnerKind::binding &&
+                  slot.owner->identity == local_symbol.value,
+              std::string(name) + " slot owner is not the binding");
+      require(hir::classify_value(binding_hir, slot.type).needs_drop,
+              std::string(name) + " slot is no longer owning");
+      require(std::none_of(
+                  native_function.slots.begin(), native_function.slots.end(),
+                  [&](const auto &s) {
+                    return s.owner &&
+                           s.owner->kind == hir::OwnerKind::temporary &&
+                           s.owner->identity == initializer.value;
+                  }),
+              std::string(name) +
+                  " inert initializer gained a temporary owner slot");
+      require(std::none_of(binding_hir.ownership.temporaries.begin(),
+                           binding_hir.ownership.temporaries.end(),
+                           [&](const auto &t) {
+                             return t.producer == initializer;
+                           }),
+              std::string(name) +
+                  " inert initializer gained a frozen temporary");
+      size_t frozen = 0;
+      for (const auto &l : binding_hir.ownership.locals)
+        if (l.symbol == local_symbol) {
+          ++frozen;
+          require(l.type == init_type &&
+                      l.scope == binding_hir.nodes[binding_node->value].scope &&
+                      binding_hir.scopes.at(l.scope.value).function == *target,
+                  std::string(name) + " frozen local identity changed");
+        }
+      require(frozen == 1,
+              std::string(name) + " must freeze exactly one local");
+      auto bad_binding = [&](const std::string &label, auto mutate) {
+        auto m = binding_ir;
+        mutate(m);
+        auto r = ir::verify(m);
+        require(!r.success() && !r.value && !r.diagnostics.empty() &&
+                    r.diagnostics[0].code == "E_IR_INVALID",
+                "corrupt function-binding NativeIR accepted: " + label);
+        ++rejected;
+      };
+      bad_binding(std::string("wrong slot owner ") + name, [&](auto &m) {
+        m.functions[function_index].slots[slot_index].owner =
+            hir::OwnerRef{hir::OwnerKind::binding, local_symbol.value + 991};
+      });
+      std::optional<TypeId> other_owned;
+      for (uint64_t id = 1; id <= binding_hir.types.size(); ++id)
+        if (id != init_type.value &&
+            hir::classify_value(binding_hir, TypeId{id}).needs_drop) {
+          other_owned = TypeId{id};
+          break;
+        }
+      require(other_owned.has_value(), "alternate owning type missing");
+      bad_binding(std::string("wrong slot type ") + name, [&](auto &m) {
+        m.functions[function_index].slots[slot_index].type = *other_owned;
       });
     }
     std::cout << "passed: " << rejected

@@ -1,0 +1,175 @@
+package app;
+
+import "std/slice" as slice;
+import "std/vec" as vec;
+import "std/weak" as weak;
+
+// The fixture is intentionally one small module.  Each function has one
+// observable emission shape; cases.json names the expected guard/drop facts.
+// No helper function is inferred from its source text by the runner.
+
+struct Node {
+    value i32;
+    callback func() i32;
+}
+
+struct Text {
+    label string;
+}
+
+struct StrongBox {
+    items Vec[i32];
+}
+
+struct Plain {
+    tag i32;
+}
+
+trait Get {
+    func get(self Self) i32;
+}
+
+impl Get for Plain {
+    func get(self Plain) i32 {
+        return self.tag;
+    }
+}
+
+func plain_i32() i32 {
+    return 3;
+}
+
+// A: fresh Vec initialization prefixes.  The strong element Vecs register;
+// the Text and Weak element Vecs do not.  Each local Vec slot store still has
+// its own strong-edge guard after the constructor interval.
+func prefix_strong_nonempty(seed i32) Vec[Node] {
+    let value Vec[Node] = [Node(value: seed, callback: plain_i32)];
+    return value;
+}
+
+func prefix_strong_empty() Vec[Node] {
+    let value Vec[Node] = [];
+    return value;
+}
+
+func prefix_text_nonstrong() Vec[Text] {
+    let value Vec[Text] = [Text(label: "text")];
+    return value;
+}
+
+func prefix_weak_nonstrong(source Vec[Node]) Vec[Weak[Vec[Node]]] {
+    let value Vec[Weak[Vec[Node]]] = [weak.downgrade[Vec[Node]](source)];
+    return value;
+}
+
+// B: owning local slot stores.  Only the strong-edge slots get a guard.
+func store_string() i32 {
+    let value string = "old";
+    return 0;
+}
+
+func store_weak(source Vec[i32]) i32 {
+    let value Weak[Vec[i32]] = weak.downgrade[Vec[i32]](source);
+    return 0;
+}
+
+func store_text_aggregate() i32 {
+    let value Text = Text(label: "plain");
+    return 0;
+}
+
+func store_vec() i32 {
+    let value Vec[i32] = [1, 2];
+    return 0;
+}
+
+func store_fn() i32 {
+    let value func() i32 = plain_i32;
+    return 0;
+}
+
+func store_slice(source Vec[i32]) i32 {
+    let value Slice[i32] = slice.view[i32](source, 0, 1);
+    return 0;
+}
+
+async func work() Unit {
+}
+
+func store_task() i32 {
+    let value Task[Unit, Unit] = work();
+    return 0;
+}
+
+func store_dyn() i32 {
+    let value dyn Get = Plain(tag: 4);
+    return 0;
+}
+
+func store_strong_aggregate() i32 {
+    let value StrongBox = StrongBox(items: [1]);
+    return 0;
+}
+
+// B: replace_indirect keeps the old owner and drops it exactly once after the
+// complete new value is published.  Non-strong owners have no inner guard.
+func replace_string(value inout string) {
+    value = "new";
+}
+
+func replace_weak(value inout Weak[Vec[i32]]) {
+    value = weak.empty[Vec[i32]]();
+}
+
+func replace_vec(value inout Vec[i32]) {
+    value = [3, 4];
+}
+
+func replace_strong_aggregate(value inout StrongBox) {
+    value = StrongBox(items: [5]);
+}
+
+// Control: a non-owning place write is store_indirect and never guarded.
+func store_indirect_scalar(value inout i32) {
+    value = 7;
+}
+
+func main() i32 {
+    let nodes = prefix_strong_nonempty(1);
+    let empty = prefix_strong_empty();
+    let texts = prefix_text_nonstrong();
+    let weaks = prefix_weak_nonstrong(nodes);
+    let numbers Vec[i32] = [1, 2];
+
+    store_string();
+    store_weak(numbers);
+    store_text_aggregate();
+    store_vec();
+    store_fn();
+    store_slice(numbers);
+    store_task();
+    store_dyn();
+    store_strong_aggregate();
+
+    var text = "old";
+    replace_string(inout text);
+    var weak_value Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    replace_weak(inout weak_value);
+    var vector Vec[i32] = [9];
+    replace_vec(inout vector);
+    var box = StrongBox(items: []);
+    replace_strong_aggregate(inout box);
+    var scalar i32 = 0;
+    store_indirect_scalar(inout scalar);
+
+    if vec.len(nodes) != 1 || vec.len(empty) != 0 {
+        return 1;
+    }
+    if vec.len(texts) != 1 || vec.len(weaks) != 1 {
+        return 2;
+    }
+    if text != "new" || scalar != 7 || vec.len(vector) != 2 {
+        return 3;
+    }
+    return 0;
+}

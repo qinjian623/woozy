@@ -1861,13 +1861,13 @@ class Emitter {
       // initialized prefix one element at a time. The scratch byte for Unit
       // and other zero-sized elements stays zero as before. Ownership is
       // already arranged by NativeIR; no extra retain or drop belongs here.
+      // This prefix only writes stack scratch, element bytes, and the
+      // initialized count; it has no callback or safepoint. The Vec is not
+      // registered until the prefix is complete, so no critical window is
+      // needed here. This reasoning does not extend to set/push/resize/clear.
       auto *data = vec_field(v, 5, builder.getPtrTy());
       const uint64_t element_stride = stride(element);
       llvm::AllocaInst *scratch = nullptr;
-      // Publish the initialized prefix as one graph-stable interval. The
-      // arguments are already owned values and no copy/drop callback runs in
-      // this loop. The Vec is not registered until the prefix is complete.
-      auto *critical = gc_enter_critical();
       for (size_t n = 0; n < args.size(); ++n) {
         auto *address = element_storage(element, args[n], scratch);
         auto *target = builder.CreateGEP(
@@ -1881,7 +1881,6 @@ class Emitter {
                        builder.CreateStructGEP(vec_type, v, 2)),
                    true);
       }
-      gc_leave_critical(critical);
       gc_register_vec(v, element);
       break;
     }
@@ -2047,7 +2046,7 @@ class Emitter {
       break;
     case ir::Op::store: {
       const auto slot_type = current_function->slots.at(i.slot.value).type;
-      if (owning(slot_type)) {
+      if (has_strong_edge(slot_type)) {
         auto *critical = gc_enter_critical();
         builder.CreateStore(args[0], slots.at(i.slot.value));
         gc_leave_critical(critical);
@@ -2095,9 +2094,13 @@ class Emitter {
         auto *old = storage(lower_type(value_type));
         builder.CreateStore(
             builder.CreateLoad(lower_type(value_type), args[0]), old);
-        auto *critical = gc_enter_critical();
-        builder.CreateStore(args[1], args[0]);
-        gc_leave_critical(critical);
+        if (has_strong_edge(value_type)) {
+          auto *critical = gc_enter_critical();
+          builder.CreateStore(args[1], args[0]);
+          gc_leave_critical(critical);
+        } else {
+          builder.CreateStore(args[1], args[0]);
+        }
         builder.CreateCall(value_op(value_type, false), {old});
       } else {
         builder.CreateStore(args[1], args[0]);
@@ -2105,7 +2108,7 @@ class Emitter {
       break;
     }
     case ir::Op::store_indirect:
-      if (owning(value_types.at(i.inputs[0]))) {
+      if (has_strong_edge(value_types.at(i.inputs[0]))) {
         auto *critical = gc_enter_critical();
         builder.CreateStore(args[1], args[0]);
         gc_leave_critical(critical);

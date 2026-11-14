@@ -660,7 +660,12 @@ class Analysis {
       gather(c, id);
     if (auto b = std::get_if<Binding>(&x.data)) {
       declarations.emplace(b->symbol.value, id);
-      local(b->symbol, x.scope, n(x.children[0]).type, ParamMode::move);
+      auto initializer = x.children[0];
+      local(b->symbol, x.scope, n(initializer).type, ParamMode::move);
+      // A binding owns its initializer's slot even when the initializer itself
+      // is an inert noncapturing FunctionValue without a temporary owner.
+      if (owned(n(initializer).type))
+        enabled.insert(fun->symbol.value);
     }
   }
   std::vector<CleanupStep>

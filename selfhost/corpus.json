@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "4a2090a3ab0ba0548a58624082506c969a6212c4",
-  "previous_git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
-  "frozen_at": "2026-11-14T14:58:55.098767+00:00",
+  "git_head": "0d20de3edcc9ac6f17aecfa154328d203625756d",
+  "previous_git_head": "4a2090a3ab0ba0548a58624082506c969a6212c4",
+  "frozen_at": "2026-11-14T21:18:36.815518+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "tracked worktree bytes at the current Root HEAD; untracked in-progress files are excluded from the catalog and reported by freeze/coverage as formal-freeze gaps",
+  "freeze_basis": "Owned uncommitted integration snapshot based on 0d20de3edcc9ac6f17aecfa154328d203625756d; explicit20 overlays staged, inventory refreshed. Formal freeze remains false until an authorized commit; no Source tests executed.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -31,9 +31,9 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1337,
-    "manifests": 1015,
-    "tests_manifests": 960,
+    "tracked_wz": 1339,
+    "manifests": 1017,
+    "tests_manifests": 962,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
   },
@@ -1480,8 +1480,8 @@
     },
     {
       "path": "selfhost/src/wzcc/nativeemit/b_ops.wz",
-      "sha256": "d96702589c045703fd3d345b40cf83a9226b9352142b6c09e59e02472a397a91",
-      "size": 41797,
+      "sha256": "c20b17ac9d83377a5606d99d72565b22be30b66252a8f04f5860b78da091702d",
+      "size": 41975,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1500,8 +1500,8 @@
     },
     {
       "path": "selfhost/src/wzcc/nativeemit/c_instructions.wz",
-      "sha256": "05ea6d275d360483bbcbb21036e2f6bc52cc23a9361b022408ca098eb5d2bec2",
-      "size": 29244,
+      "sha256": "25b19db8263b21c9522d26139430f85bb663c406d000edd43544c231f54bfcb6",
+      "size": 29311,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1780,8 +1780,8 @@
     },
     {
       "path": "selfhost/src/wzcc/ownership/analysis.wz",
-      "sha256": "406cdeec7fc1d929f456748d729c6ce688da18f3b0a7f84afc381a3fe56c79ad",
-      "size": 111988,
+      "sha256": "0525f20add34b0723b3625ab396d848720a34f21fe4bf760010aaf811274a8b3",
+      "size": 112134,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -2336,6 +2336,32 @@
       "manifest": "selfhost/tests/bindings/lang.toml"
     },
     {
+      "path": "selfhost/tests/cffi_forged/lang.toml",
+      "sha256": "bc30dbff32c4dd6c4af303f426082eb1e00e714b3e8c2c9c41005bf65ce60b5f",
+      "size": 135,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/cffi_forged/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/main.wz",
+      "sha256": "4a95f0db9492fe9fdce418712e6777654ce6e24958aa8d87945f36fae72ef93e",
+      "size": 23265,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/cffi_forged/lang.toml"
+      ],
+      "manifest": "selfhost/tests/cffi_forged/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/run.py",
+      "sha256": "0d17339890b895f7567b25c82840786e74e873719c77c48b159c88014edeb591",
+      "size": 39126,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "selfhost/tests/constant/lang.toml",
       "sha256": "8a55f717d0a8f3b9fd17ddb0bfa8decad33c7b26f581f8fb17db016ca3511a9b",
       "size": 191,
@@ -2578,6 +2604,49 @@
         "project:selfhost/tests/hirverify/lang.toml"
       ],
       "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+      "sha256": "62a6039e2a97a1a0178be4f4da2e3003551be31a2ed635d1fe261408f102b50c",
+      "size": 9321,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+      "sha256": "a9c0e503f2d2fb0baa5ef7ab2e23d452c0dbec39f92882bf3fa761eb4361096a",
+      "size": 147,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+      "sha256": "24851e3bb8c183151fbb651d6ccb5a4c224f4a6ec0dd3d2c4a9aae3b84ca59eb",
+      "size": 13515,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "sha256": "ca0729937407148dc8d8bbb0952dbfa03ba790b9fcfc9090bfa17bd523b7bd81",
+      "size": 32643,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+      "sha256": "7a460a663eb4be4136cd76d389a533f05bdbdfe1931809291a6bcbe4e6de9248",
+      "size": 2881,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "selfhost/tests/hirverify/cache/run.py",
@@ -15378,6 +15447,13 @@
       "assignment": []
     },
     {
+      "path": "tests/native/c_ffi/runner_controls.py",
+      "sha256": "077d0376d3e6950ee5ac183e3a7bb80e916b3e73443bbf99f0bc7bf35c721b68",
+      "size": 61344,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/native/c_retained_capturing/CMakeLists.txt",
       "sha256": "e609abd181efd50476e95092527189cacc5f7367afaea368a94241b782fcde3a",
       "size": 3245,
@@ -18090,6 +18166,77 @@
       "assignment": []
     },
     {
+      "path": "tests/native/gc_critical_emission/fixtures/gc_critical/cases.json",
+      "sha256": "36bc3e61595d44317276fe64c6c99a63ad9b6d68a575ea654aadc3cc969cd222",
+      "size": 1055,
+      "role": "case_metadata",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml",
+      "sha256": "cafcb36594c1782a7ff53fc725420641602d53b9bb9fd266ce978e86954e640b",
+      "size": 137,
+      "role": "manifest",
+      "assignment": [
+        "project:tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml"
+      ]
+    },
+    {
+      "path": "tests/native/gc_critical_emission/fixtures/gc_critical/src/main.wz",
+      "sha256": "a7c0ee3ec794f8d0d778da8639e32d7aca9a57cdc505a8378474dab04f484ccf",
+      "size": 3920,
+      "role": "woozy_source",
+      "assignment": [
+        "project:tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml"
+      ]
+    },
+    {
+      "path": "tests/native/gc_critical_emission/pure_controls.py",
+      "sha256": "3d3a21be1a1c0a8a12774596b4980e79290cffe24356038052ad4efd0236095f",
+      "size": 41570,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/gc_critical_emission/run_gc_critical_emission.py",
+      "sha256": "54e1d3eee5c50b6a679708579a147f9a8321507f8ea3683499cb428c22cc83a5",
+      "size": 57492,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml",
+      "sha256": "30f9b99e42a1f3b5ff5f1a19c3b3db9416391900e45aca462ff05a86a1752666",
+      "size": 178,
+      "role": "manifest",
+      "assignment": [
+        "project:tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml"
+      ]
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/src/main.wz",
+      "sha256": "de099166641bd0b521ea5e71f032761c335850c3a5c4fcaa2e0c02a69da369eb",
+      "size": 3015,
+      "role": "woozy_source",
+      "assignment": [
+        "project:tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml"
+      ]
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/pure_controls.py",
+      "sha256": "ef25764dbfbb9b42fe28973e79adec18b92936859c537e89b825de3b2b3dd69d",
+      "size": 56742,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/run.py",
+      "sha256": "42edaead1c85fff80359b8983fae5bcc06102766331028d063893b1e71dcf794",
+      "size": 51710,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/native/gc_program/run_all.sh",
       "sha256": "97b69a0bcdc9abe562b13333d991cde337b3c6b89384ba8a6ae4e30430bd899e",
       "size": 19605,
@@ -20150,6 +20297,13 @@
       "assignment": []
     },
     {
+      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
+      "sha256": "15eae14e233281c66b48cde8b3dac6ebdfd7fcc9403d6b6383b34a8fa817bb34",
+      "size": 23514,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/native/slice_source/fixtures/after-drop/lang.toml",
       "sha256": "6c2fb234db5b02719096a60ead2a44f61af901974f2608968b967eb4fdb19f94",
       "size": 127,
@@ -20533,6 +20687,13 @@
       "path": "tests/native/slice_source/run_slice_source.py",
       "sha256": "0384157ea730cde9c537cf8d3dd2e5a32e110892c42439eca20e604932318ba3",
       "size": 53855,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/slice_source/test_controls.py",
+      "sha256": "8037427025253fdd340f3caa5f5dbc1070f964012939583f2691b141b42ab0dc",
+      "size": 22053,
       "role": "runner_source",
       "assignment": []
     },
@@ -23543,6 +23704,13 @@
       "assignment": []
     },
     {
+      "path": "tests/python/language_gc/runner_controls.py",
+      "sha256": "6263c57e0fb15687324aa04a0dafa337feb9c26f87d664c1a6a43ebbefbb0541",
+      "size": 18249,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "tests/python/language_gc/runtime_gc_test.py",
       "sha256": "d70b3650ce9860c386b5738b6903c58b70f050c96a9df6ea416ef005d217bb6c",
       "size": 19430,
@@ -26460,103 +26628,6 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "sha256": "abe5d25af264e6ed22a20ee190b3a207b0b8af73566a67a48d1d50635f6084fa",
       "size": 9098,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/python/language_gc/runner_controls.py",
-      "sha256": "6263c57e0fb15687324aa04a0dafa337feb9c26f87d664c1a6a43ebbefbb0541",
-      "size": 18249,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
-      "sha256": "62a6039e2a97a1a0178be4f4da2e3003551be31a2ed635d1fe261408f102b50c",
-      "size": 9321,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
-      ],
-      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
-      "sha256": "a9c0e503f2d2fb0baa5ef7ab2e23d452c0dbec39f92882bf3fa761eb4361096a",
-      "size": 147,
-      "role": "manifest",
-      "assignment": [
-        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
-      ]
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
-      "sha256": "24851e3bb8c183151fbb651d6ccb5a4c224f4a6ec0dd3d2c4a9aae3b84ca59eb",
-      "size": 13515,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
-      ],
-      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
-      "sha256": "ca0729937407148dc8d8bbb0952dbfa03ba790b9fcfc9090bfa17bd523b7bd81",
-      "size": 32643,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
-      "sha256": "7a460a663eb4be4136cd76d389a533f05bdbdfe1931809291a6bcbe4e6de9248",
-      "size": 2881,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "selfhost/tests/cffi_forged/lang.toml",
-      "sha256": "bc30dbff32c4dd6c4af303f426082eb1e00e714b3e8c2c9c41005bf65ce60b5f",
-      "size": 135,
-      "role": "manifest",
-      "assignment": [
-        "project:selfhost/tests/cffi_forged/lang.toml"
-      ]
-    },
-    {
-      "path": "selfhost/tests/cffi_forged/main.wz",
-      "sha256": "4a95f0db9492fe9fdce418712e6777654ce6e24958aa8d87945f36fae72ef93e",
-      "size": 23265,
-      "role": "woozy_source",
-      "assignment": [
-        "project:selfhost/tests/cffi_forged/lang.toml"
-      ],
-      "manifest": "selfhost/tests/cffi_forged/lang.toml"
-    },
-    {
-      "path": "selfhost/tests/cffi_forged/run.py",
-      "sha256": "0d17339890b895f7567b25c82840786e74e873719c77c48b159c88014edeb591",
-      "size": 39126,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
-      "sha256": "15eae14e233281c66b48cde8b3dac6ebdfd7fcc9403d6b6383b34a8fa817bb34",
-      "size": 23514,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/native/slice_source/test_controls.py",
-      "sha256": "8037427025253fdd340f3caa5f5dbc1070f964012939583f2691b141b42ab0dc",
-      "size": 22053,
-      "role": "runner_source",
-      "assignment": []
-    },
-    {
-      "path": "tests/native/c_ffi/runner_controls.py",
-      "sha256": "077d0376d3e6950ee5ac183e3a7bb80e916b3e73443bbf99f0bc7bf35c721b68",
-      "size": 61344,
       "role": "runner_source",
       "assignment": []
     }
@@ -85296,6 +85367,48 @@
       "tags": [
         "selfhost"
       ]
+    },
+    {
+      "id": "project:tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "tests/native/gc_critical_emission/run_gc_critical_emission.py",
+      "runner_status": "component",
+      "reason": "Internal GC emitter/observer fixture. Real source tests are separate CPP/Wz component checks, not a public candidate full-CLI case or a new language requirement. Disabled in the public corpus; no pass is inferred here.",
+      "tags": [
+        "native",
+        "gc",
+        "component"
+      ]
+    },
+    {
+      "id": "project:tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "tests/native/gc_fresh_prefix_concurrent/run.py",
+      "runner_status": "component",
+      "reason": "Internal GC emitter/observer fixture. Real source tests are separate CPP/Wz component checks, not a public candidate full-CLI case or a new language requirement. Disabled in the public corpus; no pass is inferred here.",
+      "tags": [
+        "native",
+        "gc",
+        "component"
+      ]
     }
   ],
   "runners": [
@@ -85313,6 +85426,11 @@
       "path": "selfhost/tests/bindings/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/run.py",
+      "status": "component",
+      "reason": "Private C-FFI forged HIR/NativeIR component runner pinned to historical Sourceed1. Its eight saved rejection passes do not prove current0c46 or the full15-case C-FFI runner. Default current0c46 Source is intentionally rejected."
     },
     {
       "path": "selfhost/tests/constant/run.py",
@@ -85363,6 +85481,16 @@
       "path": "selfhost/tests/hirdump/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "status": "component",
+      "reason": "Private needs_drop cache component staging and repeated-query benchmark runner for Source0c46. Accepted51/trace47 assertions are component evidence only, not a whole-compiler performance, CLI, corpus or selfhosting pass."
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+      "status": "component",
+      "reason": "Pure JSON/execve/execveat parser controls for the private needs_drop runner; no compiler, helper or language target is launched."
     },
     {
       "path": "selfhost/tests/hirverify/cache/run.py",
@@ -85840,6 +85968,11 @@
       "reason": "FFI01 runner script correction accepted (task335075a2/event955196) with Root 20 pure-control groups and 4 independent actual-main counterexamples; full real reference/candidate CFFI execution remains not_run. Fake formal orchestration rows are controls only; existing 15 project cases and the historical ed1 forged component retain their own pending status and scope."
     },
     {
+      "path": "tests/native/c_ffi/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for the accepted FFI01 runner: strict process/JSON/trace records, reference-only helper identity, retained initial fixture copies and legacy/formal output handling; external launch entry points blocked before runner import. These checks do not execute Source, C/LLVM, CLI, forged components or targets."
+    },
+    {
       "path": "tests/native/c_retained_capturing/run_capturing.py",
       "status": "component",
       "reason": "Dedicated capturing-C callback component requires the original Source tests plus C-only lifecycle, exact shared-library load, runtime symbols and core ELF observations. The public compiler routes are recorded separately by role; all20 existing corpus rows remain disabled/required because ordinary schema does not express the full component assertions."
@@ -85903,6 +86036,26 @@
       "path": "tests/native/gc_activation/run_gc_activation.py",
       "status": "adaptation_required",
       "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+    },
+    {
+      "path": "tests/native/gc_critical_emission/pure_controls.py",
+      "status": "component",
+      "reason": "Internal GC emitter/observer test or pure assertion controls; not a public compiler-CLI corpus runner."
+    },
+    {
+      "path": "tests/native/gc_critical_emission/run_gc_critical_emission.py",
+      "status": "component",
+      "reason": "Internal GC emitter/observer test or pure assertion controls; not a public compiler-CLI corpus runner."
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/pure_controls.py",
+      "status": "component",
+      "reason": "Internal GC emitter/observer test or pure assertion controls; not a public compiler-CLI corpus runner."
+    },
+    {
+      "path": "tests/native/gc_fresh_prefix_concurrent/run.py",
+      "status": "component",
+      "reason": "Internal GC emitter/observer test or pure assertion controls; not a public compiler-CLI corpus runner."
     },
     {
       "path": "tests/native/gc_program/run_all.sh",
@@ -86050,9 +86203,19 @@
       "reason": "test helper/input/observer module; no independent compiler entrypoint"
     },
     {
+      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
+      "status": "component",
+      "reason": "Test-only fixed-ed1 Nativeobs component builder, defaultO2 with optionalO0. New and sealed build stdout share strict finite JSON/statusok/empty-diagnostics checks. Historical ac17O2/430O0 builds do not establish current0c46 or a full compiler pass."
+    },
+    {
       "path": "tests/native/slice_source/run_slice_source.py",
       "status": "component",
       "reason": "Root-corrected Native Slice CLI/IR/ELF and allocation/Vec observer test runner. Saved19fixture results belong to historical ed1/c142 and use the fixed-ed1 private Nativeobs builder; current0c46 has not rerun this family. Extra observer/IR checks are not represented by ordinary CLI case expectations, so no case is enabled from this delivery."
+    },
+    {
+      "path": "tests/native/slice_source/test_controls.py",
+      "status": "component",
+      "reason": "Sixteen guarded pure Python tests for Native Slice runner/builder decisions, including normal exit types, finite JSON, legacy/fresh outputs, process preservation and sealed stdout checks. No compiler, observer or target is started."
     },
     {
       "path": "tests/native/stdlib-io-errors/run_io_errors.py",
@@ -86318,6 +86481,11 @@
       "path": "tests/python/language_gc/run_language_gc.py",
       "status": "component",
       "reason": "Language GC observer runner: real CLI/API emission and exact generated-byte comparison precede eight GC-specific observations. Historical 72dc/da69 results and old727b symbol aid do not establish a new ed1 API or ordinary public-CLI exit test."
+    },
+    {
+      "path": "tests/python/language_gc/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python checks for strict process flags, metadata, GC observation, trace failure persistence and atomic command-record replacement; no compiler, helper, observer or program is started."
     },
     {
       "path": "tests/python/language_gc/runtime_gc_test.py",
@@ -86593,41 +86761,6 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "status": "public_cli",
       "reason": "Public check/build CLI entry confirmed by SH11b. Reference completed 22 fixtures; old Wz39ac passed 9 rejects and all 13 accepts failed at the first Python check. No claim that the new Source CLI or all runtime branches passed."
-    },
-    {
-      "path": "tests/python/language_gc/runner_controls.py",
-      "status": "component",
-      "reason": "Pure Python checks for strict process flags, metadata, GC observation, trace failure persistence and atomic command-record replacement; no compiler, helper, observer or program is started."
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
-      "status": "component",
-      "reason": "Private needs_drop cache component staging and repeated-query benchmark runner for Source0c46. Accepted51/trace47 assertions are component evidence only, not a whole-compiler performance, CLI, corpus or selfhosting pass."
-    },
-    {
-      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
-      "status": "component",
-      "reason": "Pure JSON/execve/execveat parser controls for the private needs_drop runner; no compiler, helper or language target is launched."
-    },
-    {
-      "path": "selfhost/tests/cffi_forged/run.py",
-      "status": "component",
-      "reason": "Private C-FFI forged HIR/NativeIR component runner pinned to historical Sourceed1. Its eight saved rejection passes do not prove current0c46 or the full15-case C-FFI runner. Default current0c46 Source is intentionally rejected."
-    },
-    {
-      "path": "tests/native/slice_source/build_nativeobs_ed1.py",
-      "status": "component",
-      "reason": "Test-only fixed-ed1 Nativeobs component builder, defaultO2 with optionalO0. New and sealed build stdout share strict finite JSON/statusok/empty-diagnostics checks. Historical ac17O2/430O0 builds do not establish current0c46 or a full compiler pass."
-    },
-    {
-      "path": "tests/native/slice_source/test_controls.py",
-      "status": "component",
-      "reason": "Sixteen guarded pure Python tests for Native Slice runner/builder decisions, including normal exit types, finite JSON, legacy/fresh outputs, process preservation and sealed stdout checks. No compiler, observer or target is started."
-    },
-    {
-      "path": "tests/native/c_ffi/runner_controls.py",
-      "status": "component",
-      "reason": "Pure Python controls for the accepted FFI01 runner: strict process/JSON/trace records, reference-only helper identity, retained initial fixture copies and legacy/formal output handling; external launch entry points blocked before runner import. These checks do not execute Source, C/LLVM, CLI, forged components or targets."
     }
   ],
   "refreeze": {
@@ -86879,7 +87012,7 @@
       {
         "path": "selfhost/src/wzcc/ownership/analysis.wz",
         "old_sha256": "a2a9ed16b403088967b159ac4aa5f99c6574f73300350342c30ac7cb503b4f1e",
-        "new_sha256": "406cdeec7fc1d929f456748d729c6ce688da18f3b0a7f84afc381a3fe56c79ad"
+        "new_sha256": "0525f20add34b0723b3625ab396d848720a34f21fe4bf760010aaf811274a8b3"
       },
       {
         "path": "selfhost/src/wzcc/project/project.wz",
@@ -90046,5 +90179,55 @@
       "real_CFFI_execution": "not_run",
       "scope": "Script correction publication only. 84 fake formal rows are pure controls, not real CFFI commands. Original task8fe38a9d remains rejected; accepted correction335075a2 recorded separately. Historical ed1 forged component and its pin/reports unchanged; no new 0c46 component or full 15-project pass claimed."
     }
+  },
+  "private_gc_integration": {
+    "base": "0d20de3edcc9ac6f17aecfa154328d203625756d",
+    "copied_files": 20,
+    "new_freeze_paths": [
+      "tests/native/gc_critical_emission/fixtures/gc_critical/cases.json",
+      "tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml",
+      "tests/native/gc_critical_emission/fixtures/gc_critical/src/main.wz",
+      "tests/native/gc_critical_emission/pure_controls.py",
+      "tests/native/gc_critical_emission/run_gc_critical_emission.py",
+      "tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml",
+      "tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/src/main.wz",
+      "tests/native/gc_fresh_prefix_concurrent/pure_controls.py",
+      "tests/native/gc_fresh_prefix_concurrent/run.py"
+    ],
+    "modified_freeze_paths": [
+      {
+        "path": "selfhost/src/wzcc/nativeemit/b_ops.wz",
+        "old_sha256": "d96702589c045703fd3d345b40cf83a9226b9352142b6c09e59e02472a397a91",
+        "new_sha256": "c20b17ac9d83377a5606d99d72565b22be30b66252a8f04f5860b78da091702d",
+        "old_size": 41797,
+        "new_size": 41975
+      },
+      {
+        "path": "selfhost/src/wzcc/nativeemit/c_instructions.wz",
+        "old_sha256": "05ea6d275d360483bbcbb21036e2f6bc52cc23a9361b022408ca098eb5d2bec2",
+        "new_sha256": "25b19db8263b21c9522d26139430f85bb663c406d000edd43544c231f54bfcb6",
+        "old_size": 29244,
+        "new_size": 29311
+      },
+      {
+        "path": "selfhost/src/wzcc/ownership/analysis.wz",
+        "old_sha256": "406cdeec7fc1d929f456748d729c6ce688da18f3b0a7f84afc381a3fe56c79ad",
+        "new_sha256": "0525f20add34b0723b3625ab396d848720a34f21fe4bf760010aaf811274a8b3",
+        "old_size": 111988,
+        "new_size": 112134
+      }
+    ],
+    "new_cases": [
+      "project:tests/native/gc_critical_emission/fixtures/gc_critical/lang.toml",
+      "project:tests/native/gc_fresh_prefix_concurrent/fixtures/fresh-prefix/lang.toml"
+    ],
+    "new_runners": [
+      "tests/native/gc_critical_emission/pure_controls.py",
+      "tests/native/gc_critical_emission/run_gc_critical_emission.py",
+      "tests/native/gc_fresh_prefix_concurrent/pure_controls.py",
+      "tests/native/gc_fresh_prefix_concurrent/run.py"
+    ],
+    "actual_Source_test_runs": 0,
+    "not_committed": true
   }
 }

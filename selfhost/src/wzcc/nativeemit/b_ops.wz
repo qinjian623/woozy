@@ -504,9 +504,13 @@ func b_replace_indirect(i nativeir.Instruction, args Vec[Value],
         let loaded = result(type_name, "load " + type_name + ", ptr " +
             destination.reference, inout state);
         append(b_store_line(loaded, old), inout state);
-        let critical = gc_enter_critical(inout state);
-        append(b_store_line(args[1], destination), inout state);
-        gc_leave_critical(critical, inout state);
+        if has_strong_edge(old_type, inout state) {
+            let critical = gc_enter_critical(inout state);
+            append(b_store_line(args[1], destination), inout state);
+            gc_leave_critical(critical, inout state);
+        } else {
+            append(b_store_line(args[1], destination), inout state);
+        }
         let drop = value_op(old_type, false, inout state);
         let drop_sig = Signature(result: "void", parameters: ["ptr"]);
         call(drop_sig, drop, [old], inout state);
@@ -520,7 +524,7 @@ func b_store_slot(i nativeir.Instruction, args Vec[Value],
     let slot = b_slot(state, i.slot);
     let current = b_current(state);
     let slot_type = current.slots[i.slot].type_id;
-    if owning(slot_type, inout state) {
+    if has_strong_edge(slot_type, inout state) {
         let critical = gc_enter_critical(inout state);
         append(b_store_line(args[0], slot.address), inout state);
         gc_leave_critical(critical, inout state);
@@ -538,7 +542,7 @@ func b_store_slot(i nativeir.Instruction, args Vec[Value],
 func b_store_indirect(i nativeir.Instruction, args Vec[Value],
                       state inout Emitter) throws Error {
     let pointee = value_type(state, i.inputs[0]);
-    if owning(pointee, inout state) {
+    if has_strong_edge(pointee, inout state) {
         let critical = gc_enter_critical(inout state);
         append(b_store_line(args[1], args[0]), inout state);
         gc_leave_critical(critical, inout state);

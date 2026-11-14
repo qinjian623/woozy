@@ -1,0 +1,28 @@
+{
+  "prefix": {
+    "prefix_strong_nonempty": {"registered": true, "elements": 1},
+    "prefix_strong_empty": {"registered": true, "elements": 0},
+    "prefix_text_nonstrong": {"registered": false, "elements": 1},
+    "prefix_weak_nonstrong": {"registered": false, "elements": 1}
+  },
+  "store": {
+    "store_string": {"guards": 0, "min_drops": 1},
+    "store_weak": {"guards": 0, "min_drops": 1},
+    "store_text_aggregate": {"guards": 0, "min_drops": 1},
+    "store_vec": {"guards": 1, "min_drops": 1},
+    "store_fn": {"guards": 1, "min_drops": 1},
+    "store_slice": {"guards": 1, "min_drops": 1},
+    "store_task": {"guards": 1, "min_drops": 1},
+    "store_dyn": {"guards": 1, "min_drops": 1},
+    "store_strong_aggregate": {"guards": 1, "min_drops": 1}
+  },
+  "replace": {
+    "replace_string": {"guards": 0, "drops": 1},
+    "replace_weak": {"guards": 0, "drops": 1},
+    "replace_vec": {"guards": 1, "drops": 1},
+    "replace_strong_aggregate": {"guards": 1, "drops": 1}
+  },
+  "store_indirect": {
+    "store_indirect_scalar": {"guards": 0}
+  }
+}

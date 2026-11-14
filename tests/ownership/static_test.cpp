@@ -2284,6 +2284,150 @@ void iterator_hir_tests(const fs::path &root) {
   ++probes;
 }
 
+// A binding owns its own frozen LocalLifetime even when its initializer is an
+// inert noncapturing FunctionValue. The initializer itself must not gain a
+// temporary owner; the return plan drops the binding instead.
+void function_value_binding_freeze_tests() {
+  const std::string source =
+      "func plain_i32() i32 {return 0;} "
+      "func store_fn() i32 {let value func() i32=plain_i32;return 0;} "
+      "func store_lambda() i32 {let value func() i32=func() i32 {return 7;};"
+      "return 0;} "
+      "func scalar_only() i32 {let n i32=3;return n-3;} "
+      "func used_fn() i32 {let f func() i32=plain_i32;return f();} "
+      "func capture_control() i32 {var x i32=1;let f func() i32=func() i32 "
+      "{return x;};return 0;} "
+      "func ordinary_param(op func() i32) i32 {return 0;} "
+      "func move_param(op move (func() i32)) i32 {return 0;} "
+      "func direct_return() (func() i32) {return plain_i32;} "
+      "func main() i32 {return store_fn()+store_lambda()+scalar_only();}";
+  auto m = accepted(source);
+  facts(m);
+  auto function_record = [&](SymbolId symbol) -> const HirFunction & {
+    for (const auto &f : m.functions)
+      if (f.symbol == symbol)
+        return f;
+    throw std::runtime_error("probe function record missing");
+  };
+  for (auto name : {"store_fn", "store_lambda"}) {
+    auto symbol = function_named(m, name);
+    std::optional<HirNodeId> binding;
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      if (n.kind() == NodeKind::binding &&
+          m.scopes.at(n.scope.value).function == symbol) {
+        need(!binding, std::string(name) + " has more than one binding");
+        binding = HirNodeId{i};
+      }
+    }
+    need(binding.has_value(), std::string(name) + " binding missing");
+    const auto &bn = m.nodes[binding->value];
+    auto local_symbol = std::get<Binding>(bn.data).symbol;
+    auto initializer = bn.children.at(0);
+    auto init_type = m.nodes[initializer.value].type;
+    need(m.types.find(init_type)->kind == TypeKind::Function,
+         std::string(name) + " initializer is not a function value");
+    need(m.types.find(bn.type)->kind == TypeKind::Unit,
+         std::string(name) + " binding node is not Unit");
+    need(classify_value(m, init_type).needs_drop,
+         std::string(name) + " function type is not owning");
+
+    std::vector<const LocalLifetime *> frozen;
+    for (const auto &l : m.ownership.locals)
+      if (l.symbol == local_symbol)
+        frozen.push_back(&l);
+    need(frozen.size() == 1,
+         std::string(name) + " must freeze exactly one local lifetime");
+    need(frozen.front()->type == init_type,
+         std::string(name) + " frozen local has the wrong type");
+    need(frozen.front()->scope == bn.scope,
+         std::string(name) + " frozen local has the wrong scope");
+    need(m.scopes.at(frozen.front()->scope.value).function == symbol,
+         std::string(name) + " frozen local belongs to another function");
+    need(frozen.front()->mode == ParamMode::move &&
+             frozen.front()->order == 0 &&
+             !frozen.front()->read_only_capture,
+         std::string(name) + " frozen local has the wrong mode/order");
+
+    auto ret = return_node(m, symbol);
+    const auto &plan = exit(m, ret, ExitKind::return_);
+    need(std::any_of(plan.actions.begin(), plan.actions.end(), [&](auto a) {
+           return a.kind == CleanupKind::destroy_if_live &&
+                  a.owner.kind == OwnerKind::binding &&
+                  a.owner.identity == local_symbol.value &&
+                  a.type == init_type;
+         }),
+         std::string(name) + " return lacks the binding destroy_if_live");
+
+    need(std::none_of(m.ownership.temporaries.begin(),
+                      m.ownership.temporaries.end(),
+                      [&](auto t) { return t.producer == initializer; }),
+         std::string(name) + " inert function value gained a temporary");
+    bool saw_expression = false;
+    for (const auto &fe : m.ownership.full_expressions)
+      if (fe.node == *binding) {
+        saw_expression = true;
+        need(std::none_of(fe.actions.begin(), fe.actions.end(), [&](auto a) {
+               return a.kind == CleanupKind::destroy_if_live &&
+                      a.owner.kind == OwnerKind::temporary &&
+                      a.owner.identity == initializer.value;
+             }),
+             std::string(name) +
+                 " binding expression destroys the inert initializer");
+      }
+    need(saw_expression,
+         std::string(name) + " binding full expression missing");
+
+    bool deleted = false;
+    invalid(m, std::string("delete frozen ") + name + " local",
+            [&](auto &x) {
+              deleted =
+                  std::erase_if(x.ownership.locals, [&](const auto &l) {
+                    return l.symbol == local_symbol;
+                  }) > 0;
+            });
+    need(deleted, std::string(name) + " frozen local was not deleted");
+  }
+
+  // Existing supported shapes stay enabled and keep their real records.
+  auto used = function_named(m, "used_fn");
+  need(std::any_of(m.ownership.locals.begin(), m.ownership.locals.end(),
+                   [&](const auto &l) {
+                     return m.scopes.at(l.scope.value).function == used;
+                   }),
+       "used function local lost its frozen lifetime");
+  auto capture = function_named(m, "capture_control");
+  need(std::any_of(m.ownership.locals.begin(), m.ownership.locals.end(),
+                   [&](const auto &l) {
+                     return m.scopes.at(l.scope.value).function == capture;
+                   }),
+       "capturing closure lost its frozen lifetime");
+  for (auto [name, mode] : {std::pair{"ordinary_param", ParamMode::ordinary},
+                            std::pair{"move_param", ParamMode::move}}) {
+    auto symbol = function_named(m, name);
+    auto parameter =
+        function_record(symbol).parameters.at(0).symbol;
+    auto found = std::find_if(m.ownership.locals.begin(),
+                              m.ownership.locals.end(), [&](const auto &l) {
+                                return l.symbol == parameter;
+                              });
+    need(found != m.ownership.locals.end() && found->mode == mode,
+         std::string(name) + " parameter lifetime changed");
+  }
+  auto direct = function_named(m, "direct_return");
+  need(std::none_of(m.ownership.locals.begin(), m.ownership.locals.end(),
+                    [&](const auto &l) {
+                      return m.scopes.at(l.scope.value).function == direct;
+                    }),
+       "direct function return gained a local owner slot");
+  auto scalar = function_named(m, "scalar_only");
+  need(std::none_of(m.ownership.locals.begin(), m.ownership.locals.end(),
+                    [&](const auto &l) {
+                      return m.scopes.at(l.scope.value).function == scalar;
+                    }),
+       "scalar-only function gained a frozen local");
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || argc == 3,
@@ -2300,6 +2444,7 @@ int main(int argc, char **argv) {
     query_invariance_tests();
     record_tests();
     local_index_borrow_tests();
+    function_value_binding_freeze_tests();
     extra_tests();
     computed_owning_switch_tests();
     iterator_hir_tests(argv[1]);
