@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
-  "previous_git_head": "8547f10b3ce06ecfc3dc35d3048e347bdfbb6577",
-  "frozen_at": "2026-11-14T05:19:52.865568+00:00",
+  "git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
+  "previous_git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
+  "frozen_at": "2026-11-14T05:31:13.220270+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -46570,19 +46570,49 @@
       ],
       "backend": "native",
       "manifest": "tests/native/floating/const-comparison/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_floating.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "SH12r public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 build accept, program exit 0 with empty stdout/stderr, original probes=[]; the old run_floating.py overall still contains private probe/helper paths for the other seven floating cases, so the per-case runner_status remains adaptation_required.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12r-four-floating-public-cases-20261114: run-summary.json, record-audit.json and run/runs/**; 16 check + 16 build compiler commands and 16 program executions across both roles",
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 90,
+      "source_provenance": {
+        "manifest_sha256": "da45c7988ab9bfe8ae10788b51ff4d0e0c6cef0ba89dfb89c9558825d8967953",
+        "source_sha256": "15f38d78af42446935ae934829d2ca37f73d74283f10694fa7ddcd1f4122b1d3",
+        "original_runner": "tests/native/run_floating.py",
+        "original_runner_sha256": "cd81141e6dd0ce016a61f0825b81d108f3c2b530577bac7dc8d298e2d2762cc1",
+        "original_gold": {
+          "main_return": 0,
+          "probes": [],
+          "stdout": "empty",
+          "stderr": "empty"
+        },
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/floating/dynamic/lang.toml",
@@ -46642,19 +46672,49 @@
       ],
       "backend": "native",
       "manifest": "tests/native/floating/reject-float-to-int/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_floating.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "SH12r public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 build accept, program exit 0 with empty stdout/stderr, original probes=[]; the old run_floating.py overall still contains private probe/helper paths for the other seven floating cases, so the per-case runner_status remains adaptation_required.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12r-four-floating-public-cases-20261114: run-summary.json, record-audit.json and run/runs/**; 16 check + 16 build compiler commands and 16 program executions across both roles",
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 90,
+      "source_provenance": {
+        "manifest_sha256": "da45c7988ab9bfe8ae10788b51ff4d0e0c6cef0ba89dfb89c9558825d8967953",
+        "source_sha256": "54a0417ef051a3a06ec9761990292250be016693bbd006c90895e99962b1e802",
+        "original_runner": "tests/native/run_floating.py",
+        "original_runner_sha256": "cd81141e6dd0ce016a61f0825b81d108f3c2b530577bac7dc8d298e2d2762cc1",
+        "original_gold": {
+          "main_return": 0,
+          "probes": [],
+          "stdout": "empty",
+          "stderr": "empty"
+        },
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/floating/reject-float-width-conversion/lang.toml",
@@ -46666,19 +46726,49 @@
       ],
       "backend": "native",
       "manifest": "tests/native/floating/reject-float-width-conversion/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_floating.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "SH12r public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 build accept, program exit 0 with empty stdout/stderr, original probes=[]; the old run_floating.py overall still contains private probe/helper paths for the other seven floating cases, so the per-case runner_status remains adaptation_required.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12r-four-floating-public-cases-20261114: run-summary.json, record-audit.json and run/runs/**; 16 check + 16 build compiler commands and 16 program executions across both roles",
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 90,
+      "source_provenance": {
+        "manifest_sha256": "da45c7988ab9bfe8ae10788b51ff4d0e0c6cef0ba89dfb89c9558825d8967953",
+        "source_sha256": "a343a3fbe069af24984c5c941fcec9f723cf056dece09974ecf11bf78927b42e",
+        "original_runner": "tests/native/run_floating.py",
+        "original_runner_sha256": "cd81141e6dd0ce016a61f0825b81d108f3c2b530577bac7dc8d298e2d2762cc1",
+        "original_gold": {
+          "main_return": 0,
+          "probes": [],
+          "stdout": "empty",
+          "stderr": "empty"
+        },
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/floating/reject-int-to-float/lang.toml",
@@ -46690,19 +46780,49 @@
       ],
       "backend": "native",
       "manifest": "tests/native/floating/reject-int-to-float/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
-      "runner": "tests/native/run.py",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/native/run_floating.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "SH12r public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 build accept, program exit 0 with empty stdout/stderr, original probes=[]; the old run_floating.py overall still contains private probe/helper paths for the other seven floating cases, so the per-case runner_status remains adaptation_required.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12r-four-floating-public-cases-20261114: run-summary.json, record-audit.json and run/runs/**; 16 check + 16 build compiler commands and 16 program executions across both roles",
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 90,
+      "source_provenance": {
+        "manifest_sha256": "da45c7988ab9bfe8ae10788b51ff4d0e0c6cef0ba89dfb89c9558825d8967953",
+        "source_sha256": "00f85f37396b48dd925d249f6b3a1954fb413b7078973d6505aad9ab21015873",
+        "original_runner": "tests/native/run_floating.py",
+        "original_runner_sha256": "cd81141e6dd0ce016a61f0825b81d108f3c2b530577bac7dc8d298e2d2762cc1",
+        "original_gold": {
+          "main_return": 0,
+          "probes": [],
+          "stdout": "empty",
+          "stderr": "empty"
+        },
+        "original_modes": [
+          "native-O0",
+          "native-O2"
+        ]
+      }
     },
     {
       "id": "project:tests/native/floating/reject-move/lang.toml",
@@ -85892,7 +86012,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
+    "to_git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -87232,6 +87352,78 @@
       },
       "compiler_or_program_reexecuted": false,
       "existing_jobs_operated": false,
+      "full_corpus_or_bootstrap_pass_claimed": false
+    },
+    "floating_four_existing_cases": {
+      "base_commit": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
+      "accepted_task_prefix": "02c45dc0",
+      "accepted_revision": 2,
+      "ACK_event": 949041,
+      "ACK_parent": 417,
+      "session_closed_revision": 3,
+      "proposal": "/home/qin/Work/language-dev-20261103/checks/SH12r-four-floating-public-cases-20261114/catalog-proposal.json",
+      "proposal_sha256": "d624ebdf6ffb77181dfcac05b85002b76e8b5878e44fa97d0ca4b9c1b849d492",
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH12r-four-floating-Root-review-20261114.json",
+      "Root_review_sha256": "73d2d1848600f793d3aeaccaa914870dd559dca8cf99315f95cd8c354f316396",
+      "independent_review": "/home/qin/Work/language-dev-20261103/checks/SH12r-four-floating-independent-review-20261114.json",
+      "independent_review_sha256": "8822db1afa0f5c72d61ef1538a5f997793d2f5d0543ddb4439ed88794d56b082",
+      "Root_report_correction": "/home/qin/Work/language-dev-20261103/checks/floating-four-cases-integration-20261114/Root-correction.md",
+      "Root_report_correction_sha256": "e76a0af83e5149f2ddf10028a6090f6d50f3356a9594f1af73ca5de34f314fa6",
+      "updated_existing_case_ids": [
+        "project:tests/native/floating/reject-float-to-int/lang.toml",
+        "project:tests/native/floating/reject-int-to-float/lang.toml",
+        "project:tests/native/floating/reject-float-width-conversion/lang.toml",
+        "project:tests/native/floating/const-comparison/lang.toml"
+      ],
+      "appended_or_removed_cases": 0,
+      "other_1338_case_fields_and_order_unchanged": true,
+      "operations_retained": [
+        "check",
+        "build_native"
+      ],
+      "runner_status_retained": "adaptation_required",
+      "runner_changed_to_actual_selector": "tests/native/run_floating.py",
+      "whole_runner_or_other_seven_float_cases_claimed_passed": false,
+      "proposal_action_removed": true,
+      "counts_recomputed_after_Hello": {
+        "cases": 1342,
+        "enabled": 982,
+        "disabled": 360,
+        "required": 306,
+        "files": 2872,
+        "runners": 251
+      },
+      "files_runners_classifications_and_SHA_unchanged": true,
+      "Source116_std37_fixtures_gold_unchanged": true,
+      "accepted_actual_evidence": {
+        "reference": "Cpp565",
+        "candidate": "new9d11 full O2 stage1",
+        "harness_python": "3.12.15",
+        "checks": 16,
+        "builds": 16,
+        "program_executions": 16,
+        "compiler_timeout_seconds": 90,
+        "program_timeout_seconds": 90,
+        "strict_actual_process_fields_raw_stream_SHA_and_48_traces_independently_checked": true,
+        "candidate_helper_calls": 0,
+        "reference_helper_build_calls": 8
+      },
+      "scope_limits": {
+        "three_convert_declarations_not_called_by_main": true,
+        "conversion_numeric_values_observed": false,
+        "const_comparison_main_return_type": "i32",
+        "const_comparison_if_checks": 48,
+        "other_floating_private_probes_MXCSR_or_object_identity_proven": false
+      },
+      "Source116_actual_before": "2026-11-14T05:08:48Z",
+      "Source116_independent_after": "2026-11-14T05:25:22.131442+00:00",
+      "Source116_map_sha256": "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef",
+      "old_host_Python314_attempt_preserved_and_not_adopted": true,
+      "original_REPORT_and_raw_bytes_unchanged": true,
+      "Root_README_mistaken_write_and_HEAD_restore_disclosure_preserved": true,
+      "compiler_or_program_reexecuted_for_integration": false,
+      "existing_jobs_operated": false,
+      "new_full_corpus_started": false,
       "full_corpus_or_bootstrap_pass_claimed": false
     }
   }
