@@ -233,6 +233,54 @@ def check_seccomp_exec_trace():
     print("PASS: seccomp execve/execveat records and extra-tool rejection")
 
 
+def check_process_stdin_file():
+    """Optional stdin file replays exact bytes; the default keeps fd 0."""
+    with tempfile.TemporaryDirectory(prefix="woozy-corpus-stdin-") as directory:
+        work = Path(directory)
+        payload = "中😀\r\n\nlast\0end".encode()
+        source = work / "stdin.bin"
+        source.write_bytes(payload)
+        python = Path(sys.executable).resolve()
+        echo = ("import sys; data=sys.stdin.buffer.read(); "
+                "sys.stdout.buffer.write(str(len(data)).encode()+b':'+data)")
+        result = corpus._run_process_impl(
+            [python, "-c", echo], work, dict(os.environ), 10, source)
+        assert result["exit"] == 0, result
+        assert result["timed_out"] is False, result
+        assert result["cleanup_complete"] is True, result
+        assert result["abandoned_pipes"] is False, result
+        assert result["stdout"] == (
+            str(len(payload)).encode() + b":" + payload), result["stdout"]
+        assert result["stderr"] == b"", result
+        assert source.read_bytes() == payload
+
+        inherited = work / "inherited.bin"
+        inherited.write_bytes(b"inherited\r\n\0tail")
+        saved = os.dup(0)
+        handle = os.open(inherited, os.O_RDONLY)
+        try:
+            os.dup2(handle, 0)
+        finally:
+            os.close(handle)
+        try:
+            default = corpus._run_process_impl(
+                [python, "-c", "import sys; "
+                 "sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+                work, dict(os.environ), 10)
+            isolated = corpus._run_process_impl(
+                [python, "-c", "import sys; "
+                 "sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+                work, dict(os.environ), 10, source)
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+        assert default["exit"] == 0, default
+        assert default["stdout"] == inherited.read_bytes(), default
+        assert isolated["exit"] == 0, isolated
+        assert isolated["stdout"] == payload, isolated
+    print("PASS: stdin file keeps UTF-8/NUL/EOF bytes; default inherits fd 0")
+
+
 def check_inventory():
     inventory = corpus.load_inventory(INVENTORY)
     report = corpus.check_inventory(CORPUS_ROOT, inventory)
@@ -352,9 +400,6 @@ def check_public_cli_expectations():
     not_ready = {
         "tests/generics/fixtures/cross-package-alias/vendor/dep": "component",
         "tests/generics/nested-patterns/literal-cross-package/vendor/dep": "component",
-        "tests/generics/inout/constrained/reject": "required",
-        "tests/generics/move/constrained-reject": "required",
-        "tests/generics/unbound-method-values/reject-capture": "required",
     }
     for manifest, adaptation in not_ready.items():
         case = cases["project:" + manifest + "/lang.toml"]
@@ -363,6 +408,24 @@ def check_public_cli_expectations():
         assert case["expected"] is None, case
         assert case["runner_status"] == (
             "component" if adaptation == "component" else "adaptation_required"), case
+
+    accepted_generics = {
+        "tests/generics/inout/constrained/reject": 0,
+        "tests/generics/move/constrained-reject": 0,
+        "tests/generics/unbound-method-values/reject-capture": 7,
+    }
+    for manifest, exit_code in accepted_generics.items():
+        case = cases["project:" + manifest + "/lang.toml"]
+        assert case["enabled"] is True, case
+        assert case["adaptation"] == "ready", case
+        assert case["support"] == "public_cli", case
+        assert case["runner"] == "tests/native/run_generics.py", case
+        assert case["runner_status"] == "adaptation_required", case
+        assert case["expected"] == {
+            "status": "ok", "exit": 0, "build_status": "ok",
+            "no_stderr": True}, case
+        assert case["run_expectation"] == {
+            "exit": exit_code, "stdout_base64": "", "stderr_base64": ""}, case
 
     # Published nonzero and panic expectations survive the strict checker.
     explicit = cases["project:tests/generics/fixtures/explicit/lang.toml"]
@@ -1606,6 +1669,7 @@ check_diagnostics_and_normalization()
 check_strict_json_types()
 check_trace_audit()
 check_seccomp_exec_trace()
+check_process_stdin_file()
 check_inventory()
 check_public_cli_expectations()
 check_run_expectations()

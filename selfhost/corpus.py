@@ -1073,11 +1073,22 @@ def _artifact_info(case, directory, preexisting=None):
     }
 
 
-def _run_process_impl(argv, cwd, env, timeout):
-    process = subprocess.Popen(
-        [str(part) for part in argv], cwd=str(cwd), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
-        start_new_session=True)
+def _run_process_impl(argv, cwd, env, timeout, stdin=None):
+    """Run one bounded process; ``stdin`` is an optional file path.
+
+    With ``stdin=None`` the child keeps the caller's stdin, exactly as every
+    pre-existing call does.  A path is opened read-only and handed to the
+    child as fd 0 so callers can replay exact bytes (UTF-8, NUL, EOF).
+    """
+    input_file = open(stdin, "rb") if stdin is not None else None
+    try:
+        process = subprocess.Popen(
+            [str(part) for part in argv], cwd=str(cwd), env=env,
+            stdin=input_file, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            bufsize=0, start_new_session=True)
+    finally:
+        if input_file is not None:
+            input_file.close()
     buffers = {process.stdout: b"", process.stderr: b""}
     selector = selectors.DefaultSelector()
     for stream in (process.stdout, process.stderr):
