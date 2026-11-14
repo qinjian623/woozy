@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
-  "previous_git_head": "47b9b17c2c99c8a5460673dc9b91a4624b5ea41d",
-  "frozen_at": "2026-11-14T09:08:14.069400+00:00",
+  "git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
+  "previous_git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
+  "frozen_at": "2026-11-14T09:21:57.024000+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -20481,8 +20481,8 @@
     },
     {
       "path": "tests/native/stdlib-io-errors/run_io_errors.py",
-      "sha256": "4b7229d28a24fd7c223ca31ae506b14bd265c6765c3243980248e82fb874060c",
-      "size": 1730,
+      "sha256": "e24e8a9823781be735185c145ac7eb01324b94f8fa2dc9c5058e757623fb6de2",
+      "size": 34163,
       "role": "runner_source",
       "assignment": []
     },
@@ -50815,10 +50815,11 @@
       "enabled": false,
       "runner": "tests/native/stdlib-io-errors/run_io_errors.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "IO error component runner migration and legacy repeated-output directory correction are accepted; product/performance remains failed at the original20-second per-command budget. Candidate72dc O0/O2 builds timed out with exit-9 and no program, so keep this existing row disabled/required. Original destination11bytes, absent-destination, empty stdout/stderr and exit assertions are unchanged; pure fake-process directory controls are not Source success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH15-io-errors-correction-independent-review-20261114.json; checks/SH15-io-errors-single-correction-20261114.json; checks/SH15-io-errors-public-records-20261114/SH15-io-errors-public-records-20261114.json. Core6/8 with two candidate programs not_run; legacy missing-env2fail and correct-env4pass yield12 retained compiler/program commands, not whole-session count. Original20s candidate failures and original156public+133independent explicit records retained; no new Source/C/LLVM/program/version/network run during integration."
     },
     {
       "id": "project:tests/native/stdlib-pure/lang.toml",
@@ -85748,8 +85749,8 @@
     },
     {
       "path": "tests/native/stdlib-io-errors/run_io_errors.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "Dedicated IO error component records public CLI build/program results, strict process/exec checks and exact destination/absent-destination observations. Legacy output-directory compatibility is corrected; historical72dc20s timeouts remain failures and the original project row stays disabled/required."
     },
     {
       "path": "tests/native/task_frame_gc/run_task_frame_gc.py",
@@ -86319,7 +86320,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "16bc1b0799ca69cb239b3f9d3747b827feb73503",
+    "to_git_head": "7f14626f092845919c53e624d212521d3bc7ba80",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86889,10 +86890,21 @@
         "accepted_task_prefix": "bdd262",
         "acceptance": "Capturing-C callback runner sole correction accepted, ACK952153,parent435; final Root small amendments accepted separately. Historical main140 retained; no new Source/C/LLVM execution.",
         "review": "checks/SH14-c-retained-capturing-Root-amendment-20261114/Root-review.json"
+      },
+      {
+        "path": "tests/native/stdlib-io-errors/run_io_errors.py",
+        "old_sha256": "4b7229d28a24fd7c223ca31ae506b14bd265c6765c3243980248e82fb874060c",
+        "old_size": 1730,
+        "new_sha256": "e24e8a9823781be735185c145ac7eb01324b94f8fa2dc9c5058e757623fb6de2",
+        "new_size": 34163,
+        "commit": "7f14626f092845919c53e624d212521d3bc7ba80",
+        "accepted_task": "633da2df-6f80-44d9-bee5-97e8f9e89877",
+        "acceptance": "IO runner sole compatibility correction accepted, ACK952720,parent437. Original72dc20s candidate failures retained; no performance or full product pass claim.",
+        "review": "checks/SH15-io-errors-correction-independent-review-20261114.json"
       }
     ],
     "new_freeze_path_count": 205,
-    "modified_freeze_path_count": 39,
+    "modified_freeze_path_count": 40,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -88644,6 +88656,109 @@
       "current_Source116_map": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
       "product_Source116_stdlib37_fixture_binding_gold_header_C_CPP_lifecycle_CMake_unchanged": true,
       "no_long_jobs_services_workers_operated": true,
+      "counts": {
+        "cases": 1344,
+        "enabled": 985,
+        "disabled": 359,
+        "required": 305,
+        "files": 2877,
+        "runners": 256
+      }
+    },
+    "IO_errors_runner_correction_integration": {
+      "base_commit": "4c4d9c9ebd7af8cc3a177dbfcf541a6fd3e5d64e",
+      "code_commit": "7f14626f092845919c53e624d212521d3bc7ba80",
+      "accepted_task": "633da2df-6f80-44d9-bee5-97e8f9e89877",
+      "ACK_event": 952720,
+      "ACK_parent": 437,
+      "files": [
+        {
+          "path": "tests/native/stdlib-io-errors/run_io_errors.py",
+          "before_sha256": "4b7229d28a24fd7c223ca31ae506b14bd265c6765c3243980248e82fb874060c",
+          "before_size": 1730,
+          "HEAD_tracked": true,
+          "after_sha256": "e24e8a9823781be735185c145ac7eb01324b94f8fa2dc9c5058e757623fb6de2",
+          "after_size": 34163,
+          "diff_lines": 808
+        },
+        {
+          "path": "tests/native/stdlib-io-errors/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "HEAD_tracked": false,
+          "after_sha256": "b455926a137f721b25c30826b6a46f956835b03b9ff09de4db96e366005ae5a3",
+          "after_size": 1932,
+          "diff_lines": 47
+        }
+      ],
+      "independent_review": "/home/qin/Work/language-dev-20261103/checks/SH15-io-errors-correction-independent-review-20261114.json",
+      "independent_review_sha256": "b9a813d9b82a070fd510d2143620fa6e557ef524af2b60551d3d3aba830b3626",
+      "original_review": "/home/qin/Work/language-dev-20261103/checks/SH15-io-errors-independent-review-20261114.json",
+      "original_review_sha256": "045c89f325d73c3795d10e9dba1e573df329aaeb280aee84a2557733b13bd9fa",
+      "single_correction_report": "/home/qin/Work/language-dev-20261103/checks/SH15-io-errors-single-correction-20261114.json",
+      "single_correction_report_sha256": "543424ae7b042657828e2d0eb027bc1b026ee099906fe9fbfe546b2d902c7b0d",
+      "only_existing_case_id": "project:tests/native/stdlib-io-errors/lang.toml",
+      "case_fields_changed_only": [
+        "reason",
+        "evidence"
+      ],
+      "other1343cases_exact_and_case_order_unchanged": true,
+      "original_expected_operations_backend_disabled_required_runner_status_unchanged": true,
+      "top_level_runner_component": true,
+      "new_case_runner_or_frozen_file_count": 0,
+      "README_new_not_frozen": true,
+      "original20s_build_and_program_budgets_unchanged": true,
+      "original_destination11bytes_and_absent_destination_gold_unchanged": true,
+      "accepted_pure_main_controls_reused_without_rerun": {
+        "default_identical_argv_exits": [
+          0,
+          0
+        ],
+        "fake_process_calls": [
+          4,
+          4
+        ],
+        "existing_empty_build_program_command_controls_reused": true,
+        "old_raw_generated_artifacts_and_jsonl_prefix_retained": true,
+        "strict_nonempty_record_exit": 2,
+        "strict_nonempty_record_fake_calls": 0,
+        "strict_nonempty_record_bytes_unchanged": true,
+        "original5pure_controls_passed": true
+      },
+      "historical_explicit_public156_independent133_entries_preserved": true,
+      "historical_candidate": "72dc",
+      "historical_candidate_O0_O2": {
+        "build_budget_seconds": 20.0,
+        "exit_codes": [
+          -9,
+          -9
+        ],
+        "timed_out": [
+          true,
+          true
+        ],
+        "elapsed_seconds": [
+          20.004226,
+          20.005014
+        ],
+        "programs_published": 0,
+        "status": "failed"
+      },
+      "historical_core_executed_expected": [
+        6,
+        8
+      ],
+      "candidate_program_not_run": 2,
+      "historical_legacy_no_env_failed": 2,
+      "historical_legacy_correct_env_passed": 4,
+      "retained_compiler_program_commands": 12,
+      "whole_session_count_not_claimed": true,
+      "no_product_or_performance_fix_claimed": true,
+      "product_Source116_count": 116,
+      "product_Source116_map": "da69a017dfced63d3b8ef71016fc2188ba3834bc8c4f7236526cf4b780c41388",
+      "product_Source116_stdlib37_Source_gold_manifest_CMake_unchanged": true,
+      "no_new_Source_C_program_LLVM_version_network_test": true,
+      "old_new_long_jobs_workers_services_not_operated": true,
       "counts": {
         "cases": 1344,
         "enabled": 985,
