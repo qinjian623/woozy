@@ -122,6 +122,15 @@ def check_diagnostics_and_normalization():
     assert corpus.check_expected(
         {"operation": "build_native", "expected": {"status": "error"}},
         reject, 1, b"", {"published": ["program"], "required": []})
+    assert not corpus.check_expected(
+        {"operation": "check",
+         "expected": {"status": "error", "code": "E_PARSE_EXPECTED_TOKEN"}},
+        reject, 1, b"", {"published": []})
+    assert any("expected diagnostic code" in failure
+               for failure in corpus.check_expected(
+                   {"operation": "check",
+                    "expected": {"status": "error", "code": "E_TYPE_MISMATCH"}},
+                   reject, 1, b"", {"published": []}))
 
 
 def check_strict_json_types():
@@ -978,6 +987,275 @@ def check_timeout_signal_artifacts_and_cleanup():
             time.sleep(0.05)
 
 
+def check_generated_project_controls():
+    manifest = (
+        'schema_version=1\n[package]\nname="app"\n'
+        'source_root="src"\nentry="app"\n[build]\n'
+        'backend="native"\nword_bits=64\n')
+
+    def encoded(data):
+        return base64.b64encode(data).decode("ascii")
+
+    case = {
+        "id": "generated-project",
+        "operation": "check",
+        "manifest": "lang.toml",
+        "backend": "native",
+        "generated_files": {
+            "lang.toml": encoded(manifest.encode("utf-8")),
+            "src/main.wz": encoded(b"package app;func main(){}"),
+            "src/hidden/lib.wz": encoded(
+                b"package hidden;pub struct S{x i32;}"),
+        },
+    }
+    with tempfile.TemporaryDirectory(
+            prefix="woozy-corpus-generated-") as directory:
+        work = Path(directory)
+        root = corpus._materialize_generated(case, work, "reference")
+        assert root is not None
+        assert (root / "src/main.wz").read_bytes() == (
+            b"package app;func main(){}")
+        assert (root / "src/hidden/lib.wz").read_bytes() == (
+            b"package hidden;pub struct S{x i32;}")
+        before = corpus.snapshot_case(
+            case, work, work / "run", root)
+        assert before[str((root / "lang.toml").resolve())] == (
+            corpus.digest_bytes(manifest.encode("utf-8")))
+
+        (root / "src/main.wz").write_bytes(b"package app;changed")
+        assert corpus._materialize_generated(
+            case, work, "reference") == root
+        assert (root / "src/main.wz").read_bytes() == b"package app;changed"
+        after = corpus.snapshot_case(case, work, work / "run", root)
+        assert before != after
+
+        for ident, files in (
+                ("absolute", {"/src/main.wz": encoded(b"x")}),
+                ("parent", {"../main.wz": encoded(b"x")}),
+                ("dot", {"src/./main.wz": encoded(b"x")}),
+                ("duplicate", {"src/main.wz": encoded(b"x"),
+                               "src//main.wz": encoded(b"x")}),
+                ("empty", {"": encoded(b"x")}),
+                ("not-base64", {"src/main.wz": "***"}),
+                ("not-string", {"src/main.wz": 1})):
+            bad = dict(case, id="generated-" + ident,
+                       generated_files=files)
+            expect_error(corpus._materialize_generated, bad, work,
+                         "reference")
+
+        symlink = dict(case, id="generated-symlink")
+        link = (work / "generated" / corpus.safe_name(symlink["id"])
+                / corpus.safe_name("reference"))
+        link.parent.mkdir(parents=True)
+        outside = work / "outside"
+        outside.mkdir()
+        (outside / "lang.toml").write_text(manifest)
+        link.symlink_to(outside, target_is_directory=True)
+        expect_error(corpus._materialize_generated, symlink, work,
+                     "reference")
+
+        parent_symlink = dict(case, id="generated-parent-symlink")
+        parent_root = (work / "generated"
+                       / corpus.safe_name(parent_symlink["id"])
+                       / corpus.safe_name("reference"))
+        parent_root.mkdir(parents=True)
+        (parent_root / "src").symlink_to(outside, target_is_directory=True)
+        expect_error(corpus._materialize_generated, parent_symlink, work,
+                     "reference")
+
+        seeded = {
+            "program": encoded(b"preserve-program"),
+            "program.o": encoded(b"preserve-program.o"),
+            "program.py": encoded(b"preserve-program.py"),
+            "langrt.py": encoded(b"preserve-langrt.py"),
+            "unrelated": encoded(b"preserve-unrelated"),
+        }
+        build = {
+            "id": "generated-preeserve",
+            "operation": "build_native",
+            "manifest": "lang.toml",
+            "preexisting_outputs": seeded,
+        }
+        run_dir = work / "seed-run"
+        run_dir.mkdir()
+        preexisting = corpus._seed_outputs(build, run_dir)
+        artifacts = corpus._artifact_info(build, run_dir, preexisting)
+        assert artifacts["preexisting_changed"] == []
+        assert artifacts["published"] == []
+        (run_dir / "out/program").write_bytes(b"changed")
+        artifacts = corpus._artifact_info(build, run_dir, preexisting)
+        assert artifacts["preexisting_changed"] == ["program"]
+
+        ordinary = {
+            "id": "ordinary-case",
+            "operation": "check",
+            "manifest": "tests/generics/list-inference/lang.toml",
+            "backend": "native",
+        }
+        expected_manifest = (
+            CORPUS_ROOT / "tests/generics/list-inference/lang.toml"
+        ).resolve()
+        assert corpus.build_command(
+            ordinary, Path("woozyc"), CORPUS_ROOT, work / "run",
+            {"name": "default", "opt": None}) == [
+                "woozyc", "check", "--project", str(expected_manifest),
+                "--format", "json", "--backend", "native"]
+        snapshot = corpus.snapshot_case(
+            ordinary, CORPUS_ROOT, work / "run")
+        assert snapshot
+        assert all(Path(path).is_relative_to(expected_manifest.parent)
+                   for path in snapshot)
+
+
+def check_generated_assertion_corrections():
+    manifest = (
+        'schema_version=1\n[package]\nname="app"\n'
+        'source_root="src"\nentry="app"\n[build]\n'
+        'backend="native"\nword_bits=64\n')
+    main = b"package app;func main(){}"
+
+    def encoded(data):
+        return base64.b64encode(data).decode("ascii")
+
+    nested = {
+        "id": "nested-input-snapshot",
+        "operation": "check",
+        "manifest": "sub/lang.toml",
+        "generated_files": {
+            "sub/lang.toml": encoded(manifest.encode("utf-8")),
+            "sub/src/main.wz": encoded(main),
+            "shared/lib.wz": encoded(b"package shared;func f(){}"),
+            "sub/data.bin": encoded(b"original"),
+        },
+    }
+    with tempfile.TemporaryDirectory(
+            prefix="woozy-corpus-corrections-") as directory:
+        work = Path(directory)
+        root = corpus._materialize_generated(nested, work, "reference")
+        before = corpus.snapshot_case(
+            nested, work, work / "run", root)
+        assert set(before) == {
+            str((root / relative).resolve())
+            for relative in nested["generated_files"]
+        }
+        (root / "shared/lib.wz").write_bytes(b"package shared;changed")
+        (root / "sub/data.bin").write_bytes(b"changed")
+        after = corpus.snapshot_case(nested, work, work / "run", root)
+        assert before != after
+
+        (root / "escape").symlink_to(work / "outside")
+        expect_error(corpus.snapshot_case, nested, work, work / "run", root)
+        (root / "escape").unlink()
+        os.mkfifo(root / "special")
+        expect_error(corpus.snapshot_case, nested, work, work / "run", root)
+
+        fresh = {
+            "id": "fresh-output",
+            "operation": "build_native",
+            "manifest": "lang.toml",
+            "expected": {"status": "error", "output_exists": False},
+        }
+        fresh_dir = work / "fresh"
+        (fresh_dir / "out").mkdir(parents=True)
+        artifacts = corpus._artifact_info(fresh, fresh_dir, {})
+        assert artifacts["output_exists"] is True
+        assert artifacts["output_kind"] == "directory"
+        assert artifacts["published"] == []
+        failures = corpus.check_expected(
+            fresh, document(), 1, b"", artifacts)
+        assert any("output_exists" in failure for failure in failures), failures
+
+        check = dict(fresh, id="check-output", operation="check")
+        check_dir = work / "check"
+        (check_dir / "out").mkdir(parents=True)
+        check_artifacts = corpus._artifact_info(check, check_dir, {})
+        failures = corpus.check_expected(
+            check, document(), 1, b"", check_artifacts)
+        assert any("output_exists" in failure for failure in failures), failures
+
+        absent_dir = work / "absent"
+        absent_dir.mkdir()
+        absent = corpus._artifact_info(fresh, absent_dir, {})
+        assert absent["output_exists"] is False
+        assert absent["output_kind"] == "absent"
+        assert not corpus.check_expected(
+            fresh, document(), 1, b"", absent)
+
+        existing = {
+            "id": "existing-output",
+            "operation": "build_native",
+            "manifest": "lang.toml",
+            "expected": {"status": "error", "output_exists": True},
+            "preexisting_outputs": {"program": encoded(b"preserve")},
+        }
+        existing_dir = work / "existing"
+        existing_dir.mkdir()
+        seeded = corpus._seed_outputs(existing, existing_dir)
+        existing_artifacts = corpus._artifact_info(
+            existing, existing_dir, seeded)
+        assert existing_artifacts["output_exists"] is True
+        assert not corpus.check_expected(
+            existing, document(), 1, b"", existing_artifacts)
+
+        primary = {
+            "id": "primary-input",
+            "operation": "check",
+            "manifest": "lang.toml",
+            "generated_files": {
+                "lang.toml": encoded(manifest.encode("utf-8")),
+                "src/main.wz": encoded(main),
+            },
+            "expected": {
+                "status": "error", "exit": 1,
+                "code": "E_PARSE_EXPECTED_TOKEN",
+                "require_error_span": True,
+                "primary_input": "src/main.wz",
+            },
+        }
+        good = document()
+        good["diagnostics"][0]["primary"] = {
+            "path": "<REPO>/src/main.wz",
+            "start_byte": 0,
+            "end_byte": len(main),
+        }
+        assert not corpus.check_expected(
+            primary, good, 1, b"", {"published": []})
+        wrong_path = copy.deepcopy(good)
+        wrong_path["diagnostics"][0]["primary"]["path"] = (
+            "<REPO>/lang.toml")
+        failures = corpus.check_expected(
+            primary, wrong_path, 1, b"", {"published": []})
+        assert any("primary on" in failure for failure in failures), failures
+        bad_range = copy.deepcopy(good)
+        bad_range["diagnostics"][0]["primary"]["end_byte"] = len(main) + 1
+        failures = corpus.check_expected(
+            primary, bad_range, 1, b"", {"published": []})
+        assert any("primary on" in failure for failure in failures), failures
+        empty_range = copy.deepcopy(good)
+        empty_range["diagnostics"][0]["primary"]["start_byte"] = 1
+        empty_range["diagnostics"][0]["primary"]["end_byte"] = 1
+        failures = corpus.check_expected(
+            primary, empty_range, 1, b"", {"published": []})
+        assert any("primary on" in failure for failure in failures), failures
+        missing_input = copy.deepcopy(primary)
+        missing_input["expected"]["primary_input"] = "missing.wz"
+        failures = corpus.check_expected(
+            missing_input, good, 1, b"", {"published": []})
+        assert any("not a generated input" in failure
+                   for failure in failures), failures
+
+        legacy = {
+            "operation": "check",
+            "expected": {
+                "status": "error", "exit": 1,
+                "code": "E_PARSE_EXPECTED_TOKEN",
+                "require_error_span": True,
+            },
+        }
+        assert not corpus.check_expected(
+            legacy, bad_range, 1, b"", {"published": []})
+
+
 def check_runner_and_expectation_inventory_negative():
     with tempfile.TemporaryDirectory(prefix="woozy-corpus-inventory-") as directory:
         repo = Path(directory) / "repo"
@@ -1173,6 +1451,8 @@ check_large_timeout_configuration()
 check_execution_repetition_expectations()
 check_execution_repetition_comparison()
 check_execution_fixture_repetitions()
+check_generated_project_controls()
+check_generated_assertion_corrections()
 check_timeout_signal_artifacts_and_cleanup()
 check_runner_and_expectation_inventory_negative()
 run_harness()

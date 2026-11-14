@@ -136,6 +136,17 @@ Native 发布物检查现在扫描 `out/` 下全部条目，包括 `program.o`�
 `preexisting_outputs` 用例会先写入显式已有文件并记录 hash/类型；运行后任何已有文件
 缺失、内容或模式改变都会失败。未改变的预置文件不算失败发布物。
 
+补充：可选用例字段 `generated_files` 接受
+`{安全相对路径: base64(bytes)}`，在第一次快照前按角色各物化一次，之后不再重写；
+快照仍按内容 hash 比较，因此编译器改写生成源码会失败。绝对路径、`.`/`..`、重复
+规范名、逃出根目录的 symlink 和非法 base64 都在写入前拒绝。`expected.code` 可断言
+拒绝诊断的具体 code；它不替代 `status`、`exit`、`no_stderr` 和构建发布物断言。
+生成项目按整个根目录的普通文件记录 hash；读取前拒绝符号链接和特殊文件。
+`expected.output_exists` 检查输出目录是否存在，空目录也算存在。
+`expected.primary_input` 指定生成输入文件；匹配 `expected.code` 的诊断必须指向它，
+且满足 `0 <= start_byte < end_byte <= 输入字节数`。
+本批次只用它接入 aggregate-const 的 13×2×3 命令，未推广到其他生成式 runner。
+
 回归探针 `partial-object` 现在记录 `published=["program.o"]` 且 case 失败；单测中的
 “保留已有输出”和“改变已有输出”正反控制分别通过/失败。
 

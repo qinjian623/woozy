@@ -23,7 +23,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import selectors
 import shutil
@@ -580,9 +580,62 @@ def check_expected(case, document, exit_code, stderr, artifacts):
               if item["severity"] == "error"]
     if wanted == "error" and not errors:
         failures.append("rejection has no error diagnostic")
+    if "code" in expected:
+        wanted_code = expected["code"]
+        if not isinstance(wanted_code, str):
+            failures.append("expected diagnostic code is not a string")
+        elif not any(
+                item["code"] == wanted_code
+                and (item["primary"] is not None
+                     or not expected.get("require_error_span"))
+                for item in errors):
+            observed = sorted({item["code"] for item in errors})
+            failures.append(
+                f"expected diagnostic code {wanted_code}, got {observed}")
     if expected.get("require_error_span") and any(
             item["primary"] is None for item in errors):
         failures.append("rejection diagnostic is missing its primary span")
+    if "output_exists" in expected:
+        wanted_output = expected["output_exists"]
+        actual_output = artifacts.get("output_exists")
+        if type(wanted_output) is not bool:
+            failures.append("expected output_exists is not a boolean")
+        elif actual_output != wanted_output:
+            failures.append(
+                f"expected output_exists {wanted_output}, got {actual_output}")
+    if "primary_input" in expected:
+        primary_input = expected["primary_input"]
+        if "code" not in expected:
+            failures.append("primary_input requires expected code")
+        elif not isinstance(primary_input, str) or not primary_input:
+            failures.append("primary_input is not a non-empty string")
+        else:
+            try:
+                generated = _generated_file_bytes(case)
+                relative = str(_generated_relative(case, primary_input))
+                data = generated[relative]
+            except (KeyError, CorpusError):
+                failures.append(
+                    f"primary_input is not a generated input: "
+                    f"{primary_input!r}")
+            else:
+                wanted_path = "<REPO>/" + relative
+                matching = [
+                    item for item in errors
+                    if item["code"] == expected["code"]
+                    and item["primary"] is not None
+                ]
+                if not any(
+                        item["primary"]["path"] == wanted_path
+                        and _is_integer(item["primary"]["start_byte"])
+                        and _is_integer(item["primary"]["end_byte"])
+                        and 0 <= item["primary"]["start_byte"]
+                        < item["primary"]["end_byte"] <= len(data)
+                        for item in matching):
+                    failures.append(
+                        f"expected {expected['code']} primary on "
+                        f"{wanted_path} with "
+                        f"0<=start<end<={len(data)}")
     if case["operation"].startswith("build_"):
         if artifacts.get("preexisting_changed"):
             failures.append(
@@ -707,6 +760,115 @@ def _case_source(case, root, directory):
     raise CorpusError(f"{case['id']}: syntax case has no source")
 
 
+def _generated_relative(case, relative):
+    case_id = case.get("id", "<case>")
+    if not isinstance(relative, str) or not relative:
+        raise CorpusError(f"{case_id}: generated path is not a non-empty string")
+    if "\x00" in relative:
+        raise CorpusError(f"{case_id}: generated path contains NUL")
+    path = PurePosixPath(relative)
+    if (path.is_absolute() or str(path) != relative
+            or any(part in ("", ".", "..") for part in path.parts)):
+        raise CorpusError(
+            f"{case_id}: unsafe generated path {relative!r}")
+    return path
+
+
+def _generated_file_bytes(case):
+    files = case.get("generated_files")
+    if files is None:
+        return {}
+    case_id = case.get("id", "<case>")
+    if not isinstance(files, dict) or not files:
+        raise CorpusError(
+            f"{case_id}: generated_files is not a non-empty object")
+    decoded = {}
+    canonical = set()
+    for relative, encoded in files.items():
+        name = str(_generated_relative(case, relative))
+        if name in canonical:
+            raise CorpusError(
+                f"{case_id}: duplicate generated path {name!r}")
+        canonical.add(name)
+        if not isinstance(encoded, str):
+            raise CorpusError(
+                f"{case_id}: generated file {relative!r} is not base64")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as error:
+            raise CorpusError(
+                f"{case_id}: invalid generated file {relative!r}: {error}"
+            ) from error
+        decoded[name] = data
+    return decoded
+
+
+def _generated_target(case, root, relative):
+    path = _generated_relative(case, relative)
+    root = Path(root)
+    resolved_root = root.resolve(strict=True)
+    target = root.joinpath(*path.parts)
+    current = root
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise CorpusError(
+                f"{case.get('id', '<case>')}: generated path escapes "
+                f"through symlink {relative!r}")
+    if not target.resolve(strict=False).is_relative_to(resolved_root):
+        raise CorpusError(
+            f"{case.get('id', '<case>')}: generated path escapes root "
+            f"{relative!r}")
+    return target
+
+
+def _materialize_generated(case, out_root, role):
+    files = _generated_file_bytes(case)
+    if not files:
+        return None
+    out_root = Path(out_root)
+    root = (out_root / "generated" / safe_name(case["id"])
+            / safe_name(role))
+    if not root.resolve(strict=False).is_relative_to(
+            out_root.resolve(strict=True)):
+        raise CorpusError(
+            f"{case['id']}: generated directory escapes output root")
+    if root.exists() or root.is_symlink():
+        if root.is_symlink() or not root.is_dir():
+            raise CorpusError(
+                f"{case['id']}: generated directory is not a real directory")
+        for relative in files:
+            _generated_target(case, root, relative)
+        return root
+    root.mkdir(parents=True)
+    try:
+        for relative, data in sorted(files.items()):
+            target = _generated_target(case, root, relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _generated_target(case, root, relative)
+            if target.exists() or target.is_symlink():
+                raise CorpusError(
+                    f"{case['id']}: generated file already exists: "
+                    f"{relative!r}")
+            target.write_bytes(data)
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return root
+
+
+def _case_manifest(case, root, generated_root=None):
+    if generated_root is None:
+        return (root / case["manifest"]).resolve()
+    relative = _generated_relative(case, case.get("manifest"))
+    base = Path(generated_root)
+    manifest = base.joinpath(*relative.parts).resolve()
+    if not manifest.is_relative_to(base.resolve()):
+        raise CorpusError(
+            f"{case['id']}: generated manifest escapes its root")
+    return manifest
+
+
 def _project_source(manifest):
     files = {}
     for path in sorted(manifest.parent.rglob("*")):
@@ -716,24 +878,74 @@ def _project_source(manifest):
     return files
 
 
-def snapshot_case(case, root, directory):
+def _generated_snapshot(case, root):
+    root = Path(root)
+    if root.is_symlink():
+        raise CorpusError(
+            f"{case['id']}: generated root is a symlink")
+    resolved_root = root.resolve(strict=True)
+    files = {}
+
+    def visit(directory, prefix):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError as error:
+            raise CorpusError(
+                f"{case['id']}: cannot read generated input: {error}"
+            ) from error
+        for name in names:
+            relative = f"{prefix}/{name}" if prefix else name
+            _generated_relative(case, relative)
+            path = directory / name
+            try:
+                metadata = os.lstat(path)
+            except OSError as error:
+                raise CorpusError(
+                    f"{case['id']}: cannot stat generated input "
+                    f"{relative!r}: {error}") from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise CorpusError(
+                    f"{case['id']}: generated input is a symlink: "
+                    f"{relative!r}")
+            if stat.S_ISDIR(metadata.st_mode):
+                visit(path, relative)
+            elif stat.S_ISREG(metadata.st_mode):
+                if not path.resolve(strict=True).is_relative_to(
+                        resolved_root):
+                    raise CorpusError(
+                        f"{case['id']}: generated input escapes root: "
+                        f"{relative!r}")
+                files[str(path)] = digest(path)
+            else:
+                raise CorpusError(
+                    f"{case['id']}: generated input is not a regular file: "
+                    f"{relative!r}")
+
+    visit(root, "")
+    return files
+
+
+def snapshot_case(case, root, directory, generated_root=None):
     operation = case["operation"]
     if operation == "syntax":
         path, data = _case_source(case, root, directory)
         return {str(path): digest_bytes(data)}
-    manifest = (root / case["manifest"]).resolve()
+    if generated_root is not None:
+        return _generated_snapshot(case, generated_root)
+    manifest = _case_manifest(case, root, generated_root)
     if not manifest.is_file():
         raise CorpusError(f"{case['id']}: missing manifest {manifest}")
     return _project_source(manifest)
 
 
-def build_command(case, compiler, root, directory, variant):
+def build_command(case, compiler, root, directory, variant,
+                  generated_root=None):
     operation = case["operation"]
     if operation == "syntax":
         path, _ = _case_source(case, root, directory)
         return [str(compiler), "check", "--syntax-only", "--format", "json",
                 str(path)]
-    manifest = (root / case["manifest"]).resolve()
+    manifest = _case_manifest(case, root, generated_root)
     if operation == "check":
         command = [str(compiler), "check", "--project", str(manifest),
                    "--format", "json"]
@@ -820,14 +1032,30 @@ def _seed_outputs(case, directory):
     return _scan_output_tree(out)
 
 
+def _output_kind(path):
+    if path.is_symlink():
+        return "symlink"
+    if path.is_dir():
+        return "directory"
+    if path.is_file():
+        return "file"
+    if path.exists():
+        return "other"
+    return "absent"
+
+
 def _artifact_info(case, directory, preexisting=None):
     preexisting = preexisting or {}
     required = required_artifacts(case)
+    out = directory / "out"
+    output_kind = _output_kind(out)
+    output = {"output_exists": output_kind != "absent",
+              "output_kind": output_kind}
     if not case["operation"].startswith("build_"):
         return {"published": [], "files": {}, "entries": {},
                 "preexisting": preexisting, "preexisting_changed": [],
-                "required": []}
-    entries = _scan_output_tree(directory / "out")
+                "required": [], **output}
+    entries = _scan_output_tree(out)
     published = sorted(
         name for name, entry in entries.items()
         if preexisting.get(name) != entry)
@@ -841,6 +1069,7 @@ def _artifact_info(case, directory, preexisting=None):
         "preexisting": preexisting,
         "preexisting_changed": preexisting_changed,
         "required": required,
+        **output,
     }
 
 
@@ -1013,9 +1242,12 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
     if directory.exists() and any(directory.iterdir()):
         raise CorpusError(f"run evidence directory is not empty: {directory}")
     directory.mkdir(parents=True, exist_ok=True)
+    generated_root = _materialize_generated(case, out_root, role)
     preexisting = _seed_outputs(case, directory)
-    command = build_command(case, compiler, context["root"], directory, variant)
-    before = snapshot_case(case, context["root"], directory)
+    command = build_command(
+        case, compiler, context["root"], directory, variant, generated_root)
+    before = snapshot_case(
+        case, context["root"], directory, generated_root)
     write_json(directory / "input.json", before)
     argv_record = {
         "case": case["id"],
@@ -1040,7 +1272,8 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
     timed_out = process["timed_out"]
     (directory / "stdout.bin").write_bytes(stdout)
     (directory / "stderr.bin").write_bytes(stderr)
-    after = snapshot_case(case, context["root"], directory)
+    after = snapshot_case(
+        case, context["root"], directory, generated_root)
     failures = []
     if before != after:
         failures.append("input snapshot changed while the compiler ran")
@@ -1061,15 +1294,19 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
         trace = {"status": "violation", "error": str(error),
                  "allowed": sorted(allowed)}
         failures.append(str(error))
+    normalization_roots = list(context["roots"])
+    if generated_root is not None:
+        normalization_roots.append(generated_root)
     normalized_stderr = normalize_text(
         stderr.decode("utf-8", "surrogateescape"),
-        directory, context["roots"]).encode("utf-8", "surrogateescape")
+        directory, normalization_roots).encode("utf-8", "surrogateescape")
     (directory / "stderr.normalized.bin").write_bytes(normalized_stderr)
     document = None
     json_error = None
     try:
         document = parse_diagnostic_stdout(stdout)
-        normalized = normalize_json(document, directory, context["roots"])
+        normalized = normalize_json(
+            document, directory, normalization_roots)
         write_json(directory / "diagnostics.normalized.json", normalized)
     except CorpusError as error:
         json_error = str(error)
@@ -1117,7 +1354,8 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
         "variant": variant["name"],
         "compiler": str(Path(compiler).resolve()),
         "compiler_sha256": digest(Path(compiler)),
-        "hidden_input": bool("source_base64" in case),
+        "hidden_input": bool(
+            "source_base64" in case or generated_root is not None),
         "directory": _relative(directory, out_root),
         "exit": exit_code,
         "timed_out": timed_out,
@@ -1143,6 +1381,13 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
         "_normalized_stderr": normalized_stderr,
         "_executions": executions,
     }
+    if generated_root is not None:
+        record["generated_files"] = {
+            relative: digest_bytes(data)
+            for relative, data in sorted(
+                _generated_file_bytes(case).items())
+        }
+        record["generated_directory"] = _relative(generated_root, out_root)
     return record
 
 
@@ -1240,7 +1485,7 @@ def run_case(case, reference, candidates, out_root, context):
             reference_failures = ["reference JSON diagnostics are malformed"]
         else:
             reference_failures = check_expected(
-                case, reference_run["_document"], reference_run["exit"],
+                case, reference_run["_normalized"], reference_run["exit"],
                 reference_run["_normalized_stderr"], reference_run["artifacts"])
         reference_failures += reference_run["failures"]
         reference_failures += check_run_expectations(
@@ -1263,7 +1508,7 @@ def run_case(case, reference, candidates, out_root, context):
                 candidate_failures = ["candidate JSON diagnostics are malformed"]
             else:
                 candidate_failures = check_expected(
-                    case, candidate_run["_document"], candidate_run["exit"],
+                    case, candidate_run["_normalized"], candidate_run["exit"],
                     candidate_run["_normalized_stderr"],
                     candidate_run["artifacts"])
             candidate_failures += check_run_expectations(
@@ -1406,6 +1651,10 @@ def _inventory_errors(root, inventory):
                 case.get("source") or case.get("source_base64")):
             errors.append(f"{case_id}: syntax case has no source")
         errors.extend(_case_classification_errors(case))
+        try:
+            _generated_file_bytes(case)
+        except CorpusError as error:
+            errors.append(str(error))
         if case.get("enabled") and operation in ("build_native", "build_python"):
             expected = case.get("expected") or {}
             if expected_status(expected) == "ok" and not (
