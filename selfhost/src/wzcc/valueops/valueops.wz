@@ -1691,6 +1691,11 @@ pub func classify_value(module hir.HirModule, type_id usize) hir.ValueOps
     }
     let active = vec.empty[usize]();
     out.needs_drop = needs_drop_visit(module, inout state, type_id, active, 0);
-    out.pod_inout = inout_data_type(module, type_id, vec.empty[usize]());
+    // Reuse the Classifier's private table exactly like the C++ producer: the
+    // standalone query keeps its own scratch, but a member substitution here
+    // already cloned one.  A fresh ActiveNominal stack is still required.
+    var inout_active = vec.empty[ActiveNominal]();
+    out.pod_inout = inout_data_visit(module, inout state.scratch,
+        vec.empty[usize](), inout inout_active, type_id, false, 0, 0);
     return out;
 }
