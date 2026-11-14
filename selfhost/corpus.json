@@ -86590,7 +86590,7 @@
         "new_size": 81759,
         "commit": "672e947058be36dd843d4adaacde95b45f8719bb",
         "acceptance": "SH12o async11 accepted rev4/event950001; current runner includes the strict process guard correction. Prior SH12g Root amendment and rejected original Bridge2ae history are retained below.",
-        "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md",
+        "review": "checks/SH12o-async11-Root-review-event950001-20261114/review.json",
         "history": [
           {
             "path": "tests/async_parameter_copy/run_parameter_copy.py",
