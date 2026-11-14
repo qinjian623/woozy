@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
-  "previous_git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
-  "frozen_at": "2026-11-14T06:11:10.730393+00:00",
+  "git_head": "f536b84705ec361ce811834a13a64214bc44b0e4",
+  "previous_git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
+  "frozen_at": "2026-11-14T06:24:24.629077+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -24465,8 +24465,8 @@
     },
     {
       "path": "tests/python/weak_source/run_weak_source.py",
-      "sha256": "6aa937d1ac54095008e6dc8ccea1479f87d836bd5ef58688caa7c683147d4e26",
-      "size": 10323,
+      "sha256": "6e8c5d6a524822d50cd84812f8e48e87835f394f9e2d65bda5560c47cc77e4b3",
+      "size": 49226,
       "role": "runner_source",
       "assignment": []
     },
@@ -24991,7 +24991,8 @@
       "size": 136,
       "role": "manifest",
       "assignment": [
-        "project:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml"
+        "project:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+        "project-python:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml"
       ]
     },
     {
@@ -25000,7 +25001,8 @@
       "size": 680,
       "role": "woozy_source",
       "assignment": [
-        "project:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml"
+        "project:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+        "project-python:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml"
       ],
       "manifest": "tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml"
     },
@@ -26363,6 +26365,20 @@
       "size": 7309,
       "role": "runner_source",
       "assignment": []
+    },
+    {
+      "path": "tests/python/weak_source/runner_controls.py",
+      "role": "runner_source",
+      "assignment": [],
+      "sha256": "9051432296a3371fcdad1d0cbe96c4120dfc21effcb78ece712634ea541c1e91",
+      "size": 8644
+    },
+    {
+      "path": "tests/python/weak_source/test_runner_controls.py",
+      "role": "runner_source",
+      "assignment": [],
+      "sha256": "a02454322d5e299a36224612fd47a60f139b0780e6247300fd42f6d6ec69b409",
+      "size": 5984
     }
   ],
   "cases": [
@@ -56689,10 +56705,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/generic-target/lang.toml",
@@ -56713,10 +56730,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/held-some-keeps-alive/lang.toml",
@@ -56737,10 +56755,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-file/lang.toml",
@@ -56761,10 +56780,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-foreign/lang.toml",
@@ -56785,10 +56805,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
@@ -56809,10 +56830,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-same-shape-struct/lang.toml",
@@ -56833,10 +56855,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-slice/lang.toml",
@@ -56857,10 +56880,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-string/lang.toml",
@@ -56881,10 +56905,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python/weak_source/fixtures/reject-user-struct/lang.toml",
@@ -56905,10 +56930,11 @@
       "enabled": false,
       "runner": "tests/python/weak_source/run_weak_source.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "The reviewed Python Weak component runner now uses public CLI plus Wz API, compares generated files and runs extra Weak/GC observation. An enabled project-python alias for this manifest already records the ordinary Python build/run or rejection. This legacy row remains required and disabled; private Weak/GC observations are not recorded as an ordinary execute success.",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH12q-python-weak-Root-review-20261114.json; checks/SH12q-python-weak-Root-amendment-20261114/final.json. Existing72 compiles/22 observer records retained; no new Source execution."
     },
     {
       "id": "project:tests/python_bindings/string-aggregate/lang.toml",
@@ -84789,6 +84815,45 @@
       "runner_status": "adaptation_required",
       "reason": "the original 11-mode runner builds and executes stdlib-pure with --backend python; no existing Python case row covers that manifest",
       "evidence": "SH12i retained reference/candidate 11-mode records; runner-required stdin/mock/ELF/trace assertions remain outside a generic case"
+    },
+    {
+      "id": "project-python:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 30,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/python/weak_source/run_weak_source.py",
+      "runner_status": "adaptation_required",
+      "reason": "Ordinary Python public-CLI build/main assertion only: Cpp565/new9d11 retained CLI outputs were compiled successfully and the two original program.py files now ran directly with fixed Python3.12.15 -B, default host GC, exit0 and empty stdout/stderr. Extra Weak/GC observer assertions remain outside this row.",
+      "evidence": "checks/SH12q-python-weak-source-public-api-20261114/run-18x2 existing CLI compile and same-group byte records; checks/SH12q-captured-dead-ordinary-python-20261114/summary.json two direct ordinary program executions, no compile or observer rerun.",
+      "tags": [
+        "project"
+      ],
+      "source_provenance": {
+        "manifest_sha256": "c51e10054184984c337e22b285061aec06f1dac39a52a6572b81976b51922e23",
+        "source_sha256": "e4f86db5e56c610de816ba2134af7d2eaf7bd6886115e3a8f93d8bcfbbc651ef",
+        "reference_and_candidate_program_sha256": "8d30d2442ed7554f2fee197dd53ff75c6b5b7dcda416607f774c753296db8667",
+        "generated_runtime_sha256": "e91cf920457a72e925684ca64be33d6bfc6ceaf464387e07ef832e7f6f17b7a5"
+      }
     }
   ],
   "runners": [
@@ -85950,7 +86015,7 @@
     {
       "path": "tests/python/weak_source/run_weak_source.py",
       "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "reason": "Python Weak public CLI plus Wz API component with same-group file comparison and extra Weak/GC observer assertions; those observations require the dedicated runner and are not ordinary corpus execute checks."
     },
     {
       "path": "tests/python_bindings/conformance.py",
@@ -86051,11 +86116,21 @@
       "path": "tests/bootstrap/readiness/test_runner_controls.py",
       "status": "component",
       "reason": "Only this exact readiness test script runs nine small process/error/stdin controls; it does not compile a candidate or complete the readiness suite."
+    },
+    {
+      "path": "tests/python/weak_source/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python rejection controls for the Weak runner; only a tiny fake-observer Python child, no Woozy Source compiler or generated Weak program."
+    },
+    {
+      "path": "tests/python/weak_source/test_runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python unit tests for strict exit/JSON/timeout fields and real .wz-file validation; no compiler or generated program execution."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
+    "to_git_head": "f536b84705ec361ce811834a13a64214bc44b0e4",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86257,7 +86332,9 @@
       "selfhost/tests/pythonobs/src/main.wz",
       "tests/python/slice_source/runner_controls.py",
       "tests/python/slice_source/test_runner_controls.py",
-      "tests/bootstrap/readiness/test_runner_controls.py"
+      "tests/bootstrap/readiness/test_runner_controls.py",
+      "tests/python/weak_source/runner_controls.py",
+      "tests/python/weak_source/test_runner_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -86513,10 +86590,15 @@
         "path": "tests/native/run_stdlib.py",
         "old_sha256": "386d3e46c730fdf975cc65688b4944087a9b94206faca9519d503d0fe3b8a1cb",
         "new_sha256": "7aa825afe1b2bfb114d89d9e41795d56180a679dad7c9ed68ba12bb4fb169013"
+      },
+      {
+        "path": "tests/python/weak_source/run_weak_source.py",
+        "old_sha256": "6aa937d1ac54095008e6dc8ccea1479f87d836bd5ef58688caa7c683147d4e26",
+        "new_sha256": "6e8c5d6a524822d50cd84812f8e48e87835f394f9e2d65bda5560c47cc77e4b3"
       }
     ],
-    "new_freeze_path_count": 201,
-    "modified_freeze_path_count": 32,
+    "new_freeze_path_count": 203,
+    "modified_freeze_path_count": 33,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -87550,6 +87632,128 @@
       "readiness_candidate_original60_build_passed": false,
       "readiness_candidate_selected_build_budget": 1800,
       "catalog_not_full_corpus_or_language_completion": true
+    },
+    "Python_Weak_Root_amended_integration": {
+      "base_commit": "1be1c4748300e81242cd5de6159c908c21736a27",
+      "code_commit": "f536b84705ec361ce811834a13a64214bc44b0e4",
+      "accepted_task": "fca17d7e-8659-43ef-988a-005b3773fc34",
+      "accepted_revision": 4,
+      "ACK_event": 949525,
+      "ACK_parent": 423,
+      "session_closed_revision": 5,
+      "Root_review": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-review-20261114.json",
+      "Root_review_sha256": "37154b8276d3fd7ae0b9d66b6ed9ab733faeff3fc04a4ef7eea2103dccaa64fb",
+      "Root_amended_four_file_source": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-amendment-20261114/owned-compiler",
+      "Root_amendment_final_sha256": "8118d4681731b85fe068c942b7d264acd335800a16da2c0391156be1052f7c06",
+      "approved_private_files": [
+        {
+          "path": "tests/python/weak_source/run_weak_source.py",
+          "accepted_Root_amended_source": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-amendment-20261114/owned-compiler/tests/python/weak_source/run_weak_source.py",
+          "accepted_sha256": "6e8c5d6a524822d50cd84812f8e48e87835f394f9e2d65bda5560c47cc77e4b3",
+          "root_current_exists": true,
+          "root_current_sha256": "6aa937d1ac54095008e6dc8ccea1479f87d836bd5ef58688caa7c683147d4e26",
+          "tracked_in_HEAD": true,
+          "proposed_publisher_sha256": "6e8c5d6a524822d50cd84812f8e48e87835f394f9e2d65bda5560c47cc77e4b3",
+          "size": 49226,
+          "Root_documentation_amendment_only": false
+        },
+        {
+          "path": "tests/python/weak_source/README.md",
+          "accepted_Root_amended_source": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-amendment-20261114/owned-compiler/tests/python/weak_source/README.md",
+          "accepted_sha256": "603da029d04c49ec80f365cea574c274098926bfed37baffe898c871c2801ef0",
+          "root_current_exists": true,
+          "root_current_sha256": "23b14af4a5f4d57eca5f2b75c4c978d1d912975c8c756d112d6ed10e578e0988",
+          "tracked_in_HEAD": true,
+          "proposed_publisher_sha256": "3d0dc1e741c2f28d71b82eca6a636be58c2d6feabf2d926ee92cce4686d9714b",
+          "size": 8577,
+          "Root_documentation_amendment_only": true
+        },
+        {
+          "path": "tests/python/weak_source/runner_controls.py",
+          "accepted_Root_amended_source": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-amendment-20261114/owned-compiler/tests/python/weak_source/runner_controls.py",
+          "accepted_sha256": "9051432296a3371fcdad1d0cbe96c4120dfc21effcb78ece712634ea541c1e91",
+          "root_current_exists": false,
+          "root_current_sha256": null,
+          "tracked_in_HEAD": false,
+          "proposed_publisher_sha256": "9051432296a3371fcdad1d0cbe96c4120dfc21effcb78ece712634ea541c1e91",
+          "size": 8644,
+          "Root_documentation_amendment_only": false
+        },
+        {
+          "path": "tests/python/weak_source/test_runner_controls.py",
+          "accepted_Root_amended_source": "/home/qin/Work/language-dev-20261103/checks/SH12q-python-weak-Root-amendment-20261114/owned-compiler/tests/python/weak_source/test_runner_controls.py",
+          "accepted_sha256": "a02454322d5e299a36224612fd47a60f139b0780e6247300fd42f6d6ec69b409",
+          "root_current_exists": false,
+          "root_current_sha256": null,
+          "tracked_in_HEAD": false,
+          "proposed_publisher_sha256": "a02454322d5e299a36224612fd47a60f139b0780e6247300fd42f6d6ec69b409",
+          "size": 5984,
+          "Root_documentation_amendment_only": false
+        }
+      ],
+      "README_same_Markdown_hardbreak_backslash_doc_fix": true,
+      "README_not_added_to_freeze": true,
+      "metadata_only_required_case_ids": [
+        "project:tests/python/weak_source/fixtures/combo-fields-vec-enum/lang.toml",
+        "project:tests/python/weak_source/fixtures/generic-target/lang.toml",
+        "project:tests/python/weak_source/fixtures/held-some-keeps-alive/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-file/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-foreign/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-same-shape-struct/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-slice/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-string/lang.toml",
+        "project:tests/python/weak_source/fixtures/reject-user-struct/lang.toml"
+      ],
+      "required10_still_disabled_expected_null": true,
+      "old17_Python_and8_Native_rows_unchanged": true,
+      "main_Weak_runner_status": "adaptation_required",
+      "new_control_runners_component": [
+        "tests/python/weak_source/runner_controls.py",
+        "tests/python/weak_source/test_runner_controls.py"
+      ],
+      "captured_dead_new_ordinary_Python_case": "project-python:tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+      "captured_dead_Root_review": "/home/qin/Work/language-dev-20261103/checks/SH12q-captured-dead-ordinary-python-20261114/Root-review.json",
+      "captured_dead_Root_review_sha256": "f218231e63a2b432a19b0340436455005d5752d8c8a12b2550347608965ce128",
+      "captured_dead_two_direct_program_summary": "/home/qin/Work/language-dev-20261103/checks/SH12q-captured-dead-ordinary-python-20261114/summary.json",
+      "captured_dead_two_direct_program_summary_sha256": "7ca0398c740f81df92467c8bbc9d43ce7c984add1e60a90a0fd61b25d97a4b20",
+      "captured_dead_scope": "Only ordinary Python build and main exit0/empty streams; extra Weak/GC observation not represented by ordinary execute.",
+      "two_direct_program_executions": {
+        "roles": [
+          "reference CLI output",
+          "candidate CLI output"
+        ],
+        "Python": "3.12.15 -B",
+        "host_GC": "default; no observer wrapper or disabling",
+        "exit": 0,
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+        "real_process_flags_strict": true,
+        "program_trace_only_Python": true,
+        "12_input_SHA_before_after_equal": true,
+        "Source_compiles": 0,
+        "old_observers": 0,
+        "retries": 0
+      },
+      "old72_compile22_observer_data_preserved_not_rerun": true,
+      "f90_Source_build_seal": "unknown; binary SHA and old observed behaviour only",
+      "old_task_local_reference_stdlib_before_missing_not_backfilled": true,
+      "accepted_wider_stdlib_bracket_remains_cited": true,
+      "counts": {
+        "cases": 1344,
+        "enabled": 983,
+        "disabled": 361,
+        "required": 307,
+        "files": 2875,
+        "runners": 254
+      },
+      "current_StdReady_corpus_py_kept_sha256": "d5693789bfa1c53b6448ae8be3d6ace9bc00adcf319aeef68d26309f2fac3d50",
+      "four_arg_Path_process_helper_call_unchanged": true,
+      "Source116_std37_fixtures_gold_unchanged": true,
+      "all_other_case_fields_and_relative_order_unchanged": true,
+      "compiler_Source_LLVM_observer_or_business_matrix_rerun_for_publication": false,
+      "existing_long_jobs_or_workers_operated": false,
+      "full_Weak_or_corpus_or_three_stage_completion_claimed": false
     }
   }
 }
