@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
-  "previous_git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
-  "frozen_at": "2026-11-14T04:15:52.886162+00:00",
+  "git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
+  "previous_git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+  "frozen_at": "2026-11-14T04:25:47.097731+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -33409,17 +33409,33 @@
       ],
       "backend": "native",
       "manifest": "tests/generics/inout/constrained/reject/lang.toml",
-      "expected": null,
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/run_generics.py",
       "runner_status": "adaptation_required",
-      "reason": "not referenced by run_constrained_inout.py; current check accepts it",
+      "reason": "SH12j public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 accept, program exit 0 with empty stdout/stderr.  The old runner still does not select this manifest and stays unmigrated; no old runner gold is claimed.",
       "tags": [
         "project"
       ],
-      "evidence": "not referenced by run_constrained_inout.py; current check accepts it"
+      "evidence": "check + Native O0/O2 + one execution per build, both roles; run-summary.json and record-audit.json in checks/SH12j-three-unreferenced-generic-projects-20261114",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 30
     },
     {
       "id": "project:tests/generics/inout/positive/lang.toml",
@@ -34627,17 +34643,33 @@
       ],
       "backend": "native",
       "manifest": "tests/generics/move/constrained-reject/lang.toml",
-      "expected": null,
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/run_generics.py",
       "runner_status": "adaptation_required",
-      "reason": "no current runner references this manifest",
+      "reason": "SH12j public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 accept, program exit 0 with empty stdout/stderr.  The old runner still does not select this manifest and stays unmigrated; no old runner gold is claimed.",
       "tags": [
         "project"
       ],
-      "evidence": "no current runner references this manifest"
+      "evidence": "check + Native O0/O2 + one execution per build, both roles; run-summary.json and record-audit.json in checks/SH12j-three-unreferenced-generic-projects-20261114",
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 30
     },
     {
       "id": "project:tests/generics/move/error-after/lang.toml",
@@ -35863,17 +35895,33 @@
       ],
       "backend": "native",
       "manifest": "tests/generics/unbound-method-values/reject-capture/lang.toml",
-      "expected": null,
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/run_generics.py",
       "runner_status": "adaptation_required",
-      "reason": "not referenced by run_unbound_methods.py; owning_inout/cases.json names a different manifest",
+      "reason": "SH12j public CLI matrix passed for reference C++ 565 and candidate stage1 9d11: check accept, Native O0/O2 accept, program exit 7 with empty stdout/stderr.  The old runner still does not select this manifest and stays unmigrated; no old runner gold is claimed.",
       "tags": [
         "project"
       ],
-      "evidence": "not referenced by run_unbound_methods.py; owning_inout/cases.json names a different manifest"
+      "evidence": "check + Native O0/O2 + one execution per build, both roles; run-summary.json and record-audit.json in checks/SH12j-three-unreferenced-generic-projects-20261114",
+      "run_expectation": {
+        "exit": 7,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "opt": [
+        0,
+        2
+      ],
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 30
     },
     {
       "id": "project:tests/generics/unbound-method-values/reject-const-alias-owned-after-move/lang.toml",
@@ -85401,7 +85449,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+    "to_git_head": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86499,6 +86547,90 @@
       "historical_records_modified": false,
       "Source_observer_matrix_or_OS_controls_reexecuted": false,
       "existing_long_jobs_operated": false
+    },
+    "three_generic_project_case_delta": {
+      "base_commit": "f4fd36db8d983bb748f9e5937d9acafb19b359f1",
+      "accepted_task": "18a1e9a1",
+      "accepted_revision": 2,
+      "event": 947082,
+      "parent_ACK": 414,
+      "proposal": "/home/qin/Work/language-dev-20261103/checks/SH12j-three-unreferenced-generic-projects-20261114/proposal/three-unreferenced-generic-projects-3.json",
+      "proposal_sha256": "102976dedcdd0f175375c44350a251f646047465cc942ac9fa3ca8a722ef4e97",
+      "case_ids": [
+        "project:tests/generics/inout/constrained/reject/lang.toml",
+        "project:tests/generics/move/constrained-reject/lang.toml",
+        "project:tests/generics/unbound-method-values/reject-capture/lang.toml"
+      ],
+      "update_existing_only": true,
+      "appended_or_renamed_cases": 0,
+      "proposal_action_removed_only": true,
+      "old_counts": {
+        "cases": 1335,
+        "enabled": 962,
+        "disabled": 373,
+        "required": 319
+      },
+      "new_counts": {
+        "cases": 1335,
+        "enabled": 965,
+        "disabled": 370,
+        "required": 316,
+        "files": 2872,
+        "runners": 251
+      },
+      "counts_recomputed_from_current_1335_not_proposal_1333": true,
+      "other_1332_case_fields_and_order_unchanged": true,
+      "files_runners_classifications_SHA_unchanged": true,
+      "per_case_runner_status": "adaptation_required",
+      "run_generics_selects_these_manifests": false,
+      "old_runner_gold_claimed": false,
+      "accepted_expectations": {
+        "Native_opt": [
+          0,
+          2
+        ],
+        "execution_repetitions": 1,
+        "execution_timeout_seconds": 30,
+        "program_exits_by_proposal_order": [
+          0,
+          0,
+          7
+        ],
+        "program_streams": "empty stdout/stderr",
+        "observation_limit": "The first two exits do not observe the swapped fields; the third returns a copied ordinary-Self method value result."
+      },
+      "retained_evidence": {
+        "reference_cpp_sha256": "565da3f6aa0b7f342ac5ba9523b5495643c1e44daaa5ecbb072e5906bd1a1fe4",
+        "candidate_9d11_sha256": "9d11f01536091a2ca51a7814dd3a0a9a0f1f3311b6345d97d963e21d25155122",
+        "compiler_process_records": 18,
+        "check_commands": 6,
+        "builds": 12,
+        "executions": 12,
+        "Source_input_files": 6,
+        "project_Source_files": 3,
+        "exec_traces_independently_checked_by_Root": 30,
+        "historical_resources_compared_before_after": 31,
+        "summary": {
+          "path": "/home/qin/Work/language-dev-20261103/checks/SH12j-three-unreferenced-generic-projects-20261114/run-summary.json",
+          "sha256": "46d4b88cfa587fce7a99174d1e925fa32ee2bbb7be114e023b0cab68ccc29fbb"
+        },
+        "record_audit": {
+          "path": "/home/qin/Work/language-dev-20261103/checks/SH12j-three-unreferenced-generic-projects-20261114/record-audit.json",
+          "sha256": "e2964218fcc8bef4e63c58f5aa961739f9932cec3f6a47b41a7b683d32911aa1"
+        },
+        "resource_compare": {
+          "path": "/home/qin/Work/language-dev-20261103/checks/SH12j-three-unreferenced-generic-projects-20261114/resource-compare.json",
+          "sha256": "0e2165457b2b68de00f39b363b7f28c2dd76a27154f8268a956b5acd2a13d9c6"
+        },
+        "gold_basis": "Frozen Sources and SEMANTICS; outputs serve as execution evidence, not expected-value derivation."
+      },
+      "Source116_current_map_sha256": "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef",
+      "stdlib_37_scope": "The three Sources import no std. Historical comparison covered the recorded 31 resources; 37 stdlib files are counted/hashed in current catalog/integration checks only. This does not add a historical 37-file stdlib before/after proof.",
+      "Source116_std37_fixture_bytes_unchanged": true,
+      "matrix_or_full_Source_reexecuted": false,
+      "new_full965_started": false,
+      "existing_full962_pin_or_three_stage_jobs_operated": false,
+      "full_corpus_or_bootstrap_pass_claimed": false
     }
   }
 }
