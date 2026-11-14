@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
-  "previous_git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
-  "frozen_at": "2026-11-14T01:14:38.640928+00:00",
+  "git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+  "previous_git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+  "frozen_at": "2026-11-14T02:01:02.741579+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,7 +31,7 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1328,
+    "tracked_wz": 1329,
     "manifests": 1009,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
@@ -2000,7 +2000,7 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/b_call.wz",
-      "sha256": "398b4d4c75fd2ffe867ec763753afe9906a994fd16c0b984eb87675cf40311c0",
+      "sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
       "size": 43761,
       "role": "compiler_source",
       "assignment": [
@@ -2010,7 +2010,7 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/b_call2.wz",
-      "sha256": "7f5fa1cf87222b8145d1bdbb1c006de30a767245c0b17b28c63c6796c8635ce4",
+      "sha256": "07e29ce5345488935766746ef055fccb7df1c1b4bda22848ef65b9924ba0bf0a",
       "size": 45609,
       "role": "compiler_source",
       "assignment": [
@@ -2030,7 +2030,7 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/b_expr.wz",
-      "sha256": "ddbd8973847a31ad8d4ce3764321aaa5577bfd3fdd76979d17fd8a2ac8a87266",
+      "sha256": "b0e62c7cd49ff4b9ca6ba6fe6b54bd4bce569f8879fdb34e59b4f46d53b10291",
       "size": 88477,
       "role": "compiler_source",
       "assignment": [
@@ -26260,6 +26260,32 @@
       "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
       "sha256": "19dce463ea408d1d7bdffdca1f9ca2bdac53b02b139f0784382ceb268c706d46",
       "size": 12877,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/run.py",
+      "sha256": "f76f9c191efdf848b9fb8e7f77b8f82039bb14ad0d5e669af8380f4027a42b29",
+      "size": 20640,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/src/main.wz",
+      "sha256": "245d28c99b074189655fd8aa2c61d9a680bd692b4a21bd9026e5c46a189d0abf",
+      "size": 2329,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/lang.toml"
+      ],
+      "manifest": "selfhost/lang.toml",
+      "component_runner": "selfhost/tests/sema_generic_arity/run.py",
+      "reason": "Auxiliary driver staged by the generic-arity Sema component; not a standalone CLI corpus project or full compiler proof"
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
+      "sha256": "714ba66be7a4dd0e98d5a9cc43611013945a0c2419e0d8bd7223bb0297a52272",
+      "size": 2332,
       "role": "runner_source",
       "assignment": []
     }
@@ -85237,11 +85263,21 @@
       "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
       "status": "component",
       "reason": "Portable function-level error, timeout, continuation and Native-only metadata controls. Build is stubbed and small child programs execute through the real process boundary; this is not an independent compiler entry."
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/run.py",
+      "status": "component",
+      "reason": "Real project/resolve/Sema O0 component driver with ten cases and retained ELF/C++ twenty-command replay. Compares diagnostic fields, primary byte spans and related/fixit/note counts, not full JSON or complete CLI/corpus parity."
+    },
+    {
+      "path": "selfhost/tests/sema_generic_arity/test_process_controls.py",
+      "status": "component",
+      "reason": "Portable controls call the real reference_result with a patched run function: two positive and five negative exit/status inputs; no compiler or component build."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+    "to_git_head": "6992b7129312dd9052d283ea96a129af5c2d8f97",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85431,7 +85467,10 @@
       "selfhost/tests/hirverify/expression_kinds/probe.wz",
       "selfhost/tests/hirverify/expression_kinds/run.py",
       "selfhost/tests/hirverify/expression_kinds/test_report_controls.py",
-      "tests/reference_closure_frontend/run_reference_closure_controls.py"
+      "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "selfhost/tests/sema_generic_arity/run.py",
+      "selfhost/tests/sema_generic_arity/src/main.wz",
+      "selfhost/tests/sema_generic_arity/test_process_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -85607,10 +85646,40 @@
         "new_size": 45736,
         "commit": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
         "accepted_task": "07c300d6-523c-43ff-951b-95f640481b3a"
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/b_call.wz",
+        "old_sha256": "398b4d4c75fd2ffe867ec763753afe9906a994fd16c0b984eb87675cf40311c0",
+        "old_size": 43761,
+        "new_sha256": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
+        "new_size": 43761,
+        "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+        "origin_task_prefix": "880a9683",
+        "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/b_call2.wz",
+        "old_sha256": "7f5fa1cf87222b8145d1bdbb1c006de30a767245c0b17b28c63c6796c8635ce4",
+        "old_size": 45609,
+        "new_sha256": "07e29ce5345488935766746ef055fccb7df1c1b4bda22848ef65b9924ba0bf0a",
+        "new_size": 45609,
+        "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+        "origin_task_prefix": "880a9683",
+        "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/b_expr.wz",
+        "old_sha256": "ddbd8973847a31ad8d4ce3764321aaa5577bfd3fdd76979d17fd8a2ac8a87266",
+        "old_size": 88477,
+        "new_sha256": "b0e62c7cd49ff4b9ca6ba6fe6b54bd4bce569f8879fdb34e59b4f46d53b10291",
+        "new_size": 88477,
+        "commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+        "origin_task_prefix": "880a9683",
+        "review_basis": "Root accepted / review 944972 / ACK 404; six diagnostic-code replacements; independent source and actual-record reviews"
       }
     ],
-    "new_freeze_path_count": 189,
-    "modified_freeze_path_count": 23,
+    "new_freeze_path_count": 192,
+    "modified_freeze_path_count": 26,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -85619,7 +85688,10 @@
       "wzcc/hirverify/flow.wz",
       "wzcc/hirverify/run.wz",
       "wzcc/hirverify/verify.wz",
-      "wzcc/sema/a_instantiate.wz"
+      "wzcc/sema/a_instantiate.wz",
+      "wzcc/sema/b_call.wz",
+      "wzcc/sema/b_call2.wz",
+      "wzcc/sema/b_expr.wz"
     ],
     "module_runner_delta": {
       "commit": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
@@ -85805,6 +85877,59 @@
       "case_expected_enabled_observed_unchanged": true,
       "new_language_or_Python_thread_implementation": false,
       "full962_or_bootstrap_reexecuted": false
+    },
+    "generic_arity_delta": {
+      "code_commit": "6992b7129312dd9052d283ea96a129af5c2d8f97",
+      "origin_task_prefix": "880a9683",
+      "acceptance": "Root accepted / review 944972 / ACK 404",
+      "changed_source_paths": [
+        "selfhost/src/wzcc/sema/b_call.wz",
+        "selfhost/src/wzcc/sema/b_call2.wz",
+        "selfhost/src/wzcc/sema/b_expr.wz"
+      ],
+      "diagnostic_code_replacements": 6,
+      "source_sha256": {
+        "selfhost/src/wzcc/sema/b_call.wz": "871985ca8c144c4a0c0ff3bd6d96d83b9d8c9690c41f53b824c7a0eedcd8d266",
+        "selfhost/src/wzcc/sema/b_call2.wz": "07e29ce5345488935766746ef055fccb7df1c1b4bda22848ef65b9924ba0bf0a",
+        "selfhost/src/wzcc/sema/b_expr.wz": "b0e62c7cd49ff4b9ca6ba6fe6b54bd4bce569f8879fdb34e59b4f46d53b10291"
+      },
+      "source_pre_review": "checks/SH12c-generic-arity-source-pre-review-20261114.md",
+      "runner_pre_review": "checks/SH12c-generic-arity-runner-pre-review-20261114.md",
+      "actual_record_review": "checks/SH12c-generic-arity-actual-record-review-20261114.md",
+      "Root_corrected_runner_sha256": "f76f9c191efdf848b9fb8e7f77b8f82039bb14ad0d5e669af8380f4027a42b29",
+      "Root_replay": "checks/SH12c-root-runner-correction-20261114/actual-replay/report.json",
+      "Root_replay_sha256": "e2b795da8d0fa84f8050c01eadffacf92524f71457fa72d30780d1d11ede14f5",
+      "Root_replay_commands": 20,
+      "Root_replay_cases": 10,
+      "Root_replay_no_compilation": true,
+      "component_program_sha256": "542482c58652f53c1fdcdcbc78409d4737bfe5f001f792d4da68483c108c9aa8",
+      "portable_controls": {
+        "groups": 3,
+        "positive_inputs": 2,
+        "negative_inputs": 5,
+        "status": "passed",
+        "executed_by": "Root; independently read, not rerun during integration"
+      },
+      "runner_paths": [
+        "selfhost/tests/sema_generic_arity/run.py",
+        "selfhost/tests/sema_generic_arity/test_process_controls.py"
+      ],
+      "runner_status": "component",
+      "comparison_scope": "O0 Sema diagnostic field projection, primary path/byte span and related/fixit/note counts; not full JSON, all six branches, O2 or complete CLI/corpus",
+      "original_case_count": 1333,
+      "all_original_cases_and_order_unchanged": true,
+      "enabled": 962,
+      "disabled": 371,
+      "adaptation_required": 319,
+      "current_frozen_2c11_source_difference_paths": [
+        "selfhost/src/wzcc/sema/b_call.wz",
+        "selfhost/src/wzcc/sema/b_call2.wz",
+        "selfhost/src/wzcc/sema/b_expr.wz"
+      ],
+      "existing_2c11_stage1_or_running_stage2_contains_this_fix": false,
+      "current_running_jobs_touched": false,
+      "full_corpus_or_bootstrap_reexecuted": false,
+      "historical_stage1_semantic_difference_list": "Cumulative pre-existing comparison plus these three later Source changes; do not read it as the current running 2c11 delta."
     }
   }
 }
