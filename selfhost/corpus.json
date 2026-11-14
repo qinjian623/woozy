@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
-  "previous_git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
-  "frozen_at": "2026-11-14T14:10:31.456950+00:00",
+  "git_head": "4a2090a3ab0ba0548a58624082506c969a6212c4",
+  "previous_git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
+  "frozen_at": "2026-11-14T14:58:55.098767+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -15372,8 +15372,8 @@
     },
     {
       "path": "tests/native/c_ffi/run_c_ffi.py",
-      "sha256": "6637d400d83f3f38514c9b7639401c1bee8a10184323456d0285511250c05f84",
-      "size": 10557,
+      "sha256": "208d51bb47d432a3f5354d798b86ed4950c4dac7698e4285db8fdd4e4110cb12",
+      "size": 87986,
       "role": "runner_source",
       "assignment": []
     },
@@ -26550,6 +26550,13 @@
       "path": "tests/native/slice_source/test_controls.py",
       "sha256": "8037427025253fdd340f3caa5f5dbc1070f964012939583f2691b141b42ab0dc",
       "size": 22053,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/native/c_ffi/runner_controls.py",
+      "sha256": "077d0376d3e6950ee5ac183e3a7bb80e916b3e73443bbf99f0bc7bf35c721b68",
+      "size": 61344,
       "role": "runner_source",
       "assignment": []
     }
@@ -85829,8 +85836,8 @@
     },
     {
       "path": "tests/native/c_ffi/run_c_ffi.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "component",
+      "reason": "FFI01 runner script correction accepted (task335075a2/event955196) with Root 20 pure-control groups and 4 independent actual-main counterexamples; full real reference/candidate CFFI execution remains not_run. Fake formal orchestration rows are controls only; existing 15 project cases and the historical ed1 forged component retain their own pending status and scope."
     },
     {
       "path": "tests/native/c_retained_capturing/run_capturing.py",
@@ -86616,11 +86623,16 @@
       "path": "tests/native/slice_source/test_controls.py",
       "status": "component",
       "reason": "Sixteen guarded pure Python tests for Native Slice runner/builder decisions, including normal exit types, finite JSON, legacy/fresh outputs, process preservation and sealed stdout checks. No compiler, observer or target is started."
+    },
+    {
+      "path": "tests/native/c_ffi/runner_controls.py",
+      "status": "component",
+      "reason": "Pure Python controls for the accepted FFI01 runner: strict process/JSON/trace records, reference-only helper identity, retained initial fixture copies and legacy/formal output handling; external launch entry points blocked before runner import. These checks do not execute Source, C/LLVM, CLI, forged components or targets."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
+    "to_git_head": "4a2090a3ab0ba0548a58624082506c969a6212c4",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86845,7 +86857,8 @@
       "selfhost/tests/cffi_forged/main.wz",
       "selfhost/tests/cffi_forged/run.py",
       "tests/native/slice_source/build_nativeobs_ed1.py",
-      "tests/native/slice_source/test_controls.py"
+      "tests/native/slice_source/test_controls.py",
+      "tests/native/c_ffi/runner_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -87389,10 +87402,21 @@
         "commit": "5c19fd2c64d3d0b947f6c3e21eff24652a29c8ce",
         "acceptance": "Root-controlled final Slice runner amendment accepted separately; original and single Bridge actor correction remain rejected. Existing case enablement is unchanged.",
         "review": "checks/SH15-native-slice-public-wz-Root-amendment-20261114/Root-final-acceptance.json"
+      },
+      {
+        "path": "tests/native/c_ffi/run_c_ffi.py",
+        "old_sha256": "6637d400d83f3f38514c9b7639401c1bee8a10184323456d0285511250c05f84",
+        "old_size": 10557,
+        "new_sha256": "208d51bb47d432a3f5354d798b86ed4950c4dac7698e4285db8fdd4e4110cb12",
+        "new_size": 87986,
+        "commit": "4a2090a3ab0ba0548a58624082506c969a6212c4",
+        "accepted_task": "335075a2-541e-429d-a60c-762a591b7be7",
+        "review": "checks/SH15-cffi-full-public-runner-correction-Root-review-20261114/Root-review.json",
+        "acceptance": "Coding correction only accepted rev2/event955196 parent449; original 8fe38a9d task remains rejected. Root controlled actual three-file hashes accepted; full real CFFI run pending, no case enabled."
       }
     ],
-    "new_freeze_path_count": 224,
-    "modified_freeze_path_count": 49,
+    "new_freeze_path_count": 225,
+    "modified_freeze_path_count": 50,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -89970,6 +89994,57 @@
         "files": 2896,
         "runners": 265
       }
+    },
+    "CFFI_full_public_runner_correction_integration": {
+      "code_commit": "4a2090a3ab0ba0548a58624082506c969a6212c4",
+      "accepted_task": "335075a2-541e-429d-a60c-762a591b7be7",
+      "attempt": "89a1ae78-6199-4b21-8fa9-371bc0426539",
+      "event": 955196,
+      "Root_review": "checks/SH15-cffi-full-public-runner-correction-Root-review-20261114/Root-review.json",
+      "Root_review_sha256": "75f17de439429e2d29c9fe0047232cc3db2330b71f9ee1ff1959b0e01b40533d",
+      "independent_review": "checks/SH15-cffi-full-public-runner-correction-independent-review-20261114.json",
+      "independent_review_sha256": "e72b84e7bb2c9089c8535e67313c7092fce671200c6336edd20a39651bddcd25",
+      "files": [
+        {
+          "path": "tests/native/c_ffi/run_c_ffi.py",
+          "controlled_source": "/home/qin/.local/state/cli-agent-bridge/worktrees/bdb5d893689f1df387f29f65/tests/native/c_ffi/run_c_ffi.py",
+          "before_sha256": "6637d400d83f3f38514c9b7639401c1bee8a10184323456d0285511250c05f84",
+          "before_size": 10557,
+          "after_sha256": "208d51bb47d432a3f5354d798b86ed4950c4dac7698e4285db8fdd4e4110cb12",
+          "after_size": 87986,
+          "tracked": true
+        },
+        {
+          "path": "tests/native/c_ffi/runner_controls.py",
+          "controlled_source": "/home/qin/.local/state/cli-agent-bridge/worktrees/bdb5d893689f1df387f29f65/tests/native/c_ffi/runner_controls.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "077d0376d3e6950ee5ac183e3a7bb80e916b3e73443bbf99f0bc7bf35c721b68",
+          "after_size": 61344,
+          "tracked": false
+        },
+        {
+          "path": "tests/native/c_ffi/README.md",
+          "controlled_source": "/home/qin/.local/state/cli-agent-bridge/worktrees/bdb5d893689f1df387f29f65/tests/native/c_ffi/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "f1af7c8b02cb7463d696ef535e30087fd93234b32af7c4ef1ae4823a47d4ca4e",
+          "after_size": 12299,
+          "tracked": false
+        }
+      ],
+      "reused_validation": {
+        "Root_pure_groups": 20,
+        "independent_actual_main_counterexamples": 4,
+        "external_launch_attempts": 0,
+        "old_inputs_unchanged": 47,
+        "old_reports_unchanged": 13
+      },
+      "new_frozen_runner_source": "tests/native/c_ffi/runner_controls.py",
+      "all_existing_cases_unchanged": true,
+      "README_is_metadata_only": true,
+      "real_CFFI_execution": "not_run",
+      "scope": "Script correction publication only. 84 fake formal rows are pure controls, not real CFFI commands. Original task8fe38a9d remains rejected; accepted correction335075a2 recorded separately. Historical ed1 forged component and its pin/reports unchanged; no new 0c46 component or full 15-project pass claimed."
     }
   }
 }
