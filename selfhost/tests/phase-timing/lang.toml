@@ -1,0 +1,10 @@
+schema_version = 1
+
+[package]
+name = "phase_timing_driver"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64

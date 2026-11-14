@@ -1,0 +1,431 @@
+// Private test-only phase timing driver for one real Native build.
+//
+// This program is not a product CLI and adds no compiler API.  It executes the
+// exact public production success route:
+//
+//   project.load
+//     -> resolve.resolve_project
+//     -> sema.check_types
+//     -> hirverify.verify(Backend)
+//     -> nativelower.lower
+//     -> nativeemit.emit
+//     -> nativebuild.build
+//
+// sema.check_project is exactly check_types followed by hirverify.verify on
+// success; this driver repeats those two public calls with the same success and
+// failure forwarding, without deleting validation or adding a nativeirdump
+// snapshot.  Each phase writes an immediate "PHASE_TIMING" JSON line to stderr
+// with monotonic begin/end nanoseconds, status, and the counts already exposed
+// by the public result values.  stdout carries one independent strict JSON
+// summary.  It never runs the generated program.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativebuild" as nativebuild;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/project" as project;
+import "app/wzcc/render" as render;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/time" as time;
+import "std/vec" as vec;
+
+struct Invocation {
+    project string;
+    stdlib string;
+    out_dir string;
+    optimization u32;
+    valid bool;
+    message string;
+}
+
+func number(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func signed(value i64) string {
+    return strconv.format_i64(value);
+}
+
+func boolean(value bool) string {
+    if value {
+        return "true";
+    }
+    return "false";
+}
+
+func nanoseconds(value os.Timespec) i64 {
+    return value.seconds * i64(1000000000) + value.nanoseconds;
+}
+
+func usage() throws os.Error {
+    io.eprintln("usage: phase-timing --project MANIFEST --stdlib DIR --out-dir DIR [--opt 0|2] [--format json]");
+}
+
+func invalid(result Invocation, message string) Invocation {
+    var rejected = result;
+    rejected.valid = false;
+    rejected.message = message;
+    return rejected;
+}
+
+// Small strict parser: only the options this private runner passes are known.
+func parse_args(args Vec[string]) Invocation {
+    var result = Invocation(project: "", stdlib: "", out_dir: "",
+        optimization: 2, valid: true, message: "");
+    var index usize = 1;
+    for true {
+        if index >= vec.len(args) {
+            break;
+        }
+        let key = args[index];
+        if key == "--format" {
+            if index + 1 >= vec.len(args) || args[index + 1] != "json" {
+                return invalid(result, "--format must be json");
+            }
+            index += 2;
+            continue;
+        }
+        var known = false;
+        if key == "--project" || key == "--stdlib" ||
+           key == "--out-dir" || key == "--opt" {
+            known = true;
+        }
+        if !known {
+            return invalid(result, "unknown option: " + key);
+        }
+        if index + 1 >= vec.len(args) {
+            return invalid(result, "missing value for " + key);
+        }
+        let value = args[index + 1];
+        if value == "" || text.starts_with(value, "--") {
+            return invalid(result, "missing or invalid value for " + key);
+        }
+        if key == "--project" {
+            result.project = value;
+        } else if key == "--stdlib" {
+            result.stdlib = value;
+        } else if key == "--out-dir" {
+            result.out_dir = value;
+        } else {
+            if value == "0" {
+                result.optimization = 0;
+            } else if value == "2" {
+                result.optimization = 2;
+            } else {
+                return invalid(result, "--opt must be 0 or 2");
+            }
+        }
+        index += 2;
+    }
+    if result.project == "" {
+        return invalid(result, "--project is required");
+    }
+    if result.stdlib == "" {
+        return invalid(result, "--stdlib is required");
+    }
+    if result.out_dir == "" {
+        return invalid(result, "--out-dir is required");
+    }
+    return result;
+}
+
+func marker(phase string, index usize, event string, stamp i64,
+            status string, details string) throws os.Error {
+    var line = "PHASE_TIMING {\"schema\":1,\"index\":" + number(index) +
+        ",\"phase\":\"" + phase + "\",\"event\":\"" + event +
+        "\",\"ns\":" + signed(stamp) + ",\"status\":\"" + status + "\"";
+    if details != "" {
+        line += "," + details;
+    }
+    line += "}";
+    // io.eprintln writes directly to fd 2; the marker is visible before the
+    // next phase starts and remains the last record if a timeout kills us.
+    io.eprintln(line);
+}
+
+func begin(phase string, index usize, details string) i64 throws os.Error {
+    let now = time.monotonic();
+    let stamp = nanoseconds(now);
+    marker(phase, index, "begin", stamp, "begin", details);
+    return stamp;
+}
+
+func finish(phase string, index usize, started i64, status string,
+            details string) throws os.Error {
+    let now = time.monotonic();
+    let stamp = nanoseconds(now);
+    var combined = "\"begin_ns\":" + signed(started) +
+        ",\"elapsed_ns\":" + signed(stamp - started);
+    if details != "" {
+        combined += "," + details;
+    }
+    marker(phase, index, "end", stamp, status, combined);
+}
+
+func project_counts(value model.Project) string {
+    return "\"counts\":{\"files\":" + number(vec.len(value.files)) +
+        ",\"modules\":" + number(vec.len(value.modules)) +
+        ",\"bindings\":" + number(vec.len(value.bindings)) +
+        ",\"foreign_bindings\":" + number(vec.len(value.foreign_bindings)) + "}";
+}
+
+func resolve_counts(value model.ResolvedProject) string {
+    return "\"counts\":{\"files\":" + number(vec.len(value.project.files)) +
+        ",\"modules\":" + number(vec.len(value.project.modules)) +
+        ",\"symbols\":" + number(vec.len(value.symbols)) +
+        ",\"occurrences\":" + number(vec.len(value.occurrences)) +
+        ",\"deferred_members\":" + number(vec.len(value.deferred_members)) +
+        ",\"self_parameters\":" + number(vec.len(value.self_parameters)) + "}";
+}
+
+func hir_counts(value hir.HirModule) string {
+    return "\"counts\":{\"nodes\":" + number(vec.len(value.nodes)) +
+        ",\"types\":" + number(types.size(value.types)) +
+        ",\"functions\":" + number(vec.len(value.functions)) +
+        ",\"templates\":" + number(vec.len(value.templates)) +
+        ",\"instances\":" + number(vec.len(value.instances)) +
+        ",\"scopes\":" + number(vec.len(value.scopes)) +
+        ",\"nominals\":" + number(vec.len(value.nominals)) + "}";
+}
+
+func internal_diagnostic(code string, message string) model.Diagnostic {
+    var result = model.diagnostic(code, "codegen", message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    result.has_primary = false;
+    return result;
+}
+
+// Same entry selector as cli/project.wz.  It reads only resolved.symbols.
+func native_entry(resolved model.ResolvedProject) option.Option[usize] throws model.SupportError {
+    var entry = option.Option[usize].None;
+    for symbol in resolved.symbols {
+        var function = false;
+        switch symbol.kind {
+            case model.SymbolKind.Function: function = true;
+            default: {}
+        }
+        if function && symbol.module == resolved.project.entry && symbol.name == "main" {
+            if option.is_some(entry) {
+                throw model.SupportError.Invalid("ambiguous entry name");
+            }
+            entry = option.Option[usize].Some(symbol.id);
+        }
+    }
+    return entry;
+}
+
+func failure_document(manager source.Manager, state model.PhaseState,
+                      failure model.FailureKind, has_value bool,
+                      diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    try {
+        io.println(render.document(manager.snapshots, state, failure,
+            has_value, diagnostics));
+    } catch error render.Error {
+        io.println("{\"status\":\"internal_error\",\"phase_timing_schema\":1,\"diagnostics\":[]}");
+        return 3;
+    }
+    return render.exit_code(state, failure, has_value, diagnostics);
+}
+
+func finish_failure(manager source.Manager, phase string, index usize,
+                    started i64, state model.PhaseState,
+                    failure model.FailureKind, has_value bool,
+                    diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    var details = "\"has_value\":" + boolean(has_value) +
+        ",\"diagnostics\":" + number(vec.len(diagnostics));
+    finish(phase, index, started, "failed", details);
+    return failure_document(manager, state, failure, has_value, diagnostics);
+}
+
+func success_document(config model.CheckConfig, entry usize, phases usize,
+                      nodes usize, type_count usize, functions usize,
+                      llvm_sections usize, has_async bool) string {
+    return "{\"status\":\"passed\",\"phase_timing_schema\":1,\"phases\":" +
+        number(phases) + ",\"backend\":\"native\",\"word_bits\":" +
+        number(usize(config.word_bits)) + ",\"entry_symbol\":" +
+        number(entry) + ",\"nodes\":" + number(nodes) + ",\"types\":" +
+        number(type_count) + ",\"functions\":" + number(functions) +
+        ",\"llvm_sections\":" + number(llvm_sections) +
+        ",\"has_async\":" + boolean(has_async) + "}";
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    let invocation = parse_args(args);
+    if !invocation.valid {
+        usage();
+        io.eprintln(invocation.message);
+        return 2;
+    }
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: invocation.project,
+        std_source_root: option.Option[string].Some(invocation.stdlib),
+        std_binding_bundle: option.Option[string].None);
+
+    let load_begin = begin("project.load", 1, "");
+    let loaded = project.load(options, inout manager);
+    if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
+        return finish_failure(manager, "project.load", 1, load_begin,
+            loaded.state, loaded.failure, loaded.has_value, loaded.diagnostics);
+    }
+    finish("project.load", 1, load_begin, "ok", project_counts(loaded.value));
+
+    var original = loaded.value;
+    original.backend = "native";
+
+    let resolve_begin = begin("resolve.resolve_project", 2,
+        project_counts(original));
+    let resolved = resolve.resolve_project(original);
+    if !render.succeeded(resolved.state, resolved.has_value, resolved.diagnostics) {
+        return finish_failure(manager, "resolve.resolve_project", 2,
+            resolve_begin, resolved.state, resolved.failure,
+            resolved.has_value, resolved.diagnostics);
+    }
+    finish("resolve.resolve_project", 2, resolve_begin, "ok",
+        resolve_counts(resolved.value));
+
+    let typed_begin = begin("sema.check_types", 3,
+        project_counts(resolved.value.project));
+    let typed = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    if !render.succeeded(typed.state, typed.has_value, typed.diagnostics) {
+        return finish_failure(manager, "sema.check_types", 3, typed_begin,
+            typed.state, typed.failure, typed.has_value, typed.diagnostics);
+    }
+    let node_count = vec.len(typed.value.nodes);
+    let type_count = types.size(typed.value.types);
+    let function_count = vec.len(typed.value.functions);
+    finish("sema.check_types", 3, typed_begin, "ok", hir_counts(typed.value));
+
+    let verify_input = "\"counts\":{\"nodes\":" + number(node_count) +
+        ",\"types\":" + number(type_count) + ",\"functions\":" +
+        number(function_count) + "}";
+    let verify_begin = begin("hirverify.verify", 4, verify_input);
+    let verified = hirverify.verify(typed.value, hirverify.VerifyMode.Backend);
+    let verified_has = option.is_some(verified.value);
+    if !render.succeeded(verified.state, verified_has, verified.diagnostics) {
+        return finish_failure(manager, "hirverify.verify", 4, verify_begin,
+            verified.state, verified.failure, verified_has, verified.diagnostics);
+    }
+    finish("hirverify.verify", 4, verify_begin, "ok", verify_input);
+
+    switch verified.value {
+        case option.Option.None: {
+            let diagnostic = internal_diagnostic("E_INTERNAL_ERROR",
+                "verified HIR result has no value");
+            return finish_failure(manager, "hirverify.verify", 4, verify_begin,
+                model.PhaseState.Failed, model.FailureKind.Internal, false,
+                [diagnostic]);
+        }
+        case option.Option.Some(verified_module): {
+            let config = hirverify.config(verified_module);
+            var entry = option.Option[usize].None;
+            try {
+                entry = native_entry(resolved.value);
+            } catch error model.SupportError {
+                let diagnostic = internal_diagnostic("E_INTERNAL_ERROR",
+                    "ambiguous entry name");
+                return finish_failure(manager, "hirverify.verify", 4,
+                    verify_begin, model.PhaseState.Failed,
+                    model.FailureKind.Internal, false, [diagnostic]);
+            }
+            switch entry {
+                case option.Option.None: {
+                    let diagnostic = internal_diagnostic(
+                        "E_CAPABILITY_UNAVAILABLE",
+                        "executable build requires main in the entry module");
+                    return failure_document(manager, model.PhaseState.Failed,
+                        model.FailureKind.Unsupported, false, [diagnostic]);
+                }
+                case option.Option.Some(entry_symbol): {
+                    let lower_begin = begin("nativelower.lower", 5, "");
+                    let lowered = nativelower.lower(verified_module);
+                    let lowered_has = option.is_some(lowered.value);
+                    if !render.succeeded(lowered.state, lowered_has,
+                                         lowered.diagnostics) {
+                        return finish_failure(manager, "nativelower.lower", 5,
+                            lower_begin, lowered.state, lowered.failure,
+                            lowered_has, lowered.diagnostics);
+                    }
+                    switch lowered.value {
+                        case option.Option.None: {
+                            return finish_failure(manager, "nativelower.lower", 5,
+                                lower_begin, lowered.state, lowered.failure,
+                                false, lowered.diagnostics);
+                        }
+                        case option.Option.Some(native): {
+                            finish("nativelower.lower", 5, lower_begin, "ok",
+                                "\"has_value\":true");
+
+                            let emit_begin = begin("nativeemit.emit", 6, "");
+                            var settings = nativeemit.default_options();
+                            if invocation.optimization == 2 {
+                                settings.optimization = 2;
+                            }
+                            let emitted = nativeemit.emit(native, entry_symbol,
+                                settings);
+                            let emitted_has = option.is_some(emitted.value);
+                            if !render.succeeded(emitted.state, emitted_has,
+                                                 emitted.diagnostics) {
+                                return finish_failure(manager,
+                                    "nativeemit.emit", 6, emit_begin,
+                                    emitted.state, emitted.failure, emitted_has,
+                                    emitted.diagnostics);
+                            }
+                            switch emitted.value {
+                                case option.Option.None: {
+                                    return finish_failure(manager,
+                                        "nativeemit.emit", 6, emit_begin,
+                                        emitted.state, emitted.failure, false,
+                                        emitted.diagnostics);
+                                }
+                                case option.Option.Some(output): {
+                                    let llvm_sections = vec.len(output.llvm_sections);
+                                    let has_async = output.has_async;
+                                    var emit_details = "\"llvm_sections\":" +
+                                        number(llvm_sections) +
+                                        ",\"c_adapter\":" +
+                                        boolean(output.c_adapter_source != "") +
+                                        ",\"has_async\":" + boolean(has_async);
+                                    finish("nativeemit.emit", 6, emit_begin, "ok",
+                                        emit_details);
+
+                                    let build_begin = begin("nativebuild.build", 7,
+                                        "\"optimization\":" +
+                                        number(usize(settings.optimization)));
+                                    let built = nativebuild.build(output, original,
+                                        invocation.out_dir, settings.optimization);
+                                    if !render.succeeded(built.state, built.has_value,
+                                                         built.diagnostics) {
+                                        return finish_failure(manager,
+                                            "nativebuild.build", 7, build_begin,
+                                            built.state, built.failure,
+                                            built.has_value, built.diagnostics);
+                                    }
+                                    finish("nativebuild.build", 7, build_begin,
+                                        "ok", "\"has_value\":true");
+                                    io.println(success_document(config, entry_symbol,
+                                        7, node_count, type_count,
+                                        function_count, llvm_sections, has_async));
+                                    return 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
