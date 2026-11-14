@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
-  "previous_git_head": "0fda0bdd20b170b99d7fc97ff685206b17e91bbe",
-  "frozen_at": "2026-11-14T03:53:48.929363+00:00",
+  "git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
+  "previous_git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
+  "frozen_at": "2026-11-14T04:00:13.440108+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -15896,8 +15896,8 @@
     },
     {
       "path": "tests/native/channel-waits/run.py",
-      "sha256": "526e33007da1d0cf126c156bc7b2e0901b806305b1d61a71871d8edcae4d52a0",
-      "size": 8542,
+      "sha256": "cb6e3940193feb2110cac27496b9c104b2491b32d2e167cc1542f39a3f9c6e71",
+      "size": 12331,
       "role": "runner_source",
       "assignment": []
     },
@@ -85339,7 +85339,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "7205663ec30ebbafec8ac235231c4231751e53be",
+    "to_git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85752,10 +85752,20 @@
         "commit": "7205663ec30ebbafec8ac235231c4231751e53be",
         "acceptance": "Root independent nativeobs amendment; original Bridge357 delivery remains rejected/rev4",
         "review": "checks/SH12d-nativeobs-root-amendment-20261114/independent-review.md"
+      },
+      {
+        "path": "tests/native/channel-waits/run.py",
+        "old_sha256": "526e33007da1d0cf126c156bc7b2e0901b806305b1d61a71871d8edcae4d52a0",
+        "old_size": 8542,
+        "new_sha256": "cb6e3940193feb2110cac27496b9c104b2491b32d2e167cc1542f39a3f9c6e71",
+        "new_size": 12331,
+        "commit": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
+        "accepted_correction_prefix": "88f1c67d",
+        "review": "checks/SH12e-channel-correction-Root-review-20261114/review.json"
       }
     ],
     "new_freeze_path_count": 196,
-    "modified_freeze_path_count": 27,
+    "modified_freeze_path_count": 28,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -86164,6 +86174,58 @@
       "compiler_or_driver_rebuilt": false,
       "scalar_rows_reexecuted": false,
       "running_jobs_operated": false
+    },
+    "channel_runner_process_correction_delta": {
+      "code_commit": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
+      "path": "tests/native/channel-waits/run.py",
+      "old_sha256": "526e33007da1d0cf126c156bc7b2e0901b806305b1d61a71871d8edcae4d52a0",
+      "new_sha256": "cb6e3940193feb2110cac27496b9c104b2491b32d2e167cc1542f39a3f9c6e71",
+      "accepted_correction_prefix": "88f1c67d",
+      "original_task_prefix": "5e",
+      "accepted_revision": 4,
+      "review_ACK": 946522,
+      "parent_ACK": 411,
+      "session_closed_revision": 5,
+      "review": "/home/qin/Work/language-dev-20261103/checks/SH12e-channel-correction-Root-review-20261114/review.json",
+      "review_sha256": "15b04ea17a7adf3df6d9e928dde36fd34f379b0832229570438ac1ffb7f12a86",
+      "archive_verification": "/home/qin/Work/language-dev-20261103/checks/SH12e-channel-correction-Root-review-20261114/archive-verification.json",
+      "archive_verification_sha256": "fcc1ea7debff769a64ecaa41c4b5a723e5c66ac4692583725c1ed2c62d733a53",
+      "scope": "Use existing bounded process-group helper, preserve raw stdout/stderr bytes and strict int/bool outcome fields; require GNU readelf output shape before existing INTERP/NEEDED exclusions. Original business AST and gold are unchanged.",
+      "retained_validation": {
+        "Root_short_controls": 15,
+        "strict_actual_rows": 10,
+        "unknown_rows": 8,
+        "original_archive_files": 419,
+        "original_archive_errors": [],
+        "business_AST_unchanged": true,
+        "validation_not_rerun_during_integration": true
+      },
+      "channel_cases_preserved_disabled": [
+        "project:tests/native/channel-waits/cancel-basic/lang.toml",
+        "project:tests/native/channel-waits/cancel-wake/lang.toml",
+        "project:tests/native/channel-waits/deadline-spurious/lang.toml",
+        "project:tests/native/channel-waits/invalid-receive-timeout/lang.toml",
+        "project:tests/native/channel-waits/invalid-send-timeout/lang.toml",
+        "project:tests/native/channel-waits/owned-timeout-cancel/lang.toml",
+        "project:tests/native/channel-waits/races/lang.toml",
+        "project:tests/native/channel-waits/timeout-basic/lang.toml",
+        "project:tests/native/channel-waits/timeout-blocking/lang.toml"
+      ],
+      "all_1334_case_fields_and_order_unchanged": true,
+      "runner_classifications_unchanged": true,
+      "counts": {
+        "total": 1334,
+        "enabled": 962,
+        "disabled": 372,
+        "required": 319,
+        "files": 2868,
+        "runners": 249
+      },
+      "old_2c11_timeout_remains_failure": true,
+      "new_9d11_Channel_cases_tested_in_this_integration": false,
+      "compiler_Source116_stdlib_fixtures_gold_unchanged": true,
+      "Source_or_18_row_matrix_reexecuted": false,
+      "existing_jobs_operated": false
     }
   }
 }
