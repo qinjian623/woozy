@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
-  "previous_git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
-  "frozen_at": "2026-11-14T00:52:02.771609+00:00",
+  "git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+  "previous_git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+  "frozen_at": "2026-11-14T01:14:38.640928+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -23488,8 +23488,8 @@
     },
     {
       "path": "tests/python/reference_values_backend/run_reference_values.py",
-      "sha256": "9664767835ad5db723d574223002d9d8840daed7cc4fc55428fabce38e193b68",
-      "size": 7180,
+      "sha256": "9ebc6b21f722b2621e2af99dcaec7af6f5dfa1e11c8ee87128725b8352367593",
+      "size": 18992,
       "role": "runner_source",
       "assignment": []
     },
@@ -24625,15 +24625,15 @@
     },
     {
       "path": "tests/reference_closure_frontend/run_reference_closure_cases.py",
-      "sha256": "ebba93667a18c8547008735cfe66300eecff22be66e057108f35be846340a300",
-      "size": 5013,
+      "sha256": "bcb672b238d6544a73637909cff842fc59057f31416e704f0f8a352fcfa3d089",
+      "size": 16437,
       "role": "runner_source",
       "assignment": []
     },
     {
       "path": "tests/reference_values/cases.json",
-      "sha256": "0fcd0efd9c1e830fd5d77a7f8153420ffc89eff48f39dfd1a69cb60b541599f4",
-      "size": 45299,
+      "sha256": "50da5d245f9eabe3463e859f57e8b90bd3545e4191e731b279724b9f241952c1",
+      "size": 45736,
       "role": "metadata",
       "assignment": []
     },
@@ -26253,6 +26253,13 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "sha256": "abe5d25af264e6ed22a20ee190b3a207b0b8af73566a67a48d1d50635f6084fa",
       "size": 9098,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "sha256": "19dce463ea408d1d7bdffdca1f9ca2bdac53b02b139f0784382ceb268c706d46",
+      "size": 12877,
       "role": "runner_source",
       "assignment": []
     }
@@ -66882,7 +66889,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/python/reference_values_backend/run_reference_values.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public Python 3.12 build/execute from an existing static Source runner case; the owning runner's private helper / observer checks remain separate work",
       "tags": [
         "project",
@@ -66984,7 +66991,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/python/reference_values_backend/run_reference_values.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public Python 3.12 build/execute from an existing static Source runner case; the owning runner's private helper / observer checks remain separate work",
       "tags": [
         "project",
@@ -67070,7 +67077,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/python/reference_values_backend/run_reference_values.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public Python 3.12 build/execute from an existing static Source runner case; the owning runner's private helper / observer checks remain separate work",
       "tags": [
         "project",
@@ -67156,7 +67163,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/python/reference_values_backend/run_reference_values.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public Python 3.12 build/execute from an existing static Source runner case; the owning runner's private helper / observer checks remain separate work",
       "tags": [
         "project",
@@ -85048,8 +85055,8 @@
     },
     {
       "path": "tests/python/reference_values_backend/run_reference_values.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "Public syntax/build/run CLI entry with case metadata deciding backend scope. Accepted Cpp Python record: 17 accepts, 6 rejects, 1 explicit Native-only thread not_run, plus OLD_SOURCE 3/3. The not_run case is not a Python pass; historical records and full-corpus status are separate."
     },
     {
       "path": "tests/python/reference_values_backend/runtime_reference_values_test.py",
@@ -85178,8 +85185,8 @@
     },
     {
       "path": "tests/reference_closure_frontend/run_reference_closure_cases.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "Public build/run CLI entry; accepted runner preserves negative/no-output checks, records errors and timeouts, and continues later cases. Native thread expectations remain unchanged; the metadata-excluded Python thread branch is not_run, never passed. Prior matrices and failures remain historical evidence."
     },
     {
       "path": "tests/run_isolated.py",
@@ -85225,11 +85232,16 @@
       "path": "tests/trait_objects/run_trait_cases.py",
       "status": "public_cli",
       "reason": "Public check/build CLI entry confirmed by SH11b. Reference completed 22 fixtures; old Wz39ac passed 9 rejects and all 13 accepts failed at the first Python check. No claim that the new Source CLI or all runtime branches passed."
+    },
+    {
+      "path": "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "status": "component",
+      "reason": "Portable function-level error, timeout, continuation and Native-only metadata controls. Build is stubbed and small child programs execute through the real process boundary; this is not an independent compiler entry."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+    "to_git_head": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85418,7 +85430,8 @@
       "selfhost/tests/hirverify/expression_kinds/driver.wz",
       "selfhost/tests/hirverify/expression_kinds/probe.wz",
       "selfhost/tests/hirverify/expression_kinds/run.py",
-      "selfhost/tests/hirverify/expression_kinds/test_report_controls.py"
+      "selfhost/tests/hirverify/expression_kinds/test_report_controls.py",
+      "tests/reference_closure_frontend/run_reference_closure_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -85567,10 +85580,37 @@
         "new_size": 11576,
         "commit": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
         "accepted_task": "aa19173f-4dc4-4042-a63b-16f7214cdf44"
+      },
+      {
+        "path": "tests/python/reference_values_backend/run_reference_values.py",
+        "old_sha256": "9664767835ad5db723d574223002d9d8840daed7cc4fc55428fabce38e193b68",
+        "old_size": 7180,
+        "new_sha256": "9ebc6b21f722b2621e2af99dcaec7af6f5dfa1e11c8ee87128725b8352367593",
+        "new_size": 18992,
+        "commit": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+        "accepted_task": "07c300d6-523c-43ff-951b-95f640481b3a"
+      },
+      {
+        "path": "tests/reference_closure_frontend/run_reference_closure_cases.py",
+        "old_sha256": "ebba93667a18c8547008735cfe66300eecff22be66e057108f35be846340a300",
+        "old_size": 5013,
+        "new_sha256": "bcb672b238d6544a73637909cff842fc59057f31416e704f0f8a352fcfa3d089",
+        "new_size": 16437,
+        "commit": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+        "accepted_task": "07c300d6-523c-43ff-951b-95f640481b3a"
+      },
+      {
+        "path": "tests/reference_values/cases.json",
+        "old_sha256": "0fcd0efd9c1e830fd5d77a7f8153420ffc89eff48f39dfd1a69cb60b541599f4",
+        "old_size": 45299,
+        "new_sha256": "50da5d245f9eabe3463e859f57e8b90bd3545e4191e731b279724b9f241952c1",
+        "new_size": 45736,
+        "commit": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+        "accepted_task": "07c300d6-523c-43ff-951b-95f640481b3a"
       }
     ],
-    "new_freeze_path_count": 188,
-    "modified_freeze_path_count": 20,
+    "new_freeze_path_count": 189,
+    "modified_freeze_path_count": 23,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -85708,6 +85748,63 @@
       "disabled": 371,
       "adaptation_required": 319,
       "full_corpus_or_stages_passed": false
+    },
+    "reference_runner_native_only_delta": {
+      "code_commit": "cf487cb7cad47a3f7085185d3ec43eea56aeebbf",
+      "accepted_task": "07c300d6-523c-43ff-951b-95f640481b3a",
+      "prior_oserror_review_task": "618a73e6-112d-4d35-bd4e-394aff76a39e",
+      "native_only_review": "checks/selfhost-native-only-thread-scope-review-20261114.md",
+      "oserror_review": "checks/selfhost-reference-closure-oserror-correction-review-20261114.md",
+      "runner_paths": [
+        "tests/python/reference_values_backend/run_reference_values.py",
+        "tests/reference_closure_frontend/run_reference_closure_cases.py"
+      ],
+      "new_component_runner": "tests/reference_closure_frontend/run_reference_closure_controls.py",
+      "component_control_sha256": "19dce463ea408d1d7bdffdca1f9ca2bdac53b02b139f0784382ceb268c706d46",
+      "portable_controls": {
+        "groups": 5,
+        "status": "passed",
+        "scope": "build stubs and actual small Python child processes; no Woozy compiler invocation"
+      },
+      "case_metadata": {
+        "path": "tests/reference_values/cases.json",
+        "case_count": 24,
+        "all_expected_unchanged": true,
+        "other_23_cases_unchanged": true,
+        "thread_case": "thread-capture-scalar-arg",
+        "declared_backends": [
+          "native"
+        ],
+        "Python_thread_status": "not_run/unsupported, never passed"
+      },
+      "reference_values_python_record": {
+        "accepted": 17,
+        "rejected": 6,
+        "not_run": 1,
+        "failed": 0,
+        "OLD_SOURCE_passed": 3,
+        "scope": "one reviewed Cpp565 run; not a new Source CLI conformance claim"
+      },
+      "closure_scope": "Native expectations and original no-output/preserved-file rules are retained; the excluded Python branch is not_run; old matrices and failure records were not overwritten.",
+      "python_thread_catalog_check": {
+        "method": "existing Python cases with thread-named ids/manifests or assigned frozen/generated Source importing std/thread",
+        "rows_preserved": [
+          "project:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
+          "project-python:tests/python/weak_source/fixtures/reject-native-handle/lang.toml"
+        ],
+        "enabled_CAP_rejection_preserved": "project-python:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
+        "disabled_unknown_expectation_preserved": "project:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
+        "Python_success_conflict_found": false
+      },
+      "old_case_runner_status_updates": [
+        "project-python:tests/cleanup/fixtures/case-08/lang.toml",
+        "project-python:tests/reference_values/fixtures/weak-reject-user-struct/lang.toml",
+        "project-python:tests/reference_values/fixtures/weak-reject-string/lang.toml",
+        "project-python:tests/reference_values/fixtures/weak-reject-file/lang.toml"
+      ],
+      "case_expected_enabled_observed_unchanged": true,
+      "new_language_or_Python_thread_implementation": false,
+      "full962_or_bootstrap_reexecuted": false
     }
   }
 }
