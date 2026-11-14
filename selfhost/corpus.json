@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
-  "previous_git_head": "cee3ffb6badea9d9d7a17699c2e20d9513687288",
-  "frozen_at": "2026-11-14T00:28:35.081218+00:00",
+  "git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+  "previous_git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+  "frozen_at": "2026-11-14T00:52:02.771609+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -13052,8 +13052,8 @@
     },
     {
       "path": "tests/inout_places/run_inout_places.py",
-      "sha256": "67b9e3ca68d1bdfb135345e71ad99befe299d32ec9572bd0f102ec2add960af4",
-      "size": 9519,
+      "sha256": "f1e6f7cc3df4d79dbf18015e3789bf7fb2173f126e8c023c21fb2e1d62b86e4f",
+      "size": 10233,
       "role": "runner_source",
       "assignment": []
     },
@@ -22793,8 +22793,8 @@
     },
     {
       "path": "tests/owning_inout/run_owning_inout.py",
-      "sha256": "f8509fca4206604a1dc49b3457d971f96f1bdfc87f659a439faf0726e938c670",
-      "size": 10862,
+      "sha256": "3b59361df90b32f53063efe051ca51f047d602ca84c0b0bfef048d9dc99cd0ee",
+      "size": 11576,
       "role": "runner_source",
       "assignment": []
     },
@@ -36287,7 +36287,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -36409,7 +36409,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -36531,7 +36531,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -36653,7 +36653,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -36775,7 +36775,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -36897,7 +36897,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -37015,7 +37015,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37118,7 +37118,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37221,7 +37221,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37324,7 +37324,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37427,7 +37427,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37530,7 +37530,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37633,7 +37633,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37736,7 +37736,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37839,7 +37839,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -37942,7 +37942,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -38045,7 +38045,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -38148,7 +38148,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -38251,7 +38251,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -38354,7 +38354,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "tags": [
         "inout_places",
@@ -38461,7 +38461,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "tags": [
         "inout_places",
@@ -53090,7 +53090,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -53213,7 +53213,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -53336,7 +53336,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -53459,7 +53459,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -53582,7 +53582,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -53701,7 +53701,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -53805,7 +53805,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -53909,7 +53909,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -54013,7 +54013,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -54117,7 +54117,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -54221,7 +54221,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -54325,7 +54325,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "tags": [
         "owning_inout",
@@ -54433,7 +54433,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -54556,7 +54556,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -54679,7 +54679,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -54802,7 +54802,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -54925,7 +54925,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -55048,7 +55048,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -55171,7 +55171,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -55294,7 +55294,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -55417,7 +55417,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "tags": [
         "owning_inout",
@@ -58003,7 +58003,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -58110,7 +58110,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58232,7 +58232,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58354,7 +58354,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58476,7 +58476,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58598,7 +58598,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58718,7 +58718,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -58825,7 +58825,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -58947,7 +58947,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -59069,7 +59069,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -59191,7 +59191,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -59313,7 +59313,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -59435,7 +59435,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -59555,7 +59555,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -59660,7 +59660,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -59765,7 +59765,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -59870,7 +59870,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -59975,7 +59975,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -60080,7 +60080,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -60185,7 +60185,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "tags": [
         "project",
@@ -60292,7 +60292,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -60414,7 +60414,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "tags": [
         "project",
@@ -71998,7 +71998,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72120,7 +72120,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72242,7 +72242,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72364,7 +72364,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72486,7 +72486,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72608,7 +72608,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -72731,7 +72731,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -72834,7 +72834,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -72937,7 +72937,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73040,7 +73040,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73143,7 +73143,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73246,7 +73246,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73349,7 +73349,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73452,7 +73452,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73555,7 +73555,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73658,7 +73658,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73761,7 +73761,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73864,7 +73864,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -73967,7 +73967,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -74069,7 +74069,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/inout_places/run_inout_places.py; its ELF/readelf checks were replayed as evidence but have no corpus-case field",
       "family": "inout_places",
       "derivation_group": "inout_places-accept",
@@ -74192,7 +74192,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/inout_places/run_inout_places.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/inout_places/run_inout_places.py reject branch; the ELF checks apply only to accepted builds",
       "family": "inout_places",
       "derivation_group": "inout_places-reject",
@@ -74294,7 +74294,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -74417,7 +74417,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -74540,7 +74540,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -74663,7 +74663,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -74786,7 +74786,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -74909,7 +74909,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75032,7 +75032,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75155,7 +75155,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75278,7 +75278,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75401,7 +75401,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75524,7 +75524,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75647,7 +75647,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75770,7 +75770,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -75893,7 +75893,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/owning_inout/run_owning_inout.py; the separate _rt.replace_place unit check remains a component follow-up",
       "family": "owning_inout",
       "derivation_group": "owning_inout-accept",
@@ -76017,7 +76017,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76121,7 +76121,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76225,7 +76225,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76329,7 +76329,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76433,7 +76433,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76537,7 +76537,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76641,7 +76641,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/owning_inout/run_owning_inout.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/owning_inout/run_owning_inout.py reject branch; the _rt.replace_place component check is separate",
       "family": "owning_inout",
       "derivation_group": "owning_inout-reject",
@@ -76744,7 +76744,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -76866,7 +76866,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -76988,7 +76988,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -77110,7 +77110,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -77233,7 +77233,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -77338,7 +77338,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -77443,7 +77443,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -77547,7 +77547,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -77669,7 +77669,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -77791,7 +77791,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -77913,7 +77913,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78035,7 +78035,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78157,7 +78157,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78279,7 +78279,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78401,7 +78401,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78524,7 +78524,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -78628,7 +78628,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check, Native O0/O2 build/run and Python 3.12 build/run match tests/trait_objects/run_trait_cases.py; ELF/nm checks were replayed as evidence and the dyn-cycle/dyn-retire Python observer remains private follow-up",
       "family": "trait_objects",
       "derivation_group": "trait_objects-accept",
@@ -78751,7 +78751,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -78856,7 +78856,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -78961,7 +78961,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -79066,7 +79066,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -79171,7 +79171,7 @@
       "adaptation": "ready",
       "enabled": true,
       "runner": "tests/trait_objects/run_trait_cases.py",
-      "runner_status": "adaptation_required",
+      "runner_status": "public_cli",
       "reason": "public-CLI check/build rejection on Native and Python matches tests/trait_objects/run_trait_cases.py reject branch; the dyn-cycle observer is not involved in rejected projects",
       "family": "trait_objects",
       "derivation_group": "trait_objects-reject",
@@ -83834,6 +83834,175 @@
           "output_exists": false
         }
       }
+    },
+    {
+      "generated_files": {
+        "lang.toml": "c2NoZW1hX3ZlcnNpb24gPSAxCgpbcGFja2FnZV0KbmFtZSA9ICJsaXN0X2luZmVyZW5jZSIKc291cmNlX3Jvb3QgPSAic3JjIgplbnRyeSA9ICJhcHAiCgpbYnVpbGRdCmJhY2tlbmQgPSAibmF0aXZlIgp3b3JkX2JpdHMgPSA2NAo=",
+        "src/main.wz": "cGFja2FnZSBhcHA7CgplbnVtIEUgeyBCYWQ7IH0KZnVuYyBhY2NlcHRfaTMyKHZhbHVlcyBWZWNbaTMyXSkge30KZnVuYyBhY2NlcHRfZjMyKHZhbHVlcyBWZWNbZjMyXSkge30KZnVuYyBhY2NlcHRfZjY0KHZhbHVlcyBWZWNbZjY0XSkge30KZnVuYyBhY2NlcHRfbmVzdGVkKHZhbHVlcyBWZWNbVmVjW2kzMl1dKSB7fQpmdW5jIHJlY29yZChsb2cgaW5vdXQgaTMyLCBkaWdpdCBpMzIpIGkzMiB7CiAgICBsb2cgPSBsb2cgKiAxMCArIGRpZ2l0OwogICAgcmV0dXJuIGRpZ2l0Owp9CmZ1bmMgZmFpbChsb2cgaW5vdXQgaTMyKSBWZWNbaTMyXSB0aHJvd3MgRSB7CiAgICBsb2cgPSBsb2cgKiAxMCArIDc7CiAgICB0aHJvdyBFLkJhZDsKfQpmdW5jIGlkW1RdKHZhbHVlIFQpIFQgewogICAgcmV0dXJuIHZhbHVlOwp9CgpmdW5jIG1haW4oKSBpMzIgewogICAgbGV0IHZhbHVlIGkzMiA9IDI7CiAgICBsZXQgZmlyc3QgPSBbMSwgdmFsdWVdOwogICAgbGV0IHJldmVyc2UgPSBbdmFsdWUsIDFdOwogICAgYWNjZXB0X2kzMihmaXJzdCk7CiAgICBhY2NlcHRfaTMyKHJldmVyc2UpOwogICAgaWYgZmlyc3RbMF0gIT0gcmV2ZXJzZVsxXSB8fCBmaXJzdFsxXSAhPSByZXZlcnNlWzBdIHsgcmV0dXJuIDE7IH0KCiAgICBsZXQgcmVhbCBmMzIgPSAyLjU7CiAgICBsZXQgZmxvYXRzID0gWzEuMCwgcmVhbF07CiAgICBsZXQgcmV2ZXJzZWRfZmxvYXRzID0gW3JlYWwsIDEuMF07CiAgICBhY2NlcHRfZjMyKGZsb2F0cyk7CiAgICBhY2NlcHRfZjMyKHJldmVyc2VkX2Zsb2F0cyk7CiAgICBsZXQgZGVmYXVsdHMgPSBbMS4wICsgMi41LCAzLjBdOwogICAgbGV0IHJldmVyc2VkX2RlZmF1bHRzID0gWzMuMCwgMS4wICsgMi41XTsKICAgIGFjY2VwdF9mNjQoZGVmYXVsdHMpOwogICAgYWNjZXB0X2Y2NChyZXZlcnNlZF9kZWZhdWx0cyk7CiAgICBpZiBkZWZhdWx0c1swXSAhPSAzLjUgfHwgcmV2ZXJzZWRfZGVmYXVsdHNbMV0gIT0gMy41IHsgcmV0dXJuIDI7IH0KCiAgICBsZXQgbmVzdGVkID0gW1sxXSwgW3ZhbHVlXV07CiAgICBsZXQgZW1wdHlfZmlyc3QgPSBbW10sIFt2YWx1ZV1dOwogICAgbGV0IGVtcHR5X2xhc3QgPSBbW3ZhbHVlXSwgW11dOwogICAgYWNjZXB0X25lc3RlZChuZXN0ZWQpOwogICAgYWNjZXB0X25lc3RlZChlbXB0eV9maXJzdCk7CiAgICBhY2NlcHRfbmVzdGVkKGVtcHR5X2xhc3QpOwogICAgaWYgbmVzdGVkWzBdWzBdICE9IDEgfHwgZW1wdHlfZmlyc3RbMV1bMF0gIT0gdmFsdWUgeyByZXR1cm4gMzsgfQogICAgbGV0IGdlbmVyaWNfaW50ID0gWzEsIGlkW2kzMl0oMildOwogICAgbGV0IGdlbmVyaWNfZmxvYXQgPSBbMS4wLCBpZFtmMzJdKDIuNSldOwogICAgYWNjZXB0X2kzMihnZW5lcmljX2ludCk7CiAgICBhY2NlcHRfZjMyKGdlbmVyaWNfZmxvYXQpOwoKICAgIHZhciBsb2cgaTMyID0gMDsKICAgIGxldCBvcmRlcmVkID0gWzEsIHJlY29yZChpbm91dCBsb2csIDIpLCByZWNvcmQoaW5vdXQgbG9nLCAzKV07CiAgICBpZiBsb2cgIT0gMjMgfHwgb3JkZXJlZFsxXSAhPSAyIHx8IG9yZGVyZWRbMl0gIT0gMyB7IHJldHVybiA0OyB9CiAgICBsZXQgbmVzdGVkX29yZGVyID0gW1tyZWNvcmQoaW5vdXQgbG9nLCA0KV0sIFs1XSwgW3JlY29yZChpbm91dCBsb2csIDYpXV07CiAgICBpZiBsb2cgIT0gMjM0NiB8fCBuZXN0ZWRfb3JkZXJbMV1bMF0gIT0gNSB7IHJldHVybiA1OyB9CiAgICB0cnkgewogICAgICAgIGxldCBpZ25vcmVkID0gW1sxXSwgZmFpbChpbm91dCBsb2cpXTsKICAgICAgICByZXR1cm4gNjsKICAgIH0gY2F0Y2ggZXJyb3IgRSB7CiAgICAgICAgaWYgbG9nICE9IDIzNDY3IHsgcmV0dXJuIDc7IH0KICAgIH0KICAgIHJldHVybiAwOwp9Cg=="
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/generics/run_list_inference.py",
+      "runner_status": "public_cli",
+      "reason": "reachable entry is common.simple_case public CLI; the private helper import in run_unbound_methods is not reached from run_list_inference",
+      "tags": [
+        "project",
+        "generated",
+        "list-inference"
+      ],
+      "id": "list-inference:check-native",
+      "kind": "generated_project",
+      "operation": "check",
+      "operations": [
+        "check"
+      ],
+      "backend": "native",
+      "manifest": "lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "no_stderr": true
+      },
+      "source_provenance": {
+        "runner": "tests/generics/run_list_inference.py",
+        "runner_sha256": "f97c87bf538e63abcf785eaec70356214cfe2d2f694f87b0a34d594a3361bfb5",
+        "assertion_owner": "tests/generics/run_unbound_methods.py::simple_case",
+        "assertion_owner_sha256": "09b53c5e01f4441faca9f6b24b85c55e33d0bf9ac2ddce0259ca2c4d2bf83e34",
+        "fixture_manifest": "tests/generics/list-inference/lang.toml",
+        "fixture_source": "tests/generics/list-inference/src/main.wz",
+        "manifest_sha256": "ff746f99ee1eb72d08e98b2e6ec78ae4fb447806556a64ed2ea04c5cc36e69da",
+        "source_sha256": "88c618d06b3d95193cd8774d53db14f47f1dfbc2758a286727f31e00b1d4d044",
+        "original_kind": "check",
+        "backend": "native",
+        "opt": null,
+        "audit_reference": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/reference/runner-out/results.json",
+        "audit_candidate": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/candidate/runner-out/results.json"
+      },
+      "catalog_relation": {
+        "existing_case": null,
+        "coverage": "new_coverage"
+      },
+      "original_assertions": {
+        "check_exit": 0,
+        "check_status": "ok"
+      }
+    },
+    {
+      "generated_files": {
+        "lang.toml": "c2NoZW1hX3ZlcnNpb24gPSAxCgpbcGFja2FnZV0KbmFtZSA9ICJsaXN0X2luZmVyZW5jZSIKc291cmNlX3Jvb3QgPSAic3JjIgplbnRyeSA9ICJhcHAiCgpbYnVpbGRdCmJhY2tlbmQgPSAibmF0aXZlIgp3b3JkX2JpdHMgPSA2NAo=",
+        "src/main.wz": "cGFja2FnZSBhcHA7CgplbnVtIEUgeyBCYWQ7IH0KZnVuYyBhY2NlcHRfaTMyKHZhbHVlcyBWZWNbaTMyXSkge30KZnVuYyBhY2NlcHRfZjMyKHZhbHVlcyBWZWNbZjMyXSkge30KZnVuYyBhY2NlcHRfZjY0KHZhbHVlcyBWZWNbZjY0XSkge30KZnVuYyBhY2NlcHRfbmVzdGVkKHZhbHVlcyBWZWNbVmVjW2kzMl1dKSB7fQpmdW5jIHJlY29yZChsb2cgaW5vdXQgaTMyLCBkaWdpdCBpMzIpIGkzMiB7CiAgICBsb2cgPSBsb2cgKiAxMCArIGRpZ2l0OwogICAgcmV0dXJuIGRpZ2l0Owp9CmZ1bmMgZmFpbChsb2cgaW5vdXQgaTMyKSBWZWNbaTMyXSB0aHJvd3MgRSB7CiAgICBsb2cgPSBsb2cgKiAxMCArIDc7CiAgICB0aHJvdyBFLkJhZDsKfQpmdW5jIGlkW1RdKHZhbHVlIFQpIFQgewogICAgcmV0dXJuIHZhbHVlOwp9CgpmdW5jIG1haW4oKSBpMzIgewogICAgbGV0IHZhbHVlIGkzMiA9IDI7CiAgICBsZXQgZmlyc3QgPSBbMSwgdmFsdWVdOwogICAgbGV0IHJldmVyc2UgPSBbdmFsdWUsIDFdOwogICAgYWNjZXB0X2kzMihmaXJzdCk7CiAgICBhY2NlcHRfaTMyKHJldmVyc2UpOwogICAgaWYgZmlyc3RbMF0gIT0gcmV2ZXJzZVsxXSB8fCBmaXJzdFsxXSAhPSByZXZlcnNlWzBdIHsgcmV0dXJuIDE7IH0KCiAgICBsZXQgcmVhbCBmMzIgPSAyLjU7CiAgICBsZXQgZmxvYXRzID0gWzEuMCwgcmVhbF07CiAgICBsZXQgcmV2ZXJzZWRfZmxvYXRzID0gW3JlYWwsIDEuMF07CiAgICBhY2NlcHRfZjMyKGZsb2F0cyk7CiAgICBhY2NlcHRfZjMyKHJldmVyc2VkX2Zsb2F0cyk7CiAgICBsZXQgZGVmYXVsdHMgPSBbMS4wICsgMi41LCAzLjBdOwogICAgbGV0IHJldmVyc2VkX2RlZmF1bHRzID0gWzMuMCwgMS4wICsgMi41XTsKICAgIGFjY2VwdF9mNjQoZGVmYXVsdHMpOwogICAgYWNjZXB0X2Y2NChyZXZlcnNlZF9kZWZhdWx0cyk7CiAgICBpZiBkZWZhdWx0c1swXSAhPSAzLjUgfHwgcmV2ZXJzZWRfZGVmYXVsdHNbMV0gIT0gMy41IHsgcmV0dXJuIDI7IH0KCiAgICBsZXQgbmVzdGVkID0gW1sxXSwgW3ZhbHVlXV07CiAgICBsZXQgZW1wdHlfZmlyc3QgPSBbW10sIFt2YWx1ZV1dOwogICAgbGV0IGVtcHR5X2xhc3QgPSBbW3ZhbHVlXSwgW11dOwogICAgYWNjZXB0X25lc3RlZChuZXN0ZWQpOwogICAgYWNjZXB0X25lc3RlZChlbXB0eV9maXJzdCk7CiAgICBhY2NlcHRfbmVzdGVkKGVtcHR5X2xhc3QpOwogICAgaWYgbmVzdGVkWzBdWzBdICE9IDEgfHwgZW1wdHlfZmlyc3RbMV1bMF0gIT0gdmFsdWUgeyByZXR1cm4gMzsgfQogICAgbGV0IGdlbmVyaWNfaW50ID0gWzEsIGlkW2kzMl0oMildOwogICAgbGV0IGdlbmVyaWNfZmxvYXQgPSBbMS4wLCBpZFtmMzJdKDIuNSldOwogICAgYWNjZXB0X2kzMihnZW5lcmljX2ludCk7CiAgICBhY2NlcHRfZjMyKGdlbmVyaWNfZmxvYXQpOwoKICAgIHZhciBsb2cgaTMyID0gMDsKICAgIGxldCBvcmRlcmVkID0gWzEsIHJlY29yZChpbm91dCBsb2csIDIpLCByZWNvcmQoaW5vdXQgbG9nLCAzKV07CiAgICBpZiBsb2cgIT0gMjMgfHwgb3JkZXJlZFsxXSAhPSAyIHx8IG9yZGVyZWRbMl0gIT0gMyB7IHJldHVybiA0OyB9CiAgICBsZXQgbmVzdGVkX29yZGVyID0gW1tyZWNvcmQoaW5vdXQgbG9nLCA0KV0sIFs1XSwgW3JlY29yZChpbm91dCBsb2csIDYpXV07CiAgICBpZiBsb2cgIT0gMjM0NiB8fCBuZXN0ZWRfb3JkZXJbMV1bMF0gIT0gNSB7IHJldHVybiA1OyB9CiAgICB0cnkgewogICAgICAgIGxldCBpZ25vcmVkID0gW1sxXSwgZmFpbChpbm91dCBsb2cpXTsKICAgICAgICByZXR1cm4gNjsKICAgIH0gY2F0Y2ggZXJyb3IgRSB7CiAgICAgICAgaWYgbG9nICE9IDIzNDY3IHsgcmV0dXJuIDc7IH0KICAgIH0KICAgIHJldHVybiAwOwp9Cg=="
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/generics/run_list_inference.py",
+      "runner_status": "public_cli",
+      "reason": "reachable entry is common.simple_case public CLI; the private helper import in run_unbound_methods is not reached from run_list_inference",
+      "tags": [
+        "project",
+        "generated",
+        "list-inference"
+      ],
+      "id": "list-inference:check-python",
+      "kind": "generated_project",
+      "operation": "check",
+      "operations": [
+        "check"
+      ],
+      "backend": "python",
+      "manifest": "lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "no_stderr": true
+      },
+      "source_provenance": {
+        "runner": "tests/generics/run_list_inference.py",
+        "runner_sha256": "f97c87bf538e63abcf785eaec70356214cfe2d2f694f87b0a34d594a3361bfb5",
+        "assertion_owner": "tests/generics/run_unbound_methods.py::simple_case",
+        "assertion_owner_sha256": "09b53c5e01f4441faca9f6b24b85c55e33d0bf9ac2ddce0259ca2c4d2bf83e34",
+        "fixture_manifest": "tests/generics/list-inference/lang.toml",
+        "fixture_source": "tests/generics/list-inference/src/main.wz",
+        "manifest_sha256": "ff746f99ee1eb72d08e98b2e6ec78ae4fb447806556a64ed2ea04c5cc36e69da",
+        "source_sha256": "88c618d06b3d95193cd8774d53db14f47f1dfbc2758a286727f31e00b1d4d044",
+        "original_kind": "check",
+        "backend": "python",
+        "opt": null,
+        "audit_reference": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/reference/runner-out/results.json",
+        "audit_candidate": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/candidate/runner-out/results.json"
+      },
+      "catalog_relation": {
+        "existing_case": null,
+        "coverage": "new_coverage"
+      },
+      "original_assertions": {
+        "check_exit": 0,
+        "check_status": "ok"
+      }
+    },
+    {
+      "generated_files": {
+        "lang.toml": "c2NoZW1hX3ZlcnNpb24gPSAxCgpbcGFja2FnZV0KbmFtZSA9ICJsaXN0X2luZmVyZW5jZSIKc291cmNlX3Jvb3QgPSAic3JjIgplbnRyeSA9ICJhcHAiCgpbYnVpbGRdCmJhY2tlbmQgPSAibmF0aXZlIgp3b3JkX2JpdHMgPSA2NAo=",
+        "src/main.wz": "cGFja2FnZSBhcHA7CgplbnVtIEUgeyBCYWQ7IH0KZnVuYyBhY2NlcHRfaTMyKHZhbHVlcyBWZWNbaTMyXSkge30KZnVuYyBhY2NlcHRfZjMyKHZhbHVlcyBWZWNbZjMyXSkge30KZnVuYyBhY2NlcHRfZjY0KHZhbHVlcyBWZWNbZjY0XSkge30KZnVuYyBhY2NlcHRfbmVzdGVkKHZhbHVlcyBWZWNbVmVjW2kzMl1dKSB7fQpmdW5jIHJlY29yZChsb2cgaW5vdXQgaTMyLCBkaWdpdCBpMzIpIGkzMiB7CiAgICBsb2cgPSBsb2cgKiAxMCArIGRpZ2l0OwogICAgcmV0dXJuIGRpZ2l0Owp9CmZ1bmMgZmFpbChsb2cgaW5vdXQgaTMyKSBWZWNbaTMyXSB0aHJvd3MgRSB7CiAgICBsb2cgPSBsb2cgKiAxMCArIDc7CiAgICB0aHJvdyBFLkJhZDsKfQpmdW5jIGlkW1RdKHZhbHVlIFQpIFQgewogICAgcmV0dXJuIHZhbHVlOwp9CgpmdW5jIG1haW4oKSBpMzIgewogICAgbGV0IHZhbHVlIGkzMiA9IDI7CiAgICBsZXQgZmlyc3QgPSBbMSwgdmFsdWVdOwogICAgbGV0IHJldmVyc2UgPSBbdmFsdWUsIDFdOwogICAgYWNjZXB0X2kzMihmaXJzdCk7CiAgICBhY2NlcHRfaTMyKHJldmVyc2UpOwogICAgaWYgZmlyc3RbMF0gIT0gcmV2ZXJzZVsxXSB8fCBmaXJzdFsxXSAhPSByZXZlcnNlWzBdIHsgcmV0dXJuIDE7IH0KCiAgICBsZXQgcmVhbCBmMzIgPSAyLjU7CiAgICBsZXQgZmxvYXRzID0gWzEuMCwgcmVhbF07CiAgICBsZXQgcmV2ZXJzZWRfZmxvYXRzID0gW3JlYWwsIDEuMF07CiAgICBhY2NlcHRfZjMyKGZsb2F0cyk7CiAgICBhY2NlcHRfZjMyKHJldmVyc2VkX2Zsb2F0cyk7CiAgICBsZXQgZGVmYXVsdHMgPSBbMS4wICsgMi41LCAzLjBdOwogICAgbGV0IHJldmVyc2VkX2RlZmF1bHRzID0gWzMuMCwgMS4wICsgMi41XTsKICAgIGFjY2VwdF9mNjQoZGVmYXVsdHMpOwogICAgYWNjZXB0X2Y2NChyZXZlcnNlZF9kZWZhdWx0cyk7CiAgICBpZiBkZWZhdWx0c1swXSAhPSAzLjUgfHwgcmV2ZXJzZWRfZGVmYXVsdHNbMV0gIT0gMy41IHsgcmV0dXJuIDI7IH0KCiAgICBsZXQgbmVzdGVkID0gW1sxXSwgW3ZhbHVlXV07CiAgICBsZXQgZW1wdHlfZmlyc3QgPSBbW10sIFt2YWx1ZV1dOwogICAgbGV0IGVtcHR5X2xhc3QgPSBbW3ZhbHVlXSwgW11dOwogICAgYWNjZXB0X25lc3RlZChuZXN0ZWQpOwogICAgYWNjZXB0X25lc3RlZChlbXB0eV9maXJzdCk7CiAgICBhY2NlcHRfbmVzdGVkKGVtcHR5X2xhc3QpOwogICAgaWYgbmVzdGVkWzBdWzBdICE9IDEgfHwgZW1wdHlfZmlyc3RbMV1bMF0gIT0gdmFsdWUgeyByZXR1cm4gMzsgfQogICAgbGV0IGdlbmVyaWNfaW50ID0gWzEsIGlkW2kzMl0oMildOwogICAgbGV0IGdlbmVyaWNfZmxvYXQgPSBbMS4wLCBpZFtmMzJdKDIuNSldOwogICAgYWNjZXB0X2kzMihnZW5lcmljX2ludCk7CiAgICBhY2NlcHRfZjMyKGdlbmVyaWNfZmxvYXQpOwoKICAgIHZhciBsb2cgaTMyID0gMDsKICAgIGxldCBvcmRlcmVkID0gWzEsIHJlY29yZChpbm91dCBsb2csIDIpLCByZWNvcmQoaW5vdXQgbG9nLCAzKV07CiAgICBpZiBsb2cgIT0gMjMgfHwgb3JkZXJlZFsxXSAhPSAyIHx8IG9yZGVyZWRbMl0gIT0gMyB7IHJldHVybiA0OyB9CiAgICBsZXQgbmVzdGVkX29yZGVyID0gW1tyZWNvcmQoaW5vdXQgbG9nLCA0KV0sIFs1XSwgW3JlY29yZChpbm91dCBsb2csIDYpXV07CiAgICBpZiBsb2cgIT0gMjM0NiB8fCBuZXN0ZWRfb3JkZXJbMV1bMF0gIT0gNSB7IHJldHVybiA1OyB9CiAgICB0cnkgewogICAgICAgIGxldCBpZ25vcmVkID0gW1sxXSwgZmFpbChpbm91dCBsb2cpXTsKICAgICAgICByZXR1cm4gNjsKICAgIH0gY2F0Y2ggZXJyb3IgRSB7CiAgICAgICAgaWYgbG9nICE9IDIzNDY3IHsgcmV0dXJuIDc7IH0KICAgIH0KICAgIHJldHVybiAwOwp9Cg=="
+      },
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
+      "runner": "tests/generics/run_list_inference.py",
+      "runner_status": "public_cli",
+      "reason": "reachable entry is common.simple_case public CLI; the private helper import in run_unbound_methods is not reached from run_list_inference",
+      "tags": [
+        "project",
+        "generated",
+        "list-inference"
+      ],
+      "id": "list-inference:build-python",
+      "kind": "generated_project",
+      "operation": "build_python",
+      "operations": [
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "no_stderr": true,
+        "build_status": "ok"
+      },
+      "source_provenance": {
+        "runner": "tests/generics/run_list_inference.py",
+        "runner_sha256": "f97c87bf538e63abcf785eaec70356214cfe2d2f694f87b0a34d594a3361bfb5",
+        "assertion_owner": "tests/generics/run_unbound_methods.py::simple_case",
+        "assertion_owner_sha256": "09b53c5e01f4441faca9f6b24b85c55e33d0bf9ac2ddce0259ca2c4d2bf83e34",
+        "fixture_manifest": "tests/generics/list-inference/lang.toml",
+        "fixture_source": "tests/generics/list-inference/src/main.wz",
+        "manifest_sha256": "ff746f99ee1eb72d08e98b2e6ec78ae4fb447806556a64ed2ea04c5cc36e69da",
+        "source_sha256": "88c618d06b3d95193cd8774d53db14f47f1dfbc2758a286727f31e00b1d4d044",
+        "original_kind": "python",
+        "backend": "python",
+        "opt": null,
+        "audit_reference": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/reference/runner-out/results.json",
+        "audit_candidate": "/home/qin/Work/language-dev-20261103/checks/SH10x-legacy-runner99-entry-audit-first2-20261114/reports/legacy-runner-audit-20261114/02-list-inference/candidate/runner-out/results.json"
+      },
+      "catalog_relation": {
+        "existing_case": null,
+        "coverage": "new_coverage"
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_timeout_seconds": 180,
+      "original_assertions": {
+        "build_exit": 0,
+        "build_status": "ok",
+        "execute_exit": 0,
+        "execute_stdout": "",
+        "execute_stderr": ""
+      }
     }
   ],
   "runners": [
@@ -84229,8 +84398,8 @@
     },
     {
       "path": "tests/generics/run_list_inference.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "The reachable common.simple_case path uses public check/build CLI, fixed tools, Python and built programs; the imported private helper branch is not reached. SH11e adds only three non-overlapping commands; native O0/O2 remain covered by the existing project case."
     },
     {
       "path": "tests/generics/run_method_inout.py",
@@ -84274,8 +84443,8 @@
     },
     {
       "path": "tests/inout_places/run_inout_places.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "Public check/build CLI only; SH11a reference and old Wz39ac completed all 21 fixtures under exec trace. SH11f validates GNU readelf output before the existing ELF assertions; entry classification is not a full-corpus pass."
     },
     {
       "path": "tests/iterator/run_iterator.py",
@@ -84654,8 +84823,8 @@
     },
     {
       "path": "tests/owning_inout/run_owning_inout.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "Public check/build CLI compilation entry; the separate python_places_test.py remains a component follow-up. SH11a reference completed 21 fixtures; old Wz39ac passed 8, failed dyn and left 12 not_run. This status classifies the entry, not candidate conformance."
     },
     {
       "path": "tests/performance/binarytrees/large_prepare.py",
@@ -85054,13 +85223,13 @@
     },
     {
       "path": "tests/trait_objects/run_trait_cases.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "Public check/build CLI entry confirmed by SH11b. Reference completed 22 fixtures; old Wz39ac passed 9 rejects and all 13 accepts failed at the first Python check. No claim that the new Source CLI or all runtime branches passed."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+    "to_git_head": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85380,10 +85549,28 @@
         "commit": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
         "origin_task": "ae3bf72c-7a7c-44d7-bc07-f4ab6b5f8964",
         "review_basis": "Root static comparison, formal component r2 nine commands, independent strict seven-command replay and six integrated controls; original task intentionally interrupted during redundant old-Source check"
+      },
+      {
+        "path": "tests/inout_places/run_inout_places.py",
+        "old_sha256": "67b9e3ca68d1bdfb135345e71ad99befe299d32ec9572bd0f102ec2add960af4",
+        "old_size": 9519,
+        "new_sha256": "f1e6f7cc3df4d79dbf18015e3789bf7fb2173f126e8c023c21fb2e1d62b86e4f",
+        "new_size": 10233,
+        "commit": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+        "accepted_task": "aa19173f-4dc4-4042-a63b-16f7214cdf44"
+      },
+      {
+        "path": "tests/owning_inout/run_owning_inout.py",
+        "old_sha256": "f8509fca4206604a1dc49b3457d971f96f1bdfc87f659a439faf0726e938c670",
+        "old_size": 10862,
+        "new_sha256": "3b59361df90b32f53063efe051ca51f047d602ca84c0b0bfef048d9dc99cd0ee",
+        "new_size": 11576,
+        "commit": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+        "accepted_task": "aa19173f-4dc4-4042-a63b-16f7214cdf44"
       }
     ],
     "new_freeze_path_count": 188,
-    "modified_freeze_path_count": 18,
+    "modified_freeze_path_count": 20,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -85448,6 +85635,79 @@
       "independent_review": "checks/SH11c-hir-expression-gate-independent-review-20261114.md",
       "manual_real_pipeline_supplement": "13 trait projects and async/basic; manual commands, not corpus per-command process flags",
       "corpus_expectations_unchanged": true
+    },
+    "public_cli_entry_delta": {
+      "code_commit": "4f0b662c0e16020402d5942cd2ae5c5cf7dea23d",
+      "runner_status": "public_cli",
+      "runner_paths": [
+        "tests/generics/run_list_inference.py",
+        "tests/inout_places/run_inout_places.py",
+        "tests/owning_inout/run_owning_inout.py",
+        "tests/trait_objects/run_trait_cases.py"
+      ],
+      "old_case_runner_status_updates": {
+        "tests/inout_places/run_inout_places.py": 42,
+        "tests/owning_inout/run_owning_inout.py": 42,
+        "tests/trait_objects/run_trait_cases.py": 44
+      },
+      "case_change_scope": "Only runner_status changed on the 128 existing cases; expectations, support, adaptation, enabled, observed and component follow-ups are preserved.",
+      "inout_review": "checks/SH11a-direct-inout-runners-20261114/reports/report.md",
+      "readelf_fix_review": "checks/SH11f-inout-readelf-output-check-20261114/reports/report.md",
+      "trait_independent_review": "checks/SH11b-direct-closure-trait-independent-review-20261114.md",
+      "historical_candidate": "old Wz39ac, not the new Source compiler",
+      "owning_inout_candidate_scope": {
+        "passed": 8,
+        "failed": "dyn native check: E_IR_INVALID/lowering, expected value expression",
+        "not_run": 12
+      },
+      "trait_candidate_scope": {
+        "rejects_passed": 9,
+        "accepts_failed_at_python_check": 13,
+        "native_accept_build_and_runtime": "not_run except separately recorded basic native diagnostic"
+      },
+      "python_places_component": "tests/owning_inout/python_places_test.py remains component; component_follow_up metadata is unchanged",
+      "entry_classification_only": true,
+      "full_corpus_or_stages_passed": false
+    },
+    "list_inference_delta": {
+      "proposal": "checks/SH11e-list-inference-generated-cases-20261114/proposal/list-inference-5.json",
+      "proposal_sha256": "da04b6b220e56c4ae636366c3fcd749f8ac62f92491776353c2747b4becb5917",
+      "independent_review": "checks/SH11e-list-inference-independent-review-20261114.md",
+      "new_cases": [
+        "list-inference:check-native",
+        "list-inference:check-python",
+        "list-inference:build-python"
+      ],
+      "native_overlap_not_appended": [
+        "list-inference:build-native-O0",
+        "list-inference:build-native-O2"
+      ],
+      "existing_native_case_unchanged": "project:tests/generics/list-inference/lang.toml",
+      "reviewed_proof": {
+        "compiler_commands": 10,
+        "program_executions": 6,
+        "resource_files": 127,
+        "resource_trees": 2
+      },
+      "extra_elf_observations": {
+        "scope": "native build cases",
+        "fields": [
+          "readelf -l has no INTERP",
+          "readelf -d has no NEEDED",
+          "nm --undefined-only has no strong undefined symbols",
+          "all undefined symbols are weak and in {lang_vec_observe_v1, lang_process_init_v1}"
+        ],
+        "reason": "current corpus expected/run_expectation schema has no ELF assertion; these remain outside the merged case and are checked by the proof script"
+      },
+      "python_execution_scope": "The original runner uses python -s, sets PYTHONNOUSERSITE and removes PYTHONPATH. Current corpus execution does not fully express those isolation settings; argv/environment equivalence is not claimed.",
+      "schema_or_executor_extended": false,
+      "old_case_order_preserved": true,
+      "old_case_expectations_unchanged": true,
+      "cases_total": 1333,
+      "enabled": 962,
+      "disabled": 371,
+      "adaptation_required": 319,
+      "full_corpus_or_stages_passed": false
     }
   }
 }
