@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
-  "previous_git_head": "4d73a6c57158dd04508fe4a312f0ed209d8e4c7c",
-  "frozen_at": "2026-11-14T11:04:00.020360+00:00",
+  "git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
+  "previous_git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
+  "frozen_at": "2026-11-14T12:35:02.774158+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,8 +31,8 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1334,
-    "manifests": 1013,
+    "tracked_wz": 1337,
+    "manifests": 1015,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
@@ -1250,8 +1250,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
-      "sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
-      "size": 39611,
+      "sha256": "2111f3061dd41f3b0443793258e1f66d57f14730147002262e8d488a153bb023",
+      "size": 39615,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1260,8 +1260,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/flow.wz",
-      "sha256": "cbc320285d90ca740369fefe49ef448eb6d16ac4ee1d68f7a97fe4e3d5b404c1",
-      "size": 58413,
+      "sha256": "c172f067716d6b4ab87a012018871572a33efcdf4aee051b29bcdeddc6610114",
+      "size": 58421,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1270,8 +1270,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/instance.wz",
-      "sha256": "2d26326731974aa64f92aabd1602dbe1ecab88e14cc85e33925214b809535a07",
-      "size": 51611,
+      "sha256": "b729c200c94216f1e41542eb03d1ec810a56a461dad0e68a905b2db28cfac95b",
+      "size": 51615,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1340,8 +1340,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/types.wz",
-      "sha256": "19ea6a41b402b186abb5829ba5f6a920bce7eb482242851c515af56a36b01de1",
-      "size": 17618,
+      "sha256": "223fc3c369307c6df502bd0730c8848b3bb17ce7a736113a79e0e5398c3acfa9",
+      "size": 17957,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1350,8 +1350,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/values.wz",
-      "sha256": "872d25a3de829294e747dc48b8de44e76719efb0c97a0e113c61632c4921bb2c",
-      "size": 39136,
+      "sha256": "ab35fa8dd4d916994119f416128f027d6d31ff353d1464eaa3a5f839b6610a3f",
+      "size": 39152,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1360,8 +1360,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/verify.wz",
-      "sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
-      "size": 17992,
+      "sha256": "a543f4167ea9db6145aa04e2ccf466fa09515ab84f42257fcd60d5ec631abe8a",
+      "size": 18244,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -26467,6 +26467,75 @@
       "path": "tests/python/language_gc/runner_controls.py",
       "sha256": "6263c57e0fb15687324aa04a0dafa337feb9c26f87d664c1a6a43ebbefbb0541",
       "size": 18249,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+      "sha256": "62a6039e2a97a1a0178be4f4da2e3003551be31a2ed635d1fe261408f102b50c",
+      "size": 9321,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+      "sha256": "a9c0e503f2d2fb0baa5ef7ab2e23d452c0dbec39f92882bf3fa761eb4361096a",
+      "size": 147,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+      "sha256": "24851e3bb8c183151fbb651d6ccb5a4c224f4a6ec0dd3d2c4a9aae3b84ca59eb",
+      "size": 13515,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "sha256": "ca0729937407148dc8d8bbb0952dbfa03ba790b9fcfc9090bfa17bd523b7bd81",
+      "size": 32643,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+      "sha256": "7a460a663eb4be4136cd76d389a533f05bdbdfe1931809291a6bcbe4e6de9248",
+      "size": 2881,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/lang.toml",
+      "sha256": "bc30dbff32c4dd6c4af303f426082eb1e00e714b3e8c2c9c41005bf65ce60b5f",
+      "size": 135,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/cffi_forged/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/main.wz",
+      "sha256": "4a95f0db9492fe9fdce418712e6777654ce6e24958aa8d87945f36fae72ef93e",
+      "size": 23265,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/cffi_forged/lang.toml"
+      ],
+      "manifest": "selfhost/tests/cffi_forged/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/run.py",
+      "sha256": "0d17339890b895f7567b25c82840786e74e873719c77c48b159c88014edeb591",
+      "size": 39126,
       "role": "runner_source",
       "assignment": []
     }
@@ -85168,6 +85237,44 @@
       "tags": [
         "selfhost"
       ]
+    },
+    {
+      "id": "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "runner_status": "component",
+      "reason": "Private HIR needs_drop cache component: stages real compiler modules and a same-package probe. Accepted51 assertions and47 trace assertions are component-only, with a hit-heavy benchmark; historical failed checks, repeated O2 builds and deep benchmark timeout remain. This staging manifest is not an ordinary public CLI project or a complete compiler/performance/selfhosting pass.",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/cffi_forged/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/cffi_forged/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/cffi_forged/run.py",
+      "runner_status": "component",
+      "reason": "Private C-FFI forged-metadata component staging manifest, pinned to historical ed1 Source. Only its eight HIR/NativeIR rejection assertions and legal baselines passed on olded1; the new0c46 default Source is refused by the unchanged runner. No current0c46, full15-case C-FFI, target interoperability or complete selfhosting pass is claimed.",
+      "tags": [
+        "selfhost"
+      ]
     }
   ],
   "runners": [
@@ -86470,11 +86577,26 @@
       "path": "tests/python/language_gc/runner_controls.py",
       "status": "component",
       "reason": "Pure Python checks for strict process flags, metadata, GC observation, trace failure persistence and atomic command-record replacement; no compiler, helper, observer or program is started."
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "status": "component",
+      "reason": "Private needs_drop cache component staging and repeated-query benchmark runner for Source0c46. Accepted51/trace47 assertions are component evidence only, not a whole-compiler performance, CLI, corpus or selfhosting pass."
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+      "status": "component",
+      "reason": "Pure JSON/execve/execveat parser controls for the private needs_drop runner; no compiler, helper or language target is launched."
+    },
+    {
+      "path": "selfhost/tests/cffi_forged/run.py",
+      "status": "component",
+      "reason": "Private C-FFI forged HIR/NativeIR component runner pinned to historical Sourceed1. Its eight saved rejection passes do not prove current0c46 or the full15-case C-FFI runner. Default current0c46 Source is intentionally rejected."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "6cc383785f8a91aefffead0ff9ffa9efc08980fe",
+    "to_git_head": "358aab6c744b67b51b939add764cdc4556d46d01",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86689,7 +86811,15 @@
       "selfhost/tests/phase-timing/run.py",
       "selfhost/tests/phase-timing/main.wz",
       "selfhost/tests/phase-timing/lang.toml",
-      "tests/python/language_gc/runner_controls.py"
+      "tests/python/language_gc/runner_controls.py",
+      "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+      "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+      "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+      "selfhost/tests/hirverify/cache/needs_drop/run.py",
+      "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+      "selfhost/tests/cffi_forged/lang.toml",
+      "selfhost/tests/cffi_forged/main.wz",
+      "selfhost/tests/cffi_forged/run.py"
     ],
     "modified_freeze_paths": [
       {
@@ -86785,19 +86915,32 @@
         "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
         "old_sha256": "c12289e983fa0d6edd50aa8c70a34652115b1eb5f71dfaf30c11a09b8791f61e",
         "old_size": 37552,
-        "new_sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
-        "new_size": 39611,
-        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
-        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+        "new_sha256": "2111f3061dd41f3b0443793258e1f66d57f14730147002262e8d488a153bb023",
+        "new_size": 39615,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
+        "history": [
+          {
+            "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
+            "old_sha256": "c12289e983fa0d6edd50aa8c70a34652115b1eb5f71dfaf30c11a09b8791f61e",
+            "old_size": 37552,
+            "new_sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
+            "new_size": 39611,
+            "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+            "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+          }
+        ],
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim."
       },
       {
         "path": "selfhost/src/wzcc/hirverify/flow.wz",
         "old_sha256": "8b108538a7dc2b3eb3c077f0d5b4e9f0c9bcda23be630f326a5a1bae55f1b962",
         "old_size": 56328,
-        "new_sha256": "cbc320285d90ca740369fefe49ef448eb6d16ac4ee1d68f7a97fe4e3d5b404c1",
-        "new_size": 58413,
-        "commit": "384328c89ec36948b403b781a42e9fab63f94069",
-        "accepted_task": "e876b33c-cb84-4404-b4a7-51c5b1310831",
+        "new_sha256": "c172f067716d6b4ab87a012018871572a33efcdf4aee051b29bcdeddc6610114",
+        "new_size": 58421,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
         "history": [
           {
             "path": "selfhost/src/wzcc/hirverify/flow.wz",
@@ -86807,10 +86950,21 @@
             "new_size": 58415,
             "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
             "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+          },
+          {
+            "path": "selfhost/src/wzcc/hirverify/flow.wz",
+            "old_sha256": "8b108538a7dc2b3eb3c077f0d5b4e9f0c9bcda23be630f326a5a1bae55f1b962",
+            "old_size": 56328,
+            "new_sha256": "cbc320285d90ca740369fefe49ef448eb6d16ac4ee1d68f7a97fe4e3d5b404c1",
+            "new_size": 58413,
+            "commit": "384328c89ec36948b403b781a42e9fab63f94069",
+            "accepted_task": "e876b33c-cb84-4404-b4a7-51c5b1310831",
+            "acceptance": "SH13 function-constant HIR source correction accepted rev2/event950696, parent429; three production files only, retained O0 component evidence, no full new CLI claim.",
+            "review": "checks/SH13-function-const-single-correction-Root-review-20261114/review.json"
           }
         ],
-        "acceptance": "SH13 function-constant HIR source correction accepted rev2/event950696, parent429; three production files only, retained O0 component evidence, no full new CLI claim.",
-        "review": "checks/SH13-function-const-single-correction-Root-review-20261114/review.json"
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim.",
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json"
       },
       {
         "path": "selfhost/src/wzcc/hirverify/run.wz",
@@ -86825,16 +86979,35 @@
         "path": "selfhost/src/wzcc/hirverify/verify.wz",
         "old_sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
         "old_size": 17955,
-        "new_sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
-        "new_size": 17992,
-        "commit": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
-        "accepted_task": "db5304e4-c5ff-47db-aa00-dab2f2d0985b",
+        "new_sha256": "a543f4167ea9db6145aa04e2ccf466fa09515ab84f42257fcd60d5ec631abe8a",
+        "new_size": 18244,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
         "previous_revision": {
           "new_sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
           "new_size": 18189,
           "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
           "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
-        }
+        },
+        "history": [
+          {
+            "path": "selfhost/src/wzcc/hirverify/verify.wz",
+            "old_sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
+            "old_size": 17955,
+            "new_sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
+            "new_size": 17992,
+            "commit": "01fa815af3d06e82ca61369d7da78b7b390aaa9c",
+            "accepted_task": "db5304e4-c5ff-47db-aa00-dab2f2d0985b",
+            "previous_revision": {
+              "new_sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
+              "new_size": 18189,
+              "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+              "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+            }
+          }
+        ],
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim."
       },
       {
         "path": "selfhost/src/wzcc/sema/a_instantiate.wz",
@@ -87018,12 +87191,25 @@
         "path": "selfhost/src/wzcc/hirverify/values.wz",
         "old_sha256": "47159acfcd14fa3d3511fcf4b47fa3f3da44966506fb58cf4823857aef6969e1",
         "old_size": 39137,
-        "new_sha256": "872d25a3de829294e747dc48b8de44e76719efb0c97a0e113c61632c4921bb2c",
-        "new_size": 39136,
-        "commit": "384328c89ec36948b403b781a42e9fab63f94069",
-        "accepted_task": "e876b33c-cb84-4404-b4a7-51c5b1310831",
-        "acceptance": "SH13 function-constant HIR source correction accepted rev2/event950696, parent429; three production files only, retained O0 component evidence, no full new CLI claim.",
-        "review": "checks/SH13-function-const-single-correction-Root-review-20261114/review.json"
+        "new_sha256": "ab35fa8dd4d916994119f416128f027d6d31ff353d1464eaa3a5f839b6610a3f",
+        "new_size": 39152,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim.",
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+        "history": [
+          {
+            "path": "selfhost/src/wzcc/hirverify/values.wz",
+            "old_sha256": "47159acfcd14fa3d3511fcf4b47fa3f3da44966506fb58cf4823857aef6969e1",
+            "old_size": 39137,
+            "new_sha256": "872d25a3de829294e747dc48b8de44e76719efb0c97a0e113c61632c4921bb2c",
+            "new_size": 39136,
+            "commit": "384328c89ec36948b403b781a42e9fab63f94069",
+            "accepted_task": "e876b33c-cb84-4404-b4a7-51c5b1310831",
+            "acceptance": "SH13 function-constant HIR source correction accepted rev2/event950696, parent429; three production files only, retained O0 component evidence, no full new CLI claim.",
+            "review": "checks/SH13-function-const-single-correction-Root-review-20261114/review.json"
+          }
+        ]
       },
       {
         "path": "tests/async/run_async_cases.py",
@@ -87145,10 +87331,32 @@
         "accepted_task": "b6092241-237c-451e-a1fc-10b3e54ab297",
         "review": "checks/SH15-python-language-gc-correction-Root-review-20261114/Root-review.json",
         "acceptance": "Accepted rev2/event953782 parent443 plus Root atomic record-replacement amendment; original74 historical records preserved; no current-ed1 API or Source execution claim."
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/instance.wz",
+        "old_sha256": "2d26326731974aa64f92aabd1602dbe1ecab88e14cc85e33925214b809535a07",
+        "old_size": 51611,
+        "new_sha256": "b729c200c94216f1e41542eb03d1ec810a56a461dad0e68a905b2db28cfac95b",
+        "new_size": 51615,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim."
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/types.wz",
+        "old_sha256": "19ea6a41b402b186abb5829ba5f6a920bce7eb482242851c515af56a36b01de1",
+        "old_size": 17618,
+        "new_sha256": "223fc3c369307c6df502bd0730c8848b3bb17ce7a736113a79e0e5398c3acfa9",
+        "new_size": 17957,
+        "commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+        "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
+        "review": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+        "acceptance": "HIR per-Verifier needs_drop cache accepted rev2/event954582 parent444 with Root parser corrections; production six-file copy only, retained component evidence and no full compiler speed/selfhosting claim."
       }
     ],
-    "new_freeze_path_count": 214,
-    "modified_freeze_path_count": 46,
+    "new_freeze_path_count": 222,
+    "modified_freeze_path_count": 48,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -88408,8 +88616,8 @@
       },
       "current_modified_freeze_size": 81759
     },
-    "compiler_source_current_map_sha256": "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09",
-    "compiler_source_current_code_commit": "5bedfabb8a369afdf778180ce02e60d28ee8573a",
+    "compiler_source_current_map_sha256": "0c46f7ea6ad2487f574f91147bca062708ef2cdefd0b76fdc1d068eb8a5bcd76",
+    "compiler_source_current_code_commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
     "hir_function_const_three_file_integration": {
       "base_commit": "dc7f9200e3d738157439ac864e5d075a90a2bf1d",
       "code_commit": "384328c89ec36948b403b781a42e9fab63f94069",
@@ -89361,6 +89569,272 @@
         "required": 305,
         "files": 2886,
         "runners": 260
+      }
+    },
+    "SH15_needs_drop_cache_and_CFFI_component_integration": {
+      "base_commit": "f8fe6e9c5179180d5c2cc9deee0768ed42b01cb1",
+      "production_commit": "530bea32e2fc0eef03ae4be3a7ec14e2f374157f",
+      "test_commit": "358aab6c744b67b51b939add764cdc4556d46d01",
+      "controlled_manifest": "checks/SH15-cache-cffi-Root-controlled-files-20261114.json",
+      "controlled_manifest_sha256": "3c864c8fa47565cfff80a7b2aecdd047d9fbcafe2b9241393018bc68cec53035",
+      "Root_final_reviews": [
+        {
+          "path": "checks/SH15-hir-needs-drop-cache-Root-final-review-20261114.json",
+          "sha256": "ede114f67241228771835c77cc3eb3b05717bcd589f845c108869b57f7f415fe",
+          "accepted_task": "b5412d94-2aff-4772-8cdc-7d96bc40dccf",
+          "ACK_event": 954582,
+          "ACK_parent": 444
+        },
+        {
+          "path": "checks/SH15-cffi-forged-wz-component-Root-final-review-20261114.json",
+          "sha256": "8ac2db6f9189b1a94ed179991fff8c43f9cbfde807dc7520aa5ad019b43a453e",
+          "accepted_task": "a81b9ccf-cec8-44b1-a863-0dd834426654",
+          "ACK_event": 954415,
+          "ACK_parent": 445
+        }
+      ],
+      "files": [
+        {
+          "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/effectsrc.wz",
+          "before_sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
+          "before_size": 39611,
+          "after_sha256": "2111f3061dd41f3b0443793258e1f66d57f14730147002262e8d488a153bb023",
+          "after_size": 39615,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/src/wzcc/hirverify/flow.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/flow.wz",
+          "before_sha256": "cbc320285d90ca740369fefe49ef448eb6d16ac4ee1d68f7a97fe4e3d5b404c1",
+          "before_size": 58413,
+          "after_sha256": "c172f067716d6b4ab87a012018871572a33efcdf4aee051b29bcdeddc6610114",
+          "after_size": 58421,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/src/wzcc/hirverify/instance.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/instance.wz",
+          "before_sha256": "2d26326731974aa64f92aabd1602dbe1ecab88e14cc85e33925214b809535a07",
+          "before_size": 51611,
+          "after_sha256": "b729c200c94216f1e41542eb03d1ec810a56a461dad0e68a905b2db28cfac95b",
+          "after_size": 51615,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/src/wzcc/hirverify/types.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/types.wz",
+          "before_sha256": "19ea6a41b402b186abb5829ba5f6a920bce7eb482242851c515af56a36b01de1",
+          "before_size": 17618,
+          "after_sha256": "223fc3c369307c6df502bd0730c8848b3bb17ce7a736113a79e0e5398c3acfa9",
+          "after_size": 17957,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/src/wzcc/hirverify/values.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/values.wz",
+          "before_sha256": "872d25a3de829294e747dc48b8de44e76719efb0c97a0e113c61632c4921bb2c",
+          "before_size": 39136,
+          "after_sha256": "ab35fa8dd4d916994119f416128f027d6d31ff353d1464eaa3a5f839b6610a3f",
+          "after_size": 39152,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/src/wzcc/hirverify/verify.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/src/wzcc/hirverify/verify.wz",
+          "before_sha256": "e72b17eff36a93d6e1d001cb8b7c24951e34b92078ee5af3fd461b00b590795d",
+          "before_size": 17992,
+          "after_sha256": "a543f4167ea9db6145aa04e2ccf466fa09515ab84f42257fcd60d5ec631abe8a",
+          "after_size": 18244,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/tests/hirverify/README.md",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/README.md",
+          "before_sha256": "89d3c65c665b7780fe0f5fa74379e146bdd9bf0b4a0e5d931d291fdf4522c53b",
+          "before_size": 11303,
+          "after_sha256": "eac5f4419c002cae98265fb5b2b4d30dbb0dff06ab97e89033a7c496a3cd4edb",
+          "after_size": 11814,
+          "tracked": true
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/README.md",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "1232769fe82a214fb2931392185709b61a41b76bf77fd4c0ef7a01f74f1cc92e",
+          "after_size": 3401,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "62a6039e2a97a1a0178be4f4da2e3003551be31a2ed635d1fe261408f102b50c",
+          "after_size": 9321,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "a9c0e503f2d2fb0baa5ef7ab2e23d452c0dbec39f92882bf3fa761eb4361096a",
+          "after_size": 147,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "24851e3bb8c183151fbb651d6ccb5a4c224f4a6ec0dd3d2c4a9aae3b84ca59eb",
+          "after_size": 13515,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/run.py",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/run.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "ca0729937407148dc8d8bbb0952dbfa03ba790b9fcfc9090bfa17bd523b7bd81",
+          "after_size": 32643,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+          "group": "SH15-hir-needs-drop-cache-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-Root-amendment-20261114/files/selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "7a460a663eb4be4136cd76d389a533f05bdbdfe1931809291a6bcbe4e6de9248",
+          "after_size": 2881,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/cffi_forged/README.md",
+          "group": "SH15-cffi-forged-wz-component-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-cffi-forged-wz-component-Root-amendment-20261114/files/selfhost/tests/cffi_forged/README.md",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "b51aadd52e6f126f8ed140a7128bc30186c3857e72af84d0d1f6841043ce24ac",
+          "after_size": 4737,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/cffi_forged/lang.toml",
+          "group": "SH15-cffi-forged-wz-component-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-cffi-forged-wz-component-Root-amendment-20261114/files/selfhost/tests/cffi_forged/lang.toml",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "bc30dbff32c4dd6c4af303f426082eb1e00e714b3e8c2c9c41005bf65ce60b5f",
+          "after_size": 135,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/cffi_forged/main.wz",
+          "group": "SH15-cffi-forged-wz-component-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-cffi-forged-wz-component-Root-amendment-20261114/files/selfhost/tests/cffi_forged/main.wz",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "4a95f0db9492fe9fdce418712e6777654ce6e24958aa8d87945f36fae72ef93e",
+          "after_size": 23265,
+          "tracked": false
+        },
+        {
+          "path": "selfhost/tests/cffi_forged/run.py",
+          "group": "SH15-cffi-forged-wz-component-Root-amendment-20261114",
+          "controlled_source": "/home/qin/Work/language-dev-20261103/checks/SH15-cffi-forged-wz-component-Root-amendment-20261114/files/selfhost/tests/cffi_forged/run.py",
+          "before_sha256": null,
+          "before_size": null,
+          "after_sha256": "0d17339890b895f7567b25c82840786e74e873719c77c48b159c88014edeb591",
+          "after_size": 39126,
+          "tracked": false
+        }
+      ],
+      "product_Source116_count": 116,
+      "product_Source116_map_sha256": "0c46f7ea6ad2487f574f91147bca062708ef2cdefd0b76fdc1d068eb8a5bcd76",
+      "only_six_product_Source_files_changed": [
+        "selfhost/src/wzcc/hirverify/effectsrc.wz",
+        "selfhost/src/wzcc/hirverify/flow.wz",
+        "selfhost/src/wzcc/hirverify/instance.wz",
+        "selfhost/src/wzcc/hirverify/types.wz",
+        "selfhost/src/wzcc/hirverify/values.wz",
+        "selfhost/src/wzcc/hirverify/verify.wz"
+      ],
+      "other110_product_sources_and_stdlib37_unchanged": true,
+      "all1346_existing_case_records_and_order_exact": true,
+      "new_disabled_nonrequired_component_cases": [
+        "project:selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+        "project:selfhost/tests/cffi_forged/lang.toml"
+      ],
+      "new_frozen_paths": [
+        "selfhost/tests/hirverify/cache/needs_drop/driver.wz",
+        "selfhost/tests/hirverify/cache/needs_drop/lang.toml",
+        "selfhost/tests/hirverify/cache/needs_drop/needs_drop_probe.wz",
+        "selfhost/tests/hirverify/cache/needs_drop/run.py",
+        "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+        "selfhost/tests/cffi_forged/lang.toml",
+        "selfhost/tests/cffi_forged/main.wz",
+        "selfhost/tests/cffi_forged/run.py"
+      ],
+      "new_component_runners": [
+        "selfhost/tests/hirverify/cache/needs_drop/run.py",
+        "selfhost/tests/hirverify/cache/needs_drop/test_controls.py",
+        "selfhost/tests/cffi_forged/run.py"
+      ],
+      "README_files_metadata_only_not_frozen": true,
+      "actual_publication_Python_AST_checks": 3,
+      "accepted_parser_controls_reused_without_rerun": {
+        "HIR": 12,
+        "CFFI": 18
+      },
+      "accepted_HIR_component_evidence": {
+        "saved_run_assertions": 51,
+        "saved_trace_assertions": 47,
+        "benchmark_trials": 3,
+        "raw_audit_assertions": 419,
+        "raw_audit_errors": 0
+      },
+      "accepted_CFFI_component_evidence": {
+        "saved_Wz_cases": 8,
+        "raw_audit_assertions": 4267,
+        "raw_audit_errors": 0,
+        "historical_Source116": "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09",
+        "component_files": 117
+      },
+      "CFFI_runner_old_ed1_pin_preserved": true,
+      "CFFI_default_current0c46_refused": true,
+      "no_current0c46_CFFI15_fullCLI_selfhosting_or_wholecompiler_speed_claim": true,
+      "historical_limits_preserved": [
+        "HIR two failed checks, two O2 builds and deep60 nested Vec benchmark300s timeout; once-build/failure-stop scope exceeded.",
+        "HIR component benchmark is hit-heavy and construction commands were not all exec-traced.",
+        "CFFI initial precheck lacks historical full-resource freeze/trace; later component map is supplementary.",
+        "CFFI fourth pure-control command has resultJSON/summary flags but no independent historical process/rawstderr/trace.",
+        "CFFI unexecuted initial has_value failure branches are not separately proved."
+      ],
+      "no_new_Source_compiler_LLVM_or_language_target_execution": true,
+      "no_existing_long_jobs_workers_services_PLAN_STATE_operated": true,
+      "counts": {
+        "cases": 1348,
+        "enabled": 985,
+        "disabled": 363,
+        "required": 305,
+        "files": 2894,
+        "runners": 263
       }
     }
   }
