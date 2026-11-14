@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
-  "previous_git_head": "7a2471fb067dababe6813f9bcdf585394b87cfe5",
-  "frozen_at": "2026-11-14T05:31:13.220270+00:00",
+  "git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
+  "previous_git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
+  "frozen_at": "2026-11-14T06:11:10.730393+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -6627,8 +6627,8 @@
     },
     {
       "path": "tests/bootstrap/readiness/run.py",
-      "sha256": "e9f7bd07875b0dfe831ff6b26946fe3a46bf891497c1bb75b2e6bc1888eeedef",
-      "size": 26618,
+      "sha256": "d91aef0c83534df8dbf16b4079860196ae3ceff6f637d0f9a9bc03a676c06af5",
+      "size": 39156,
       "role": "runner_source",
       "assignment": []
     },
@@ -19934,8 +19934,8 @@
     },
     {
       "path": "tests/native/run_stdlib.py",
-      "sha256": "386d3e46c730fdf975cc65688b4944087a9b94206faca9519d503d0fe3b8a1cb",
-      "size": 3652,
+      "sha256": "7aa825afe1b2bfb114d89d9e41795d56180a679dad7c9ed68ba12bb4fb169013",
+      "size": 25680,
       "role": "runner_source",
       "assignment": []
     },
@@ -20502,7 +20502,8 @@
       "size": 107,
       "role": "manifest",
       "assignment": [
-        "project:tests/native/stdlib-pure/lang.toml"
+        "project:tests/native/stdlib-pure/lang.toml",
+        "project:tests/native/stdlib-pure/lang.toml#python"
       ]
     },
     {
@@ -20511,7 +20512,8 @@
       "size": 2382,
       "role": "woozy_source",
       "assignment": [
-        "project:tests/native/stdlib-pure/lang.toml"
+        "project:tests/native/stdlib-pure/lang.toml",
+        "project:tests/native/stdlib-pure/lang.toml#python"
       ],
       "manifest": "tests/native/stdlib-pure/lang.toml"
     },
@@ -26354,6 +26356,13 @@
       "size": 3257,
       "role": "runner_source",
       "assignment": []
+    },
+    {
+      "path": "tests/bootstrap/readiness/test_runner_controls.py",
+      "sha256": "ef053623b27ac818bf94cd37230a05ebeebf0379976dd0b6d60484dad1dcc61f",
+      "size": 7309,
+      "role": "runner_source",
+      "assignment": []
     }
   ],
   "cases": [
@@ -28407,9 +28416,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": null,
-      "runner_status": "unmapped",
-      "reason": "no runner mapping for this manifest",
+      "runner": "tests/bootstrap/readiness/run.py",
+      "runner_status": "adaptation_required",
+      "reason": "runner-required full readiness suite: 10 positive x probe-opt/ir-opt 4 = 40 runs, 11 negative x probe-opt 2 = 22 runs, and 4 tool-failure controls; a single catalog case cannot encode those counts, and the probe is an 8-argument DSL program, not a no-arg main0 project",
       "tags": [
         "project"
       ]
@@ -47165,9 +47174,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": "tests/native/run.py",
+      "runner": "tests/native/run_stdlib.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "runner-required: tests/native/run_stdlib.py drives this project at Native O0 and O2; the generic case schema cannot express the short-write mock compile/link, stdin fixture, readelf shape check, or seccomp exec trace, so this proposal does not mark the case complete.",
       "tags": [
         "project"
       ]
@@ -50634,9 +50643,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": "tests/native/run.py",
+      "runner": "tests/native/run_stdlib.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "runner-required: tests/native/run_stdlib.py drives this project at Native O0 and O2; the generic case schema cannot express the short-write mock compile/link, stdin fixture, readelf shape check, or seccomp exec trace, so this proposal does not mark the case complete.",
       "tags": [
         "project"
       ]
@@ -50658,9 +50667,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": "tests/native/run.py",
+      "runner": "tests/native/run_stdlib.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "runner-required: tests/native/run_stdlib.py drives this project at Native O0 and O2; the generic case schema cannot express the short-write mock compile/link, stdin fixture, readelf shape check, or seccomp exec trace, so this proposal does not mark the case complete.",
       "tags": [
         "project"
       ]
@@ -50682,9 +50691,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": "tests/native/run.py",
+      "runner": "tests/native/run_stdlib.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "runner-required: tests/native/run_stdlib.py drives this project at Native O0 and O2; the generic case schema cannot express the short-write mock compile/link, stdin fixture, readelf shape check, or seccomp exec trace, so this proposal does not mark the case complete.",
       "tags": [
         "project"
       ]
@@ -50706,9 +50715,9 @@
       "support": "existing_runner",
       "adaptation": "required",
       "enabled": false,
-      "runner": "tests/native/run.py",
+      "runner": "tests/native/run_stdlib.py",
       "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "reason": "runner-required: tests/native/run_stdlib.py drives this project at Native O0 and O2; the generic case schema cannot express the short-write mock compile/link, stdin fixture, readelf shape check, or seccomp exec trace, so this proposal does not mark the case complete.",
       "tags": [
         "project"
       ]
@@ -84751,6 +84760,35 @@
         ]
       },
       "evidence": "tests/native/run_collections.py generated JSON oracle Python mode"
+    },
+    {
+      "id": "project:tests/native/stdlib-pure/lang.toml#python",
+      "kind": "project",
+      "operation": "build_python",
+      "operations": [
+        "check",
+        "build_python"
+      ],
+      "backend": "python",
+      "manifest": "tests/native/stdlib-pure/lang.toml",
+      "expected": {
+        "status": "ok",
+        "exit": 0,
+        "build_status": "ok",
+        "no_stderr": true
+      },
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "support": "existing_runner",
+      "adaptation": "required",
+      "enabled": false,
+      "runner": "tests/native/run_stdlib.py",
+      "runner_status": "adaptation_required",
+      "reason": "the original 11-mode runner builds and executes stdlib-pure with --backend python; no existing Python case row covers that manifest",
+      "evidence": "SH12i retained reference/candidate 11-mode records; runner-required stdin/mock/ELF/trace assertions remain outside a generic case"
     }
   ],
   "runners": [
@@ -86008,11 +86046,16 @@
       "path": "tests/python/slice_source/test_runner_controls.py",
       "status": "component",
       "reason": "Pure-Python tests of strict process fields, I/O-result validation and finite timeouts; no compiler, driver, observer or program execution."
+    },
+    {
+      "path": "tests/bootstrap/readiness/test_runner_controls.py",
+      "status": "component",
+      "reason": "Only this exact readiness test script runs nine small process/error/stdin controls; it does not compile a candidate or complete the readiness suite."
     }
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "8f667129c8cacd379a8099b73e9b5e43b9acd139",
+    "to_git_head": "301ff6493142847e0c1a0210cd77a9557eebcda2",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -86213,7 +86256,8 @@
       "selfhost/tests/pythonobs/lang.toml",
       "selfhost/tests/pythonobs/src/main.wz",
       "tests/python/slice_source/runner_controls.py",
-      "tests/python/slice_source/test_runner_controls.py"
+      "tests/python/slice_source/test_runner_controls.py",
+      "tests/bootstrap/readiness/test_runner_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -86459,10 +86503,20 @@
         "commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
         "acceptance": "Root independent stdlib-after amendment accepted separately; original Bridge2ae remains rejected/rev2",
         "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md"
+      },
+      {
+        "path": "tests/bootstrap/readiness/run.py",
+        "old_sha256": "e9f7bd07875b0dfe831ff6b26946fe3a46bf891497c1bb75b2e6bc1888eeedef",
+        "new_sha256": "d91aef0c83534df8dbf16b4079860196ae3ceff6f637d0f9a9bc03a676c06af5"
+      },
+      {
+        "path": "tests/native/run_stdlib.py",
+        "old_sha256": "386d3e46c730fdf975cc65688b4944087a9b94206faca9519d503d0fe3b8a1cb",
+        "new_sha256": "7aa825afe1b2bfb114d89d9e41795d56180a679dad7c9ed68ba12bb4fb169013"
       }
     ],
-    "new_freeze_path_count": 200,
-    "modified_freeze_path_count": 30,
+    "new_freeze_path_count": 201,
+    "modified_freeze_path_count": 32,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -87425,6 +87479,77 @@
       "existing_jobs_operated": false,
       "new_full_corpus_started": false,
       "full_corpus_or_bootstrap_pass_claimed": false
+    },
+    "stdlib_readiness_test_integration": {
+      "base_commit": "32d80e9b2fb2f3ef3d19a23532d81ed6b1ea5f29",
+      "existing_case_changes": [
+        {
+          "id": "project:tests/native/stdlib/lang.toml",
+          "changed_fields": [
+            "runner",
+            "reason"
+          ]
+        },
+        {
+          "id": "project:tests/native/stdlib-pure/lang.toml",
+          "changed_fields": [
+            "runner",
+            "reason"
+          ]
+        },
+        {
+          "id": "project:tests/native/stdlib-writer-error/lang.toml",
+          "changed_fields": [
+            "runner",
+            "reason"
+          ]
+        },
+        {
+          "id": "project:tests/native/stdlib-stdin/lang.toml",
+          "changed_fields": [
+            "runner",
+            "reason"
+          ]
+        },
+        {
+          "id": "project:tests/native/json-thread/lang.toml",
+          "changed_fields": [
+            "runner",
+            "reason"
+          ]
+        },
+        {
+          "id": "project:tests/native/stdlib-pure/lang.toml#python",
+          "new": true
+        },
+        {
+          "id": "project:tests/bootstrap/readiness/probe/lang.toml",
+          "changed_fields": [
+            "runner",
+            "runner_status",
+            "reason"
+          ]
+        }
+      ],
+      "enabled_delta": 0,
+      "added_disabled_required_case_ids": [
+        "project:tests/native/stdlib-pure/lang.toml#python"
+      ],
+      "new_component_runner_exact_path": "tests/bootstrap/readiness/test_runner_controls.py",
+      "only_frozen_hash_updates": [
+        "tests/bootstrap/readiness/run.py",
+        "tests/native/run_stdlib.py"
+      ],
+      "shared_stdin_interface": "Path; readiness passes Path(os.devnull)",
+      "runner_groups_remain_required": true,
+      "no_Source_or_original_gold_or_expected_change": true,
+      "Source116_std37_unchanged": true,
+      "old72_stdlib_and40_22_4_readiness_results_reused": true,
+      "stdlib_candidate_build_budget": 1200,
+      "stdlib_original60_proven": false,
+      "readiness_candidate_original60_build_passed": false,
+      "readiness_candidate_selected_build_budget": 1800,
+      "catalog_not_full_corpus_or_language_completion": true
     }
   }
 }
