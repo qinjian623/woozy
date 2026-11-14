@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
-  "previous_git_head": "541d1d388a2f3e1d92333436b35d2009f2e733a5",
-  "frozen_at": "2026-11-14T04:08:18.357804+00:00",
+  "git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+  "previous_git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
+  "frozen_at": "2026-11-14T04:15:52.886162+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -6055,8 +6055,8 @@
     },
     {
       "path": "tests/async_parameter_copy/run_parameter_copy.py",
-      "sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
-      "size": 15874,
+      "sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+      "size": 52782,
       "role": "runner_source",
       "assignment": []
     },
@@ -85401,7 +85401,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
+    "to_git_head": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -85838,10 +85838,20 @@
         "commit": "75fded7a2e61be561b64703dde3d20d810d9e7d3",
         "acceptance": "Root independent Pythonobs amendment; original Bridge98 delivery remains rejected/rev4",
         "review": "checks/SH12f-pythonobs-root-amendment-20261114/independent-review.md"
+      },
+      {
+        "path": "tests/async_parameter_copy/run_parameter_copy.py",
+        "old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
+        "old_size": 15874,
+        "new_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+        "new_size": 52782,
+        "commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+        "acceptance": "Root independent stdlib-after amendment accepted separately; original Bridge2ae remains rejected/rev2",
+        "review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md"
       }
     ],
     "new_freeze_path_count": 200,
-    "modified_freeze_path_count": 29,
+    "modified_freeze_path_count": 30,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -86414,6 +86424,81 @@
       "old_reference_or_28_case_matrix_reexecuted": false,
       "entire_Slice_family_newly_enabled_or_claimed": false,
       "existing_jobs_operated": false
+    },
+    "async_parameter_public_object_delta": {
+      "code_commit": "2c044c2dc244dadfc198e4c49ea228f9bebff61e",
+      "acceptance": "Root independent small amendment accepted separately",
+      "amendment_tree": "/home/qin/Work/language-dev-20261103/checks/SH12g-async-param-root-amendment-20261114/tree",
+      "Root_acceptance": "checks/SH12g-async-param-root-amendment-20261114/accepted.json",
+      "Root_acceptance_sha256": "787bdc3ba8da2a9a941ecfb4531be0518f2db77408e6442ed95ae1167602909c",
+      "independent_review": "checks/SH12g-async-param-root-amendment-20261114/independent-review.md",
+      "independent_review_sha256": "4e83f6ef0c0de34e95d1f4a671ba4e3a31d54eb5ceeb3d0953d551965ff6eeb9",
+      "original_bridge_delivery": {
+        "task_prefix": "2ae",
+        "review_status": "rejected",
+        "revision": 2,
+        "owner_and_original_reports_unchanged": true
+      },
+      "files": {
+        "tests/async_parameter_copy/run_parameter_copy.py": {
+          "old_sha256": "44daf58aaf3f89391a46cc922649a47a5bb0ba2a3c0427df4383a02a71e8e6e7",
+          "old_size": 15874,
+          "new_sha256": "bc05bb72b517679f8f414a38e10a70c2da49203d13e0ffbb1ed7812d46e6c3fd",
+          "new_size": 52782
+        },
+        "tests/async_parameter_copy/README.md": {
+          "old_sha256": "7b0522d16016fe76c10e62bce60bb4aeb7f15c9f13c35341ede609f275d6f5ae",
+          "old_size": 2972,
+          "new_sha256": "37a8f7aa1ad7ca3324f25a487f8dc1894ffed98b89d9e8b96e0869341286d3b9",
+          "new_size": 9222
+        }
+      },
+      "frozen_input_path_modified": "tests/async_parameter_copy/run_parameter_copy.py",
+      "README_not_in_frozen_files": true,
+      "README_SHA_recorded_as_metadata_only": true,
+      "scope": "Public-object mode retains this role public-build program.o for the unchanged observer; the Root amendment adds same-stdlib-tree after comparison in finally and propagates failure to summary and exit.",
+      "all_1335_case_fields_and_order_unchanged": true,
+      "all_runner_classifications_unchanged": true,
+      "counts": {
+        "total": 1335,
+        "enabled": 962,
+        "disabled": 373,
+        "required": 319,
+        "files": 2872,
+        "runners": 251
+      },
+      "ten_proposals_enabled": false,
+      "whole_eleven_case_runner_complete": false,
+      "eleventh_param_string_await": "pending private before.ll lang_text_concat_v1 assertion",
+      "retained_execution_scope": {
+        "final_r2_public_builds": 40,
+        "final_r2_observer_executions": 36,
+        "reference": "Cpp565",
+        "candidate": "old2c11",
+        "new9d11_validated_by_these_records": false,
+        "historical_Source_build_attempts_at_least": 73,
+        "manual_attempts_in_history": 2,
+        "interrupted_and_manual_missing_process_flags": "unknown; no flags fabricated",
+        "original_records": "checks/SH12g-async-parameter-copy-public-objects-20261114",
+        "original_stdlib_after_scope": "Old records lacked their own after; independent dated supplemental tree check remains separate, not backfilled."
+      },
+      "retained_controls": {
+        "total": 19,
+        "original_actual": 17,
+        "new_pure_stdlib_outcomes": 2,
+        "record": "checks/SH12g-async-param-root-amendment-20261114/controls.stdout.json",
+        "record_sha256": "ea9f01a7b67c8b1b542b85c1925ca96df5f8ce4c430cfedebda333436363787e",
+        "independent_record": "checks/SH12g-async-param-root-amendment-20261114/independent-controls.json",
+        "independent_record_sha256": "1723b5eb0a99adbc6681d2f96ac4e8a607c768d2cf302c249100f4b08a31cf52",
+        "independent_actual_main_public": "Synthetic in-memory case functions leave stdlib unchanged or mutate it; actual main_public returns passed/0 or failed/1 accordingly. No Source/observer child ran.",
+        "tests_reexecuted_at_integration": false
+      },
+      "existing_gold_and_legacy_functions_AST_unchanged": true,
+      "Source116_stdlib_fixtures_observer_parser_unchanged": true,
+      "README_final_scope": "Final Root accepted README removes pending/draft/early-accepted wording; new37a8 hash recorded here, old independent a8f6 draft snapshot is historical.",
+      "historical_records_modified": false,
+      "Source_observer_matrix_or_OS_controls_reexecuted": false,
+      "existing_long_jobs_operated": false
     }
   }
 }
