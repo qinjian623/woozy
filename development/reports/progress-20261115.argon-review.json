@@ -1,0 +1,176 @@
+{
+  "operation_id": "woozy-sh19-argon-medium-full-progress-report-review-20261115",
+  "reviewed_at": "2026-11-15T19:24:00+08:00",
+  "reviewer": {
+    "role": "AGY Argon",
+    "actual_model": "gemini-4-argon-medium",
+    "human_readable_model": "Gemini 4 Argon (Medium)",
+    "configured_profile": "agy-sonnet",
+    "profile_note": "profile名agy-sonnet仅为通道配置，未使用Sonnet或Flash；首次High派发因profile reasoning不兼容在校验阶段被拒且未交付，本次为兼容的Argon Medium正式审读交付。"
+  },
+  "inputs": {
+    "report_path": "development/reports/progress-20261115.md",
+    "facts_path": "development/reports/progress-20261115.facts.json",
+    "public_head": "7a79db7ce098267817f67a318835d28f64c20c6a",
+    "source116_sha256": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef"
+  },
+  "constraints_compliance": {
+    "only_report_and_facts_read": true,
+    "source_or_compiler_or_program_executed": false,
+    "gdb_or_core_rerun": false,
+    "full_repo_or_history_scanned": false,
+    "report_or_source_edited": false,
+    "git_commit_or_push": false,
+    "bridge_or_other_agents_operated": false
+  },
+  "verdict": {
+    "deterministic_errors_found": false,
+    "overall_status": "no_factual_or_numeric_errors_found_with_substantive_limits_preserved",
+    "user_readable_conclusion": "Argon Medium结论：报告与facts一致，无确定性错误。正式stage2超时(21600s/-9)、私有栈耗尽(11271s/-11，fn2903未映射、不归因GC桶)、stage3未跑、985/1350边界、Python47/Slice28/Native19缺项、39组266行归属、仅A5(d8b7)提交及962807仅入队未收悉等限制均保留。需补审读栏，附6项优化与6项待核数。",
+    "user_readable_conclusion_char_count": 198
+  },
+  "key_checkpoints_verified": {
+    "bootstrap_stage2_stage3": {
+      "verified": true,
+      "formal_stage2": "21600.168s, exit -9, timed_out=true, finished 16:51 CST (08:51 UTC), cleanup_complete=true",
+      "private_stage2": "11270.999s, exit -11 (SIGSEGV), timed_out=false, finished 16:22 CST (08:22 UTC), cleanup_complete=true",
+      "stage3": "not_run for both"
+    },
+    "core_stack_exhaustion": {
+      "verified": true,
+      "recursive_symbol": "lang.fn.2903",
+      "per_layer_bytes": 222192,
+      "stack_reservation_bytes": 222136,
+      "fault_symbol": "lang.fn.2843+0x21 (callq lang_gc_runtime_poll_v1)",
+      "fault_address": "RSP-8 (0x7fff70fe9958, 1704 bytes below 16 MiB stack mapping)",
+      "source_symbol_mapped": false,
+      "gc_bucket_causality_claimed": false,
+      "same_stage1_object_sha256": "52370e9bd28878079830026d3833df18de45c687f9aa803a62f0b7febf5585be"
+    },
+    "corpus_985_vs_1350": {
+      "verified": true,
+      "total_cases": 1350,
+      "enabled_passed": 985,
+      "disabled": 365,
+      "required_rows": 266,
+      "compiles": 3132,
+      "executions": 2078,
+      "overall_catalog_status": "incomplete/exit2"
+    },
+    "special_suites_and_omissions": {
+      "verified": true,
+      "python_cases_47": "47 rows, 209/209 commands: 44 passed (17 basic + 22 extra observations + 5 negative controls), 2 unsupported, 1 rejected",
+      "python_slice_28_and_string_20": "Slice 28 dual-role (54 observers) + String 20 host probes = 180 commands (167+13); missing 2 API I/O failure controls; 111 Slice commands without exec/PID; legacy final slice_passed=false",
+      "native_slice_19": "107 reference + 147 candidate + 107 CMake = 361 commands; 30 observations, 66 Panics, 9 rejections; missing full 1408-item LLVM library input snapshot; excludes unselected python-slice and 15 forge cases",
+      "groups_39_rows_266": "39 resolved groups totaling 266 required catalog rows (13 Class A + 151 Class B + 102 Class C); vendor 3, library:stdlib 1, python-slice 1, and finite-callback 1 explicitly held for attribution verification rather than fake main"
+    },
+    "publication_and_commits": {
+      "verified": true,
+      "public_head_7a79": "contains foreign-read fix, T10 migration, C++ helper LLD fix, and 16 rows (T10/CFFI) metadata",
+      "a5_private_commit": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a (13 rows, 5 runner paths, private required=253, unpushed)",
+      "autogc_second_batch": "not copied, not committed (3 files + 9 required rows)",
+      "python_third_batch": "not copied, not committed (3 files + 1 required row project:tests/python/fixtures/finite-callback/lang.toml)"
+    },
+    "notification_verification": {
+      "verified": true,
+      "task_id": "5fba70e4-4145-4d46-8d32-a856b917b1ce",
+      "event_seq": 962807,
+      "actual_executions": 2,
+      "first_attempt": "recorder byte serialization failed",
+      "second_attempt": "complete exit 7 recorded",
+      "delivery_state": "enqueued_not_yet_received (distinguished from received and ACK)"
+    },
+    "scope_and_stage_distinction": {
+      "verified": true,
+      "cpp_vs_wz_stage1_vs_full_bootstrap": "clearly distinguished across sections",
+      "cpp_template_specialization_excluded": true,
+      "tasks_and_roles_covered": true
+    }
+  },
+  "must_fix": [
+    {
+      "id": "M1",
+      "severity": "status_update_required_after_review",
+      "lines": "L3, L172, L194-L196",
+      "section": "报告头部、当前分工、Argon审读",
+      "issue": "原报告未发现确定性事实或数字错误；仅需将『模型审读尚未完成 / 待实际审读后填写』占位文字更新为本次 gemini-4-argon-medium 实际审读记录。",
+      "replacement": "## Argon审读\n\n已由 `gemini-4-argon-medium`（Gemini 4 Argon Medium；配置 profile 名 `agy-sonnet` 仅为通道配置，首次 High 派发因 profile reasoning 校验不兼容在校验阶段拒绝、未产生交付，本次由兼容的 Argon Medium 独立完成）审读 `progress-20261115.md` 与 `progress-20261115.facts.json`。结论：未发现确定性事实、数字或状态错误，各项实质限制均已保留；另附6条表达与上下文精确度可选优化及6项不在 `facts.json` 内的细分数字供 Root 结合原始记录自核。"
+    }
+  ],
+  "optional_improvements": [
+    {
+      "id": "O1",
+      "lines": "L9, L67-L68",
+      "section": "当前结果 / 自举失败与当前排查",
+      "issue": "第9行写『每层至少占222,192字节』，第67行写『每层约217 KiB』，单位不同易让读者误以为是两个不同数字；同时 facts.json 已确认触发 callq lang_gc_runtime_poll_v1 故障的指令位于 lang.fn.2843+0x21，且正式版 bd1 与私有版 fc788 的第一代 program.o（52370e9）字节完全一致，证明大栈帧同样存在于公用版生成代码中。",
+      "replacement": "私有版本已有匹配core：递归函数 `lang.fn.2903` 每层至少占222,192字节（约217 KiB），经 `lang.fn.2827/2828` 进入 `lang.fn.2843+0x21` 执行 `callq lang_gc_runtime_poll_v1` 压入返回地址时触发段错误（fault地址等于 `RSP-8`，低于16 MiB栈映射下界1704字节，尚未进入 `poll`）。正式版 `bd1` 与私有版 `fc788` 的第一代 `program.o`（`52370e9`）字节完全相同，证明该大栈帧同样属于公用版生成代码；但函数对应源码、大栈帧成因和最小修复仍在查，且尚不能证明正式版超时最终也会停在同一位置，更不推断GC桶数是递归成因。"
+    },
+    {
+      "id": "O2",
+      "lines": "L138-L139",
+      "section": "266条待办测试的全部原执行组（run_stdlib.py）",
+      "issue": "第138行写『stdlib六项目记录 | 6』，第139行写『5项目不能代替全库证明』，6与5表面矛盾。据 facts.json，6条记录对应5个项目（其中 stdlib-pure 含默认与 #python 两条记录，共5项目11模式），而 library:stdlib 对应37个 .wz 标准库模块。",
+      "replacement": "| `tests/native/run_stdlib.py`（stdlib五项目6条记录，含 `stdlib-pure#python`） | 6 | 当前d602整组专用结果（5项目11模式）待补；旧记录保留 |\n| `tests/native/run_stdlib.py`（`library:stdlib` 库集合1行） | 1 | 37个标准库模块的完成条件及全API覆盖待明确，上述5项目不能代替全库证明 |"
+    },
+    {
+      "id": "O3",
+      "lines": "L76, L122",
+      "section": "私有改动与待发布文件 / 266条待办测试的全部原执行组（tests/python/run_cases.py）",
+      "issue": "可进一步写明 project:tests/python/fixtures/finite-callback/lang.toml 的 kind=project（非 runner_group）、在985中已有同manifest启用别名，且修正版 runner 未见该字面路径，因此不能直接按 required 244→243 记完成。",
+      "replacement": "- Python完整用例：Root审核的三份测试文件尚未复制到发布候选，没有第三提交。公开清单中唯一相关required条目为 `project:tests/python/fixtures/finite-callback/lang.toml`（`kind=project`，非 `runner_group`，且在985中已有同manifest启用别名），而修正版runner未见该路径字面量，须先核清它与209条记录的对应关系，不能直接按required减1记完成。"
+    },
+    {
+      "id": "O4",
+      "lines": "L53, L116-L117",
+      "section": "本轮已保存的测试结果 / 266条待办测试的全部原执行组（NativeSlice）",
+      "issue": "第117行可直接写出未被选择的第20项 ID（project:tests/native/slice_source/fixtures/python-slice/lang.toml）；第53行『forged组』建议按 facts.json 统一为『15项forge组』。",
+      "replacement": "| `tests/native/slice_source/run_slice_source.py`（未被选择的 `fixtures/python-slice` 1行） | 1 | 现挂Native runner但不在原19选中集合内，须核清原Python测试/别名归属，不填假main |"
+    },
+    {
+      "id": "O5",
+      "lines": "L132-L137",
+      "section": "266条待办测试的全部原执行组（默认归属24→...）",
+      "issue": "『默认归属24→...』为内部速记，读者不易看出这6组共24条记录是因公开清单 catalog_runner 原挂伞状脚本 tests/native/run.py 而按 functional_dispatch 归入各自真实 runner。",
+      "replacement": "（注：表中标“默认归属24→...”的6组共24条记录，在公开清单中原挂伞状脚本 `tests/native/run.py`，按实际功能分发至各自专用runner执行。）"
+    },
+    {
+      "id": "O6",
+      "lines": "L52, L185",
+      "section": "本轮已保存的测试结果 / 主要原始记录",
+      "issue": "第52行『旧后处理字段仍有不一致』可点明为『final仍残留slice_passed=false旧字段』；第185行 SH18-event962730-Root-review-20261115.json 文件名不含测试名，建议加括注『（Native切片19复核记录）』。",
+      "replacement": "第52行第3列：两条API I/O失败控制未跑；111条Slice命令无exec/PID；final仍残留slice_passed=false旧字段\n第185行：- `checks/SH18-event962730-Root-review-20261115.json`（Native切片19复核记录）"
+    }
+  ],
+  "unverifiable_from_facts_json_alone": [
+    {
+      "id": "U1",
+      "lines": "L47",
+      "detail": "T10真实NumPy/Torch训练最终loss具体数值 9.684752999561397e-13（facts.json L127仅记录full20/subset3、96+30命令、18 API调用及CPU训练通过，未收录该浮点数）。"
+    },
+    {
+      "id": "U2",
+      "lines": "L49",
+      "detail": "五组公开CLI测试『只有56条编译exec记录』（facts.json L137仅记录584条原测试命令通过，未拆分56条编译exec子计数）。"
+    },
+    {
+      "id": "U3",
+      "lines": "L53",
+      "detail": "Native切片19『单次O2组件制作1116.334秒』（facts.json L157/L672仅记录组件准备预算1800秒及361条命令通过，未收录1116.334秒耗时）。"
+    },
+    {
+      "id": "U4",
+      "lines": "L62-L63",
+      "detail": "第一代制作耗时『1716.751秒』与『1274.532秒』（facts.json L171-L220记录了第一代status=ok与SHA256、第二代精确秒数21600.168/11270.999，未收录第一代耗时秒数）。"
+    },
+    {
+      "id": "U5",
+      "lines": "L77",
+      "detail": "Native切片『两处源码哈希常量修改仍在worker副本』（facts.json L674-L676记录了builder固定ed1及组件身份pin限制，未详列两处源码哈希常量修改）。"
+    },
+    {
+      "id": "U6",
+      "lines": "L165-L171",
+      "detail": "当前分工表内具体子会话角色与『普通明确编码继续可交Flash，Ollama同时最多3项』并发规则（facts.json L1233声明活跃worker/会话由Root独立核查）。"
+    }
+  ]
+}

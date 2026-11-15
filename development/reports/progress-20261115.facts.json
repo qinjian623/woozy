@@ -1,0 +1,2163 @@
+{
+  "status": "read_only_current_facts_for_parent_report_not_new_acceptance",
+  "observed_at": "2026-11-15T11:12:23.373407+00:00",
+  "scope": "只读取明确项目文档、固定报告、公开清单、两项实际终态与明确私有候选。没有执行Source、编译器、程序、版本、测试、网络或进程控制；没有Root untracked/protected扫描。",
+  "public": {
+    "actual_local_HEAD": "7a79db7ce098267817f67a318835d28f64c20c6a",
+    "remote_latest_saved_confirmation": {
+      "commit": "7a79db7ce098267817f67a318835d28f64c20c6a",
+      "at": "2026-11-15T05:28:05.419332+00:00",
+      "repo": "https://github.com/qinjian623/woozy",
+      "isPrivate": true,
+      "report": "checks/SH18-publish-reviewed-fixes-20261115.cmbq6bsp/final.json"
+    },
+    "catalog_sha256": "76a7a303c5f89277d8f8aa7ba86ab1a791b6bc6153e7b8814b0b3eaf800f7b66",
+    "counts": {
+      "cases": 1350,
+      "enabled": 985,
+      "disabled": 365,
+      "required_rows": 266,
+      "frozen_files": 2909,
+      "runners": 273
+    },
+    "counts_meaning": "required是测试/runner/库集合登记行，不是266个语言功能；365disabled也不全是缺功能。"
+  },
+  "identities": {
+    "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+    "current_tested_Wz_stage1": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+    "same_source_Python_API": "6f8411bb66517db3c2ac449abc5f84d04f721839940409156ff20254fac95d00",
+    "reference_for985": "a26 C++/Cpp64 19124",
+    "fixed_LLD_reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+    "native_runtime": "0cb002a6e3c16a3a3dda1671553d25e6729bfcf85095fe4e27c6c9ff06ec8096",
+    "hosted_runtime": "89bdd4765ed663a2cd4c336dc6ca1fa2e1832a0229b303ed3eb47410b2855b4e"
+  },
+  "core_implementation_and_proof": [
+    {
+      "part": "Lexer",
+      "Wz_implementation": "selfhost/src/wzcc/lexer/lexer.wz及source/model",
+      "Cpp_implementation": "src/syntax/lexer.cpp",
+      "proof": "2026-11-13移植测试文档记录完整前端169输入字段一致；旧契约另留121的较早数，不能相加。当前bd1的985语料亦经过实际lexer。",
+      "limit": "169是历史组件输入数，不是全语言穷举。"
+    },
+    {
+      "part": "Parser",
+      "Wz_implementation": "selfhost/src/wzcc/parser/parser.wz",
+      "Cpp_implementation": "src/syntax/parser.cpp",
+      "proof": "历史O0/O2各3484预制token检查，AST/recovery及完整前端字段对照；公开语法CLI各80例。",
+      "limit": "语法成功不等于sema/代码生成成功。"
+    },
+    {
+      "part": "Project/Resolve",
+      "Wz_implementation": "selfhost/src/wzcc/{input,paths,toml,manifest,bindings,project,resolve}",
+      "Cpp_implementation": "src/{modules,bindings}与driver项目加载",
+      "proof": "历史resolver O0/O2各197项+8组完整字段，独立11组Source；当前116源码项目可被完整stage1加载和编译，985接受/拒绝有实际结果。",
+      "limit": "历史部分错误文字/非法UTF8文件名说明曾有待定；本轮未重做所有FS边界。"
+    },
+    {
+      "part": "Sema",
+      "Wz_implementation": "selfhost/src/wzcc/sema（18文件）及types/constant/foreign/pattern",
+      "Cpp_implementation": "src/sema/check.cpp",
+      "proof": "A/B组件与完整生产移植已整合；bd1实际编译985项目并保留诊断/位置比较；T10 current Source运行验证Python外部对象。",
+      "limit": "剩余required runner的额外内部断言尚不能由普通985替代；不据模块存在宣称每条规则全测。"
+    },
+    {
+      "part": "HIR/ownership",
+      "Wz_implementation": "hir四文件、hirclone、hirverify十五文件、ownership五文件/valueops",
+      "Cpp_implementation": "src/hir及ownership算法",
+      "proof": "私有Verified身份/隔离snapshot接口已实现；四项HIR修正、exit节点身份、泛型来源及foreign-read修复后，d602完整第一代和985通过；AutoGC236/Python47等另外专项验证。",
+      "limit": "完整第二代仍超时；全恶意HIR/全部ownership节点的current新版组合证明不足，不能删校验换通过。"
+    },
+    {
+      "part": "NativeIR",
+      "Wz_implementation": "nativeir、nativelower五文件、nativeverify八文件、nativelayout、nativeirdump",
+      "Cpp_implementation": "src/ir及Native lowering/verifier",
+      "proof": "生产lower/verifier已接公开build；Function owning slot修复已通过匹配Cpp NativeIR unit；当前985中Native构建实际成功。",
+      "limit": "普通构建不替原helper/IR/GC观察额外断言；仍需迁移或运行相应原runner。"
+    },
+    {
+      "part": "LLVM IR/二进制",
+      "Wz_implementation": "nativeemit十四文件、nativebuild、cli/toolio",
+      "Cpp_implementation": "src/backend/native及helper.cpp",
+      "proof": "Wz自己产生文本LLVM，经固定LLVM22/Clang/LLD生成对象和ELF；bd1与Native19/CFFI和985Native程序均有实际文件/执行记录。新版C++helper仅1行LLD选择修复已发布。",
+      "limit": "保留LLVM/Clang/LLD属于已定范围；不等于Wz实现机器码后端或完全不需工具链。第二/三代未完成。"
+    },
+    {
+      "part": "Python",
+      "Wz_implementation": "pythonemit六文件、runtime/python/{langrt.py,unicode18.py}",
+      "Cpp_implementation": "src/backend/python",
+      "proof": "生成program.py/langrt.py与Cpp/API逐字比较；985Python子集、T10full20/subset3、Python47/209、Slice28/String20等有当前d602结果。",
+      "limit": "Native专用thread/async/C系统接口不计Python缺陷；Python cleanup/Weak/某些metadata与内部断言组仍待当前版本完整证明。"
+    },
+    {
+      "part": "Driver",
+      "Wz_implementation": "selfhost/src/main.wz、wzcc/cli三文件、resources/nativebuild/toolio",
+      "Cpp_implementation": "src/driver/main.cpp及Native helper",
+      "proof": "公开check/build/format JSON、失败诊断和发布输出已接生产；stage1原生CLI bd1实际3132语料编译命令，候选exec无Cpp前端/helper代做。",
+      "limit": "C++stage0仍用于生成第一代；不能把stage1自编译未过写为完整替换。"
+    },
+    {
+      "part": "Runtime",
+      "Wz_implementation": "沿用runtime/native及runtime/python，不要求本阶段用Woozy重写运行库",
+      "Cpp_implementation": "runtime/native含自有入口、syscall、ARC/GC、线程等；可选hosted支持",
+      "proof": "Native core默认无libc/libstdc++依赖；线程计数缓存修改后原IO/process38通过，现版native0cb/hosted89bd；GC236为单mutator真实专项。",
+      "limit": "共享底层库可保留，用户明确选择TLS/C外部库允许依赖。GC16384仅私有实验，stage2 SIGSEGV，未发布，不当正式结果。"
+    },
+    {
+      "part": "stdlib",
+      "Wz_implementation": "stdlib共37份.wz，含文本/容器/IO/FS/JSON/网络/进程/同步/异步等",
+      "Cpp_implementation": "同一stdlib源码由两个编译器编译；部分系统操作在runtime内实现",
+      "proof": "既有语言与C++版本已提供文档接口；当前985及专项T10/CFFI/A5/GC/Python/Native19覆盖实际使用部分。",
+      "limit": "std库集合一行与5项目11模式不同；std37存在和5项目通过均不证明37模块全部API。"
+    }
+  ],
+  "actual_proof_ledger": [
+    {
+      "key": "stage1",
+      "report": "checks/SH18-new-bd1-stage1-Root-accepted-20261115.json",
+      "fact": "同一116份Woozy源码d602由C++种子生成原生第一代bd1；不是第二/三代通过。"
+    },
+    {
+      "key": "enabled985",
+      "report": "checks/SH18-new-bd1-corpus985-independent-20261115.json",
+      "fact": "985启用项通过、0失败；3132编译命令+2078程序执行。总清单1350，365停用，总状态incomplete/exit2。"
+    },
+    {
+      "key": "T10",
+      "report": "checks/SH18-T10-fixed-source-current-independent-20261115.json",
+      "fact": "full20与subset3全部通过；96+30命令、18API调用，真实NumPy/Torch CPU训练。t10_cli1800未运行。"
+    },
+    {
+      "key": "CFFI",
+      "report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+      "fact": "84条全部通过：共享2、C++参考41、Wz候选41；覆盖原C交互、ELF、拒绝及两个各8项forge执行。"
+    },
+    {
+      "key": "A5",
+      "report": "checks/SH18-five-public-groups-independent-20261115.json",
+      "fact": "readiness、channel-waits、HTTP、concurrency-timeouts、timezone五组584原测试命令；13条required的完成结果已接受，公开清单尚未改。"
+    },
+    {
+      "key": "AutoGC",
+      "report": "checks/SH18-automatic-GC-full-independent-20261115.json",
+      "fact": "原9个单mutator fixture/O0/O2共236命令、36观察行通过；不证明MEM02、并发回收、线程/fork/外部环或完整自举。"
+    },
+    {
+      "key": "Python_cases",
+      "report": "checks/SH18-python-cases-anonymous-full-independent-20261115.json",
+      "fact": "47记录行/209实际命令已独立核对：17基础+22额外观察+5负控制通过，2明确unsupported+1Source拒绝按原期望处理；不是47项普通程序均接受。"
+    },
+    {
+      "key": "Python_Slice_String",
+      "report": "checks/SH18-python-slice-string-full-independent-20261115.json",
+      "fact": "Slice原28项双角色与54观察、String20个host probes通过；167+13命令。两个API文件I/O失败控制本轮未执行；Slice111命令无trace/PID；final残留slice_passed=false旧字段。"
+    },
+    {
+      "key": "NativeSlice19",
+      "report": "checks/SH18-event962730-Root-review-20261115.json",
+      "fact": "原19项三套实际107+147+107=361命令已核：30观察、66Panic、9拒绝；缺请求的完整1408项LLVM库输入快照，不包括未选Python-slice或forge组。"
+    }
+  ],
+  "bootstrap_terminal_records": [
+    {
+      "name": "正式d602/bd1",
+      "completion": "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json",
+      "result": "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json",
+      "stage2_record": "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
+      "status": "failed",
+      "phase": "finished",
+      "finished_at": "2026-11-15T08:51:56.327554+00:00",
+      "controller_exit": 1,
+      "active_pid": null,
+      "stage1": {
+        "generation": 1,
+        "status": "ok",
+        "exit": 0,
+        "timed_out": false,
+        "cleanup_complete": true,
+        "abandoned_pipes": false,
+        "sha256": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665"
+      },
+      "stage2": {
+        "exit": -9,
+        "timed_out": true,
+        "cleanup_complete": true,
+        "abandoned_pipes": false,
+        "elapsed_seconds": 21600.16839826404,
+        "timeout_seconds": 21600
+      },
+      "stage3": "not_run; failed stage2 and no stage3 record",
+      "independent_scope": "read-only existing terminal records; no live PID verification or new trace parsing in this task"
+    },
+    {
+      "name": "私有GC16384",
+      "completion": "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json",
+      "result": "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json",
+      "stage2_record": "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json",
+      "status": "failed",
+      "phase": "finished",
+      "finished_at": "2026-11-15T08:22:31.178025+00:00",
+      "controller_exit": 1,
+      "active_pid": null,
+      "stage1": {
+        "generation": 1,
+        "status": "ok",
+        "exit": 0,
+        "timed_out": false,
+        "cleanup_complete": true,
+        "abandoned_pipes": false,
+        "sha256": "fc7882516a53383d3d3305698b13079e10c90b9cc38a4fe9154195edfb986f11"
+      },
+      "stage2": {
+        "exit": -11,
+        "timed_out": false,
+        "cleanup_complete": true,
+        "abandoned_pipes": false,
+        "elapsed_seconds": 11270.99987215799,
+        "timeout_seconds": 21600
+      },
+      "stage3": "not_run; failed stage2 and no stage3 record",
+      "independent_scope": "read-only existing terminal records; no live PID verification or new trace parsing in this task"
+    }
+  ],
+  "publication_pending": {
+    "A5": {
+      "private_commit": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a",
+      "rows": 13,
+      "counts_266_to_253": true,
+      "published": false,
+      "source": "checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json"
+    },
+    "AutoGC": {
+      "actual_accepted": true,
+      "private_runner_exists": true,
+      "public9rows_required": true,
+      "A5_candidate_latest_commit_still_d8b7": true,
+      "final_second_catalog_commit_receipt_not_found_in_named_candidate_directory": true,
+      "no_working_catalog_inspected": true,
+      "not_claimed_second_candidate_absent_elsewhere": true
+    },
+    "Python_cases": {
+      "actual47rows_209commands_accepted": true,
+      "private_amended3files_exists": true,
+      "public1row_required": true,
+      "amendment_metadata_status_stale_pending_but_later_actual_report_passed": true
+    },
+    "Slice_String_Native19": "已接受限定真实功能结果，当前公开清单未发布对应完成metadata；缺项需明确保留。"
+  },
+  "remaining_public_required_groups": {
+    "rows": 266,
+    "resolved_groups": 39,
+    "catalog_runner_values_including_None": 32,
+    "classes_original_plan": {
+      "A": "No private compiler helper/API needed: run the complete original suite once for each public CLI. Common fixed LLVM/runtime environment and external recording still required.",
+      "B": "Existing public-CLI candidate branch exists, but complete assertions require same-Source Wz API/IR driver, independent fixture/tester, C++ observer, or external addon/library.",
+      "C": "Old full runner still delegates relevant Source/IR/metadata to Cpp helper/probe without a candidate route, or catalog selection/library/vendor completion meaning is unresolved. Existing components may help test-side orchestration; this is not an assertion of a missing language feature."
+    },
+    "row_counts_by_class": {
+      "A": 13,
+      "B": 151,
+      "C": 102
+    },
+    "groups": [
+      {
+        "runner": "tests/async/run_async_cases.py",
+        "catalog_runner": "tests/async/run_async_cases.py",
+        "label": "tests/async/run_async_cases.py",
+        "class": "B",
+        "required_rows": 25,
+        "case_ids": [
+          "project:tests/async/bare-main/lang.toml",
+          "project:tests/async/basic/lang.toml",
+          "project:tests/async/cancel-main/lang.toml",
+          "project:tests/async/cancel-queued-move-vec/lang.toml",
+          "project:tests/async/cancel/lang.toml",
+          "project:tests/async/io/lang.toml",
+          "project:tests/async/nested/lang.toml",
+          "project:tests/async/never-started-body/lang.toml",
+          "project:tests/async/never-started-move-fn/lang.toml",
+          "project:tests/async/never-started-move-struct/lang.toml",
+          "project:tests/async/never-started-move-vec/lang.toml",
+          "project:tests/async/never-started/lang.toml",
+          "project:tests/async/order/lang.toml",
+          "project:tests/async/owned-error-entry/lang.toml",
+          "project:tests/async/owned-error-repeat/lang.toml",
+          "project:tests/async/reject/async-inout/lang.toml",
+          "project:tests/async/reject/async-method/lang.toml",
+          "project:tests/async/reject/async-value/lang.toml",
+          "project:tests/async/reject/await-not-task/lang.toml",
+          "project:tests/async/reject/await-outside/lang.toml",
+          "project:tests/async/reject/undeclared-error/lang.toml",
+          "project:tests/async/repeat-await/lang.toml",
+          "project:tests/async/shutdown-fd/lang.toml",
+          "project:tests/async/tcp-loopback/lang.toml",
+          "project:tests/async/udp-loopback/lang.toml"
+        ],
+        "original_budget_and_repetition": "build180/link120/run15；25例全选、O0/O2、12observer；原68行/role",
+        "minimum_inputs": "--cli --root --out --public-object --role --observe on --runtime --clang --ld --observer --strace --toolchain --stdlib-root --libxml2-lib --candidate-source --identity；reference另准其helper",
+        "next_action": "复用已迁移public-object；核新d602完整CLI与资源身份，公共program.o重链原COUNTS observer，不用helper替候选发射。",
+        "original_assertions": "原25项目正/拒绝、O0/O2 CLI对象、COUNTS future/frame/Vec/Task观察、独立链接/执行。",
+        "historical_scope": "Cpp56568/68，9d11/727b56/68、四项目pending/八编译超时；新B未有全组证据。保留disabled，别用普通exit替代COUNTS。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/async_parameter_copy/run_parameter_copy.py",
+        "catalog_runner": "tests/async_parameter_copy/run_parameter_copy.py",
+        "label": "tests/async_parameter_copy/run_parameter_copy.py",
+        "class": "B",
+        "required_rows": 11,
+        "case_ids": [
+          "project:tests/async_parameter_copy/fixtures/param-cancel-queued/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-cancel/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-dyn-await/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-fn-capture-await/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-string-await/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-struct-enum-await/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-throw/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-unstarted/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-vec-late-start/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/param-weak-await/lang.toml",
+          "project:tests/async_parameter_copy/fixtures/reject-resource-copy/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认180；11原例全选/O0O2，string额外IR",
+        "minimum_inputs": "--cli --root --out --public-object --role --runtime --toolchain --clang --readelf --strace --resource-root；string需--ir-driver/--ir-stdlib/精确SHA",
+        "next_action": "同源Nativeobs制作一次后复用；保留heap/Vec观察和param-string-await IR，禁止--only缩范围。",
+        "original_assertions": "原10正+1拒绝、O0/O2 public对象、heap/Vec观察、静态ELF；string还需Nativeobs LLVM。",
+        "historical_scope": "已有Cpp565/9d11原11例252命令，脚本23+13纯控不等于新Source执行；不重复开发runner。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/bootstrap/readiness/run.py",
+        "catalog_runner": "tests/bootstrap/readiness/run.py",
+        "label": "tests/bootstrap/readiness/run.py",
+        "class": "A",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/bootstrap/readiness/probe/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令60；probe O0/O2×IR O0/O2；10正/11负/4工具失败原全集",
+        "minimum_inputs": "--woozyc --clang --lld --work-dir --timeout60 --probe-opts0,2 --ir-opts0,2 --role --strace --record-dir；reference extra-allowed-exec=其helper",
+        "next_action": "新stage1到位即可双角色完整跑；旧1800s构建历史不得改称原60s通过。",
+        "original_assertions": "8参数probe；10正×probe/IR两优化40运行、11负×probe两优化22运行、4工具故障。",
+        "historical_scope": "已接受222历史记录及40/22/4，并已合共享stdin修正；旧candidate60s失败，用1800s，不称原时限通过。不是无参main0，不能普通启用此一行。",
+        "current_recorded_state": "原整组实测已接受；13行完成metadata在A5私有commit，未发布",
+        "proof_key": "A5",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/async_fork/run_async_fork.py",
+        "catalog_runner": "tests/native/async_fork/run_async_fork.py",
+        "label": "tests/native/async_fork/run_async_fork.py",
+        "class": "C",
+        "required_rows": 7,
+        "case_ids": [
+          "project:tests/native/async_fork/fixtures/fork-fd-both-continue/lang.toml",
+          "project:tests/native/async_fork/fixtures/fork-fd-child-cancel/lang.toml",
+          "project:tests/native/async_fork/fixtures/fork-foreign-executor-throws/lang.toml",
+          "project:tests/native/async_fork/fixtures/fork-inside-coroutine-defer/lang.toml",
+          "project:tests/native/async_fork/fixtures/fork-observer-balance/lang.toml",
+          "project:tests/native/async_fork/fixtures/fork-same-thread-scalar/lang.toml",
+          "project:tests/native/async_fork/fixtures/spawn-foreign-executor/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认120；7例/O0O2；observer父子分别平衡",
+        "minimum_inputs": "--cli --root --out；完整组还需--helper --runtime --toolchain",
+        "next_action": "CLI部分可跑，完整observer路径仍把Source交Cpp helper的--out-object/--out-llvm等；测试端改接同源Nativeobs+LLVM，不省父子日志。",
+        "original_assertions": "七项目O0/O2、精确parent-ok输出、无Panic/fork-refused；observer-balance父子各自heap/Vec零live和平衡，外部child日志。",
+        "historical_scope": "普通build不能替代fork-observer-balance；helper发射需Wz Nativeobs，父子独立进程/记录和日志不能省。是否产品失败待实际候选测试。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/async_memory/run_async_memory.py",
+        "catalog_runner": "tests/native/async_memory/run_async_memory.py",
+        "label": "tests/native/async_memory/run_async_memory.py",
+        "class": "C",
+        "required_rows": 12,
+        "case_ids": [
+          "project:tests/native/async_memory/fixtures/async-param-lifetime/lang.toml",
+          "project:tests/native/async_memory/fixtures/double-await-string/lang.toml",
+          "project:tests/native/async_memory/fixtures/double-await-struct/lang.toml",
+          "project:tests/native/async_memory/fixtures/double-await-vec/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-cancel/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-closure-cycle/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-completed/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-live-root/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-shutdown/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-typed-error/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-unstarted/lang.toml",
+          "project:tests/native/async_memory/fixtures/task-vec-cycle/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认180；12例/O0O2；CMake900",
+        "minimum_inputs": "--cli --helper --runtime --toolchain --root --out --observer/clang/readelf/libxml可显式给",
+        "next_action": "helper专用IR/对象接口不能直接换Nativeobs；测试端保持原IR、静态ELF、heap/Vec与最小分配检查。",
+        "original_assertions": "12例O0/O2、各例stdout、静态ELF；before LLVM同一函数的拥有payload调用；观察heap/Vec零live/平衡与最小真实分配次数。",
+        "historical_scope": "需从候选实际LLVM重新链接原observe_gc，不能用Cpp发射替候选；当前所读证据没有本组完整新B结果。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/automatic_gc/run_automatic_gc.py",
+        "catalog_runner": "tests/native/automatic_gc/run_automatic_gc.py",
+        "label": "tests/native/automatic_gc/run_automatic_gc.py",
+        "class": "C",
+        "required_rows": 9,
+        "case_ids": [
+          "project:tests/native/automatic_gc/fixtures/control-acyclic/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/control-empty/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/dead-cycle-live/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/duplicate-edges/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/enum-nested-cycle/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/loop-continue/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/self-cycle/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/two-cycle/lang.toml",
+          "project:tests/native/automatic_gc/fixtures/typed-throw-defer/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认60；9fixture/O0O2/原pressure阈值，不用baseline-only",
+        "minimum_inputs": "--cli --helper --runtime --clang --readelf --root --out --libxml2-lib；原SHA pin",
+        "next_action": "旧helper仍生成被观察的IR/对象；需同源Wz发射替代与现有observer组合，不能用GC32代九fixture。",
+        "original_assertions": "九fixture CLI/静态ELF和observer；dead-cycle/root-live/duplicate edge、pressure预算、动态Vec逐事件/正确drop。",
+        "historical_scope": "新GC22/32只测特定guard/pending-stop用例，不等于这九个manifest全部通过；保留原计数和压力上限。",
+        "current_recorded_state": "236条原单mutator组已接受；公开9行仍required，私有runner副本存在",
+        "proof_key": "AutoGC",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/box_source/run_box_source.py",
+        "catalog_runner": "tests/native/box_source/run_box_source.py",
+        "label": "tests/native/box_source/run_box_source.py",
+        "class": "C",
+        "required_rows": 8,
+        "case_ids": [
+          "project:tests/native/box_source/fixtures/cleanup/lang.toml",
+          "project:tests/native/box_source/fixtures/core/lang.toml",
+          "project:tests/native/box_source/fixtures/dropcount/lang.toml",
+          "project:tests/native/box_source/fixtures/mutex/lang.toml",
+          "project:tests/native/box_source/fixtures/no-extra-api/lang.toml",
+          "project:tests/native/box_source/fixtures/private-constructor/lang.toml",
+          "project:tests/native/box_source/fixtures/private-field/lang.toml",
+          "project:tests/native/box_source/fixtures/python-cycle/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认180；Native4正O0O2/Python3正/原双端拒绝与cycle",
+        "minimum_inputs": "--cli --helper --clang --lld --runtime --python --python-helper --root --out --ld-library-path",
+        "next_action": "完整组还直接调用两种Cpp helper；改接同源Nativeobs/Pythonobs并逐项核参数。普通exit不能替Box cycle/Vec计数。",
+        "original_assertions": "Native四正O0/O2、Vec IR且禁止新lang_box ABI；三单线程分配观察；Python三正、三双端私有访问拒绝、host-GC禁用的语言Box cycle。",
+        "historical_scope": "需Wz Nativeobs和真实PythonEmitter metadata入口；主程序exit0不能替代Box cycle/Vec retain-release/dropcount峰值。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/c_retained_capturing/run_capturing.py",
+        "catalog_runner": "tests/native/c_retained_capturing/run_capturing.py",
+        "label": "tests/native/c_retained_capturing/run_capturing.py",
+        "class": "B",
+        "required_rows": 20,
+        "case_ids": [
+          "project:tests/native/c_retained_capturing/negative/bad_metadata/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/mode/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/python_static_unsupported/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/python_unsupported/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/signature/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/static_capture/lang.toml",
+          "project:tests/native/c_retained_capturing/negative/throws/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/c_thread/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/captures_escape/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/cleanup_observation/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/close_modes/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/failure_cleanup/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/gc_cleanup/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/move_capture/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/probe/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/returns_and_units/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/sync_register/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/two_resource_borrow/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/typed_errors/lang.toml",
+          "project:tests/native/c_retained_capturing/projects/userdata_positions/lang.toml"
+        ],
+        "original_budget_and_repetition": "build240/check120/run30；fixture120/lifecycle60/nm60/readelf30；13正O0O2+7拒绝",
+        "minimum_inputs": "--cli --root --out --clang --hosted-runtime --native-runtime --fixture-test --stdlib --toolchain --nm --readelf --ld --strace --role --source-tests require --require-trace；ref可helper",
+        "next_action": "制作匹配C/C++fixture tester（非编译器API）并完整双角色跑；保留unregister/在途/Weak与无输出拒绝，不仅普通程序。",
+        "original_assertions": "13正O0/O2+7拒绝、no-output、共享库生命周期、Weak/cleanup、真实C线程与unregister等，hosted符号/core ELF。",
+        "historical_scope": "历史main140属于9d11/727b；新runner110pure未跑新Source。C-only不证明Woozy typed error。原275选路不是整个会话总数。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/c_retained_static/run_retained_static.py",
+        "catalog_runner": "tests/native/c_retained_static/run_retained_static.py",
+        "label": "tests/native/c_retained_static/run_retained_static.py",
+        "class": "B",
+        "required_rows": 5,
+        "case_ids": [
+          "project:tests/native/c_retained_static/negative/capturing/lang.toml",
+          "project:tests/native/c_retained_static/negative/throws/lang.toml",
+          "project:tests/native/c_retained_static/projects/callback_gc_external/lang.toml",
+          "project:tests/native/c_retained_static/projects/callback_gc_sync/lang.toml",
+          "project:tests/native/c_retained_static/projects/retained_static/lang.toml"
+        ],
+        "original_budget_and_repetition": "build180；program默认20；5行含3正O0O2及2拒绝",
+        "minimum_inputs": "--cli --root --out --clang --ar --hosted-runtime --native-runtime --callback-gc require",
+        "next_action": "现有CLI入口可用，先核Cfixture/原GC观察器和同runtime；require模式不把unsupported/blocked当pass。",
+        "original_assertions": "普通static、两callback GC正例O0/O2；capturing/throws拒绝，Cfixture、双runtime callback enter/leave符号、core/hosted观察。",
+        "historical_scope": "auto会把三种已知GC panic记unsupported/blocked，不能当全五项通过；完整要求必须保留require模式/blocked说明。不能从历史备注推断当前B仍有此产品错。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/channel-waits/run.py",
+        "catalog_runner": "tests/native/channel-waits/run.py",
+        "label": "tests/native/channel-waits/run.py",
+        "class": "A",
+        "required_rows": 9,
+        "case_ids": [
+          "project:tests/native/channel-waits/cancel-basic/lang.toml",
+          "project:tests/native/channel-waits/cancel-wake/lang.toml",
+          "project:tests/native/channel-waits/deadline-spurious/lang.toml",
+          "project:tests/native/channel-waits/invalid-receive-timeout/lang.toml",
+          "project:tests/native/channel-waits/invalid-send-timeout/lang.toml",
+          "project:tests/native/channel-waits/owned-timeout-cancel/lang.toml",
+          "project:tests/native/channel-waits/races/lang.toml",
+          "project:tests/native/channel-waits/timeout-basic/lang.toml",
+          "project:tests/native/channel-waits/timeout-blocking/lang.toml"
+        ],
+        "original_budget_and_repetition": "build240；普通90/Panic30；readelf30；O0O2 repeats=1,2,1,3,2,1,2,1,1",
+        "minimum_inputs": "--cli --root --out --ld-library-path",
+        "next_action": "两角色完整9例；18build、28program及36GNU ELF调用/role；复用已接受transport，补逐role trace/完整输入记录。",
+        "original_assertions": "九项目O0/O2，原重复/90s普通与30sPanic、build240s，strictflags/raw与GNU ELF。",
+        "historical_scope": "9d11全部18次build在240s超时、无候选程序；新B需实际复测，不能把pure15或timeout当通过；与channels9不同。",
+        "current_recorded_state": "原整组实测已接受；13行完成metadata在A5私有commit，未发布",
+        "proof_key": "A5",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/concurrency-extra/run.py",
+        "catalog_runner": "tests/native/concurrency-extra/run.py",
+        "label": "tests/native/concurrency-extra/run.py",
+        "class": "B",
+        "required_rows": 9,
+        "case_ids": [
+          "project:tests/native/concurrency-extra/cancel/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-downgrade/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-read-recursive/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-unowned-read-unlock/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-unowned-write-unlock/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-upgrade/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-write-recursive/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock-misuse-wrong-thread-unlock/lang.toml",
+          "project:tests/native/concurrency-extra/rwlock/lang.toml"
+        ],
+        "original_budget_and_repetition": "Wz build120/run30；rwlock/cancel各3次，其余1；Cpp compile180/run120、static compile180/run30，各O0O2×3",
+        "minimum_inputs": "--cli --root --out --clang=clang++ --lld；原runtime_timeout_test.cpp/static_timeout_fixture.cpp及运行库源",
+        "next_action": "完整runner本身会制作Cpp ABI tester；与候选Source结果分开记。其末尾wait_for not_run旧说明照实保留，不能因statuspassed擦掉。",
+        "original_assertions": "九Source正/误用O0/O2、精确Panic、静态ELF，另有原C++ rwlock/cancel运行时控制。",
+        "historical_scope": "Cpp运行时控制需要保留但单列，不能计作候选Source编译。当前未找到本组接受的新B全组记录。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/gc_activation/run_gc_activation.py",
+        "catalog_runner": "tests/native/gc_activation/run_gc_activation.py",
+        "label": "tests/native/gc_activation/run_gc_activation.py",
+        "class": "C",
+        "required_rows": 3,
+        "case_ids": [
+          "project:tests/native/gc_activation/graph-self-cycle/lang.toml",
+          "project:tests/native/gc_activation/graph-thread-cycle/lang.toml",
+          "project:tests/native/gc_activation/no-graph-string-vec/lang.toml"
+        ],
+        "original_budget_and_repetition": "原run默认240；3例O0O2，加timezone LLVM-only",
+        "minimum_inputs": "--cli --helper --root --out --libxml2-lib",
+        "next_action": "helper仍直接发射before/after/object；同源Nativeobs+LLVM薄层保留逐Type init/register/critical断言。",
+        "original_assertions": "三例O0/O2 build/run与init/register/world-register调用有无；finish/poll/critical仍在；另timezone O2 LLVM-only NoGraph。",
+        "historical_scope": "可复用现有真实Nativeobs；新GC22/32不含这三manifest。原时限240s，不靠修改正则/删critical断言迎合输出。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/http/run_http.py",
+        "catalog_runner": "tests/native/http/run_http.py",
+        "label": "tests/native/http/run_http.py",
+        "class": "A",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/http/lang.toml"
+        ],
+        "original_budget_and_repetition": "build默认120；selftest/nonblocking30；socket3/5/8等原有限等待；O0O2",
+        "minimum_inputs": "--cli --out（项目由脚本自身位置定位，无--root）",
+        "next_action": "完整HTTP server/client/分片/pipeline/错误输入/精确流两角色分别跑，仅loopback，不需外部服务。",
+        "original_assertions": "selftest/nonblocking精确行，loopback多次server/client交互、分块/关闭/HEAD/多header、Unicode与非UTF8字节，剩余流和退出断言。",
+        "historical_scope": "一条catalog不能代表全部HTTP交互；需保留原本地server/reader有限等待与逐命令记录，不是缺产品入口。",
+        "current_recorded_state": "原整组实测已接受；13行完成metadata在A5私有commit，未发布",
+        "proof_key": "A5",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/language_gc_source/run_language_gc_source.py",
+        "catalog_runner": "tests/native/language_gc_source/run_language_gc_source.py",
+        "label": "tests/native/language_gc_source/run_language_gc_source.py",
+        "class": "C",
+        "required_rows": 7,
+        "case_ids": [
+          "project:tests/native/language_gc_source/fixtures/closure-cycle/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/live-root-cycle/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/mutual-cycle/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/scalar-control/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/self-cycle/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/stress-cycle/lang.toml",
+          "project:tests/native/language_gc_source/fixtures/weak-cycle/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认300；7fixture/O0O2；CMake600",
+        "minimum_inputs": "--cli --helper --runtime --clang --readelf --root --out --libxml2-lib",
+        "next_action": "原Source仍交helper获取LLVM/对象；换成当前Wz观察发射再用原observe_gc，不把普通CLI退出替代计数。",
+        "original_assertions": "七fixture O0/O2 CLI/LLVM、before LLVM重链observe_gc、零live/ALLOC=FREE/Vec=FREE，cycle和pressure原阈值。",
+        "historical_scope": "匹配Cpp七例98命令已过；Wz GC22/32是其它fixture与guard测试，不能替代此七例。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/reference_values_backend/run_reference_values_backend.py",
+        "catalog_runner": "tests/native/reference_values_backend/run_reference_values_backend.py",
+        "label": "tests/native/reference_values_backend/run_reference_values_backend.py",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/reference_values_backend/fixtures/function-abi/lang.toml"
+        ],
+        "original_budget_and_repetition": "emit180/run60；function-abi与concurrency/basic O0O2",
+        "minimum_inputs": "--helper --root --out",
+        "next_action": "没有--cli/候选分支，只有Cpp helper；按原Fn ABI断言接同源Nativeobs+公开CLI/LLVM，不需新产品API。",
+        "original_assertions": "function-abi与concurrency/basic O0/O2；16-byte Fn、env-first thunk/cache、direct/indirect try ABI、Fn retain/release与thread context两项copy/drop。",
+        "historical_scope": "Fn slot unit修复/GC store_fn不证明本ABI全文；现有真实Nativeobs可给before LLVM，无需新增产品接口。旧文档未接受capture是当时范围，不能当当前缺语言功能。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/slice_source/run_slice_source.py",
+        "catalog_runner": "tests/native/slice_source/run_slice_source.py",
+        "label": "NativeSlice selected19",
+        "class": "B",
+        "required_rows": 19,
+        "case_ids": [
+          "project:tests/native/slice_source/fixtures/after-drop/lang.toml",
+          "project:tests/native/slice_source/fixtures/bounds-high/lang.toml",
+          "project:tests/native/slice_source/fixtures/bounds-order/lang.toml",
+          "project:tests/native/slice_source/fixtures/cleanup/lang.toml",
+          "project:tests/native/slice_source/fixtures/core/lang.toml",
+          "project:tests/native/slice_source/fixtures/empty-still-pins/lang.toml",
+          "project:tests/native/slice_source/fixtures/huge-index/lang.toml",
+          "project:tests/native/slice_source/fixtures/negative-index/lang.toml",
+          "project:tests/native/slice_source/fixtures/owned/lang.toml",
+          "project:tests/native/slice_source/fixtures/structural-clear/lang.toml",
+          "project:tests/native/slice_source/fixtures/structural-pop/lang.toml",
+          "project:tests/native/slice_source/fixtures/structural-push/lang.toml",
+          "project:tests/native/slice_source/fixtures/structural-reserve/lang.toml",
+          "project:tests/native/slice_source/fixtures/structural-resize/lang.toml",
+          "project:tests/native/slice_source/fixtures/sub-bounds/lang.toml",
+          "project:tests/native/slice_source/fixtures/throws-return/lang.toml",
+          "project:tests/native/slice_source/fixtures/type-mismatch/lang.toml",
+          "project:tests/native/slice_source/fixtures/wrong-arity/lang.toml",
+          "project:tests/native/slice_source/fixtures/wrong-len/lang.toml"
+        ],
+        "original_budget_and_repetition": "build180/run60/readelf30；原19selected O0O2；component准备另1800",
+        "minimum_inputs": "--cli --role --wz-native-helper --reference-helper --clang --lld --runtime --root --out --toolchains --strace --readelf --source-root --stdlib-source --build-report --component-source-map --candidate-ready --fresh",
+        "next_action": "保留19选中用例/IR/真实Vec观察；现builder固定ed1，需受控新Source准备，不冒用旧O2ac17。",
+        "original_assertions": "原19选中(5正/11Panic/3拒绝)，O0/O2 CLI+四IR/真实分配Vec观察；第20 python-slice未被Native选中；另15forge完全独立。",
+        "historical_scope": "最终107reference/147candidate有效，605+2build=607历史保留。候选driver ac17/O2，旧430/O0；builder固定ed1，不能拿新9ede冒名。新Source需要明确新组件身份，不能跳过pin。",
+        "current_recorded_state": "原19完整功能结果接受；输入快照缺完整LLVM库，未发布完成metadata",
+        "proof_key": "NativeSlice19",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/slice_source/run_slice_source.py",
+        "catalog_runner": "tests/native/slice_source/run_slice_source.py",
+        "label": "NativeSlice未被选择的1行",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/slice_source/fixtures/python-slice/lang.toml"
+        ],
+        "original_budget_and_repetition": "不在原19选择集合；不能填main0",
+        "minimum_inputs": "唯一python-slice manifest现挂Native runner但未被它选中",
+        "next_action": "交Root确认应由哪个原Python测试/普通别名覆盖，保持该行原字段，不伪称Native19已覆盖20。",
+        "original_assertions": "原19选中(5正/11Panic/3拒绝)，O0/O2 CLI+四IR/真实分配Vec观察；第20 python-slice未被Native选中；另15forge完全独立。",
+        "historical_scope": "最终107reference/147candidate有效，605+2build=607历史保留。候选driver ac17/O2，旧430/O0；builder固定ed1，不能拿新9ede冒名。新Source需要明确新组件身份，不能跳过pin。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/task_frame_gc/run_task_frame_gc.py",
+        "catalog_runner": "tests/native/task_frame_gc/run_task_frame_gc.py",
+        "label": "tests/native/task_frame_gc/run_task_frame_gc.py",
+        "class": "C",
+        "required_rows": 16,
+        "case_ids": [
+          "project:tests/native/task_frame_gc/fixtures/async-c-closure-dyn-cycle/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/async-c-closure-dyn-order/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/async-c-closure-dyn-reversed/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/async-c-dyn-closure-order/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/async-c-dyn-closure-reversed/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/async-c-resource-reject/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-await-chain/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-await-scalar/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-error-cycle/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-live-move-root/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-move-closure-cycle/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-move-vec-cycle/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-never-started-move-cleanup/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-result-cycle/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-scalar-nograph/lang.toml",
+          "project:tests/native/task_frame_gc/fixtures/task-unit-nograph/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认180；10正+6拒绝/O0O2；CMake900",
+        "minimum_inputs": "--cli --helper --runtime --toolchain --root --out --observer/clang/readelf/libxml",
+        "next_action": "与async_memory共享helper发射，先测试端接Wz IR并保留frame.meta/trace/clear/publish_v2和heap/Vec；非只跑程序。",
+        "original_assertions": "10正+6拒绝、O0/O2，frame.meta/trace/clear、publish_v2、graph startup/leaf NoGraph、heap/Vec零live/最小分配，async C/dyn/closure次序。",
+        "historical_scope": "复用async_memory原观察器和真实Nativeobs，保留六拒绝；async11/25与GC32均不是这16项目全测。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/tls_source/run_tls_source.py",
+        "catalog_runner": "tests/native/tls_source/run_tls_source.py",
+        "label": "tests/native/tls_source/run_tls_source.py",
+        "class": "B",
+        "required_rows": 6,
+        "case_ids": [
+          "project:tests/native/tls_source/projects/https_client/lang.toml",
+          "project:tests/native/tls_source/projects/https_server/lang.toml",
+          "project:tests/native/tls_source/projects/request_probe/lang.toml",
+          "project:tests/native/tls_source/projects/tls_client/lang.toml",
+          "project:tests/native/tls_source/projects/tls_server/lang.toml",
+          "project:tests/native/tls_source/projects/token_probe/lang.toml"
+        ],
+        "original_budget_and_repetition": "build180；addon configure180/build300/CTest120；I/O45/60/90，原组合上限300/420/600",
+        "minimum_inputs": "--cli --cxx=clang++ --cc=clang --python --openssl --out；CMake原TLS addon/headers/OpenSSL与本地证书",
+        "next_action": "原完整6项目/peer/证书错误/retry/cleanup probes全部保留；别跑到默认旧CLI/.build，也别启用额外http-regression重复HTTP任务。",
+        "original_assertions": "原addon ABI/header、TLS Wz/Python peer、证书错误、nonblocking retry/partial write、Wz-Wz TLS/HTTPS复用、cleanup/token probes、原HTTP/core。",
+        "historical_scope": "不只是六次build。需固定TLS addon/本地证书和父子有限等待，不能把C++ addon probe当候选编译证明。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/weak_source/run_weak_source.py",
+        "catalog_runner": "tests/native/weak_source/run_weak_source.py",
+        "label": "tests/native/weak_source/run_weak_source.py",
+        "class": "C",
+        "required_rows": 15,
+        "case_ids": [
+          "project:tests/native/weak_source/fixtures/alias-liveness/lang.toml",
+          "project:tests/native/weak_source/fixtures/canonical-handles/lang.toml",
+          "project:tests/native/weak_source/fixtures/generic-fields/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-box-lifecycle/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-empty-upgrade-none/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-fn-captured-dead/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-fn-immortal/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-reject-file/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-reject-string/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-reject-user-struct/lang.toml",
+          "project:tests/native/weak_source/fixtures/root-weak-vec-lifecycle/lang.toml",
+          "project:tests/native/weak_source/fixtures/weak-32bit/lang.toml",
+          "project:tests/native/weak_source/fixtures/weak-reject-fake-box/lang.toml",
+          "project:tests/native/weak_source/fixtures/weak-reject-ipc-wrapper/lang.toml",
+          "project:tests/native/weak_source/fixtures/weak-reject-slice/lang.toml"
+        ],
+        "original_budget_and_repetition": "build/helper300/run120；8正+7拒绝/O0O2；CMake900",
+        "minimum_inputs": "--cli --helper --root --out --ld-library-path",
+        "next_action": "仍依赖Cpp helper输出对象/IR，Nativeobs不能直接顶替；另unsupported_capture()旧拒绝文案需Root按原case核定义，不擅改gold。",
+        "original_assertions": "8正+7拒绝，O0/O2真Weak upgrade/downgrade；canonical Vec/handle weak slot布局、system_call且无新Weak opcode、ELF与原类型/32bit拒绝。",
+        "historical_scope": "Python Weak原22观察和GC32中Weak不能代此15例；现有Nativeobs可用，真实产品差异待候选测试，不先断言缺Weak实现。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/performance/run_native.py",
+        "catalog_runner": "tests/performance/run_native.py",
+        "label": "tests/performance/run_native.py",
+        "class": "C",
+        "required_rows": 2,
+        "case_ids": [
+          "project:tests/performance/fixtures/u32-branch/lang.toml",
+          "project:tests/performance/fixtures/u64-recurrence/lang.toml"
+        ],
+        "original_budget_and_repetition": "check/build120/run60；warmups≥2/samples≥7/build-samples≥5，prepare→measure",
+        "minimum_inputs": "--woozyc --helper --runtime --llvm-bin --fixtures --out；--prepare-report/CPU固定",
+        "next_action": "完整性能/IR断言仍私有helper；先组合Wz Nativeobs输出、保留原oracle。与长job资源分开，未授权不测量。",
+        "original_assertions": "原两算例、CLI/helper对象一致、四IR/ELF、固定优化与C++参考、正确值，再按warmup>=2、samples>=7、build-samples>=5。",
+        "historical_scope": "单次IO AB/完整38或needs_drop重复命中均不代该性能要求。须Wz Nativeobs替helper并保留准备/测量分离；当前长作业活跃时不擅自开始测量。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/python/run_cases.py",
+        "catalog_runner": "tests/python/run_cases.py",
+        "label": "tests/python/run_cases.py",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/python/fixtures/finite-callback/lang.toml"
+        ],
+        "original_budget_and_repetition": "command30；原15case及额外生成/bit/Panic/host错误全套",
+        "minimum_inputs": "--helper --root --out --python",
+        "next_action": "只有Cpp Python helper；同源Pythonobs的argv/metadata需逐项接入；已有finite-callback普通enabled别名不代表helper额外断言完成。",
+        "original_assertions": "原15后台case与额外Source/bit/Panic/host bug、Fn callback等；完整原runner仍helper-only。",
+        "historical_scope": "finite-callback已有同manifest enabled别名；本required行不能再重复append。原15普通编译不代helper元数据/直接Python探针。",
+        "current_recorded_state": "完整47行209命令已接受；匿名函数source_name测试修正存在私有副本，公开1行仍required",
+        "proof_key": "Python_cases",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/python/slice_source/run_slice_source.py",
+        "catalog_runner": "tests/python/slice_source/run_slice_source.py",
+        "label": "tests/python/slice_source/run_slice_source.py",
+        "class": "B",
+        "required_rows": 28,
+        "case_ids": [
+          "project:tests/python/slice_source/fixtures/after-drop/lang.toml",
+          "project:tests/python/slice_source/fixtures/bounds-high/lang.toml",
+          "project:tests/python/slice_source/fixtures/bounds-order/lang.toml",
+          "project:tests/python/slice_source/fixtures/cleanup/lang.toml",
+          "project:tests/python/slice_source/fixtures/compound/lang.toml",
+          "project:tests/python/slice_source/fixtures/core/lang.toml",
+          "project:tests/python/slice_source/fixtures/empty-still-pins/lang.toml",
+          "project:tests/python/slice_source/fixtures/empty/lang.toml",
+          "project:tests/python/slice_source/fixtures/for-in/lang.toml",
+          "project:tests/python/slice_source/fixtures/gc-cycle/lang.toml",
+          "project:tests/python/slice_source/fixtures/huge-index/lang.toml",
+          "project:tests/python/slice_source/fixtures/huge-sub/lang.toml",
+          "project:tests/python/slice_source/fixtures/huge-view/lang.toml",
+          "project:tests/python/slice_source/fixtures/move/lang.toml",
+          "project:tests/python/slice_source/fixtures/negative-index/lang.toml",
+          "project:tests/python/slice_source/fixtures/negative-sub/lang.toml",
+          "project:tests/python/slice_source/fixtures/nested-to-vec/lang.toml",
+          "project:tests/python/slice_source/fixtures/owned/lang.toml",
+          "project:tests/python/slice_source/fixtures/python-slice/lang.toml",
+          "project:tests/python/slice_source/fixtures/reassign/lang.toml",
+          "project:tests/python/slice_source/fixtures/structural-clear/lang.toml",
+          "project:tests/python/slice_source/fixtures/structural-pop/lang.toml",
+          "project:tests/python/slice_source/fixtures/structural-push/lang.toml",
+          "project:tests/python/slice_source/fixtures/structural-reserve/lang.toml",
+          "project:tests/python/slice_source/fixtures/structural-resize/lang.toml",
+          "project:tests/python/slice_source/fixtures/sub-bounds/lang.toml",
+          "project:tests/python/slice_source/fixtures/throws-return/lang.toml",
+          "project:tests/python/slice_source/fixtures/unsupported-c/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令180；组件build1800另记；28case原observer/54bytes",
+        "minimum_inputs": "--cli=reference --helper=CppPython --candidate-cli --api-driver --source-root --candidate-resources --strace --root --out --python --toolchain-root",
+        "next_action": "复用3ab任务产出的同源Pythonobs前先核argv/metadata/Source身份；全28及两个IO控制，禁--only缩范围。",
+        "original_assertions": "28案例CLI/API生成文件逐字对比、原27observer/54bytepairs、GC/owning view/panic/拒绝；两IO error控制。",
+        "historical_scope": "已有28manifest普通enabled别名；组件extra不能并入普通exit。旧9d11/727b的28/84cmd等历史，不是当前新CLI全组证据。",
+        "current_recorded_state": "原28 Slice/String20已接受有限范围；2个API I/O失败控制未跑，公开完成metadata未改",
+        "proof_key": "Python_Slice_String",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/python/weak_source/run_weak_source.py",
+        "catalog_runner": "tests/python/weak_source/run_weak_source.py",
+        "label": "tests/python/weak_source/run_weak_source.py",
+        "class": "B",
+        "required_rows": 10,
+        "case_ids": [
+          "project:tests/python/weak_source/fixtures/combo-fields-vec-enum/lang.toml",
+          "project:tests/python/weak_source/fixtures/generic-target/lang.toml",
+          "project:tests/python/weak_source/fixtures/held-some-keeps-alive/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-file/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-foreign/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-native-handle/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-same-shape-struct/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-slice/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-string/lang.toml",
+          "project:tests/python/weak_source/fixtures/reject-user-struct/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认120；原22observer/7类型拒绝；Python版本20",
+        "minimum_inputs": "--cli=reference --helper=CppPython --candidate-cli --api-driver --candidate-resources --strace --root --out --python --toolchain-root --operation-id",
+        "next_action": "同源Pythonobs可与API任务共用一次制作；保留物理stdlib before/after、hostGC关闭与Weak/根统计，不用17普通aliases代替。",
+        "original_assertions": "CLI+Wz API字节/metadata、22 Weak/GC观察，hostGC禁用、根/Weak句柄与Vec统计、7类型拒绝。",
+        "historical_scope": "已有17 enabled Python aliases，其中本10manifest各有同manifest enabled行；8Native关系不改。本required10不能用额外GC观察当普通case全过；旧72编译/22观察只属原固定版本。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/python/run_string_binding.py",
+        "catalog_runner": null,
+        "label": "Python string-binding（catalog runner空）",
+        "class": "B",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/python_bindings/string-aggregate/lang.toml"
+        ],
+        "original_budget_and_repetition": "默认90；API build1800另记；20原host string probes",
+        "minimum_inputs": "实际tests/python/run_string_binding.py，--cli --helper --candidate-cli --api-driver --source-root --candidate-resources --root --out --python --strace --toolchain-root",
+        "next_action": "catalog runner=None属已知粗归属；跑原实际runner，不创建新ID。等3ab Pythonobs明确CLI/API兼容后再用。",
+        "original_assertions": "真实runner tests/python/run_string_binding.py；CLI/Verified PythonEmitter metadata/生成bytes、20 host string probes。",
+        "historical_scope": "catalog此条runner=None，但原因已写组件。先补明确归属/要求表达，不可按未实现语言功能；历史9d11/727b与f90参考Sourceunknown限制仍保留。",
+        "current_recorded_state": "原28 Slice/String20已接受有限范围；2个API I/O失败控制未跑，公开完成metadata未改",
+        "proof_key": "Python_Slice_String",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_cli.py",
+        "catalog_runner": "tests/native/run_cli.py",
+        "label": "tests/native/run_cli.py",
+        "class": "C",
+        "required_rows": 3,
+        "case_ids": [
+          "project:tests/sema/aggregate-constants/vendor/dep/lang.toml",
+          "project:tests/sema/string-constants/vendor/dep/lang.toml",
+          "project:tests/sema/strings/vendor/dep/lang.toml"
+        ],
+        "original_budget_and_repetition": "原CLI脚本command30/CMake180，但这3个dep无main",
+        "minimum_inputs": "3个vendor/dep lib.wz；父aggregate-constants/string-constants/strings已enabled",
+        "next_action": "只核父manifest真实import与Source身份及实际已跑记录后交Root改归属；不把dep当3个可执行程序，不另跑大CLI组。",
+        "original_assertions": "三个dep仅lib.wz无main；父aggregate-constants/string-constants/strings manifests均明确source依赖，父项目已enabled。",
+        "historical_scope": "不是三份待编译main。记录父项目import覆盖及依赖身份后处理adaptation/归属；不能填虚假exit0或重复建ID。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/concurrency-timeouts/run.py",
+        "catalog_runner": "tests/native/concurrency-timeouts/run.py",
+        "label": "tests/native/concurrency-timeouts/run.py",
+        "class": "A",
+        "required_rows": 1,
+        "case_ids": [
+          "runner:tests/native/concurrency-timeouts/run.py"
+        ],
+        "original_budget_and_repetition": "build120/run20/readelf+nm10；O0O2、repeat2；CMake180",
+        "minimum_inputs": "--cli --root --out --repeat 2",
+        "next_action": "原全部timed wait/condvar断言双角色；源码SHA/空流/无strongundefined保持；输出目录必须不存在。",
+        "original_assertions": "O0/O2、默认repeat2、build120s/run20s/readelf与nm10s、静态ELF无strong undefined、空流、源码及CLI SHA不变。",
+        "historical_scope": "只需保留原Source时钟/condvar结果并用既有有界执行器，未确认需生产改动。",
+        "current_recorded_state": "原整组实测已接受；13行完成metadata在A5私有commit，未发布",
+        "proof_key": "A5",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_chat.py",
+        "catalog_runner": "tests/native/run_chat.py",
+        "label": "tests/native/run_chat.py",
+        "class": "B",
+        "required_rows": 1,
+        "case_ids": [
+          "runner:tests/native/run_chat.py"
+        ],
+        "original_budget_and_repetition": "build/default60/help5/ELF10；交互3/4/6等原deadline；O0O2；CMake300",
+        "minimum_inputs": "--cli --root --out --clang --lld --runtime",
+        "next_action": "全协议/Unicode/背压及Cpp partial-write/mock relink都要保留；用自己loopback与输出，不能只build/server退出。",
+        "original_assertions": "原协议/Unicode分片/广播/错误输入、断线恢复、客户端退出与背压等多进程，静态ELF。",
+        "historical_scope": "单普通main不能代表服务器/客户端协议；保留每角色过程/超时/流，勿把json-thread归到chat。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/timezone/run.py",
+        "catalog_runner": "tests/native/timezone/run.py",
+        "label": "tests/native/timezone/run.py",
+        "class": "A",
+        "required_rows": 1,
+        "case_ids": [
+          "runner:tests/native/timezone/run.py"
+        ],
+        "original_budget_and_repetition": "build180；批量120/300/180/300/120/30/30，loader120/30；O0O2，CMake600",
+        "minimum_inputs": "--cli --root --out --zoneinfo /usr/share/zoneinfo；同字节tzdata及tzif.py",
+        "next_action": "完整synthetic+真实ZoneInfo逐条比对，不截取zone列表；不把GC activation的timezone LLVM观察代替行为测试。",
+        "original_assertions": "TZif synthetic/real、UTC/反向/transition/loader/error、批量流的逐项预期，静态ELF/输出与资源SHA。",
+        "historical_scope": "GC activation里timezone LLVM-only不等于timezone行为测试；测试较大，不能只跑一个main代全组。",
+        "current_recorded_state": "原整组实测已接受；13行完成metadata在A5私有commit，未发布",
+        "proof_key": "A5",
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/performance/run_plb.py",
+        "catalog_runner": "tests/performance/run_plb.py",
+        "label": "tests/performance/run_plb.py",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "runner:tests/performance/run_plb.py"
+        ],
+        "original_budget_and_repetition": "prepare/sample/selftest；内部命令300，原五bench/oracle及校准",
+        "minimum_inputs": "phase --out --cli --llvm-bin --cpu；原bench sources/C++ reference/helper对象同等检查",
+        "next_action": "先确认候选不能自动发现旧Cpp helper并代做Source，测试端接Wz API并保持prepare封存/采样原要求，当前不启动性能。",
+        "original_assertions": "五bench pinned small oracle、浮点finite/精确正确结果、CLI/helper对象相同、独立C++基准/批量校准与prepared状态防覆盖。",
+        "historical_scope": "不是入口缺失；仍有私有helper与性能测量要求，不能用public_cli标签/普通build当passed。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/python/run_cleanup_regressions.py",
+        "catalog_runner": "tests/python/run_cleanup_regressions.py",
+        "label": "tests/python/run_cleanup_regressions.py",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "runner:tests/python/run_cleanup_regressions.py"
+        ],
+        "original_budget_and_repetition": "导入原cleanup command时限；原所有function-key/defer/outline/owning组合",
+        "minimum_inputs": "--helper --cli --root --out --python，原observe_cleanup_regressions/observe_outlining",
+        "next_action": "helper输出verified.hir/metadata与观察仍Cpp专用；同源Pythonobs需--emit-hir且核输出格式，不因参数存在就称可互换。",
+        "original_assertions": "生成function-key/defer/outline/owning泛型组合；CLI拒绝保旧输出、metadata Source映射/行号、ALIVE/ALLOCS/FREES/iteration/free interval与typed generic identity。",
+        "historical_scope": "普通syntax/build不代verified.hir、metadata和Python观察。可借真实PythonEmitter组件设计，不能用C++helper代候选。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_floating.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→floating",
+        "class": "C",
+        "required_rows": 7,
+        "case_ids": [
+          "project:tests/native/floating/dynamic/lang.toml",
+          "project:tests/native/floating/panic/lang.toml",
+          "project:tests/native/floating/reject-move/lang.toml",
+          "project:tests/native/floating/reject-vec/lang.toml",
+          "project:tests/native/floating/return101/lang.toml",
+          "project:tests/native/floating/uncaught/lang.toml",
+          "project:tests/native/floating/values-cleanup/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令90；原O0O2、IR/JIT/MPFR与拒绝全套；CMake240",
+        "minimum_inputs": "--cli --probe --root --clang --runtime --out",
+        "next_action": "Cpp probe并非候选发射；需当前Wz数值/发射观察与原probe参考分开，不能只跑7项目普通build。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/hosted_thread_gc/run_thread_cleanup.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→hosted_thread_gc",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/hosted_thread_gc/fixtures/thread-cycle/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令120；O0O2；THREAD_CLEANUP:1:1:1及heap/Vec平衡",
+        "minimum_inputs": "--cli --helper --runtime=hosted --toolchain --root --out",
+        "next_action": "helper单独生成被观察对象；需Wz同源产物接原pthread cleanup observer。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_os.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→os",
+        "class": "B",
+        "required_rows": 9,
+        "case_ids": [
+          "project:tests/native/os/directories/lang.toml",
+          "project:tests/native/os/errors/lang.toml",
+          "project:tests/native/os/exit/lang.toml",
+          "project:tests/native/os/file-io/lang.toml",
+          "project:tests/native/os/getpid/lang.toml",
+          "project:tests/native/os/hello/lang.toml",
+          "project:tests/native/os/write-all-no-progress/lang.toml",
+          "project:tests/native/os/write-all-success/lang.toml",
+          "project:tests/native/os/write-all-would-block/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令30；9例/O0O2；3个write mock；CMake180",
+        "minimum_inputs": "--cli --root --out --clang --lld --runtime",
+        "next_action": "完整原CLI+mock_write.cpp/真实写指针、EINTR/EAGAIN/文件字节、PID/exit23都保留。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_ownership.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→ownership",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/ownership/defer-diverges/lang.toml"
+        ],
+        "original_budget_and_repetition": "command45；普通build20、capture拒绝30；O0O2；CMake240",
+        "minimum_inputs": "--cli --probe --root --clang --runtime --runtime-test --out，原alloc-selftest",
+        "next_action": "Cpp ownership_probe会进行Source/HIR/发射观察；候选需Wz原断言，不能以Cpp probe通过当候选实现通过。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_unreachable_try.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→unreachable",
+        "class": "C",
+        "required_rows": 5,
+        "case_ids": [
+          "project:tests/native/unreachable-try/both-return-join/lang.toml",
+          "project:tests/native/unreachable-try/catch-throws-tail/lang.toml",
+          "project:tests/native/unreachable-try/dead-catch-nontail/lang.toml",
+          "project:tests/native/unreachable-try/return-tail-owning/lang.toml",
+          "project:tests/native/unreachable-try/zero-locals-dead-tail/lang.toml"
+        ],
+        "original_budget_and_repetition": "每命令90；5例/O0O2、原reject/LLVM坏IR；CMake300",
+        "minimum_inputs": "--cli --probe --root --python --cxx --runtime --out",
+        "next_action": "Cpp unreachable probe仍含参考IR检查；准备Wz对应观察，禁止删不可达/坏IR断言。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_value_library.py",
+        "catalog_runner": "tests/native/run.py",
+        "label": "默认归属24→value_library",
+        "class": "B",
+        "required_rows": 1,
+        "case_ids": [
+          "project:tests/native/value_library/lang.toml"
+        ],
+        "original_budget_and_repetition": "继承tests/python/string_cases.command原默认；NativeO0O2+Python，6 Panic双端",
+        "minimum_inputs": "--cli --root --clang --lld --runtime --python --out",
+        "next_action": "仅需现有C++ lifetime_probe链接公共program.o；保留alloc=free>0和两端6 Panic，不需compiler API。",
+        "original_assertions": "真实归属见functional_dispatch；包括channels9/concurrency9/floating7/hostedGC1/os9/ownership1/unreachable5/value-library1。",
+        "historical_scope": "原Nativeobs41+2只测另一选择集合。本42无一被它选中，不能以41覆盖42；已启用的Hello/collections/core/floating四短例不在42内。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_stdlib.py",
+        "catalog_runner": "tests/native/run_stdlib.py",
+        "label": "stdlib六项目记录",
+        "class": "B",
+        "required_rows": 6,
+        "case_ids": [
+          "project:tests/native/json-thread/lang.toml",
+          "project:tests/native/stdlib-pure/lang.toml",
+          "project:tests/native/stdlib-stdin/lang.toml",
+          "project:tests/native/stdlib-writer-error/lang.toml",
+          "project:tests/native/stdlib/lang.toml",
+          "project:tests/native/stdlib-pure/lang.toml#python"
+        ],
+        "original_budget_and_repetition": "每命令/build60；5项目11模式=NativeO0O2+purePython；CMake300",
+        "minimum_inputs": "--cli --root --out --clang --lld --runtime --python --role --strace --readelf --watch实际资源；reference可helper",
+        "next_action": "现有StdReady可直接跑新CLI，C++writer mock属外部观察，不是Source委托；原1200s历史不算60s通过。",
+        "original_assertions": "五项目11模式、Native O0/O2静态ELF/精确字节、Unicode/CRLF/NUL stdin、writer mock短写，pure另跑Python；library:stdlib不是main项目。",
+        "historical_scope": "StdReady脚本已接受，不应再派“迁移入口”。旧72记录使用candidate1200s，不能改称原60s通过；37模块全API不由五项目证明。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      },
+      {
+        "runner": "tests/native/run_stdlib.py",
+        "catalog_runner": "tests/native/run_stdlib.py",
+        "label": "stdlib库集合1行",
+        "class": "C",
+        "required_rows": 1,
+        "case_ids": [
+          "library:stdlib"
+        ],
+        "original_budget_and_repetition": "集合登记，不是普通main0",
+        "minimum_inputs": "library:stdlib的实际完成定义；37接口/49资源成员与所选5项目不同",
+        "next_action": "交Root明确库集合行须由哪些源/API编译证明，不能仅用5项目通过代替所有stdlib API。",
+        "original_assertions": "五项目11模式、Native O0/O2静态ELF/精确字节、Unicode/CRLF/NUL stdin、writer mock短写，pure另跑Python；library:stdlib不是main项目。",
+        "historical_scope": "StdReady脚本已接受，不应再派“迁移入口”。旧72记录使用candidate1200s，不能改称原60s通过；37模块全API不由五项目证明。",
+        "current_recorded_state": "当前d602完整原组未获本次报告所列证明；不等于产品缺功能",
+        "proof_key": null,
+        "case_objects_still_required": true
+      }
+    ],
+    "all266_exact_caseIDs_accounted_for": true,
+    "full_case_objects_modified": false
+  },
+  "priority_unfinished": [
+    {
+      "item": "完整自举",
+      "fact": "正式第二代21600秒超时，第三代未执行，须先定位/处理这项；985通过无法替代。"
+    },
+    {
+      "item": "GC16384私有实验",
+      "fact": "第一代制成，但第二代11270.999秒SIGSEGV；私有985仅准备而未执行，不可发布成已验证优化。"
+    },
+    {
+      "item": "原完整required组",
+      "fact": "266行中部分专项已接受待发布，其余原IR/GC/metadata/性能/系统库观察仍要逐组保留原断言完成；详见39组逐行表。"
+    },
+    {
+      "item": "限定结果缺项",
+      "fact": "PythonSlice缺2API I/O失败控制；Native19缺LLVM1408库快照；不能回填历史。"
+    },
+    {
+      "item": "性能证明",
+      "fact": "组件/局部运行时间不能替代整编译器基准；当前正式完整第二代未过，不给整体提升倍数。"
+    }
+  ],
+  "native_only_exclusions": {
+    "thread": "用户已决定std/thread保持Native专用",
+    "async": "现Python后端不提供async；SELFHOST_BACKENDS明确不新增Python async",
+    "raw_syscall": "用户选择逐项有类型的C风格接口，保留throws；没有开放原始syscall不是本轮缺陷",
+    "templates": "泛型按Go/Java量级，不追求C++模板特化/元编程"
+  },
+  "historical_or_stale_notes": [
+    "PLAN首页日期2026-11-14、962/983/307与9d11 running属于旧状态；STATUS含更早C++开发记录，不作为当前运行证明。",
+    "contracts/selfhost.json阶段计数121/1234/881和部分pending文字为旧登记，不能覆盖真实985与stage2终态。",
+    "current-selfhost-continuation的SH17/SH18里旧stage2_running及05:45 live快照已由两个真实completion/result终态取代。",
+    "旧da69/ed1/0c46/13a第二代均已有终态，不列为当前运行；本任务未检查任何旧PID。",
+    "某些tracker早期条目仍标foreign-read/observer修正running，但后续已接受并进入d602；不把历史字段当现有worker。",
+    "BASE/compiler-dev和compiler/compiler-dev不存在；本次只读取ROOT/development/docs显式SELFHOST文档。",
+    "AGY Argon报告审读由Root处理，本任务没有联系AGY或代其审读。"
+  ],
+  "missing_current_information": [
+    "当前活跃worker/会话由Root独立核查；本任务不查询或操作会话。",
+    "没有读取所有365disabled逐条原执行器源码；本报告完整列出当前266required精确行及其39已知执行组。"
+  ],
+  "evidence_files": {
+    "PLAN.md": {
+      "path": "/home/qin/Work/language-dev-20261103/PLAN.md",
+      "sha256": "4f547a536c05268c6899602d6aa3cfdffc834aa161aa7c05c2f0f4d1e23cc440",
+      "bytes": 110591
+    },
+    "STATUS.md": {
+      "path": "/home/qin/Work/language-dev-20261103/STATUS.md",
+      "sha256": "ac26e3d905184de2a347d68562cfec0878ff864474660c97f9e37eab055e246b",
+      "bytes": 53072
+    },
+    "checks/current-selfhost-continuation-20261113.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/current-selfhost-continuation-20261113.json",
+      "sha256": "bc75de727964caa6410df4f038207a9507d51debbaf026da488e32845186f8c2",
+      "bytes": 222295
+    },
+    "compiler/contracts/selfhost.json": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/contracts/selfhost.json",
+      "sha256": "dd7cbb7f3130bfde9b1a2a5c055a18934bb2ffd2c261265bc73cc2ec7ab03f92",
+      "bytes": 22993
+    },
+    "compiler/README.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/README.md",
+      "sha256": "d259f2c357781cde2c9907f2dd37c96d30cbb439d3af3ed4a6a02cc4ef643dc1",
+      "bytes": 6206
+    },
+    "compiler/development/docs/SELFHOST_CONTRACT.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_CONTRACT.md",
+      "sha256": "fa91fae925f1566359d978d1538ce75f88597f9546b9a117cfea65640f252bda",
+      "bytes": 18729
+    },
+    "compiler/development/docs/SELFHOST_BACKENDS.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_BACKENDS.md",
+      "sha256": "e38f5900ea9a80fe5a63bdad469d7117ffa2129970b93ac5fa06478ab8a1fcdf",
+      "bytes": 4107
+    },
+    "compiler/development/docs/SELFHOST_NATIVEEMIT.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_NATIVEEMIT.md",
+      "sha256": "1d9c9c459d2f163c61b6812486a6b62b89dce9c76aaae91d9b970cef17fc48f5",
+      "bytes": 24181
+    },
+    "compiler/development/docs/SELFHOST_SEMA.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_SEMA.md",
+      "sha256": "4096200da983decbdf67674e22d4b9511eeab5c3f275568e050ee092b6a5c7bb",
+      "bytes": 30463
+    },
+    "compiler/development/docs/SELFHOST_BOOTSTRAP.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_BOOTSTRAP.md",
+      "sha256": "9fc115b6c53bbc00260b7e3b49c0c8ac2a1d0b948b05afddcd4df9946648cb83",
+      "bytes": 4137
+    },
+    "compiler/development/tests/selfhost/README.md": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/development/tests/selfhost/README.md",
+      "sha256": "80bfdd5ce4582629973e1c80e6b5f77f89e6b02b7c9d97727a0a8e88f43ff77b",
+      "bytes": 3813
+    },
+    "compiler/selfhost/corpus.json": {
+      "path": "/home/qin/Work/language-dev-20261103/compiler/selfhost/corpus.json",
+      "sha256": "76a7a303c5f89277d8f8aa7ba86ab1a791b6bc6153e7b8814b0b3eaf800f7b66",
+      "bytes": 3865626
+    },
+    "checks/SH17-remaining-required-runner-execution-plan-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-remaining-required-runner-execution-plan-20261115.json",
+      "sha256": "7791de9d2f16990ea5b52c30b604674b8b69a9f9c15b94b6e5a4b0eb096a63c8",
+      "bytes": 173335
+    },
+    "checks/SH18-new-bd1-stage1-Root-accepted-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-new-bd1-stage1-Root-accepted-20261115.json",
+      "sha256": "278bba46ad8f71b5088f225da6a30f3502c263ce0eb73700e92f26f97290d7ab",
+      "bytes": 1381
+    },
+    "checks/SH18-new-bd1-corpus985-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-new-bd1-corpus985-independent-20261115.json",
+      "sha256": "6eff1eae3537b6bd76a51afcb470fde979420a8b9ac8f320332907ab558abd38",
+      "bytes": 7421
+    },
+    "checks/SH18-T10-fixed-source-current-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-T10-fixed-source-current-independent-20261115.json",
+      "sha256": "4f0157e3e00d0d5a08d0889a5a4b0e1e7727faba1ebcfa64ddda37848b68a8e9",
+      "bytes": 42167
+    },
+    "checks/SH18-CFFI-fixed-LLD-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+      "sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+      "bytes": 19277
+    },
+    "checks/SH18-five-public-groups-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-five-public-groups-independent-20261115.json",
+      "sha256": "ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034",
+      "bytes": 24313
+    },
+    "checks/SH18-automatic-GC-full-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-automatic-GC-full-independent-20261115.json",
+      "sha256": "186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311",
+      "bytes": 59153
+    },
+    "checks/SH18-python-cases-anonymous-full-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-python-cases-anonymous-full-independent-20261115.json",
+      "sha256": "30dc6086f46195b3cc52583026e1e2e7060ed3954e8f82ecd0750e306054f616",
+      "bytes": 237250
+    },
+    "checks/SH18-python-slice-string-full-independent-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-python-slice-string-full-independent-20261115.json",
+      "sha256": "890d1061a3a1aa28f1e04766960a6ef3ba5cdb6180b67b152c9c1a165275a61d",
+      "bytes": 624014
+    },
+    "checks/SH18-event962730-Root-review-20261115.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-event962730-Root-review-20261115.json",
+      "sha256": "bcbf66b5a55f732adfa1c89c3b0d12ee8fc914469f28faab34652bbffb4e7c77",
+      "bytes": 2132
+    },
+    "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json",
+      "sha256": "97795e35f2bff8fbf2da03c769e7116837c5f5cc3072e47dcd4c679d9dcc0894",
+      "bytes": 10936
+    },
+    "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json",
+      "sha256": "efa6f67e09a024f2775f7446cd56cc22b3f3e94ce0abdde96a47cce244924527",
+      "bytes": 59358
+    },
+    "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
+      "sha256": "c80f3b52ac395f2765da1e3dc31362c6d9e0de522fc53faffd5bc6e79a60a731",
+      "bytes": 4008
+    },
+    "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json",
+      "sha256": "f3bb0d981c89639cd048bb87e49b39610a5debcc4dd2692be738f8cd43dd693f",
+      "bytes": 6428
+    },
+    "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json",
+      "sha256": "4b1747dd8034dd63451e570784ed9fd6f3387fb6b59c92e9bde9cc317e0a516d",
+      "bytes": 59616
+    },
+    "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json",
+      "sha256": "06797f69c021624e83c86b933ef1297daecf6324ee826e27eb1b257c30d20340",
+      "bytes": 3787
+    },
+    "checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
+      "sha256": "702e81046e40b88e25cdc8154dac43678b935c1b6fed63a341356e9c5fa8d97d",
+      "bytes": 2393
+    },
+    "checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
+      "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
+      "bytes": 3877673
+    },
+    "checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/amendment.json": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/amendment.json",
+      "sha256": "c5849be69585853394ec4aa9187166256fec3ed854a10adca3b3d5cf76e16b3d",
+      "bytes": 1058
+    },
+    "checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
+      "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
+      "bytes": 76564
+    },
+    "checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
+      "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
+      "bytes": 65989
+    }
+  },
+  "execution_counts_this_task": {
+    "Source": 0,
+    "compiler": 0,
+    "generated_program": 0,
+    "test": 0,
+    "version": 0,
+    "network": 0,
+    "process_control": 0,
+    "git_read_only_queries": true
+  },
+  "publication_actual": {
+    "checked_at": "2026-11-15T11:06:08.595700+00:00",
+    "scope": "只读检查中断后私有候选；本轮只写本报告",
+    "candidate_directory": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza",
+    "repository": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source",
+    "actual_HEAD": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a",
+    "base_HEAD": "7a79db7ce098267817f67a318835d28f64c20c6a",
+    "tracked_worktree_diff": "",
+    "tracked_index_diff": "",
+    "tracked_status": "",
+    "tracked_clean": true,
+    "commits_since_base": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a test(selfhost): record accepted A5 external suites\n\nM\tselfhost/corpus.json\n",
+    "only_A5_commit_exists": true,
+    "A5": {
+      "state": "private_commit_complete",
+      "commit": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a",
+      "changed_path": [
+        "selfhost/corpus.json"
+      ],
+      "changed_cases": [
+        {
+          "id": "project:tests/bootstrap/readiness/probe/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/cancel-basic/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/cancel-wake/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/deadline-spurious/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/invalid-receive-timeout/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/invalid-send-timeout/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/owned-timeout-cancel/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/races/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/timeout-basic/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/channel-waits/timeout-blocking/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "project:tests/native/http/lang.toml",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "runner:tests/native/concurrency-timeouts/run.py",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        },
+        {
+          "id": "runner:tests/native/timezone/run.py",
+          "fields": [
+            "adaptation",
+            "evidence",
+            "reason",
+            "runner_status"
+          ]
+        }
+      ],
+      "changed_runner_paths": [
+        "tests/bootstrap/readiness/run.py",
+        "tests/native/channel-waits/run.py",
+        "tests/native/concurrency-timeouts/run.py",
+        "tests/native/http/run_http.py",
+        "tests/native/timezone/run.py"
+      ],
+      "other1337_case_objects_unchanged": true,
+      "all985_enabled_objects_unchanged": true,
+      "all985_actual_JSON_object_substrings_byte_identical": true,
+      "all985_framed_raw_substrings_SHA256": "2545e198a8eec317571a9267b195f39b54448b5708a8e9d4f063ef52e95865ce",
+      "all_files_and_refreeze_unchanged": true,
+      "catalog": {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/selfhost/corpus.json",
+        "exists": true,
+        "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
+        "size": 3877673
+      },
+      "counts": {
+        "cases": 1350,
+        "enabled": 985,
+        "disabled": 365,
+        "required": 253,
+        "files": 2909,
+        "runners": 273
+      },
+      "existing_formal_result": {
+        "status": "passed",
+        "errors": [],
+        "formal_freeze_ready": true,
+        "coverage_complete": false,
+        "reexecuted_this_turn": false
+      }
+    },
+    "unstarted_batches": {
+      "AutomaticGC": {
+        "stage": "not_started",
+        "copied": false,
+        "committed": false,
+        "files": [
+          {
+            "relative": "tests/native/automatic_gc/run_automatic_gc.py",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/run_automatic_gc.py",
+              "exists": true,
+              "sha256": "86a147649502c0155b171f8a19a885f67b88e77d81dc4b9cde33af4a22886eb4",
+              "size": 47924
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
+              "exists": true,
+              "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
+              "size": 76564
+            },
+            "same_bytes": false
+          },
+          {
+            "relative": "tests/native/automatic_gc/CONTRACT.md",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/CONTRACT.md",
+              "exists": true,
+              "sha256": "dcc7753c2b922b7070c13586d38f96ad2e40e996b5b6624f6204e6538ec8e93b",
+              "size": 11912
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/CONTRACT.md",
+              "exists": true,
+              "sha256": "c992d2eeddaa83ed4a7e920b6f99b310c4d4f47152835488d31aaca78bd7eaa4",
+              "size": 16751
+            },
+            "same_bytes": false
+          },
+          {
+            "relative": "tests/native/automatic_gc/test_public_port_controls.py",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/test_public_port_controls.py",
+              "exists": false,
+              "sha256": null,
+              "size": null
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/test_public_port_controls.py",
+              "exists": true,
+              "sha256": "329b1100f90a63d86953f18bf62cce6a8f6a73bad860ed965b8706acb2858298",
+              "size": 45829
+            },
+            "same_bytes": false
+          }
+        ]
+      },
+      "Python": {
+        "stage": "not_started",
+        "copied": false,
+        "committed": false,
+        "files": [
+          {
+            "relative": "tests/python/run_cases.py",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/run_cases.py",
+              "exists": true,
+              "sha256": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c",
+              "size": 23947
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
+              "exists": true,
+              "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
+              "size": 65989
+            },
+            "same_bytes": false
+          },
+          {
+            "relative": "tests/python/python_cases_public_controls.py",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/python_cases_public_controls.py",
+              "exists": false,
+              "sha256": null,
+              "size": null
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/python_cases_public_controls.py",
+              "exists": true,
+              "sha256": "c3ca5d06879abbf7bd5a607b1926570c2eefb2f0a51b32b735ea771fc3ddd8eb",
+              "size": 41385
+            },
+            "same_bytes": false
+          },
+          {
+            "relative": "tests/python/PYTHON_CASES_PUBLIC.md",
+            "candidate": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/PYTHON_CASES_PUBLIC.md",
+              "exists": false,
+              "sha256": null,
+              "size": null
+            },
+            "accepted_copy": {
+              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/PYTHON_CASES_PUBLIC.md",
+              "exists": true,
+              "sha256": "7146e21cee51b8accf16b721e5f415a75b20ccffab1f20e7e05f51f258812a5a",
+              "size": 7358
+            },
+            "same_bytes": false
+          }
+        ]
+      }
+    },
+    "AutomaticGC_pending9": [
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/control-acyclic/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/control-empty/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/dead-cycle-live/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/duplicate-edges/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/enum-nested-cycle/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/loop-continue/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/self-cycle/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/two-cycle/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      },
+      {
+        "id": "project:tests/native/automatic_gc/fixtures/typed-throw-defer/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      }
+    ],
+    "Python_pending1": [
+      {
+        "id": "project:tests/python/fixtures/finite-callback/lang.toml",
+        "kind": "project",
+        "adaptation": "required",
+        "enabled": false,
+        "runner_status": "adaptation_required"
+      }
+    ],
+    "partial_uncommitted_code_or_catalog_edits_found": false,
+    "omissions_and_next_steps": [
+      "AutoGC第二批只读过受控三文件及差异；未复制、未登记controls、未改9case、未更新冻结或提交。",
+      "Python第三批是在中断后新增的指令；没有执行复制、清单更新或提交。",
+      "preparation.json仍是最初prepared_uncommitted说明；A5-final.json与实际Git是已完成A5状态。",
+      "当前Python唯一required条目是project:tests/python/fixtures/finite-callback/lang.toml，kind=project，不是runner_group。k98新runner未见该路径字面量；后续发布前需核209记录与该具体输入的对应关系，不能直接按required244→243预估写ready。",
+      "仅核指定候选及关联目录，不推断Root目前公开提交状态或全任务完成度；没有恢复写入旧候选。"
+    ],
+    "next_actions_not_executed": [
+      "单独处理AutoGC受控三文件、控制脚本登记/冻结及9行完成说明，保留single-mutator及旧记录限制；formal检查后独立第二提交。",
+      "核清Python那1个具体project与已审209记录的对应关系，再处理k98三文件/冻结和获准元数据；独立第三提交。",
+      "A5可按d8b7e39及已有完整diff单独审；本轮不提交、不推送、不修改Root或现有候选。"
+    ],
+    "existing_artifacts": [
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
+        "exists": true,
+        "sha256": "702e81046e40b88e25cdc8154dac43678b935c1b6fed63a341356e9c5fa8d97d",
+        "size": 2393
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
+        "exists": true,
+        "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
+        "size": 3877673
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-commit.txt",
+        "exists": true,
+        "sha256": "50966508b7159b3f97a33b448de11fd62df9330e36ac38dc442adecb75528dec",
+        "size": 41
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog-proposal.json",
+        "exists": true,
+        "sha256": "a02c3bba1663c9f9e0b267e9b811d70d1a4473e7deec6e661580e8f4ba938cb0",
+        "size": 36818
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog.diff",
+        "exists": true,
+        "sha256": "319af39249aa60ca3e0f968fa83800e483227604f59567e531ad01ff3a5bd62d",
+        "size": 27061
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/staged.patch",
+        "exists": true,
+        "sha256": "5d2f56dcdd8f26a50bfc8895a61510b50d8cdd9fc94bb6d17ad61f6f4b57e715",
+        "size": 27061
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stdout",
+        "exists": true,
+        "sha256": "27acbd83a98f64b1c9bb615d25ebf088a18dc2511385fbc58d230816b95681d5",
+        "size": 126
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stderr",
+        "exists": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.json",
+        "exists": true,
+        "sha256": "33d09322492922f2cab1d756d9f02e4a8b92a6b68b906bdee1f2d2f7b1a61dba",
+        "size": 73937
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.stderr",
+        "exists": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-receipt.json",
+        "exists": true,
+        "sha256": "70ee9ddda2bf596080458196b600c0c0a6a9201e45ec57a3c168ec5b135093ee",
+        "size": 690
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-inventory.json",
+        "exists": true,
+        "sha256": "ba0ca2b5bfb49e7deacb8892660ff96db9df6992dc244dcf7619a737f46e2044",
+        "size": 97
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-tree.json",
+        "exists": true,
+        "sha256": "1c0484e5833bf461612a1f5b53bae12c221f90dccbe06ea7474ff3ec945e3703",
+        "size": 247
+      },
+      {
+        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/clone-receipt.json",
+        "exists": true,
+        "sha256": "123c72d8489716d72be184c79d5e0c93342dd7d1ef5d689e24fde5c44f231f23",
+        "size": 191618
+      }
+    ],
+    "forbidden_actions": {
+      "Source_test_program_version_executions": 0,
+      "Root_untracked_scan": false,
+      "protected_path_access": false,
+      "code_or_catalog_written": false,
+      "old_patch_resumed": false,
+      "commit_push": false,
+      "other_jobs_touched": false
+    },
+    "conclusion": "只完成A5一个私有提交；AutoGC第二批和Python第三批均未开始写入，没有半成品。现候选required253，不能报244或243。"
+  },
+  "core_analysis": {
+    "operation_id": "SH19-stage2-segv-initial-20261115",
+    "reviewed_at": "2026-11-15T11:15:38.960829+00:00",
+    "status": "direct_stack_exhaustion_confirmed_source_symbol_unmapped",
+    "actual_stage2": {
+      "argv": [
+        "/home/qin/Work/language-dev-20261103/toolchains/strace-7.2/usr/bin/strace",
+        "--seccomp-bpf",
+        "-f",
+        "-qq",
+        "-s",
+        "16384",
+        "-e",
+        "trace=execve,execveat",
+        "-o",
+        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/exec.log",
+        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
+        "build",
+        "--project",
+        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/source/lang.toml",
+        "--backend",
+        "native",
+        "--opt",
+        "2",
+        "--out-dir",
+        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/build",
+        "--format",
+        "json"
+      ],
+      "timeout_seconds": 21600,
+      "started_at": "2026-11-15T05:14:35.870593+00:00",
+      "finished_at": "2026-11-15T08:22:26.870798+00:00",
+      "elapsed_seconds": 11270.99987215799,
+      "exit": -11,
+      "timed_out": false,
+      "cleanup_complete": true,
+      "abandoned_pipes": false
+    },
+    "failed_pid": 3195289,
+    "failed_start_ticks": 52384650,
+    "candidate": {
+      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
+      "sha256": "fc7882516a53383d3d3305698b13079e10c90b9cc38a4fe9154195edfb986f11"
+    },
+    "core": {
+      "present": true,
+      "system_core_path": "/var/lib/systemd/coredump/core.woozyc.1000.61b85dcb56ab40d19b8742c8e04ff74c.3195289.1794730940000000.zst",
+      "system_event_timestamp": "2026-11-15T08:22:20Z",
+      "only_matching_pid_queried": true,
+      "full_memory_copied_into_repo": false,
+      "debug_inferior_executed": false,
+      "debuginfod_disabled": true
+    },
+    "fault": {
+      "signal": "SIGSEGV",
+      "si_code": "SEGV_MAPERR",
+      "pc": "0x1548381",
+      "symbol": "lang.fn.2843+0x21",
+      "rsp": "0x7fff70fe9960",
+      "si_addr": "0x7fff70fe9958",
+      "si_addr_equals_rsp_minus_8": true,
+      "stack_mapping": [
+        "0x7fff70fea000",
+        "0x7fff71fea000"
+      ],
+      "soft_stack_limit_bytes": 16777216,
+      "mapping_size_bytes": 16777216,
+      "fault_bytes_below_mapping": 1704,
+      "instruction": "callq lang_gc_runtime_poll_v1",
+      "interpretation": "call faults while pushing its return address below the16MiB stack mapping, before entering poll"
+    },
+    "recursive_function": {
+      "native_symbol": "lang.fn.2903",
+      "start": "0x158a100",
+      "text_size": "0x8c8c3",
+      "stack_reservation_instruction": "subq $0x363b8, %rsp",
+      "stack_reservation_bytes": 222136,
+      "callee_saved_register_push_bytes": 48,
+      "additional_return_address_bytes": 8,
+      "minimum_per_recursive_layer_bytes": 222192,
+      "recursive_call_addresses": [
+        "0x15c4339",
+        "0x15a5951"
+      ],
+      "corresponding_saved_return_pcs": [
+        "0x15c433e",
+        "0x15a5956"
+      ],
+      "known_call_stack_prefix": [
+        "lang.fn.2843",
+        "lang.fn.2828",
+        "lang.fn.2827",
+        "lang.fn.2828",
+        "lang.fn.2827",
+        "lang.fn.2903",
+        "lang.fn.2903..."
+      ],
+      "confirmed_source_function": null
+    },
+    "input_integrity": {
+      "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+      "before_after_equal": true,
+      "before_sha256": "7e09661eec776c1b4a4a4f5000ead4fdcd5c8e8e858a3ed99318406f23f1f887",
+      "after_sha256": "7e09661eec776c1b4a4a4f5000ead4fdcd5c8e8e858a3ed99318406f23f1f887",
+      "stage2_raw_streams_empty": true,
+      "stage2_execs": "only fc788 Wz CLI, thenSIGSEGV; no LLVM/helper invocation",
+      "build_directory_exists": false,
+      "retained_stage1_outputs": [
+        "program.o",
+        "program"
+      ],
+      "retained_llvm_or_native_ir": false
+    },
+    "public_bd1_comparison": {
+      "Source116_same": true,
+      "runtime_variant": "public0cb/89bd",
+      "process_path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
+      "actual_stage2": {
+        "exit": -9,
+        "timed_out": true,
+        "cleanup_complete": true,
+        "abandoned_pipes": false,
+        "timeout_seconds": 21600,
+        "elapsed_seconds": 21600.16839826404,
+        "started_at": "2026-11-15T02:51:51.723393+00:00",
+        "finished_at": "2026-11-15T08:51:51.892646+00:00"
+      },
+      "same_program_object_sha256": "52370e9bd28878079830026d3833df18de45c687f9aa803a62f0b7febf5585be",
+      "object_files_byte_equal": true,
+      "conclusion": "Publicbd1 timed out after21600; privatefc788 reached stack exhaustion earlier. Same Wz object proves the large generated stack frame also belongs to the public code. It does not establish bucket count as the cause of recursion or comparative speed."
+    },
+    "gdb_reads": {
+      "first": {
+        "argv": [
+          "coredumpctl",
+          "--no-pager",
+          "--since=2026-11-15 08:21:00 UTC",
+          "--until=2026-11-15 08:24:00 UTC",
+          "--debugger=/usr/bin/gdb",
+          "--debugger-arguments=-nx -nh -batch -iex 'set auto-load off' -iex 'set debuginfod enabled off' -ex 'set print frame-arguments none' -ex 'info registers rip rsp rbp' -ex 'p/x $_siginfo._sifields._sigfault.si_addr' -ex 'bt 32' -ex 'x/8i $pc-16' -ex 'info proc mappings'",
+          "debug",
+          "3195289"
+        ],
+        "exit": 0,
+        "stdout_path": "/home/qin/Work/language-dev-20261103/checks/SH19-stage2-segv-initial-20261115-data/gdb-local-stack.txt",
+        "stderr_scope": "only debugger warnings/errors retained; no journal environment metadata",
+        "stderr_warnings": [],
+        "core_dump_copy_retained": false,
+        "debug_inferior_executed": false,
+        "debuginfod_disabled": true,
+        "original_stdout_sha256": "05345fb1dd9f2eaecbd58273915546740930c93e9bb4c412a9124bc5772c1d06",
+        "retained_stdout_sha256": "5f489c6005ec7100716fc713b394c8821b9a6f8425c49abaa3f3e0d79c60c61a",
+        "retained_stdout_scope": "selected GDB LWP/registers/32-frame stack/disassembly/mappings; coredumpctl metadata preamble removed",
+        "retained_stdout_bytes": 3383
+      },
+      "bounded_second": {
+        "started_at": "2026-11-15T11:05:52.563761+00:00",
+        "pid": 1036043,
+        "start_ticks": 54492319,
+        "pgid": 1036043,
+        "sid": 1036043,
+        "argv": [
+          "/usr/bin/coredumpctl",
+          "--no-pager",
+          "--since=2026-11-15 08:21:00 UTC",
+          "--until=2026-11-15 08:24:00 UTC",
+          "--debugger=/usr/bin/gdb",
+          "--debugger-arguments=-nx -nh -batch -iex 'set auto-load off' -iex 'set debuginfod enabled off' -ex 'set print frame-arguments none' -ex 'info registers rip rsp rbp' -ex 'p/x $_siginfo._sifields._sigfault.si_addr' -ex 'bt 20' -ex 'x/8i $pc-16'",
+          "debug",
+          "3195289"
+        ],
+        "timeout_seconds": 55,
+        "source_or_inferior_run": false,
+        "debuginfod_disabled": true,
+        "exit": 0,
+        "timed_out": false,
+        "elapsed_seconds": 20.60374830395449,
+        "stdout_bytes": 16298,
+        "stderr_scope": "warnings/errors only, no core memory or environment retained",
+        "warnings": [],
+        "temporary_core_copy_in_repo": false,
+        "raw_stdout_bytes_seen": 16298,
+        "retained_stdout_bytes": 2005,
+        "stdout_scope": "selected GDB LWP/registers/20-frame stack/disassembly only; coredumpctl process metadata preamble removed",
+        "retained_stdout_sha256": "1a3696c948153a9cc75b2df87fbc32dfd4fbcccb740174aef35fd63d037dbb3a"
+      },
+      "second_scope": "registers+20frames+8instructions; no arguments/locals/environment",
+      "first_scope": "registers+32frames+8instructions+file mappings, process metadata preamble removed",
+      "selected_stack_path": "/home/qin/Work/language-dev-20261103/checks/SH19-stage2-segv-initial-20261115-data/gdb-bounded-stdout.txt"
+    },
+    "source_mapping_limitations": [
+      "The actual ELF has lang.fn.ID symbols and no usable Wz line/name debug information. The retained stage1build contains only program.o/program, not NativeIR/LLVM text or resolver symbol-name metadata.",
+      "Offline binary string cross-reference found no direct mapping for these four symbols; no guessed SymbolId assignment or Source function name is claimed.",
+      "The direct failure is stack exhaustion. Whether the recursion depth is legitimate Source nesting, an unintended cycle/revisit, or another semantic issue is not determined by these local32frames. GC bucket expansion is not identified as a cause."
+    ],
+    "minimal_next_step_for_Root": [
+      "Look for an existing VerifiedHIR/resolver symbol table for this exact116Source/52370e9 object; if present, map2827/2828/2843/2903 to full declaration names and spans without running Source.",
+      "If no saved table exists, authorize one bounded resolver-only diagnostic on the same frozen116Source that outputs SymbolId/declaration/span immediately after resolution; no Sema/Native build or three-generation rerun is needed to obtain this mapping. Only then choose a focused recursion/frame-size test."
+    ],
+    "diagnostic_attempt_notes": [
+      "An initial selected-journal reader encountered null large fields; --all and explicit PID/field selection returned only the required stack map/limit metadata.",
+      "Two completed read-only GDB core inspections are retained; the first terminal handle was not captured, while its saved exit0 receipt exists. The second has a55s bounded process-group wrapper and actually completed in20.603748s/exit0. Neither ran an inferior."
+    ],
+    "evidence": {
+      "gdb-local-stack.txt": {
+        "sha256": "5f489c6005ec7100716fc713b394c8821b9a6f8425c49abaa3f3e0d79c60c61a",
+        "bytes": 3383
+      },
+      "gdb-errors.txt": {
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "bytes": 1
+      },
+      "gdb-receipt.json": {
+        "sha256": "ed1298eed1bc2760fbecc054533a4333b1ab5b8d956420e4f29a54aea635ad7f",
+        "bytes": 1182
+      },
+      "journal-selected-metadata.json": {
+        "sha256": "f172cf0ee976813baf948159fbb3e5a0e06b3f2f0eb1604e48464b8ab0a970d8",
+        "bytes": 955
+      },
+      "actual-target-symbols.json": {
+        "sha256": "3cf475144209a12067963c63281b993f0ba2f00c1e5b03237d101082bbf027e2",
+        "bytes": 566
+      },
+      "gdb-core-read.py": {
+        "sha256": "ec32b5e8573f9cb40fb8118438be643d8086d1524a6671a3e566b02431b7d6a4",
+        "bytes": 2286
+      },
+      "gdb-bounded-startup.json": {
+        "sha256": "f21d500800f3d8e4e0c22fc61eddc30fc16642ea6a1a0312b7a836e0a3f9f166",
+        "bytes": 677
+      },
+      "gdb-bounded-stdout.txt": {
+        "sha256": "1a3696c948153a9cc75b2df87fbc32dfd4fbcccb740174aef35fd63d037dbb3a",
+        "bytes": 2005
+      },
+      "gdb-bounded-warnings.txt": {
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "bytes": 1
+      },
+      "gdb-bounded-result.json": {
+        "sha256": "2df3a42e2828378bfd3d40247390d4c02a31ded5b9567fb108ef9a869dbcb302",
+        "bytes": 1207
+      },
+      "fault-prologue.asm": {
+        "sha256": "ce1ae6559e131cecad9f3d0e6e017816d45f8354e30c7b40083d93254d06ffd0",
+        "bytes": 1587
+      },
+      "recursive-prologue.asm": {
+        "sha256": "cfcada6b68d6735ee35d3814529e560c19737aab3b5840e62d7af1e47494db83",
+        "bytes": 2341
+      },
+      "recursive-call-a.asm": {
+        "sha256": "8cf74a00767cb049c589f0aceeece352aad918649ad3c37e976753d2e889a58b",
+        "bytes": 2085
+      },
+      "recursive-call-b.asm": {
+        "sha256": "898f712e123b1ed3d778d9a32c76c339e18e13b1bc05f947cbe4956a1396b689",
+        "bytes": 2316
+      },
+      "objdump-receipts.json": {
+        "sha256": "5cd2973149203aa0ee5c9b06c85fe79ec4d1219c28af2b7f4b4c6667fa85e5ce",
+        "bytes": 1595
+      },
+      "binary-string-source-cross-reference.json": {
+        "sha256": "25546e751602ab31586b078a2da73ef2c78209d6735e73ac6a0813170b1b8047",
+        "bytes": 1964
+      }
+    },
+    "production_changed": false,
+    "Source_or_bootstrap_rerun": false,
+    "other_jobs_controlled": false
+  },
+  "notification_check": {
+    "task": "5fba70e4-4145-4d46-8d32-a856b917b1ce",
+    "event_seq": 962807,
+    "delivery": "enqueued_not_yet_received",
+    "expected_exit": 7,
+    "actual_execution_count": 2,
+    "known_issue": "First recorder could not serialize bytes; first exit not retained, raw kept; second recorded complete7FTF",
+    "new_services_or_timers": 0
+  }
+}
