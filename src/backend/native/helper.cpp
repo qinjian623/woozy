@@ -225,8 +225,8 @@ int run(int argc, char **argv) {
       } else {
         link.push_back("-nostdlib");
         link.push_back("-static");
-        link.push_back("--ld-path=" LANG_NATIVE_LLD);
       }
+      link.push_back("--ld-path=" LANG_NATIVE_LLD);
       link.push_back(object.string());
       if (has_adapter) link.push_back(adapter_o.string());
       link.push_back(frozen_project.hosted ? LANG_HOSTED_RUNTIME : LANG_NATIVE_RUNTIME);
