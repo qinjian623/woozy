@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "60c16f42324832b5207e601311263d41e6816773",
-  "previous_git_head": "efe18af13894ccbb821d0130d952e802a69febc7",
-  "frozen_at": "2026-11-15T02:06:13.294503+00:00",
+  "git_head": "f6853855cd6eef74fbf1e6d69f0771d48ce648ec",
+  "previous_git_head": "60c16f42324832b5207e601311263d41e6816773",
+  "frozen_at": "2026-11-15T04:44:17.696027+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed.",
+  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed. SH18 records the accepted fixed-LLD C++ helper and CFFI15/T10 dedicated suite results; all16 remain disabled, the original985 case objects and all gold are unchanged. Full985 used referenceCpp19124 before this helper-only change; no new Source test was run for this publication.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -43300,14 +43300,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/bad-binding/lang.toml",
@@ -43324,14 +43335,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/buffer-field-size/lang.toml",
@@ -43348,14 +43370,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/buffer-from-vec/lang.toml",
@@ -43372,14 +43405,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/link-failure/lang.toml",
@@ -43396,14 +43440,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/no-hosted/lang.toml",
@@ -43420,14 +43475,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/readonly-write/lang.toml",
@@ -43444,14 +43510,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/unknown-key/lang.toml",
@@ -43468,14 +43545,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/unsafe-required/lang.toml",
@@ -43492,14 +43580,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/negative/varargs/lang.toml",
@@ -43516,14 +43615,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/projects/bounds/lang.toml",
@@ -43540,14 +43650,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/projects/libc/lang.toml",
@@ -43564,14 +43685,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/projects/scalars/lang.toml",
@@ -43588,14 +43720,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/projects/threads/lang.toml",
@@ -43612,14 +43755,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_ffi/projects/unicode/lang.toml",
@@ -43636,14 +43790,25 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/c_ffi/run_c_ffi.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原CFFI完整84行已由公开CLI及真实Wz forged组件通过，原断言/预算保留；C++参考hosted链接固定LLD已修复。专用runner已完成，本行仍停用，expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "d6b1ccaf-6947-4fc5-a056-a7b940b518d9",
+        "independent_report": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+        "independent_sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+        "suite": "original CFFI full84: shared2/reference41/candidate41",
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+        "scope": "Dedicated runner passed; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "project:tests/native/c_retained_capturing/negative/bad_metadata/lang.toml",
@@ -61986,14 +62151,38 @@
       "kind": "runner_group",
       "operation": "external",
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/python/run_t10_bindings.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原T10 bindings full20及foreign-ownership subset3已由当前bd1 CLI/同源6f84 API实际通过，原断言/预算保留；本行仍停用，未运行t10_cli1800，不将其记为通过。",
       "tags": [
         "runner_group"
-      ]
+      ],
+      "evidence": {
+        "status": "passed",
+        "accepted_task": "3ab974b4-9e13-4d41-90d7-c56fc04fe653",
+        "independent_report": "checks/SH18-T10-fixed-source-current-independent-20261115.json",
+        "independent_sha256": "4f0157e3e00d0d5a08d0889a5a4b0e1e7727faba1ebcfa64ddda37848b68a8e9",
+        "full20": {
+          "cases": 20,
+          "commands": 96,
+          "status": "passed"
+        },
+        "subset3": {
+          "cases": 3,
+          "commands": 30,
+          "status": "passed"
+        },
+        "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+        "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+        "candidate_API": "6f8411bb66517db3c2ac449abc5f84d04f721839940409156ff20254fac95d00",
+        "reference_Cpp64": "19124ee81949d7310774ff82cbb0ca968c832bb7faebac111c2c9dc3eac60335",
+        "not_run": [
+          "t10_cli1800"
+        ],
+        "scope": "Only run_t10_bindings full20/subset3; ordinary corpus remains disabled; no new Source run in this publication."
+      }
     },
     {
       "id": "syntax:embedded:all_for_forms-582541080ada",
@@ -86270,8 +86459,8 @@
     },
     {
       "path": "tests/native/c_ffi/run_c_ffi.py",
-      "status": "component",
-      "reason": "FFI01 runner script correction accepted (task335075a2/event955196) with Root 20 pure-control groups and 4 independent actual-main counterexamples; full real reference/candidate CFFI execution remains not_run. Fake formal orchestration rows are controls only; existing 15 project cases and the historical ed1 forged component retain their own pending status and scope."
+      "status": "public_cli",
+      "reason": "原完整CFFI84行实际通过并经独立核对；候选bd1/Source d602与Wz forged组件，C++参考3052修复hosted固定LLD。15个项目仍由专用runner负责，普通corpus继续停用；纯控制不替代本次真实记录。"
     },
     {
       "path": "tests/native/c_ffi/runner_controls.py",
@@ -86925,8 +87114,8 @@
     },
     {
       "path": "tests/python/run_t10_bindings.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原run_t10_bindings full20与foreign-ownership subset3由bd1/6f84实际通过并经独立核对；原预算/观察/拒绝范围保留。t10_cli1800未运行，普通corpus本行继续停用。"
     },
     {
       "path": "tests/python/run_t10_cli.py",
@@ -93972,6 +94161,80 @@
       "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
       "Source116_map_sha256": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
       "scope": "Declared local callee types before ambiguous HIR fallback; Cpp parity reviewed. New CLI/T10/985 and stage23 remain pending; historical partial evidence and failed attempts retained."
+    },
+    "SH18_reviewed_LLD_and_dedicated_results": {
+      "base_source_snapshot_commit": "0e7bef6611bbbcde5518e34770ebf39575fcc1b1",
+      "previous_catalog_sha256": "8672e5c1d023b52d1b1eb7609a51c41758c9d362ef33c2ffadd0cd51cdaa81d0",
+      "previous_catalog_metadata": {
+        "git_head": "60c16f42324832b5207e601311263d41e6816773",
+        "previous_git_head": "efe18af13894ccbb821d0130d952e802a69febc7",
+        "frozen_at": "2026-11-15T02:06:13.294503+00:00"
+      },
+      "code_commit": "f6853855cd6eef74fbf1e6d69f0771d48ce648ec",
+      "code_file": "src/backend/native/helper.cpp",
+      "code_file_sha256": "9214bc3b8c6e5d3cae2120c14fd0b193fe3d18b3e2b7edae7eec8422f30d4369",
+      "helper_frozen_entry_present": false,
+      "current_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+      "previous_Cpp64": "19124ee81949d7310774ff82cbb0ca968c832bb7faebac111c2c9dc3eac60335",
+      "unchanged_Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+      "unchanged_Source_code_commit": "60c16f42324832b5207e601311263d41e6816773",
+      "known_proofs": {
+        "enabled985": {
+          "path": "checks/SH18-new-bd1-corpus985-independent-20261115.json",
+          "sha256": "6eff1eae3537b6bd76a51afcb470fde979420a8b9ac8f320332907ab558abd38",
+          "status": "985 enabled passed;1350 inventory incomplete",
+          "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+          "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+          "reference_Cpp64_at_run": "19124ee81949d7310774ff82cbb0ca968c832bb7faebac111c2c9dc3eac60335",
+          "corpus_exit": 2,
+          "total": 1350,
+          "enabled_passed": 985,
+          "disabled": 365,
+          "stage23_proved": false
+        },
+        "CFFI": {
+          "path": "checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+          "sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
+          "status": "original84 passed",
+          "reference_Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+          "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+          "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef"
+        },
+        "T10": {
+          "path": "checks/SH18-T10-fixed-source-current-independent-20261115.json",
+          "sha256": "4f0157e3e00d0d5a08d0889a5a4b0e1e7727faba1ebcfa64ddda37848b68a8e9",
+          "status": "full20 and subset3 passed",
+          "reference_Cpp64_at_run": "19124ee81949d7310774ff82cbb0ca968c832bb7faebac111c2c9dc3eac60335",
+          "candidate_cli": "bd1c6fa8a359bee118abefda2968abd64c8bce44443ae3aa00be1930ad4f1665",
+          "Source116": "d602fb3ba95dc4832d7ae49e4fbc727e5901b5e2cc973863d5870d3d99670cef",
+          "not_run": [
+            "t10_cli1800"
+          ]
+        }
+      },
+      "metadata_only_case_rows": [
+        "project:tests/native/c_ffi/forged-project/lang.toml",
+        "project:tests/native/c_ffi/negative/bad-binding/lang.toml",
+        "project:tests/native/c_ffi/negative/buffer-field-size/lang.toml",
+        "project:tests/native/c_ffi/negative/buffer-from-vec/lang.toml",
+        "project:tests/native/c_ffi/negative/link-failure/lang.toml",
+        "project:tests/native/c_ffi/negative/no-hosted/lang.toml",
+        "project:tests/native/c_ffi/negative/readonly-write/lang.toml",
+        "project:tests/native/c_ffi/negative/unknown-key/lang.toml",
+        "project:tests/native/c_ffi/negative/unsafe-required/lang.toml",
+        "project:tests/native/c_ffi/negative/varargs/lang.toml",
+        "project:tests/native/c_ffi/projects/bounds/lang.toml",
+        "project:tests/native/c_ffi/projects/libc/lang.toml",
+        "project:tests/native/c_ffi/projects/scalars/lang.toml",
+        "project:tests/native/c_ffi/projects/threads/lang.toml",
+        "project:tests/native/c_ffi/projects/unicode/lang.toml",
+        "runner:tests/python/run_t10_bindings.py"
+      ],
+      "enabled_case_rows_changed": 0,
+      "A5_13_rows_not_changed": true,
+      "unrun_Python_cases_and_autoGC_ports_not_integrated": true,
+      "publication_Source_test_or_version_commands": 0,
+      "scope": "No language extension. Fixed reference linker selection and record already accepted dedicated suite results; no new Source test or bootstrap claim."
     }
   },
   "private_gc_integration": {
