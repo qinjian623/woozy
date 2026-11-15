@@ -14,6 +14,7 @@
 package app;
 
 import "app/wzcc/hir" as hir;
+import "app/wzcc/hirdump" as hirdump;
 import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/model" as model;
 import "app/wzcc/project" as project;
@@ -123,6 +124,11 @@ func run() i32 throws os.Error {
     var manifest = "";
     var out = "";
     var binding = "";
+    // Optional test-only HIR observation: the runner needs the original
+    // verified.hir artifact, but the product CLI no longer publishes it.  The
+    // text comes from the same real Verified snapshot used for emission; the
+    // default Slice-compatible stdout and two-file publication stay unchanged.
+    var emit_hir = false;
     var index usize = 1;
     for index < vec.len(argv) {
         let argument = argv[index];
@@ -142,9 +148,11 @@ func run() i32 throws os.Error {
                     "only --format json is supported",
                     model.FailureKind.Environment);
             }
+        } else if argument == "--emit-hir" {
+            emit_hir = true;
         } else {
             return failure("E_DRIVER_ARGUMENT", "toolchain",
-                "usage: pythonobs --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--format json]",
+                "usage: pythonobs --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--format json] [--emit-hir]",
                 model.FailureKind.Environment);
         }
         index += 1;
@@ -224,6 +232,14 @@ func run() i32 throws os.Error {
                                 // Validate and encode the real Output.symbols
                                 // map before creating any output file.
                                 let metadata = symbol_metadata(module, output);
+                                // The optional HIR text is produced before any
+                                // file is published, so a failed dump leaves no
+                                // partial verified.hir behind.
+                                var hir_json = "";
+                                if emit_hir {
+                                    hir_json = ",\"verified_hir\":" +
+                                        quoted(hirdump.dump_module(module));
+                                }
                                 try {
                                     // Same private staging and paired publish as
                                     // cli/project.wz: both files are complete
@@ -253,7 +269,7 @@ func run() i32 throws os.Error {
                                 }
                                 io.println("{\"status\":\"ok\",\"entry\":" +
                                     strconv.format_u64(u64(entry_symbol)) +
-                                    ",\"symbols\":" + metadata + "}");
+                                    ",\"symbols\":" + metadata + hir_json + "}");
                                 return 0;
                             }
                         }

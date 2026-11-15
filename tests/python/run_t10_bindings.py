@@ -12,14 +12,557 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 THREAD_ENV = ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
               'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS')
+
+# Reuse the public-CLI harness process/trace helpers so candidate compiles and
+# observations keep raw streams and fail closed on an unexpected exec.
+SELFHOST = Path(__file__).resolve().parents[2] / 'selfhost'
+sys.path.insert(0, str(SELFHOST))
+from corpus import (TraceError, _output_entry, _run_process_impl,
+                    _scan_output_tree, audit_trace)  # noqa: E402
+
+# Fixed registration order of the complete python.t10_bindings target.  The
+# three-case python.foreign_ownership target is only a subset of these; it
+# never stands in for the complete 20-case run.
+NAMED_CASES = [
+    'order-objects-errors',
+    'foreign-ownership-move-aggregate',
+    'py-error-aggregate-storage',
+    'foreign-ownership-cleanup',
+    'generic-foreign-error-key',
+    'generic-error-key-escaping',
+    'foreign-ownership-rejections',
+    'internal-cross-module',
+    'internal-escape',
+    'base-keyboard-interrupt',
+    'base-system-exit',
+    'base-panic',
+    'bad-unit-contract',
+    'no-throws-external-callable',
+    'foreign-value-error',
+    'function-foreign-error',
+    'missing-host-environment-error',
+    'real-ndarray-tensor-identity',
+    'real-host-exception',
+    'original-04-cpu',
+]
+FOREIGN_OWNERSHIP_ONLY = [
+    'foreign-ownership-move-aggregate',
+    'foreign-ownership-cleanup',
+    'foreign-ownership-rejections',
+]
+
+# All eleven projects inside 'foreign-ownership-rejections'.  The first eight
+# are binding/ownership diagnostics; the remaining two are direct runtime-error
+# declarations and the last is the 32-bit word-size rejection.
+FOREIGN_REJECTION_CASES = [
+    ('inout', 'func f(x inout host.Probe) Unit { } '
+     'func main() i32 { return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
+    ('partial-move', 'struct S { p host.Probe; } '
+     'func main() i32 throws py.Error { let s = S(p: host.make()); '
+     'let p = move s.p; return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
+    ('undeclared-member', 'func main() i32 throws py.Error { '
+     'let p = host.make(); p.missing(); return 0; }',
+     'E_CAPABILITY_UNAVAILABLE'),
+    ('read-after-move', 'func main() i32 throws py.Error { '
+     'let p = host.make(); let q = move p; host.same(p, q); '
+     'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
+    ('double-move', 'func main() i32 throws py.Error { '
+     'let p = host.make(); let q = move p; let r = move p; '
+     'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
+    ('borrow-alias', 'func f(a host.Probe, b move host.Probe) i32 '
+     '{ return 0; } func main() i32 throws py.Error { '
+     'let p = host.make(); return f(p, move p); }', 'E_CALL_ARGUMENT'),
+    ('error-aggregate-read-after-move', 'struct Saved { value py.Error; } '
+     'func main() i32 throws py.Error { try { host.error_source(); } '
+     'catch e py.Error { let saved = Saved(value: e); '
+     'let moved = move saved; host.inspect(saved.value); } '
+     'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
+    ('move-borrowed-parameter', 'func f(p host.Probe) i32 { '
+     'let q = move p; return 0; } func main() i32 throws py.Error { '
+     'return f(host.make()); }', 'E_CALL_ARGUMENT'),
+]
+DIRECT_REJECTION_CASES = [
+    ('direct-throws', 'func fail() Unit throws host.Probe { } '
+     'func main() i32 { return 0; }'),
+    ('direct-catch', 'func fail() Unit throws host.Probe { } '
+     'func main() i32 { try { fail(); } '
+     'catch e host.Probe { return 0; } return 1; }'),
+]
+WORD_BITS_REJECTION = 'foreign-reject-32bit'
+
+
+def rejection_plan():
+    """Return the eleven (project, code) rejection projects in order."""
+    plan = [(name, code) for name, _, code in FOREIGN_REJECTION_CASES]
+    plan.extend((name, 'E_CAPABILITY_UNAVAILABLE')
+                for name, _ in DIRECT_REJECTION_CASES)
+    plan.append((WORD_BITS_REJECTION, 'E_CAPABILITY_UNAVAILABLE'))
+    return plan
+
+
+def label_name(text):
+    return ''.join(
+        character if character.isalnum() or character in '-_.' else '_'
+        for character in str(text))
+
+
+def finite_positive(text):
+    """Accept only the original per-command budget: finite, positive, <= 180."""
+    try:
+        value = float(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            'timeout must be finite, positive and at most 180 seconds') from error
+    if not math.isfinite(value) or value <= 0 or value > 180:
+        raise argparse.ArgumentTypeError(
+            'timeout must be finite, positive and at most 180 seconds')
+    return value
+
+
+def dispatch_mode(args):
+    """Select legacy or paired candidate mode without starting any process."""
+    candidate = getattr(args, 'candidate_cli', None) is not None
+    api = getattr(args, 'api_driver', None) is not None
+    if api and not candidate:
+        raise AssertionError('--api-driver requires --candidate-cli')
+    if candidate and not api:
+        raise AssertionError(
+            'candidate mode requires --api-driver for real PythonEmitter '
+            'symbols/entry/HIR')
+    if candidate and getattr(args, 'strace', None) is None:
+        raise AssertionError(
+            'candidate mode requires --strace for compile/exec evidence')
+    if candidate and getattr(args, 'helper', None) is None:
+        raise AssertionError(
+            'paired mode requires --helper as the reference emitter')
+    return 'paired' if candidate else 'legacy'
+
+
+def prepare_output(out, strict):
+    out = Path(out)
+    if out.exists():
+        if not out.is_dir():
+            raise AssertionError(f'--out is not a directory: {out}')
+        if strict and any(out.iterdir()):
+            raise AssertionError(
+                f'refusing to overwrite existing evidence in --out: {out}')
+    out.mkdir(parents=True, exist_ok=True)
+
+
+def exec_allowlist(*paths):
+    return {str(Path(path).resolve()) for path in paths}
+
+
+def strict_process(record):
+    """Reject truthy stand-ins: exit must be int, flags must be real bools."""
+    if type(record.get('exit')) is not int:
+        raise AssertionError(
+            f'process exit is not a real int: {record.get("exit")!r}')
+    for key in ('timed_out', 'cleanup_complete', 'abandoned_pipes'):
+        if type(record.get(key)) is not bool:
+            raise AssertionError(
+                f'process {key} is not a real bool: {record.get(key)!r}')
+    return record
+
+
+def require_clean(record, label='process'):
+    """Reject a finished command with a timeout, dirty cleanup or pipes."""
+    strict_process(record)
+    if (record['timed_out'] or not record['cleanup_complete']
+            or record['abandoned_pipes']):
+        raise AssertionError(
+            f"{label}: process was not clean: exit {record['exit']} "
+            f"timed_out={record['timed_out']} "
+            f"cleanup_complete={record['cleanup_complete']} "
+            f"abandoned_pipes={record['abandoned_pipes']}")
+    return record
+
+
+def require_process(record, expected_exit=0):
+    require_clean(record)
+    if record['exit'] != expected_exit:
+        raise AssertionError(
+            f"process exit {record['exit']} != expected {expected_exit}")
+    return record
+
+
+# CPython's platform module probes `uname -p` through PATH while a real
+# NumPy/PyTorch observer collects its environment.  Only the fixed Linux uname
+# tool may be that optional child, only on the observer/exec whitelist, and its
+# identity is read and frozen before the paired Runner starts any real command.
+OBSERVER_UNAME_PATH = '/usr/bin/uname'
+UNAME_PROBE_ARGV = ['uname', '-p']
+_ERRNO = re.compile(r'^(?P<errno>[A-Z][A-Z0-9]*)\b')
+_EXECVE = re.compile(r'\bexecve\(("(?:[^"\\]|\\.)*")')
+_EXECVEAT = re.compile(r'\bexecveat\(')
+_EXEC_LINE = re.compile(
+    r'^\s*(?:\[pid\s+)?(?P<pid>\d+)\]?\s+execve\('
+    r'(?P<path>"(?:[^"\\]|\\.)*")\s*,\s*'
+    r'(?P<rest>.*)\)\s+=\s+(?P<result>-?\d+)(?P<detail>.*)$')
+
+
+def trace_string(text):
+    """Decode one strace string literal the way corpus.parse_trace does."""
+    return ast.literal_eval('b' + text).decode(
+        sys.getfilesystemencoding(), 'surrogateescape')
+
+
+def trace_argv(text):
+    match = re.match(r'\s*(\[[^\]]*\])', text)
+    if match is None:
+        raise AssertionError(f'uname probe argv is missing: {text!r}')
+    try:
+        argv = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError) as error:
+        raise AssertionError(
+            f'uname probe argv is not a literal list: {text!r}') from error
+    if not isinstance(argv, list) or not all(
+            isinstance(item, str) for item in argv):
+        raise AssertionError(
+            f'uname probe argv is not a string list: {argv!r}')
+    return argv
+
+
+def read_uname_identity(path, path_entries):
+    """Read a fixed uname tool's logical/canonical path and content SHA."""
+    logical = Path(path)
+    if not os.path.isabs(str(logical)):
+        raise AssertionError(f'frozen uname path is not absolute: {path!r}')
+    canonical = logical.resolve()
+    if not canonical.is_file():
+        raise AssertionError(f'frozen uname tool is missing: {logical}')
+    entries = [str(entry) for entry in path_entries]
+    if not entries:
+        raise AssertionError('observer PATH is empty; uname identity needs it')
+    for entry in entries:
+        if not os.path.isabs(entry):
+            raise AssertionError(
+                f'observer PATH entry is not absolute: {entry!r}')
+    return {'path': str(logical), 'canonical': str(canonical),
+            'sha256': sha(canonical), 'path_entries': entries}
+
+
+def freeze_observer_uname(path=OBSERVER_UNAME_PATH, search_path=None):
+    """Freeze the fixed uname tool and the observer PATH before any command."""
+    if not isinstance(search_path, str) or not search_path:
+        raise AssertionError('observer PATH is required to freeze uname')
+    entries = [entry for entry in search_path.split(os.pathsep) if entry]
+    return read_uname_identity(path, entries)
+
+
+def verify_uname_identity(frozen):
+    """Re-read the frozen tool now and refuse any identity change."""
+    if not isinstance(frozen, dict):
+        raise AssertionError('frozen uname identity is missing')
+    current = read_uname_identity(
+        frozen.get('path'), frozen.get('path_entries') or [])
+    if (current['canonical'] != frozen.get('canonical')
+            or current['sha256'] != frozen.get('sha256')):
+        raise AssertionError(
+            'frozen uname identity changed: '
+            f"{frozen.get('path')!r} was {frozen.get('sha256')} at "
+            f"{frozen.get('canonical')}, now {current['sha256']} at "
+            f"{current['canonical']}")
+    return {'path': frozen['path'], 'canonical': frozen['canonical'],
+            'sha256_before': frozen['sha256'],
+            'sha256_at_audit': current['sha256'],
+            'path_entries': list(frozen['path_entries']),
+            'unchanged': True}
+
+
+def trace_uname_probes(trace_path, required, frozen):
+    """Collect verified optional `uname -p` probes from one retained trace.
+
+    The observer policy accepts only the frozen Linux uname tool, only as a
+    child of a successfully executed required tool, and only with argv
+    ``["uname", "-p"]``.  Failed lookups must be the next explicit entries of
+    the frozen observer PATH, use a real ENOENT errno token, and be followed by
+    the frozen tool from the same child pid.  ``execveat`` is rejected because
+    this policy cannot verify that form.  Every required path needs at least
+    one complete successful execve record with a real pid.  Returns the probe
+    records and the pids that successfully ran ``required``.
+    """
+    lookup = [str((Path(entry) / 'uname').resolve())
+              for entry in frozen['path_entries']]
+    canonical = frozen['canonical']
+    probes = []
+    required_pids = set()
+    required_success = 0
+    pending = {}
+    failed = set()
+    executed = set()
+    for line in Path(trace_path).read_text(
+            encoding='utf-8', errors='surrogateescape').splitlines():
+        if _EXECVEAT.search(line):
+            raise AssertionError(
+                'observer exec policy does not accept execveat: ' + line)
+        match = _EXECVE.search(line)
+        if match is None:
+            continue
+        raw = trace_string(match.group(1))
+        executable = str(Path(raw).resolve())
+        fields = _EXEC_LINE.match(line)
+        if executable in required:
+            if fields is None:
+                raise AssertionError(
+                    'unparseable required execve record: ' + line)
+            result = int(fields.group('result'))
+            detail = fields.group('detail').strip()
+            if result != 0 or detail:
+                raise AssertionError(
+                    'required observer tool did not successfully execve: '
+                    + line)
+            required_pids.add(int(fields.group('pid')))
+            required_success += 1
+            continue
+        if os.path.basename(executable) != 'uname':
+            continue
+        if fields is None:
+            raise AssertionError(f'unparseable uname execve record: {line}')
+        if not os.path.isabs(raw):
+            raise AssertionError(
+                f'uname probe pathname is relative: {raw!r}')
+        argv = trace_argv(fields.group('rest'))
+        if argv != UNAME_PROBE_ARGV:
+            raise AssertionError(
+                f'uname probe argv {argv!r} != {UNAME_PROBE_ARGV!r}')
+        pid = int(fields.group('pid'))
+        result = int(fields.group('result'))
+        detail = fields.group('detail').strip()
+        if result == 0:
+            if detail:
+                raise AssertionError(
+                    f'uname probe {executable}: unexpected success detail '
+                    f'{detail!r}')
+            if executable != canonical:
+                raise AssertionError(
+                    f'uname probe {executable} is not the frozen tool '
+                    f'{canonical}')
+            if executable in failed:
+                raise AssertionError(
+                    f'uname probe {executable}: reported failed lookup and '
+                    'success')
+            failures = pending.pop(pid, [])
+            expected = lookup[:len(failures) + 1]
+            actual = [item['path'] for item in failures] + [executable]
+            if actual != expected:
+                raise AssertionError(
+                    'uname -p lookup sequence is not the frozen PATH prefix: '
+                    f'{actual} != {expected}')
+            probes.append({'pid': pid, 'argv': list(UNAME_PROBE_ARGV),
+                           'lookup': failures, 'executable': executable,
+                           'result': result})
+            executed.add(executable)
+        elif result == -1:
+            errno = _ERRNO.match(detail)
+            if errno is None or errno.group('errno') != 'ENOENT':
+                raise AssertionError(
+                    f'uname probe {executable}: lookup failure errno is not '
+                    f'ENOENT: {detail!r}')
+            if executable in executed:
+                raise AssertionError(
+                    f'uname probe {executable}: lookup failed after success')
+            failures = pending.setdefault(pid, [])
+            index = len(failures)
+            if index >= len(lookup) or lookup[index] != executable:
+                raise AssertionError(
+                    f'uname probe lookup {executable} is not frozen PATH '
+                    f'entry {lookup[index] if index < len(lookup) else None}')
+            failures.append({'path': executable, 'result': 'ENOENT'})
+            failed.add(executable)
+        else:
+            raise AssertionError(
+                f'uname probe {executable}: unexpected execve result {result}')
+    if pending:
+        raise AssertionError(
+            'uname -p lookup failed without an executed child: '
+            + ', '.join(sorted(failed - executed)))
+    if required_success == 0:
+        raise AssertionError(
+            'required observer tool has no successful execve record')
+    return probes, required_pids
+
+
+def require_trace(record, allowed, label='trace', allow_uname=None):
+    path = record.get('trace_path')
+    if not isinstance(path, str) or not path:
+        raise AssertionError(f'{label}: command was not traced')
+    allowed = {str(Path(value).resolve()) for value in allowed}
+    probes = []
+    identity = None
+    if allow_uname is not None and allow_uname is not False:
+        if not isinstance(allow_uname, dict):
+            raise AssertionError(
+                f'{label}: observer uname policy needs the frozen identity')
+        try:
+            identity = verify_uname_identity(allow_uname)
+            probes, required_pids = trace_uname_probes(
+                Path(path), allowed, allow_uname)
+        except AssertionError as error:
+            raise AssertionError(
+                f'{label}: optional uname -p policy rejected trace: '
+                f'{error}') from error
+        for probe in probes:
+            if probe['pid'] in required_pids:
+                raise AssertionError(
+                    f'{label}: uname -p probe reused the traced tool pid '
+                    f'{probe["pid"]}')
+            allowed |= {item['path'] for item in probe['lookup']}
+            allowed.add(probe['executable'])
+    try:
+        audit = audit_trace(Path(path), allowed)
+    except TraceError as error:
+        raise AssertionError(
+            f'{label}: exact exec whitelist rejected trace: {error}') from error
+    if set(audit['observed']) != allowed:
+        raise AssertionError(
+            f'{label}: expected exactly {sorted(allowed)}, '
+            f'observed {audit["observed"]}')
+    if identity is not None:
+        identity['probe_count'] = len(probes)
+        audit['uname_identity'] = identity
+    if probes:
+        audit['optional_uname'] = probes
+    record['trace_audit'] = audit
+    return audit
+
+
+def require_hir(document, label='api'):
+    """Accept only the actual Verified-path hir dump text, never a fake."""
+    text = document.get('verified_hir')
+    if not isinstance(text, str) or not text.strip():
+        raise AssertionError(
+            f'{label}: real Verified HIR text is missing, non-string or empty')
+    if ' scalar-v1 module=' not in text:
+        raise AssertionError(f'{label}: HIR text is not a real hir dump')
+    return text
+
+
+def api_projection(document):
+    """Project real PythonEmitter entry/symbols; never synthesize _f/_s."""
+    if document.get('status') != 'ok':
+        raise AssertionError(
+            f'API status is not ok: {document.get("status")!r}')
+    entry = document.get('entry')
+    symbols = document.get('symbols')
+    if type(entry) is not int or entry < 0:
+        raise AssertionError(f'API entry is not a non-negative int: {entry!r}')
+    if not isinstance(symbols, list) or not symbols:
+        raise AssertionError('API metadata has no symbols array')
+    by_symbol = {}
+    generated_names = set()
+    mains = 0
+    projected = []
+    for item in symbols:
+        if not isinstance(item, dict):
+            raise AssertionError(f'API symbol is not an object: {item!r}')
+        symbol = item.get('symbol')
+        source_name = item.get('source_name')
+        generated = item.get('generated')
+        if type(symbol) is not int or symbol < 0:
+            raise AssertionError(f'API symbol id is not an int: {item!r}')
+        if not isinstance(source_name, str) or not source_name:
+            raise AssertionError(f'API source_name is not a string: {item!r}')
+        if not isinstance(generated, str) or not generated:
+            raise AssertionError(f'API generated name is not a string: {item!r}')
+        if symbol in by_symbol:
+            raise AssertionError(f'duplicate API symbol id: {symbol}')
+        if generated in generated_names:
+            raise AssertionError(f'duplicate API generated name: {generated}')
+        if source_name == 'main':
+            mains += 1
+        by_symbol[symbol] = item
+        generated_names.add(generated)
+        projected.append({'symbol': symbol, 'source_name': source_name,
+                          'generated': generated})
+    if mains > 1:
+        raise AssertionError('ambiguous API entry: more than one main symbol')
+    if entry not in by_symbol:
+        raise AssertionError(
+            f'API entry {entry} is absent from the published symbols')
+    origin = by_symbol[entry]
+    if origin['source_name'] != 'main':
+        raise AssertionError(
+            f'API entry {entry} has source_name {origin["source_name"]!r}')
+    if origin['generated'] != '_f' + str(entry):
+        raise AssertionError(
+            f'published entry name {origin["generated"]!r} does not satisfy '
+            f'the unchanged observer naming for entry {entry}')
+    return {'contract': 'compiler-dev/1', 'backend': 'python',
+            'word_bits': 64, 'entry_symbol': entry, 'symbols': projected}
+
+
+def compare_generated(first, second, label='candidate'):
+    """CLI and API bytes must be identical before any metadata is trusted."""
+    for name in ('program.py', 'langrt.py'):
+        left = sha(Path(first) / name)
+        right = sha(Path(second) / name)
+        if left != right:
+            raise AssertionError(
+                f'{label}: CLI/API differ on {name} ({left} != {right})')
+
+
+def require_rejection(record, out, codes, label='rejection'):
+    """A rejected Source keeps its original output and publishes no program."""
+    if record.get('exit') != 1:
+        raise AssertionError(
+            f'{label}: expected a Source rejection (exit 1), '
+            f'got {record.get("exit")!r}')
+    if not record.get('stdout'):
+        raise AssertionError(f'{label}: rejection output was not retained')
+    try:
+        data = json.loads(record['stdout'])
+    except json.JSONDecodeError as error:
+        raise AssertionError(
+            f'{label}: rejection output is not JSON: {error}') from error
+    present = {item.get('code') for item in data.get('diagnostics', [])
+               if isinstance(item, dict)}
+    for code in codes:
+        if code not in present:
+            raise AssertionError(
+                f'{label}: rejection lost code {code}: '
+                f'{sorted(map(str, present))}')
+    for name in ('program.py', 'langrt.py'):
+        if (Path(out) / name).exists():
+            raise AssertionError(f'{label}: rejection published {name}')
+    return data
+
+
+def rejection_snapshot(out):
+    entries = _scan_output_tree(out)
+    if out.exists() or out.is_symlink():
+        entries['.'] = _output_entry(out, '.')[1]
+    return entries
+
+
+def validate_registration(order):
+    if list(order) != list(NAMED_CASES):
+        raise AssertionError(
+            'registered cases differ from the fixed 20-case plan: '
+            f'{list(order)!r}')
+    return True
+
+
+def write_evidence(path, data):
+    """Publish one evidence file by writing a sibling then replacing it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.partial')
+    if isinstance(data, bytes):
+        temporary.write_bytes(data)
+    else:
+        temporary.write_text(data)
+    os.replace(temporary, path)
 
 
 def sha(path):
@@ -34,8 +577,10 @@ def write(path, text):
 class Runner:
     def __init__(self, args):
         self.args = args
+        self.mode = dispatch_mode(args)
         self.rows = []
         self.registered = set()
+        self.registered_order = []
         self.commands = []
         self.env = dict(os.environ)
         for name in THREAD_ENV:
@@ -43,9 +588,20 @@ class Runner:
         self.env['PYTHONDONTWRITEBYTECODE'] = '1'
         self.env['PYTHONNOUSERSITE'] = '1'
         self.env.pop('PYTHONPATH', None)
+        # Freeze the fixed observer uname tool and the observer PATH before any
+        # real paired command starts; legacy mode never reads this new path.
+        self.uname_identity = None
+        if self.mode == 'paired':
+            self.uname_identity = freeze_observer_uname(
+                OBSERVER_UNAME_PATH, self.env.get('PATH', ''))
 
-    def command(self, row, argv, cwd, timeout=180):
+    def command(self, row, argv, cwd, timeout=180, audit_allowed=None,
+                label='command', allow_uname=None):
         argv = [str(value) for value in argv]
+        if audit_allowed is not None:
+            return self.traced(row, argv, cwd, timeout, audit_allowed, label,
+                               allow_uname=allow_uname)
+        # Legacy helper path: unchanged argv, streams and record shape.
         proc = subprocess.run(argv, cwd=str(cwd), env=self.env,
                               capture_output=True, text=True, timeout=timeout)
         record = {
@@ -57,6 +613,57 @@ class Runner:
         }
         row['commands'].append(record)
         self.commands.append(record)
+        return record
+
+    def traced(self, row, argv, cwd, timeout, audit_allowed, label,
+               allow_uname=None):
+        if not (math.isfinite(timeout) and timeout > 0):
+            raise AssertionError(f'{label}: timeout must be finite and positive')
+        if self.args.strace is None:
+            raise AssertionError(f'{label}: traced command requires --strace')
+        logs = self.args.out / 'logs'
+        traces = self.args.out / 'traces'
+        logs.mkdir(parents=True, exist_ok=True)
+        traces.mkdir(parents=True, exist_ok=True)
+        stem = f'{len(self.commands):03d}-{label_name(label)}'
+        stdout_path = logs / f'{stem}.stdout'
+        stderr_path = logs / f'{stem}.stderr'
+        trace_path = traces / f'{stem}.trace'
+        real_argv = [str(self.args.strace), '--seccomp-bpf', '-f', '-qq',
+                     '-s', '16384', '-e', 'trace=execve,execveat',
+                     '-o', str(trace_path), *argv]
+        started = time.monotonic()
+        process = _run_process_impl(real_argv, str(cwd), self.env, timeout)
+        elapsed = time.monotonic() - started
+        stdout_path.write_bytes(process['stdout'])
+        stderr_path.write_bytes(process['stderr'])
+        record = {
+            'label': label,
+            'argv': argv,
+            'tool_argv': argv,
+            'cwd': str(Path(cwd).resolve()),
+            'timeout_seconds': timeout,
+            'elapsed_seconds': elapsed,
+            'exit': process['exit'],
+            'timed_out': process['timed_out'],
+            'cleanup_complete': process['cleanup_complete'],
+            'abandoned_pipes': process['abandoned_pipes'],
+            'stdout_path': str(stdout_path),
+            'stderr_path': str(stderr_path),
+            'stdout_sha256': hashlib.sha256(process['stdout']).hexdigest(),
+            'stderr_sha256': hashlib.sha256(process['stderr']).hexdigest(),
+            'stdout': process['stdout'].decode('utf-8', errors='replace'),
+            'stderr': process['stderr'].decode('utf-8', errors='replace'),
+            'trace_path': str(trace_path),
+            'trace_sha256': sha(trace_path) if trace_path.is_file() else '',
+        }
+        # Retain the raw streams and process record before any check can
+        # fail, then reject a timeout/dirty cleanup/dirty pipes uniformly and
+        # only afterwards audit the exec whitelist.
+        row['commands'].append(record)
+        self.commands.append(record)
+        require_clean(record, label)
+        require_trace(record, audit_allowed, label, allow_uname=allow_uname)
         return record
 
     def project(self, name, files, binding):
@@ -80,7 +687,26 @@ host_package = "t10host"
 ''')
         return root
 
+    def observer_trace(self):
+        # Compile and observer/exec whitelists stay separate: the candidate
+        # compile may only exec the candidate tool, never the observed Python.
+        if self.mode == 'legacy':
+            return None
+        return exec_allowlist(self.args.python)
+
+    def require_success(self, record, expected_exit=0):
+        """Paired records use the real process checks; legacy stays as before."""
+        if self.mode == 'paired':
+            return require_process(record, expected_exit)
+        assert record['exit'] == expected_exit, record
+        return record
+
     def emit(self, row, project, binding, expect_success=True):
+        if self.mode == 'paired':
+            return self.emit_paired(row, project, binding, expect_success)
+        return self.emit_legacy(row, project, binding, expect_success)
+
+    def emit_legacy(self, row, project, binding, expect_success=True):
         out = project / 'out'
         record = self.command(
             row,
@@ -105,10 +731,139 @@ host_package = "t10host"
             assert 'import std.py' not in code
         return out, record
 
+    def emit_paired(self, row, project, binding, expect_success=True):
+        """Candidate bytes come only from the public CLI; helper is reference."""
+        manifest = project / 'lang.toml'
+        out = project / 'out'
+        previous = (rejection_snapshot(out)
+                    if not expect_success and (out.exists() or out.is_symlink())
+                    else None)
+        cli_allow = exec_allowlist(self.args.candidate_cli)
+        cli = self.command(
+            row,
+            [self.args.candidate_cli, 'build', '--project', manifest,
+             '--backend', 'python', '--std-binding', binding,
+             '--out-dir', out, '--format', 'json'],
+            project, timeout=self.args.compile_timeout,
+            audit_allowed=cli_allow, label='candidate-cli')
+        row['candidate_cli'] = {
+            'argv': cli['argv'], 'exit': cli['exit'],
+            'trace_path': cli['trace_path'],
+            'stdout_sha256': cli['stdout_sha256'],
+            'stderr_sha256': cli['stderr_sha256'],
+        }
+        # A failed CLI aborts immediately: the reference helper below is never
+        # consulted and can never supply candidate bytes.  A source rejection
+        # must leave neither generated file, checked before the reference run.
+        if expect_success:
+            require_process(cli, 0)
+        else:
+            require_rejection(cli, out, (), 'candidate-cli')
+            if previous is not None:
+                require(rejection_snapshot(out) == previous,
+                        'candidate-cli: rejection changed existing output directory')
+        # The C++ helper is the reference emitter only; it is never used for
+        # candidate bytes, metadata or HIR observation.  Paired mode runs it
+        # through the same bounded+trace transport so its record carries the
+        # real strict cleanup fields; legacy mode is unchanged.
+        reference = project / 'reference-out'
+        helper = self.command(
+            row,
+            [self.args.helper, '--project', manifest,
+             '--out-dir', reference, '--std-binding', binding],
+            project, timeout=self.args.compile_timeout,
+            audit_allowed=exec_allowlist(self.args.helper),
+            label='reference-helper')
+        row['reference_emit'] = {
+            'argv': helper['argv'], 'exit': helper['exit'],
+            'stderr': helper['stderr'], 'trace_path': helper['trace_path'],
+        }
+        if not expect_success:
+            # The formal CLI rejection is the assertion target; the helper
+            # keeps its original rejection behaviour and retained output.
+            require_process(helper, 1)
+            require_rejection(helper, reference, (), 'reference-helper')
+            return out, cli
+        require_process(helper, 0)
+        require((out / 'program.py').exists(), cli)
+        require((out / 'langrt.py').exists(), cli)
+        require((reference / 'program.py').exists(), helper)
+        require((reference / 'langrt.py').exists(), helper)
+        require(json.loads(cli['stdout']).get('status') == 'ok', cli)
+
+        api_out = project / 'api-out'
+        api = self.command(
+            row,
+            [self.args.api_driver, '--project', manifest,
+             '--out-dir', api_out, '--std-binding', binding,
+             '--format', 'json', '--emit-hir'],
+            project, timeout=self.args.compile_timeout,
+            audit_allowed=exec_allowlist(self.args.api_driver),
+            label='candidate-api')
+        row['candidate_api'] = {
+            'argv': api['argv'], 'exit': api['exit'],
+            'trace_path': api['trace_path'],
+            'stdout_sha256': api['stdout_sha256'],
+            'stderr_sha256': api['stderr_sha256'],
+        }
+        require_process(api, 0)
+        document = json.loads(api['stdout'])
+        metadata = api_projection(document)
+        hir_text = require_hir(document)
+        # Metadata and HIR are only published after the CLI and real API
+        # generated bytes are byte-for-byte identical.
+        compare_generated(out, api_out, 'candidate CLI/API')
+        write_evidence(out / 'metadata.json',
+                       json.dumps(metadata, ensure_ascii=False, indent=2) + '\n')
+        write_evidence(out / 'verified.hir', hir_text)
+        # The declared host module is copied alongside generated files.
+        host = self.args.root / 'tests/python/t10_host.py'
+        shutil.copyfile(host, out / 't10host.py')
+        row['generated_files'] = {
+            'program.py': sha(out / 'program.py'),
+            'langrt.py': sha(out / 'langrt.py'),
+            'verified.hir': sha(out / 'verified.hir'),
+            'metadata.json': sha(out / 'metadata.json'),
+        }
+        code = (out / 'program.py').read_text()
+        assert '_LANG_BINDING_INFO =' in code
+        assert 'import std.py' not in code
+        row['candidate_metadata'] = {
+            'entry_symbol': metadata['entry_symbol'],
+            'symbol_count': len(metadata['symbols']),
+        }
+        return out, cli
+
+    def formal_cli(self, row, project, binding, out):
+        if self.args.langc is None:
+            row['cli_comparison'] = {'status': 'not_run',
+                                     'reason': '--woozyc not supplied'}
+            return
+        cli_out = project / 'cli-out'
+        audit = (exec_allowlist(self.args.langc)
+                 if self.mode == 'paired' else None)
+        record = self.command(
+            row,
+            [self.args.langc, 'build', '--project', project / 'lang.toml',
+             '--backend', 'python', '--format', 'json',
+             '--std-binding', binding, '--out-dir', cli_out],
+            project, audit_allowed=audit, label='formal-cli')
+        self.require_success(record, 0)
+        for name in ('program.py', 'langrt.py'):
+            require(sha(out / name) == sha(cli_out / name),
+                    'formal CLI differs from helper for ' + name)
+        row['cli_comparison'] = {
+            'status': 'passed',
+            'langc': str(self.args.langc),
+            'program.py': sha(out / 'program.py'),
+            'langrt.py': sha(out / 'langrt.py'),
+        }
+
     def observe(self, row, out):
         record = self.command(row, [self.args.python, self.args.observe, out],
-                              out)
-        assert record['exit'] == 0, record
+                              out, audit_allowed=self.observer_trace(),
+                              label='observe', allow_uname=self.uname_identity)
+        self.require_success(record, 0)
         lines = record['stdout'].splitlines()
         assert lines, record
         observed = json.loads(lines[-1])
@@ -118,18 +873,24 @@ host_package = "t10host"
 
     def real_observe(self, row, out, mode):
         record = self.command(
-            row, [self.args.python, self.args.real_observer, out, mode], out)
-        assert record['exit'] == 0, record
+            row, [self.args.python, self.args.real_observer, out, mode], out,
+            audit_allowed=self.observer_trace(), label='real-observe',
+            allow_uname=self.uname_identity)
+        self.require_success(record, 0)
         lines = record['stdout'].splitlines()
         assert lines, record
         return json.loads(lines[-1])
 
     def direct(self, row, out, timeout=180):
         return self.command(row, [self.args.python, '-s', out / 'program.py'],
-                            out, timeout=timeout)
+                            out, timeout=timeout,
+                            audit_allowed=self.observer_trace(),
+                            label='program')
 
     def add(self, name, fn):
+        require(name in NAMED_CASES, 'case is not in the fixed 20: ' + name)
         self.registered.add(name)
+        self.registered_order.append(name)
         if self.args.only and name not in self.args.only:
             return None
         row = {'name': name, 'status': 'failed', 'commands': []}
@@ -158,10 +919,21 @@ def error_events(events):
     return [event for event in events if event.startswith('ERR ')]
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--helper', type=Path, required=True)
     parser.add_argument('--woozyc', dest="langc", type=Path)
+    parser.add_argument('--candidate-cli', type=Path,
+                        help='real public Wz CLI for candidate Python builds')
+    parser.add_argument('--api-driver', type=Path,
+                        help='test-only pythonobs driver using the real '
+                             'PythonEmitter API')
+    parser.add_argument('--strace', type=Path,
+                        help='fixed strace used to audit candidate compiles '
+                             'and observations')
+    parser.add_argument('--compile-timeout', type=finite_positive, default=180.0,
+                        help='per-command candidate CLI/API/reference budget, '
+                             'at most the original 180 seconds')
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True)
@@ -174,21 +946,27 @@ def main():
     parser.add_argument('--real-observer', type=Path)
     parser.add_argument('--only', nargs='+', default=[],
                         help='run only these named cases in this invocation')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    # Validate the role/budget/output before any external process starts.
+    mode = dispatch_mode(args)
+    prepare_output(args.out, strict=(mode == 'paired'))
     # Keep the venv interpreter path itself: resolving its symlink selects the
     # base CPython and loses the dedicated NumPy/PyTorch site-packages.
     args.python = Path(os.path.abspath(str(args.python)))
     for key in ('helper', 'root', 'out', 'binding', 'example_binding',
-                'reference', 'observe', 'original_observer', 'reference_observer'):
-        setattr(args, key, getattr(args, key).resolve())
+                'reference', 'observe', 'original_observer', 'reference_observer',
+                'candidate_cli', 'api_driver', 'strace'):
+        value = getattr(args, key)
+        if value is not None:
+            setattr(args, key, value.resolve())
     if args.langc is not None:
         args.langc = args.langc.resolve()
     if args.real_observer is None:
         args.real_observer = args.root / 'tests/python/t10_real_objects.py'
     else:
         args.real_observer = args.real_observer.resolve()
-    args.out.mkdir(parents=True, exist_ok=True)
     r = Runner(args)
+    require(r.mode == mode, 'runner mode changed after dispatch')
     binding = str(args.binding)
     example_binding = str(args.example_binding)
 
@@ -496,27 +1274,7 @@ func main() i32 throws py.Error {
         project = r.project('py-error-aggregate-storage',
                             {'src/main.wz': error_aggregate_source}, binding)
         out, _ = r.emit(row, project, binding)
-        if args.langc is not None:
-            cli_out = project / 'cli-out'
-            record = r.command(
-                row,
-                [args.langc, 'build', '--project', project / 'lang.toml',
-                 '--backend', 'python', '--format', 'json',
-                 '--std-binding', binding, '--out-dir', cli_out],
-                project)
-            require(record['exit'] == 0, record)
-            for name in ('program.py', 'langrt.py'):
-                require(sha(out / name) == sha(cli_out / name),
-                        'formal CLI differs from helper for ' + name)
-            row['cli_comparison'] = {
-                'status': 'passed',
-                'langc': str(args.langc),
-                'program.py': sha(out / 'program.py'),
-                'langrt.py': sha(out / 'langrt.py'),
-            }
-        else:
-            row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--woozyc not supplied'}
+        r.formal_cli(row, project, binding, out)
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
         require(observed['owners'] == [], observed)
@@ -799,27 +1557,7 @@ func main() i32 throws py.Error {
                              'src/kinds/main.wz': generic_error_kinds},
                             binding)
         out, _ = r.emit(row, project, binding)
-        if args.langc is not None:
-            cli_out = project / 'cli-out'
-            record = r.command(
-                row,
-                [args.langc, 'build', '--project', project / 'lang.toml',
-                 '--backend', 'python', '--format', 'json',
-                 '--std-binding', binding, '--out-dir', cli_out],
-                project)
-            require(record['exit'] == 0, record)
-            for name in ('program.py', 'langrt.py'):
-                require(sha(out / name) == sha(cli_out / name),
-                        'formal CLI differs from helper for ' + name)
-            row['cli_comparison'] = {
-                'status': 'passed',
-                'langc': str(args.langc),
-                'program.py': sha(out / 'program.py'),
-                'langrt.py': sha(out / 'langrt.py'),
-            }
-        else:
-            row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--woozyc not supplied'}
+        r.formal_cli(row, project, binding, out)
         # The stable keys must retain the full ordered concrete arguments and
         # the defining module, not a local alias or a session/binding number.
         keys = {node.value.decode('utf-8')
@@ -947,27 +1685,7 @@ func main() i32 {
                             {'src/main.wz': generic_error_key_escaping_source},
                             variant_path)
         out, _ = r.emit(row, project, variant_path)
-        if args.langc is not None:
-            cli_out = project / 'cli-out'
-            record = r.command(
-                row,
-                [args.langc, 'build', '--project', project / 'lang.toml',
-                 '--backend', 'python', '--format', 'json',
-                 '--std-binding', variant_path, '--out-dir', cli_out],
-                project)
-            require(record['exit'] == 0, record)
-            for name in ('program.py', 'langrt.py'):
-                require(sha(out / name) == sha(cli_out / name),
-                        'formal CLI differs from helper for ' + name)
-            row['cli_comparison'] = {
-                'status': 'passed',
-                'langc': str(args.langc),
-                'program.py': sha(out / 'program.py'),
-                'langrt.py': sha(out / 'langrt.py'),
-            }
-        else:
-            row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--woozyc not supplied'}
+        r.formal_cli(row, project, variant_path, out)
         keys = {node.value.decode('utf-8')
                 for node in ast.walk(ast.parse((out / 'program.py').read_text()))
                 if isinstance(node, ast.Constant)
@@ -999,33 +1717,7 @@ func main() i32 {
     r.add('generic-error-key-escaping', generic_error_key_escaping_case)
 
     def foreign_rejections_case(row):
-        cases = [
-            ('inout', 'func f(x inout host.Probe) Unit { } '
-             'func main() i32 { return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
-            ('partial-move', 'struct S { p host.Probe; } '
-             'func main() i32 throws py.Error { let s = S(p: host.make()); '
-             'let p = move s.p; return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
-            ('undeclared-member', 'func main() i32 throws py.Error { '
-             'let p = host.make(); p.missing(); return 0; }',
-             'E_CAPABILITY_UNAVAILABLE'),
-            ('read-after-move', 'func main() i32 throws py.Error { '
-             'let p = host.make(); let q = move p; host.same(p, q); '
-             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
-            ('double-move', 'func main() i32 throws py.Error { '
-             'let p = host.make(); let q = move p; let r = move p; '
-             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
-            ('borrow-alias', 'func f(a host.Probe, b move host.Probe) i32 '
-             '{ return 0; } func main() i32 throws py.Error { '
-             'let p = host.make(); return f(p, move p); }', 'E_CALL_ARGUMENT'),
-            ('error-aggregate-read-after-move', 'struct Saved { value py.Error; } '
-             'func main() i32 throws py.Error { try { host.error_source(); } '
-             'catch e py.Error { let saved = Saved(value: e); '
-             'let moved = move saved; host.inspect(saved.value); } '
-             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
-            ('move-borrowed-parameter', 'func f(p host.Probe) i32 { '
-             'let q = move p; return 0; } func main() i32 throws py.Error { '
-             'return f(host.make()); }', 'E_CALL_ARGUMENT'),
-        ]
+        cases = FOREIGN_REJECTION_CASES
         for name, body, code in cases:
             source = ('package main; import "std/py" as py; '
                       'import "t10host" as host; ' + body)
@@ -1041,13 +1733,7 @@ func main() i32 {
         # A source enum's ordinary host type argument is not an error-root
         # foreign type, but declaring, throwing or catching host.Probe itself
         # must stay rejected.
-        direct_cases = [
-            ('direct-throws', 'func fail() Unit throws host.Probe { } '
-             'func main() i32 { return 0; }'),
-            ('direct-catch', 'func fail() Unit throws host.Probe { } '
-             'func main() i32 { try { fail(); } '
-             'catch e host.Probe { return 0; } return 1; }'),
-        ]
+        direct_cases = DIRECT_REJECTION_CASES
         for name, body in direct_cases:
             source = ('package main; import "std/py" as py; '
                       'import "t10host" as host; ' + body)
@@ -1065,7 +1751,7 @@ func main() i32 {
                   'import "t10host" as host; '
                   'func main() i32 throws py.Error { let p = host.make(); '
                   'let values Vec[host.Probe] = [p]; return 0; }')
-        project = r.project('foreign-reject-32bit',
+        project = r.project(WORD_BITS_REJECTION,
                             {'src/main.wz': source}, binding)
         manifest = (project / 'lang.toml').read_text().replace(
             'word_bits = 64', 'word_bits = 32')
@@ -1076,7 +1762,9 @@ func main() i32 {
         require(any(d['code'] == 'E_CAPABILITY_UNAVAILABLE'
                     for d in data['diagnostics']), data)
         require(not (out / 'program.py').exists(), result)
+        require(not (out / 'langrt.py').exists(), result)
         row['rejections'] = cases
+        row['rejection_plan'] = rejection_plan()
 
     r.add('foreign-ownership-rejections', foreign_rejections_case)
 
@@ -1210,6 +1898,7 @@ func main() Unit throws py.Error { host.note(1); }
         require(any('requires declared lang.py.Error' in message for message in messages),
                 data)
         require(not (out / 'program.py').exists(), result)
+        require(not (out / 'langrt.py').exists(), result)
         row['diagnostics'] = data['diagnostics']
 
     r.add('no-throws-external-callable', no_throws_case)
@@ -1389,15 +2078,18 @@ host_package = "torch"
         names = {s['source_name']: s['generated'] for s in generated['symbols']}
         require('train' in names, names)
         generated_result = r.command(
-            row, [args.python, args.original_observer, out], out, timeout=300)
-        require(generated_result['exit'] == 0, generated_result)
+            row, [args.python, args.original_observer, out], out, timeout=300,
+            audit_allowed=r.observer_trace(), label='original-observer',
+            allow_uname=r.uname_identity)
+        r.require_success(generated_result, 0)
         generated_row = json.loads(generated_result['stdout'].splitlines()[-1])
         require(generated_row['status'] == 'passed', generated_row)
         require(all(generated_row['acceptance'].values()), generated_row)
         reference_result = r.command(
             row, [args.python, args.reference_observer, args.reference], out,
-            timeout=300)
-        require(reference_result['exit'] == 0, reference_result)
+            timeout=300, audit_allowed=r.observer_trace(),
+            label='reference-observer', allow_uname=r.uname_identity)
+        r.require_success(reference_result, 0)
         reference_row = json.loads(reference_result['stdout'].splitlines()[-1])
         require(reference_row['status'] == 'passed', reference_row)
         require(all(reference_row['acceptance'].values()), reference_row)
@@ -1420,6 +2112,10 @@ host_package = "torch"
         }
 
     r.add('original-04-cpu', original04_case)
+
+    # The fixed 20-case plan must be registered even on a subset run; --only
+    # never changes the plan or lets a three-case wrapper stand in for it.
+    validate_registration(r.registered_order)
 
     # shortcut: matched cases may run before an unknown-name error; collect
     # cases first if rejection before execution is needed.

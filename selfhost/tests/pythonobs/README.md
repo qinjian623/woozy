@@ -32,6 +32,30 @@ At runtime it:
    from `pythonemit.Output.symbols`.  No `_f`/`_s` name is guessed or parsed
    from generated Python.
 
+## Optional real HIR observation (`--emit-hir`)
+
+The product CLI publishes only `program.py`/`langrt.py`; it does not publish
+`verified.hir`.  The original T10 runner nevertheless requires a real
+`verified.hir` artifact and hashes it.  The test-only `--emit-hir` flag adds an
+optional, additive field to the existing JSON status line:
+
+```json
+{"status":"ok","entry":...,"symbols":[...],"verified_hir":"..."}
+```
+
+`verified_hir` is the exact text of `hirdump.dump_module(module)` for the
+`hirverify.snapshot(verified)` module already used for emission.  It is computed
+before publishing, so a failed dump returns a diagnostic and publishes nothing.
+Without the flag the stdout is unchanged, and the `langrt.py`/`program.py` pair
+is still staged and published exactly as before.  The runner writes the
+returned text as `verified.hir` itself; this driver adds no product CLI flag and
+never fabricates HIR text.
+
+A retained 55d `pythonobs` binary predates this flag.  Changing a Python runner
+cannot give that binary the new interface, so it cannot be used as the real-HIR
+candidate.  Using this interface requires a separately authorized build of this
+component from the current Source.
+
 Failure prints the same diagnostic document as the product CLI and exits
 non-zero without creating an output program.  Resource paths are based on the
 real executable directory, so the runner stages the candidate's frozen

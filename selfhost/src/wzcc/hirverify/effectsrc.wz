@@ -181,7 +181,7 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
             if !is_foreign && ast_is(method_node.kind, model.AstKind.Member) &&
                !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, method)) {
                 let base = source_ast_type(inout state, reference.module, reference.file, file, method_node.children[0],
-                    0, node_types);
+                    0, node_types, function_value.symbol);
                 if option.is_some(base) &&
                    kind_is(verifier_type(state, option_usize(base)).kind,
                        model.TypeKind.ForeignOpaque) {
@@ -192,7 +192,7 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
             }
             if !is_foreign {
                 let callee_type = source_ast_type(inout state, reference.module, reference.file, file,
-                    syntax.children[0], 0, node_types);
+                    syntax.children[0], 0, node_types, function_value.symbol);
                 if option.is_some(callee_type) &&
                    kind_is(verifier_type(state, option_usize(callee_type)).kind,
                        model.TypeKind.ForeignOpaque) {
@@ -225,7 +225,7 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
             if ast_is(syntax.kind, model.AstKind.Member) &&
                !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, id)) {
                 let base = source_ast_type(inout state, reference.module, reference.file, file, syntax.children[0], 0,
-                    node_types);
+                    node_types, function_value.symbol);
                 if option.is_some(base) &&
                    kind_is(verifier_type(state, option_usize(base)).kind,
                        model.TypeKind.ForeignOpaque) {
@@ -648,9 +648,44 @@ func source_type_syntax(state Verifier, module usize, file_index usize,
     return false;
 }
 
+// A source occurrence can name a local whose HIR has more than one node at
+// the same source identity.  In particular a foreign callable local has the
+// owner-typed receiver Read and the synthetic ForeignCallable callee
+// ForeignRead at the same source node, so the unique-node-type fallback cannot
+// recover the local's declared type.  Resolve the local first, including
+// instance renames, exactly like the C++ verifier's local_type lookup.
+func source_local_type(state Verifier, module usize, file_index usize,
+                       file model.ParseResult, id usize,
+                       function_symbol usize) option.Option[usize] {
+    let symbol = source_ast_symbol(state, module, file_index, file, id);
+    if !option.is_some(symbol) {
+        return option.Option[usize].None;
+    }
+    var symbol_id = option_usize(symbol);
+    for instance in state.m.instances {
+        if instance.symbol == function_symbol {
+            for rename in instance.renamed {
+                if rename.origin == symbol_id {
+                    symbol_id = rename.replacement;
+                    break;
+                }
+            }
+        }
+    }
+    let found = local_index(state, symbol_id);
+    if found < 0 {
+        return option.Option[usize].None;
+    }
+    let local = state.locals[usize(found)].value;
+    if local.function != function_symbol {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(local.type_id);
+}
+
 func source_ast_type(state inout Verifier, module usize, file_index usize,
                      file model.ParseResult, id usize, depth usize,
-                     node_types Vec[NodeTypeEntry])
+                     node_types Vec[NodeTypeEntry], function_symbol usize)
     option.Option[usize] throws Invalid {
     if depth > 64 {
         return option.Option[usize].None;
@@ -659,6 +694,11 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
     let node = file.nodes[unwrapped];
     if ast_is(node.kind, model.AstKind.Name) ||
        ast_is(node.kind, model.AstKind.Member) {
+        let local = source_local_type(state, module, file_index, file,
+            unwrapped, function_symbol);
+        if option.is_some(local) {
+            return local;
+        }
         let symbol = source_ast_symbol(state, module, file_index, file, unwrapped);
         if option.is_some(symbol) {
             let exported = foreign_export(state, option_usize(symbol));
@@ -674,7 +714,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         if ast_is(node.kind, model.AstKind.Member) &&
            vec.len(node.children) > 0 {
             let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
-                node_types);
+                node_types, function_symbol);
             if option.is_some(base) {
                 let base_type = verifier_type(state, option_usize(base));
                 if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
@@ -751,7 +791,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         if ast_is(method_node.kind, model.AstKind.Member) &&
            !option.is_some(source_ast_symbol(state, module, file_index, file, method)) {
             let base = source_ast_type(inout state, module, file_index, file, method_node.children[0],
-                depth + 1, node_types);
+                depth + 1, node_types, function_symbol);
             if option.is_some(base) &&
                kind_is(verifier_type(state, option_usize(base)).kind,
                    model.TypeKind.ForeignOpaque) {
@@ -763,7 +803,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
             }
         }
         let callee_type = source_ast_type(inout state, module, file_index, file, callee, depth + 1,
-            node_types);
+            node_types, function_symbol);
         if option.is_some(callee_type) {
             let kind = verifier_type(state, option_usize(callee_type)).kind;
             if kind_is(kind, model.TypeKind.Function) {
@@ -783,7 +823,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
     if ast_is(node.kind, model.AstKind.NeutralBracket) &&
        vec.len(node.children) == 2 {
         let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
-            node_types);
+            node_types, function_symbol);
         if option.is_some(base) {
             let base_type = verifier_type(state, option_usize(base));
             if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
@@ -802,7 +842,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
     }
     if ast_is(node.kind, model.AstKind.Slice) {
         let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
-            node_types);
+            node_types, function_symbol);
         if option.is_some(base) {
             let base_type = verifier_type(state, option_usize(base));
             if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
