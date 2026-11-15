@@ -26,7 +26,7 @@ uint32_t g_collecting;
 // only a performance bound, never a correctness bound.  Any number of
 // colliding addresses share a bucket and are still found by exact pointer
 // comparison.  The fixed table is BSS; it adds no allocation or public ABI.
-constexpr uint64_t kRegistryBuckets = 2048;
+constexpr uint64_t kRegistryBuckets = 16384;
 static_assert((kRegistryBuckets & (kRegistryBuckets - 1)) == 0,
               "registry bucket count must be a power of two");
 
