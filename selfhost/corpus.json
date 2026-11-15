@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "1872cca39f1663efc76a3c4a0de9de9622d8cb9e",
-  "previous_git_head": "7a79db7ce098267817f67a318835d28f64c20c6a",
-  "frozen_at": "2026-11-15T12:46:15.913055+00:00",
+  "git_head": "eab367444291e7b99faee59395b4b14bb48c14b0",
+  "previous_git_head": "1872cca39f1663efc76a3c4a0de9de9622d8cb9e",
+  "frozen_at": "2026-11-15T13:49:37.291397+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed. SH18 records the accepted fixed-LLD C++ helper and CFFI15/T10 dedicated suite results; all16 remain disabled, the original985 case objects and all gold are unchanged. Full985 used referenceCpp19124 before this helper-only change; no new Source test was run for this publication. A5原五组双角色13行已按584条实际测试记录及独立审查完成，仍全部停用；仅完成分类与说明，普通985对象/金值不变，不称其余测试或整个自举完成。 SH19按实际236/209/6条已审记录登记AutoGC九个fixture与finite-callback共10行及受控三文件、三文件；required253→243，仍全部停用，普通985对象/金值不变，仅新增两个纯controls冻结文件并更新两份runner hash；不称MEM02、Python家族或自举完成，也不称db918新源码或私有GC985覆盖这些专用组。",
+  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed. SH18 records the accepted fixed-LLD C++ helper and CFFI15/T10 dedicated suite results; all16 remain disabled, the original985 case objects and all gold are unchanged. Full985 used referenceCpp19124 before this helper-only change; no new Source test was run for this publication. A5原五组双角色13行已按584条实际测试记录及独立审查完成，仍全部停用；仅完成分类与说明，普通985对象/金值不变，不称其余测试或整个自举完成。 SH19按实际236/209/6条已审记录登记AutoGC九个fixture与finite-callback共10行及受控三文件、三文件；required253→243，仍全部停用，普通985对象/金值不变，仅新增两个纯controls冻结文件并更新两份runner hash；不称MEM02、Python家族或自举完成，也不称db918新源码或私有GC985覆盖这些专用组。 SH19 refreshes only the accepted statement-helper and GC-bucket product input hashes at eab367444291e7b99faee59395b4b14bb48c14b0; original1350 case objects,985enabled gold/repeats/budgets,all23published test completion rows remain unchanged. Source db918/Cpp3052/runtime085/std473a; limited O2/deep/IR/28binary and oldSource985 runtime proofs only, final same-Source stage123/985/special tests pending.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -550,8 +550,8 @@
     },
     {
       "path": "runtime/native/gc.cpp",
-      "sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
-      "size": 15685,
+      "sha256": "a1dab03403bf2c92a893557e930f9f839d36ba78c917f390151bcfd4237233e1",
+      "size": 15686,
       "role": "runtime_source",
       "assignment": []
     },
@@ -1680,8 +1680,8 @@
     },
     {
       "path": "selfhost/src/wzcc/nativelower/stmt.wz",
-      "sha256": "f9ff538a68bdee54e99c3264b92ab796f4f718c742e338eecf9a7ba598c952f7",
-      "size": 45893,
+      "sha256": "d2fda1899a000fff9ba162873c75c0ff0d380c122625ec085eb5a57318fecd31",
+      "size": 42338,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -87617,11 +87617,22 @@
       {
         "path": "runtime/native/gc.cpp",
         "old_sha256": "ea330276634e86721f135520543089e25d6b9afab95d9ade827df371f6339a25",
-        "new_sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
+        "new_sha256": "a1dab03403bf2c92a893557e930f9f839d36ba78c917f390151bcfd4237233e1",
         "old_size": 13339,
-        "new_size": 15685,
-        "commit": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
-        "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
+        "new_size": 15686,
+        "commit": "eab367444291e7b99faee59395b4b14bb48c14b0",
+        "accepted_task": "64e8ed28-76b2-49d3-9a79-9c29ca5eb644",
+        "history": [
+          {
+            "path": "runtime/native/gc.cpp",
+            "old_sha256": "ea330276634e86721f135520543089e25d6b9afab95d9ade827df371f6339a25",
+            "new_sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
+            "old_size": 13339,
+            "new_size": 15685,
+            "commit": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
+            "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
+          }
+        ]
       },
       {
         "path": "tests/native/CMakeLists.txt",
@@ -88133,6 +88144,15 @@
         "new_size": 89876,
         "review": "checks/SH16-T10-uname-correction-independent-20261115.json",
         "acceptance": "Reviewed test-only coding integration. Prior real full20 failed16passed4; no new T10 execution or conformance is claimed."
+      },
+      {
+        "path": "selfhost/src/wzcc/nativelower/stmt.wz",
+        "old_sha256": "f9ff538a68bdee54e99c3264b92ab796f4f718c742e338eecf9a7ba598c952f7",
+        "new_sha256": "d2fda1899a000fff9ba162873c75c0ff0d380c122625ec085eb5a57318fecd31",
+        "old_size": 45893,
+        "new_size": 42338,
+        "commit": "eab367444291e7b99faee59395b4b14bb48c14b0",
+        "accepted_task": "a51bfb84-7e0b-4627-a59c-8cecf186ed29"
       }
     ],
     "new_freeze_path_count": 226,
@@ -94370,6 +94390,39 @@
         "finite_callback_6": "checks/SH19-finite-callback-original6-independent-20261115.json SHA256=02a623fb8b57bb7015f73351c20b52d42375e2199c9405bf525dbd99ab547f85"
       },
       "scope": "Source116 d602, public runtime core 0cb002a6 and hosted 89bdd476; the nine AutomaticGC rows are the reviewed single-mutator O0/O2 fixtures only and finite-callback is the original six commands only. No new db918 source, no private GC985 coverage of these dedicated groups, no full MEM02, Python API or aggregate claim."
+    },
+    "SH19_stack_GC": {
+      "product_commit": "eab367444291e7b99faee59395b4b14bb48c14b0",
+      "modified": [
+        {
+          "path": "runtime/native/gc.cpp",
+          "old_sha256": "da35241aa0e6c0520dd9632242bb78f71052b5b8282d33c7092cdc95ecaba021",
+          "new_sha256": "a1dab03403bf2c92a893557e930f9f839d36ba78c917f390151bcfd4237233e1",
+          "old_size": 15685,
+          "new_size": 15686
+        },
+        {
+          "path": "selfhost/src/wzcc/nativelower/stmt.wz",
+          "old_sha256": "f9ff538a68bdee54e99c3264b92ab796f4f718c742e338eecf9a7ba598c952f7",
+          "new_sha256": "d2fda1899a000fff9ba162873c75c0ff0d380c122625ec085eb5a57318fecd31",
+          "old_size": 45893,
+          "new_size": 42338
+        }
+      ],
+      "Source116": "db91835d1c723d6ebfd0f0256a858a0cd4f8e51372cb8a03d06a3a9b279da749",
+      "Cpp64": "3052e89c169464e4600d51edda643d5fa01d2c671b4159fd5a19fb82c8e0cdcd",
+      "runtime158": "085a61410b00646f278dbaa87295bdb1e7b921d1a65cd11400439c115e985113",
+      "stdlib37": "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47",
+      "full_same_source_bootstrap_proven": false,
+      "original_985_objects_unchanged": true,
+      "counts": {
+        "total": 1350,
+        "enabled": 985,
+        "disabled": 365,
+        "required": 243,
+        "files": 2911,
+        "runners": 275
+      }
     }
   },
   "private_gc_integration": {
