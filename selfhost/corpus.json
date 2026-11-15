@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "f6853855cd6eef74fbf1e6d69f0771d48ce648ec",
-  "previous_git_head": "60c16f42324832b5207e601311263d41e6816773",
-  "frozen_at": "2026-11-15T04:44:17.696027+00:00",
+  "git_head": "1872cca39f1663efc76a3c4a0de9de9622d8cb9e",
+  "previous_git_head": "7a79db7ce098267817f67a318835d28f64c20c6a",
+  "frozen_at": "2026-11-15T12:46:15.913055+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed. SH18 records the accepted fixed-LLD C++ helper and CFFI15/T10 dedicated suite results; all16 remain disabled, the original985 case objects and all gold are unchanged. Full985 used referenceCpp19124 before this helper-only change; no new Source test was run for this publication.",
+  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver. Private tracked T10 code-only integration;1350case objects unchanged; no Source/test execution. Root SH17 refreshed the single production effectsrc file after limited-source repair acceptance; all original cases and18 accepted metadata rows unchanged. No new full T10 or selfhost completion claimed. SH18 records the accepted fixed-LLD C++ helper and CFFI15/T10 dedicated suite results; all16 remain disabled, the original985 case objects and all gold are unchanged. Full985 used referenceCpp19124 before this helper-only change; no new Source test was run for this publication. A5原五组双角色13行已按584条实际测试记录及独立审查完成，仍全部停用；仅完成分类与说明，普通985对象/金值不变，不称其余测试或整个自举完成。 SH19按实际236/209/6条已审记录登记AutoGC九个fixture与finite-callback共10行及受控三文件、三文件；required253→243，仍全部停用，普通985对象/金值不变，仅新增两个纯controls冻结文件并更新两份runner hash；不称MEM02、Python家族或自举完成，也不称db918新源码或私有GC985覆盖这些专用组。",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -14920,8 +14920,8 @@
     },
     {
       "path": "tests/native/automatic_gc/run_automatic_gc.py",
-      "sha256": "86a147649502c0155b171f8a19a885f67b88e77d81dc4b9cde33af4a22886eb4",
-      "size": 47924,
+      "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
+      "size": 76564,
       "role": "runner_source",
       "assignment": []
     },
@@ -23854,8 +23854,8 @@
     },
     {
       "path": "tests/python/run_cases.py",
-      "sha256": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c",
-      "size": 23947,
+      "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
+      "size": 65989,
       "role": "runner_source",
       "assignment": []
     },
@@ -26651,6 +26651,20 @@
       "size": 56598,
       "role": "runner_source",
       "assignment": []
+    },
+    {
+      "path": "tests/native/automatic_gc/test_public_port_controls.py",
+      "sha256": "329b1100f90a63d86953f18bf62cce6a8f6a73bad860ed965b8706acb2858298",
+      "size": 45829,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "tests/python/python_cases_public_controls.py",
+      "sha256": "c3ca5d06879abbf7bd5a607b1926570c2eefb2f0a51b32b735ea771fc3ddd8eb",
+      "size": 41385,
+      "role": "runner_source",
+      "assignment": []
     }
   ],
   "cases": [
@@ -28738,14 +28752,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/bootstrap/readiness/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner-required full readiness suite: 10 positive x probe-opt/ir-opt 4 = 40 runs, 11 negative x probe-opt 2 = 22 runs, and 4 tool-failure controls; a single catalog case cannot encode those counts, and the probe is an 8-argument DSL program, not a no-arg main0 project",
+      "runner_status": "public_cli",
+      "reason": "原runner通过两角色公开CLI构建probe，完成40正例、22负例、4工具失败、40次独立ELF执行及10个不同IR；构建和probe仍为60秒。本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=readiness。"
     },
     {
       "id": "project:tests/cleanup/fixtures/case-01/lang.toml",
@@ -42892,14 +42907,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（无环嵌套树的4个Vec全部释放，根读取/写入保持）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/control-empty/lang.toml",
@@ -42916,14 +42932,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（无拥有值时0 Vec分配、0存活、0 payload）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/dead-cycle-live/lang.toml",
@@ -42940,14 +42957,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（8192轮压力期间存活payload峰值≤2MiB；死循环先于存活根释放，存活根release 1→0并最后释放）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/duplicate-edges/lang.toml",
@@ -42964,14 +42982,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（同一Vec在自身元素中存两次，两条边缘都被容忍且循环恰好释放一次）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/enum-nested-cycle/lang.toml",
@@ -42988,14 +43007,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（struct→enum→Vec边缘被追踪并释放）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/loop-continue/lang.toml",
@@ -43012,14 +43032,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（8192轮死self-cycle加约1KiB payload，峰值≤2MiB且全部源Vec最终释放）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/self-cycle/lang.toml",
@@ -43036,14 +43057,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（Vec元素指回容器，循环Vec与非空Vec释放，根读取保持）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/two-cycle/lang.toml",
@@ -43060,14 +43082,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（两个Vec互相指向，两个循环都释放）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/automatic_gc/fixtures/typed-throw-defer/lang.toml",
@@ -43084,14 +43107,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/automatic_gc/run_automatic_gc.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner在O0/O2两角色公开CLI下对本fixture完成原target检查（typed throw前的死循环经defer/catch释放，defer/错误日志与源退出值不变）。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311（errors=[]；11674项读取检查）; 实际记录目录 checks/SH18-automatic-GC-full-actual-20261115.mpDnBE; 原236命令（参考127/候选109）、60秒预算（两个压力用例120秒）、九个用例O0/O2共18次运行、36组target全通过、72个程序/observer ELF无PT_INTERP/DT_NEEDED、18个候选observer链接同组公开CLI的program.o。Source116d602/Cpp64 19124ee8，候选bd1c6fa8/参考a26c1120/helper1de3d122，公用core0cb002a6/hosted89bdd476，实际observer头runtime/native/vec.hpp 6c3fcaad。EeAu73是保留的准备失败，不计为通过；未使用GC16384私有运行库，也不是db918新源码。"
     },
     {
       "id": "project:tests/native/box_source/fixtures/cleanup/lang.toml",
@@ -44443,14 +44467,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/cancel-wake/lang.toml",
@@ -44467,14 +44492,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/deadline-spurious/lang.toml",
@@ -44491,14 +44517,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/invalid-receive-timeout/lang.toml",
@@ -44515,14 +44542,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/invalid-send-timeout/lang.toml",
@@ -44539,14 +44567,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/owned-timeout-cancel/lang.toml",
@@ -44563,14 +44592,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/races/lang.toml",
@@ -44587,14 +44617,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/timeout-basic/lang.toml",
@@ -44611,14 +44642,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channel-waits/timeout-blocking/lang.toml",
@@ -44635,14 +44667,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/channel-waits/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=channel-waits。"
     },
     {
       "id": "project:tests/native/channels/bounded-blocking/lang.toml",
@@ -48017,14 +48050,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/http/run_http.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner的两角色公开CLI O0/O2及完整Popen/loopback协议各26项通过，保留分片、pipeline、21个错误case和原等待。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=http。"
     },
     {
       "id": "project:tests/native/json-thread/lang.toml",
@@ -56861,14 +56895,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/python/run_cases.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner对该project的两角色公开CLI check/build及原Python3.12.15 -s运行共6条30秒命令实际通过，独立审查733项0差异；这6条不含在已审209内，也不代表API或整个aggregate组。本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH19-finite-callback-original6-independent-20261115.json SHA256=02a623fb8b57bb7015f73351c20b52d42375e2199c9405bf525dbd99ab547f85（733项读取检查、errors=[]）及同名md; 源记录 checks/SH19-python-finite-callback-original6-20261115.w36a838i/report.json SHA256=4bb1ee372f54ca9a4cea01fdaba32bafc09004dc0eee1714706d33d1d964e0a0。两角色公开CLI check/build与--python3.12.15 -s程序共6条30秒命令全部exit0；program.py/langrt.py两角色逐字相同（3e67d83a…/e91cf920…）；候选bd1c6fa8/参考a26c1120。生产before的24文件、256冻结项及operator脚本经独立after重新读取全等，三份stdlib树49/37/37文件map 473aa…；fixture lang.toml 57fc1dd5…/src/main.wz 61bc7c40…与Root当前字节相同。此6条不在已审47行/209命令内，不覆盖python.api、整个aggregate组或Python家族。"
     },
     {
       "id": "project:tests/python/slice_source/fixtures/after-drop/lang.toml",
@@ -62002,14 +62037,15 @@
       "kind": "runner_group",
       "operation": "external",
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/concurrency-timeouts/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成O0/O2、每档重复2次、静态ELF、弱未定义符号及原空流检查，保留120/20/10秒限制。通用corpus驱动不调用该runner，本行仍停用。",
       "tags": [
         "runner_group"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=concurrency-timeouts。"
     },
     {
       "id": "runner:tests/native/run_chat.py",
@@ -62030,14 +62066,15 @@
       "kind": "runner_group",
       "operation": "external",
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/timezone/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原runner的两角色公开CLI各4个构建、598时区/18批次及O0/O2逐字比较通过，保留原独立oracle和各批次预算。通用corpus驱动不调用该runner，本行仍停用。",
       "tags": [
         "runner_group"
-      ]
+      ],
+      "evidence": "checks/SH18-five-public-groups-independent-20261115.json SHA256=ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034; checks/SH17-five-public-groups-actual-20261115.qIK3j2Kx/SH17-five-public-groups-actual.json SHA256=6ec54ccb8b9b3847e3341e7870cd1d6be44500aa74a7f575d4bdf575a95cdd65; task ffa66052-ca1f-43d5-98ed-8dbacd3d59cd / attempt b0dd73d0-5576-4d18-a318-2b6ca749194a，Root accepted/ACK960917 parent479。候选bd1/Source116d602/native0cb-hosted89bd；参考a26/helper1de3/Cpp6419124。584只计原测试命令，另有wrapper和恢复/后处理调用；只有56条编译exec trace，候选编译未委托Cpp。原失败历史与私有脚本版本/PID说明保留；本证明不称新helper42d9已重跑A5或普通985已调用外部runner。 分组=timezone。"
     },
     {
       "id": "runner:tests/native/unicode/run_source.py",
@@ -86284,8 +86321,8 @@
     },
     {
       "path": "tests/bootstrap/readiness/run.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原runner通过两角色公开CLI构建probe，完成40正例、22负例、4工具失败、40次独立ELF执行及10个不同IR；构建和probe仍为60秒。本行仍停用，普通预期不改。"
     },
     {
       "path": "tests/bootstrap/readiness/test_runner_controls.py",
@@ -86434,8 +86471,8 @@
     },
     {
       "path": "tests/native/automatic_gc/run_automatic_gc.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原runner的两角色公开CLI在60秒预算（两个压力用例120秒）下完成九个single-mutator fixture的O0/O2共18次运行、36组target与observer/ELF检查，共236命令；参考role仍用helper出LLVM，候选role只链接同组公开CLI的program.o。范围仅此，不含MEM02、并发、Weak/闭包/线程/fork/外部循环；通用corpus驱动不调用该runner。"
     },
     {
       "path": "tests/native/automatic_gc/selftest_checks.py",
@@ -86484,8 +86521,8 @@
     },
     {
       "path": "tests/native/channel-waits/run.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成9个项目O0/O2、原重复次数、静态ELF及两个误用Panic检查。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。"
     },
     {
       "path": "tests/native/channels/run_channels.py",
@@ -86504,8 +86541,8 @@
     },
     {
       "path": "tests/native/concurrency-timeouts/run.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原专用runner已用两角色公开CLI完成O0/O2、每档重复2次、静态ELF、弱未定义符号及原空流检查，保留120/20/10秒限制。通用corpus驱动不调用该runner，本行仍停用。"
     },
     {
       "path": "tests/native/cycle_gc/run_all.sh",
@@ -86594,8 +86631,8 @@
     },
     {
       "path": "tests/native/http/run_http.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原runner的两角色公开CLI O0/O2及完整Popen/loopback协议各26项通过，保留分片、pipeline、21个错误case和原等待。通用corpus驱动不调用该runner，本行仍停用，普通预期不改。"
     },
     {
       "path": "tests/native/language_gc_source/run.sh",
@@ -86739,8 +86776,8 @@
     },
     {
       "path": "tests/native/timezone/run.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原runner的两角色公开CLI各4个构建、598时区/18批次及O0/O2逐字比较通过，保留原独立oracle和各批次预算。通用corpus驱动不调用该runner，本行仍停用。"
     },
     {
       "path": "tests/native/timezone/tzif.py",
@@ -87075,7 +87112,7 @@
     {
       "path": "tests/python/run_cases.py",
       "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "reason": "原runner的47行匿名公共CLI记录已由独立审查接受（209命令、8634项读取检查、errors=[]）；finite-callback的原6条check/build/-s为另行接受，不含在209内，也不代表python.api或整个aggregate组。普通corpus驱动不调用该runner。"
     },
     {
       "path": "tests/python/run_cleanup.py",
@@ -87271,6 +87308,16 @@
       "path": "tests/python/t10_runner_controls.py",
       "status": "component",
       "reason": "Pure tests for the T10 test runner, bounded process records, CLI/API metadata, rejection output preservation and the fixed observer uname policy. These controls block external execution and do not establish full T10 conformance."
+    },
+    {
+      "path": "tests/native/automatic_gc/test_public_port_controls.py",
+      "status": "component",
+      "reason": "纯进程传输控制：以内存seam替换有界进程层并调用真实run_case分支，检查argv、raw记录与trace允许列表；禁止实际Source/编译器/LLVM/observer/程序/目标Python，不构成GC证据。"
+    },
+    {
+      "path": "tests/python/python_cases_public_controls.py",
+      "status": "component",
+      "reason": "纯harness控制：以脚本化fake替换最低传输层，检查真实PairedRunner/PairedExecutor的记录、raw流、trace审计与输出树；禁止实际编译器/驱动/目标Python/Source程序。"
     }
   ],
   "refreeze": {
@@ -94235,6 +94282,94 @@
       "unrun_Python_cases_and_autoGC_ports_not_integrated": true,
       "publication_Source_test_or_version_commands": 0,
       "scope": "No language extension. Fixed reference linker selection and record already accepted dedicated suite results; no new Source test or bootstrap claim."
+    },
+    "SH19_reviewed_tests_publication": {
+      "base_tree_commit": "1872cca39f1663efc76a3c4a0de9de9622d8cb9e",
+      "previous_catalog_sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
+      "previous_catalog_git_head": "7a79db7ce098267817f67a318835d28f64c20c6a",
+      "copied_files": [
+        {
+          "path": "tests/native/automatic_gc/run_automatic_gc.py",
+          "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486"
+        },
+        {
+          "path": "tests/native/automatic_gc/CONTRACT.md",
+          "sha256": "c992d2eeddaa83ed4a7e920b6f99b310c4d4f47152835488d31aaca78bd7eaa4"
+        },
+        {
+          "path": "tests/native/automatic_gc/test_public_port_controls.py",
+          "sha256": "329b1100f90a63d86953f18bf62cce6a8f6a73bad860ed965b8706acb2858298"
+        },
+        {
+          "path": "tests/python/run_cases.py",
+          "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f"
+        },
+        {
+          "path": "tests/python/python_cases_public_controls.py",
+          "sha256": "c3ca5d06879abbf7bd5a607b1926570c2eefb2f0a51b32b735ea771fc3ddd8eb"
+        },
+        {
+          "path": "tests/python/PYTHON_CASES_PUBLIC.md",
+          "sha256": "7146e21cee51b8accf16b721e5f415a75b20ccffab1f20e7e05f51f258812a5a"
+        }
+      ],
+      "new_freeze_paths": [
+        "tests/native/automatic_gc/test_public_port_controls.py",
+        "tests/python/python_cases_public_controls.py"
+      ],
+      "modified_freeze_paths": [
+        {
+          "path": "tests/native/automatic_gc/run_automatic_gc.py",
+          "old_sha256": "86a147649502c0155b171f8a19a885f67b88e77d81dc4b9cde33af4a22886eb4",
+          "new_sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
+          "old_size": 47924,
+          "new_size": 76564
+        },
+        {
+          "path": "tests/python/run_cases.py",
+          "old_sha256": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c",
+          "new_sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
+          "old_size": 23947,
+          "new_size": 65989
+        }
+      ],
+      "case_changes": [
+        "project:tests/native/automatic_gc/fixtures/control-acyclic/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/control-empty/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/dead-cycle-live/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/duplicate-edges/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/enum-nested-cycle/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/loop-continue/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/self-cycle/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/two-cycle/lang.toml",
+        "project:tests/native/automatic_gc/fixtures/typed-throw-defer/lang.toml",
+        "project:tests/python/fixtures/finite-callback/lang.toml"
+      ],
+      "changed_fields": [
+        "adaptation",
+        "runner_status",
+        "reason",
+        "evidence"
+      ],
+      "runner_descriptions": [
+        "tests/native/automatic_gc/run_automatic_gc.py",
+        "tests/python/run_cases.py"
+      ],
+      "new_component_freeze_paths": [
+        "tests/native/automatic_gc/test_public_port_controls.py",
+        "tests/python/python_cases_public_controls.py"
+      ],
+      "required_before": 253,
+      "required_after": 243,
+      "cases": 1350,
+      "enabled": 985,
+      "disabled": 365,
+      "evidence": {
+        "automatic_gc_236": "checks/SH18-automatic-GC-full-independent-20261115.json SHA256=186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311",
+        "python_209": "checks/SH18-python-cases-anonymous-full-independent-20261115.json SHA256=30dc6086f46195b3cc52583026e1e2e7060ed3954e8f82ecd0750e306054f616",
+        "finite_callback_6": "checks/SH19-finite-callback-original6-independent-20261115.json SHA256=02a623fb8b57bb7015f73351c20b52d42375e2199c9405bf525dbd99ab547f85"
+      },
+      "scope": "Source116 d602, public runtime core 0cb002a6 and hosted 89bdd476; the nine AutomaticGC rows are the reviewed single-mutator O0/O2 fixtures only and finite-callback is the original six commands only. No new db918 source, no private GC985 coverage of these dedicated groups, no full MEM02, Python API or aggregate claim."
     }
   },
   "private_gc_integration": {

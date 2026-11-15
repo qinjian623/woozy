@@ -165,27 +165,95 @@ Result taxonomy (no ambiguous `automatic_gc_implemented` boolean):
   `single_mutator_full_suite_cycles_passed`.
 - `mem02_complete`: always `false` from this suite.
 
-## Tool pinning
+## Reference and candidate roles
+
+`--role reference` is the default and keeps the original route: the public
+CLI builds and runs the program, the supplied `--helper` emits LLVM, and the
+observer links that LLVM. `--role candidate` never runs the helper. It links
+the unchanged `observe_gc.cpp` from the `cli/program.o` published by the same
+successful public CLI build, with the role's `--runtime`, fixed `--clang` and
+`--lld`:
+
+```text
+clang -O<0|2> -std=c++20 <case/O*/cli/program.o> observe_gc.cpp
+      <runtime> -o observe -nostdlib -static --ld-path=<ld.lld>
+      -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1
+```
+
+Candidate mode requires `--strace FILE` and `--lld FILE`; `--helper` is not
+required (a wrapper may still pass it, but it is never executed),
+`--expect-helper-sha256` is rejected, and the helper path is not pinned or
+checked as embedded in the CLI. The candidate link preserves the absolute
+alias in argv (`Path.absolute()`), including `--ld-path=<.../ld.lld>`; only
+the SHA-256 and exec-trace allowlist canonicalize symlinks. It never substitutes
+a generic `lld` target. Candidate builds, links, readelf and program runs are
+traced with separate exec allowlists: the CLI plus its fixed LLVM toolchain
+for the build, the selected clang/LLD for the observer link, the built program
+for its run, the observer only for its run, and readelf only for ELF checks.
+The one existing `clang --version` call uses the same bounded command layer,
+raw/SHA and process JSON as case commands; candidate version tracing allows
+only clang. An unexpected exec, missing trace, timeout, signal, non-int exit,
+non-bool cleanup flag, abandoned pipe, missing `program.o`, or build failure
+stops that case before a later observer can mask it.
+
+The full nine cases at O0/O2 are 18 runs. Reference uses 7 commands per run
+(126 case commands); candidate uses 6 (108) because it has no helper emit.
+Each role also performs the existing one `clang --version` check, so the full
+planned counts are 127 and 109 (236 for both), excluding preparation. The
+`command_plan` field reports these pre-run expectations; it is not backfilled
+from a driver exit status.
+
+## Tool and input pinning
 
 - `--expect-cli-sha256`, `--expect-helper-sha256` and
   `--expect-runtime-sha256` pin the exact build products. Without them the
   hashes observed at run start are the pin.
-- The CLI must embed the supplied helper path; a mismatch is
-  `inconclusive_tool_pin`, not a GC result.
-- CLI/helper/runtime are re-hashed after the run. Any change makes the run
-  `inconclusive_tool_pin`. Root may rebuild the CLI while running Python GC
-  tests; the helper/runtime pin is what matters for Native evidence. A copied
-  CLI (with the same embedded helper path) can be used to keep the CLI stable.
+- Build JSON is parsed with strict finite JSON. NaN, Infinity and exponent
+  overflow such as `1e999` are rejected, not stringified. `summary.json`,
+  compact reports and process JSON are written with `allow_nan=False` and
+  recursive finite-number checks.
+- In reference mode the CLI must embed the supplied helper path; a mismatch
+  is `inconclusive_tool_pin`, not a GC result. Candidate mode does not check
+  the helper and pins the CLI, runtime, clang, readelf, strace and LLD.
+- CLI/helper/runtime (reference) or CLI/runtime/strace/LLD (candidate) are
+  re-hashed after the run. Any change makes the run `inconclusive_tool_pin`.
+  Root may rebuild the CLI while running Python GC tests; the helper/runtime
+  pin is what matters for Native evidence. A copied CLI (with the same
+  embedded helper path) can be used to keep the CLI stable.
 - Every command has a finite timeout (`--timeout`, per-case override for the
   pressure cases). Tool output, exit codes, source hashes and the pin are in
   the external full summary.
+- Before the run snapshot the selected CLI resource stdlib and runtime, the
+  linked runtime, root stdlib, observer source, all fixtures and tools. The
+  Vec header is `HERE.parents[2]/runtime/native/vec.hpp`, the actual file
+  selected by `observe_gc.cpp`'s relative include; it is independent of
+  `--root`. The snapshot and both before/after path displays use that same
+  actual header. After the run recompute the same set from the stored
+  before paths. Any change or missing required input makes the run
+  `inconclusive_tool_pin` with a non-zero exit; it is not merely recorded as
+  `false` while still passing. Missing required inputs are never silently
+  skipped.
 
 ## Output hygiene
 
-- The full `summary.json` (including per-command output, or paths/hashes for
-  large streams) is written to `--out` under `/tmp` or an external checks
-  directory. Streams larger than `--raw-output-limit` are stored under
-  `OUT/raw/...`, not in the candidate tree.
+- Candidate mode still requires a new or empty `--out`; a non-empty directory
+  is refused. Default/reference mode preserves the legacy repeatable entry:
+  a non-empty `--out` gets a unique `run-*` child, old materials are kept, and
+  the report records both `requested_out` and the actual `output_dir`. This is
+  the existing NativeSlice pattern; it is not claimed to be byte-identical
+  default behavior. A `--compact-out` requested inside that legacy `--out` is
+  remapped into the new child run directory.
+- The full `summary.json` is written under the actual `--out`. Every command's
+  stdout/stderr bytes are atomically saved under `OUT/raw/...` (or
+  `OUT/tool/raw/...` for the version call) with sizes and SHA-256. Candidate
+  exec traces are saved under `OUT/<case>/O*/traces/` or
+  `OUT/tool/traces/`.
+- Immediately after the transport returns, before trace audit or any
+  assertion, each command writes `OUT/<case>/O*/process/<name>.json` (or
+  `OUT/tool/process/clang-version.json`) with argv, timeout budget, exact
+  four process fields, raw paths/SHA and trace status. The same JSON is
+  updated after trace audit. Private raw text is never copied into JSON, so
+  an interrupted later command still leaves earlier process records readable.
 - The candidate tree keeps only source, `cases.json`, this contract,
   `BASELINE.md`, and a compact baseline report (`baseline/pins.json`) with
   tool/source hashes and per-case metrics. Raw logs and full summaries are not
@@ -219,9 +287,22 @@ tests/native/automatic_gc/run.sh /tmp/woozy-automatic-gc-baseline \
 tests/native/automatic_gc/run.sh /tmp/woozy-automatic-gc-control \
   --case control-empty --opt 0
 
+# Candidate role: append these flags to the reference wrapper invocation.
+# The wrapper may still pass --helper; candidate mode ignores it.
+tests/native/automatic_gc/run.sh /tmp/woozy-automatic-gc-candidate \
+  --role candidate --strace /path/to/strace \
+  --lld "$WOOZY_LLVM/bin/ld.lld"
+
 # Synthetic checker logic only, not GC evidence
 python3 tests/native/automatic_gc/selftest_checks.py
+
+# Pure transport/argv controls only, not GC evidence
+python3 tests/native/automatic_gc/test_public_port_controls.py
 ```
+
+Default/reference reuse of an existing output directory writes a new `run-*`
+child and reports the actual `output_dir`; candidate mode still refuses a
+non-empty output directory.
 
 `run.sh` defaults to the fixed Root build products under
 `/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native` and

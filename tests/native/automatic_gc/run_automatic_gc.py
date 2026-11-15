@@ -26,15 +26,30 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import math
 import os
-import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[2]
+ROLE_REFERENCE = "reference"
+ROLE_CANDIDATE = "candidate"
+ROLES = (ROLE_REFERENCE, ROLE_CANDIDATE)
+LLVM_TOOL_NAMES = (
+    "clang",
+    "clang++",
+    "ld.lld",
+    "opt",
+    "llc",
+    "llvm-readelf",
+    "llvm-nm",
+)
 SCHEMA = "woozy/native-automatic-gc-report/2"
 COMPACT_SCHEMA = "woozy/native-automatic-gc-compact/1"
 LIMITATIONS = [
@@ -42,7 +57,7 @@ LIMITATIONS = [
     "Capturing closures are not exercised; LANG01 owns them and is not implemented.",
     "Concurrent collection, collection during blocking runtime calls, threads, fork and channels are not exercised.",
     "Only Vec objects and their allocator blocks are measured. RSS, page-cache state and 'file' output are not collection evidence.",
-    "The observation binary is a test-only static build of the same helper-emitted LLVM plus the Native runtime and observe_gc.cpp; it is not the CLI-linked program.",
+    "The observation binary is a test-only static build of observe_gc.cpp plus either the reference helper-emitted LLVM or the candidate public CLI program.o and the matching runtime; it is not the CLI-linked program.",
     "A normal single-thread main-return final collection may reclaim a watched dead cycle; this is an implementation choice, not a source timing guarantee.",
     "This directory contains tests only. A full-suite pass would not by itself mark MEM02 complete.",
 ]
@@ -59,6 +74,107 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def file_info(path: Path):
+    path = Path(path)
+    return {
+        "path": str(path),
+        "sha256": digest(path) if path.is_file() else None,
+    }
+
+
+def atomic_write_bytes(path: Path, data: bytes):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def finite_json(value, where="$"):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite float at {where}")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            finite_json(item, f"{where}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            finite_json(item, f"{where}[{index}]")
+
+
+def _reject_json_constant(value):
+    raise ValueError(f"non-standard JSON constant {value}")
+
+
+def _finite_json_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"non-finite JSON number {value}")
+    return number
+
+
+def strict_json_loads(text):
+    return json.loads(
+        text,
+        parse_constant=_reject_json_constant,
+        parse_float=_finite_json_float,
+    )
+
+
+def write_json(path: Path, value):
+    finite_json(value)
+    atomic_write_bytes(
+        path,
+        json.dumps(
+            value, indent=2, ensure_ascii=False, allow_nan=False
+        ).encode("utf-8"),
+    )
+
+
+def tree_digest(root: Path):
+    root = Path(root)
+    entries = []
+    if root.is_dir():
+        for child in sorted(root.rglob("*")):
+            if child.is_file():
+                entries.append(
+                    [str(child.relative_to(root)), digest(child)]
+                )
+    if not entries:
+        return None
+    return hashlib.sha256(
+        json.dumps(entries, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def snapshot_resources(paths):
+    values = {}
+    missing = []
+    for name, path in paths.items():
+        path = Path(path)
+        if path.is_file():
+            value = digest(path)
+        elif path.is_dir():
+            value = tree_digest(path)
+        else:
+            value = None
+        values[name] = value
+        if value is None:
+            missing.append(name)
+    return values, missing
+
+
 class CaseError(RuntimeError):
     def __init__(self, kind: str, message: str):
         super().__init__(message)
@@ -69,59 +185,299 @@ class ObserverError(RuntimeError):
     pass
 
 
-def command(argv, timeout, env, cwd=None):
-    argv = [str(x) for x in argv]
-    started = time.time()
-    try:
-        run = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd
-        )
-        return {
-            "argv": argv,
-            "timeout_seconds": timeout,
-            "elapsed_seconds": round(time.time() - started, 4),
-            "exit": run.returncode,
-            "stdout": run.stdout,
-            "stderr": run.stderr,
-        }
-    except subprocess.TimeoutExpired as error:
-        return {
-            "argv": argv,
-            "timeout_seconds": timeout,
-            "elapsed_seconds": round(time.time() - started, 4),
-            "timeout": True,
-            "exit": None,
-            "stdout": (error.stdout or "") if isinstance(error.stdout, str) else "",
-            "stderr": (error.stderr or "") if isinstance(error.stderr, str) else "",
-        }
+# Loaded by main from the checked-out Root; pure controls replace it with a
+# bounded in-memory transport. No command bypasses this seam.
+CORPUS = None
 
 
-def compact_command(out_dir: Path, name: str, row: dict, limit: int):
-    """Keep small output inline; move large streams under OUT/raw/."""
-    for stream in ("stdout", "stderr"):
-        text = row.get(stream, "")
-        encoded = len(text.encode())
-        if encoded <= limit:
+def load_corpus_support(root: Path):
+    path = Path(root) / "selfhost/corpus.py"
+    if not path.is_file():
+        raise RuntimeError(f"missing bounded process support: {path}")
+    spec = importlib.util.spec_from_file_location("woozy_automatic_gc_corpus", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def set_corpus(root: Path):
+    global CORPUS
+    CORPUS = load_corpus_support(root)
+    return CORPUS
+
+
+def aliases(*paths):
+    result = set()
+    for path in paths:
+        if path is None:
             continue
-        path = out_dir / "raw" / f"{name}.{stream}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-        row[f"{stream}_file"] = str(path)
-        row[f"{stream}_bytes"] = encoded
-        row[f"{stream}_sha256"] = digest(path)
-        row[stream] = f"<stored:{path}>"
+        value = Path(path)
+        result.add(str(value))
+        try:
+            result.add(str(value.resolve()))
+        except OSError:
+            pass
+    return sorted(result)
+
+
+def command(argv, timeout, env, cwd=None, strace=None, trace_file=None,
+            trace_allowed=None):
+    """Run one bounded process through the shared transport.
+
+    The row keeps the actual command in ``argv`` and the strace wrapper in
+    ``run_argv``. Raw bytes stay in private fields until ``record_command``
+    writes them to disk; assertions happen only after that write.
+    """
+    values = [str(x) for x in argv]
+    run_argv = values
+    trace_path = Path(trace_file) if trace_file is not None else None
+    if trace_path is not None:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        run_argv = [
+            str(strace),
+            "--seccomp-bpf",
+            "-f",
+            "-qq",
+            "-s",
+            "16384",
+            "-e",
+            "trace=execve,execveat",
+            "-o",
+            str(trace_path),
+            *values,
+        ]
+    started = time.time()
+    launch_error = None
+    try:
+        if CORPUS is None:
+            raise RuntimeError("bounded transport is not loaded")
+        raw = CORPUS._run_process_impl(run_argv, str(cwd or HERE), env, timeout)
+    except OSError as error:
+        launch_error = str(error)
+        raw = {
+            "exit": None,
+            "stdout": b"",
+            "stderr": b"",
+            "timed_out": False,
+            "cleanup_complete": True,
+            "abandoned_pipes": False,
+        }
+    stdout_bytes = raw.get("stdout", b"")
+    stderr_bytes = raw.get("stderr", b"")
+    if not isinstance(stdout_bytes, (bytes, bytearray)):
+        stdout_bytes = str(stdout_bytes).encode("utf-8", "replace")
+    if not isinstance(stderr_bytes, (bytes, bytearray)):
+        stderr_bytes = str(stderr_bytes).encode("utf-8", "replace")
+    exit_code = raw.get("exit")
+    timed_out = raw.get("timed_out")
+    cleanup_complete = raw.get("cleanup_complete")
+    abandoned_pipes = raw.get("abandoned_pipes")
+    if launch_error is not None:
+        status = "launch_failed"
+    elif timed_out is True:
+        status = "timeout"
+    elif type(exit_code) is int and exit_code < 0:
+        status = "signalled"
+    else:
+        status = "exited"
+    row = {
+        "argv": values,
+        "run_argv": run_argv,
+        "timeout_seconds": timeout,
+        "elapsed_seconds": round(time.time() - started, 4),
+        "status": status,
+        "timeout": timed_out is True,
+        "exit": exit_code,
+        "timed_out": timed_out,
+        "cleanup_complete": cleanup_complete,
+        "abandoned_pipes": abandoned_pipes,
+        "stdout": bytes(stdout_bytes).decode("utf-8", "replace"),
+        "stderr": bytes(stderr_bytes).decode("utf-8", "replace"),
+        "_stdout_bytes": bytes(stdout_bytes),
+        "_stderr_bytes": bytes(stderr_bytes),
+        "trace_required": trace_path is not None,
+    }
+    if launch_error is not None:
+        row["launch_error"] = launch_error
+    if trace_path is not None:
+        row["trace_path"] = str(trace_path)
+        row["trace_expected"] = sorted(set(trace_allowed or ()))
+        row["trace"] = {"status": "pending"}
+    else:
+        row["trace"] = {"status": "not_required"}
     return row
 
 
+def audit_command_trace(row):
+    """Audit a saved trace after raw stdout/stderr have been persisted."""
+    if not row.get("trace_required"):
+        row["trace"] = {"status": "not_required"}
+        return row
+    allowed = row.get("trace_expected") or []
+    try:
+        row["trace"] = CORPUS.audit_trace(Path(row["trace_path"]), allowed)
+    except (CORPUS.TraceError, OSError, ValueError) as error:
+        row["trace"] = {
+            "status": "violation",
+            "error": str(error),
+            "allowed": allowed,
+        }
+    return row
+
+
+def record_command(out_dir: Path, name: str, row: dict, limit: int):
+    """Persist complete raw streams before any caller asserts on them."""
+    raw = {}
+    for stream in ("stdout", "stderr"):
+        data = row.pop(f"_{stream}_bytes", None)
+        if data is None:
+            data = row.get(stream, "").encode("utf-8", "replace")
+        path = out_dir / "raw" / f"{name}.{stream}"
+        atomic_write_bytes(path, data)
+        raw[stream] = data
+        row[f"{stream}_path"] = str(path)
+        row[f"{stream}_bytes"] = len(data)
+        row[f"{stream}_sha256"] = hashlib.sha256(data).hexdigest()
+    for stream in ("stdout", "stderr"):
+        if len(raw[stream]) > limit:
+            row[f"{stream}_file"] = row[f"{stream}_path"]
+            row[stream] = f"<stored:{row[f'{stream}_path']}>"
+    row["name"] = name
+    return row
+
+
+def process_clean(row):
+    """Require the exact four-field process record, not truthiness."""
+    return (
+        row.get("status") == "exited"
+        and type(row.get("exit")) is int
+        and row.get("timed_out") is False
+        and row.get("cleanup_complete") is True
+        and row.get("abandoned_pipes") is False
+        and (
+            not row.get("trace_required")
+            or (row.get("trace") or {}).get("status") == "ok"
+        )
+    )
+
+
+def require_process_clean(row, what, kind="harness"):
+    trace = row.get("trace") or {}
+    if row.get("trace_required") and trace.get("status") != "ok":
+        raise CaseError(
+            "harness",
+            f"{what}: exec trace {trace.get('status')}: {trace.get('error', '')}",
+        )
+    if row.get("timed_out") is True:
+        raise CaseError(
+            kind, f"{what}: timed out after {row['timeout_seconds']}s"
+        )
+    if row.get("status") == "signalled":
+        raise CaseError(kind, f"{what}: terminated by signal {row.get('exit')}")
+    if not process_clean(row):
+        raise CaseError(
+            "harness",
+            f"{what}: invalid bounded process record: "
+            f"status={row.get('status')!r} exit={row.get('exit')!r} "
+            f"timed_out={row.get('timed_out')!r} "
+            f"cleanup_complete={row.get('cleanup_complete')!r} "
+            f"abandoned_pipes={row.get('abandoned_pipes')!r}",
+        )
+    return row
+
+
+def sanitize_row(row):
+    return {key: value for key, value in row.items() if not key.startswith("_")}
+
+
+def public_process_record(row):
+    keep = (
+        "name",
+        "kind",
+        "case",
+        "opt",
+        "argv",
+        "run_argv",
+        "timeout_seconds",
+        "elapsed_seconds",
+        "status",
+        "timeout",
+        "exit",
+        "timed_out",
+        "cleanup_complete",
+        "abandoned_pipes",
+        "stdout_path",
+        "stdout_bytes",
+        "stdout_sha256",
+        "stderr_path",
+        "stderr_bytes",
+        "stderr_sha256",
+        "trace_required",
+        "trace_path",
+        "trace_expected",
+        "trace",
+        "process_path",
+        "launch_error",
+    )
+    return {key: row[key] for key in keep if key in row}
+
+
+def persist_process_record(record_dir: Path, name: str, row: dict):
+    path = Path(record_dir) / "process" / f"{name}.json"
+    row["process_path"] = str(path)
+    write_json(path, public_process_record(row))
+    return path
+
+
+def execute_recorded(argv, timeout, env, record_dir: Path, name: str,
+                     limit: int, cwd=HERE, strace=None, trace_file=None,
+                     trace_allowed=None, kind="harness", extra=None):
+    """Run, persist raw+process JSON, then audit trace and update the record.
+
+    The process JSON is durable before trace audit or any caller assertion.
+    Private raw text never enters that JSON.
+    """
+    result = command(
+        argv,
+        timeout,
+        env,
+        cwd=cwd,
+        strace=strace,
+        trace_file=trace_file,
+        trace_allowed=trace_allowed,
+    )
+    raw_stdout, raw_stderr = result["stdout"], result["stderr"]
+    result = record_command(record_dir, name, result, limit)
+    result["_raw_stdout"] = raw_stdout
+    result["_raw_stderr"] = raw_stderr
+    result["kind"] = kind
+    if extra:
+        result.update(extra)
+    persist_process_record(record_dir, name, result)
+    audit_command_trace(result)
+    persist_process_record(record_dir, name, result)
+    return result
+
+
 def require_ok(row, what):
-    if row.get("timeout"):
-        raise CaseError("harness", f"{what}: timed out after {row['timeout_seconds']}s")
+    require_process_clean(row, what)
     if row["exit"] != 0:
         raise CaseError(
             "harness",
             f"{what}: exit {row['exit']}\nstdout:\n{row['stdout']}\nstderr:\n{row['stderr']}",
         )
     return row
+
+
+def elf_problems(text):
+    problems = []
+    if "INTERP" in text:
+        problems.append("program header INTERP present")
+    if "NEEDED" in text:
+        problems.append("dynamic NEEDED entry present")
+    return problems
 
 
 def elf_is_freestanding(readelf: Path, binary: Path, timeout: int, env):
@@ -134,6 +490,48 @@ def elf_is_freestanding(readelf: Path, binary: Path, timeout: int, env):
     if "NEEDED" in text:
         problems.append("dynamic NEEDED entry present")
     return row, problems
+
+
+def prepare_out(out: Path):
+    """Prepare a fresh output directory; never overwrite old records."""
+    out = Path(out)
+    if out.exists():
+        if not out.is_dir():
+            raise RuntimeError(f"output path is not a directory: {out}")
+        if any(out.iterdir()):
+            raise RuntimeError(
+                "output directory is not empty; refusing to overwrite records: "
+                + str(out)
+            )
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "raw").mkdir(parents=True, exist_ok=True)
+    (out / "traces").mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def prepare_legacy_out(out: Path):
+    """Repeatable legacy reference entry: keep old records, add one run.
+
+    Candidate mode remains strict. A non-empty reference output directory gets
+    a unique child run directory, following the existing NativeSlice pattern.
+    """
+    out = Path(out)
+    if out.exists() and out.is_dir() and any(out.iterdir()):
+        out = Path(tempfile.mkdtemp(prefix="run-", dir=str(out)))
+    return prepare_out(out)
+
+
+def remap_compact_out(compact_out, requested_out, actual_out):
+    """Keep a compact report requested inside legacy OUT with the new run."""
+    if compact_out is None:
+        return None
+    try:
+        relative = Path(compact_out).resolve().relative_to(
+            Path(requested_out).resolve()
+        )
+    except ValueError:
+        return compact_out
+    return Path(actual_out) / relative
 
 
 def histogram_add(table, value, delta=1):
@@ -643,21 +1041,18 @@ CHECKS = {
 }
 
 
-def record_command(out_dir: Path, name: str, row: dict, limit: int):
-    row = compact_command(out_dir, name, row, limit)
-    row["name"] = name
-    return row
-
-
 def run_case(case, opt, args, env, report):
     identity = f"{case['id']}/O{opt}"
     case_dir = args.out / case["id"] / f"O{opt}"
     case_dir.mkdir(parents=True, exist_ok=True)
     timeout = case.get("timeout_seconds", args.timeout)
+    role = getattr(args, "role", ROLE_REFERENCE)
+    candidate = role == ROLE_CANDIDATE
     row = {
         "id": case["id"],
         "kind": case["kind"],
         "opt": opt,
+        "role": role,
         "status": "failed",
         "commands": [],
         "source_hashes": {},
@@ -667,16 +1062,34 @@ def run_case(case, opt, args, env, report):
     fixture = HERE / Path(case["manifest"]).parent
     commands = row["commands"]
 
-    def run(name, argv, kind, local_timeout=None):
-        result = command(argv, local_timeout or timeout, env, cwd=HERE)
-        raw_stdout, raw_stderr = result["stdout"], result["stderr"]
-        result = record_command(case_dir, name, result, args.raw_output_limit)
-        result["_raw_stdout"] = raw_stdout
-        result["_raw_stderr"] = raw_stderr
-        result["kind"] = kind
+    def cli_tool_aliases():
+        paths = [args.cli]
+        bases = {Path(args.cli).parent, Path(args.cli).resolve().parent}
+        for base in bases:
+            for name in LLVM_TOOL_NAMES:
+                paths.append(base / "toolchain" / name)
+        return aliases(*paths)
+
+    def run(name, argv, kind, local_timeout=None, trace_allowed=None):
+        trace_file = None
+        if candidate:
+            trace_file = case_dir / "traces" / f"{name}.exec.log"
+        result = execute_recorded(
+            argv,
+            local_timeout or timeout,
+            env,
+            case_dir,
+            name,
+            args.raw_output_limit,
+            cwd=HERE,
+            strace=args.strace if candidate else None,
+            trace_file=trace_file,
+            trace_allowed=trace_allowed,
+            kind=kind,
+            extra={"case": case["id"], "opt": opt},
+        )
         commands.append(result)
-        if result.get("timeout"):
-            raise CaseError(kind, f"{identity} {name} timed out after {result['timeout_seconds']}s")
+        require_process_clean(result, f"{identity} {name}", kind)
         return result
 
     try:
@@ -705,29 +1118,62 @@ def run_case(case, opt, args, env, report):
                 "json",
             ],
             "build",
+            trace_allowed=cli_tool_aliases() if candidate else None,
         )
         if build["exit"] != 0:
             raise CaseError("build", f"{identity} cli build exit {build['exit']}")
-        build_json = json.loads(build["stdout"])
+        try:
+            build_json = strict_json_loads(build["_raw_stdout"])
+        except (ValueError, TypeError) as error:
+            raise CaseError(
+                "build", f"{identity} cli build JSON is not finite: {error}"
+            ) from error
         if build_json.get("status") != "ok":
             raise CaseError("build", f"{identity} cli build status {build_json.get('status')}")
         program = cli_out / "program"
         if not program.is_file():
             raise CaseError("build", f"{identity} cli build produced no program")
-        readelf_real, problems = elf_is_freestanding(
-            args.readelf, program, timeout, env
+        program_object = cli_out / "program.o"
+        if candidate:
+            # The observer must consume the object published by this exact
+            # successful public build, never a helper object or stale file.
+            if not program_object.is_file():
+                raise CaseError(
+                    "build", f"{identity} cli build produced no program.o"
+                )
+            if program_object.stat().st_size == 0:
+                raise CaseError(
+                    "build", f"{identity} cli build produced an empty program.o"
+                )
+            row["cli_program_object"] = {
+                "path": str(program_object),
+                "sha256": digest(program_object),
+                "bytes": program_object.stat().st_size,
+                "build_command": build["name"],
+            }
+        readelf_real = run(
+            "readelf-real-program",
+            [args.readelf, "-l", "-d", program],
+            "static_elf",
+            trace_allowed=aliases(args.readelf) if candidate else None,
         )
-        readelf_real = record_command(
-            case_dir, "readelf-real-program", readelf_real, args.raw_output_limit
-        )
-        commands.append(readelf_real)
+        if readelf_real["exit"] != 0:
+            raise CaseError(
+                "harness", f"{identity} readelf program exit {readelf_real['exit']}"
+            )
+        problems = elf_problems(readelf_real["_raw_stdout"])
         row["real_program_elf"] = {"path": str(program), "problems": problems}
         if problems:
             raise CaseError("static_elf", f"{identity} real program is not freestanding: {problems}")
 
         # 2. Run the real program: source checks prove rooted content and
         #    typed-error/defer behavior.
-        real_execute = run("real-execute", [program], "behavior")
+        real_execute = run(
+            "real-execute",
+            [program],
+            "behavior",
+            trace_allowed=aliases(program) if candidate else None,
+        )
         if real_execute["exit"] != case["main_return"]:
             raise CaseError(
                 "source_result",
@@ -740,30 +1186,58 @@ def run_case(case, opt, args, env, report):
                 f"{real_execute['_raw_stdout']!r} {real_execute['_raw_stderr']!r}",
             )
 
-        # 3. Emit the same program as LLVM from the same helper, then link the
-        #    test-only freestanding observer statically.
+        # 3. Reference keeps the original helper-emitted LLVM link. Candidate
+        #    relinks the unchanged observer from this public program.o.
         observe_dir = case_dir / "observe"
         observe_dir.mkdir(parents=True, exist_ok=True)
-        emit = run(
-            "helper-emit-llvm",
-            [
-                args.helper,
-                "--project",
-                HERE / case["manifest"],
-                "--out-object",
-                observe_dir / "program.o",
-                "--out-llvm",
-                observe_dir / "program.ll",
-                "--opt",
-                str(opt),
-            ],
-            "build",
-        )
-        if emit["exit"] != 0:
-            raise CaseError("build", f"{identity} helper emit exit {emit['exit']}")
-        observe_build = run(
-            "observer-link",
-            [
+        if candidate:
+            clang = str(Path(args.clang).absolute())
+            lld = str(Path(args.lld).absolute())
+            observer_input = program_object
+            observer_input_sha = row["cli_program_object"]["sha256"]
+            link_argv = [
+                clang,
+                f"-O{opt}",
+                "-std=c++20",
+                observer_input,
+                HERE / "observe_gc.cpp",
+                args.runtime,
+                "-o",
+                observe_dir / "observe",
+                "-nostdlib",
+                "-static",
+                f"--ld-path={lld}",
+                "-Wl,--wrap=lang_alloc_v1",
+                "-Wl,--wrap=lang_free_v1",
+            ]
+            link_trace = aliases(args.clang, args.lld)
+            row["observer_link"] = {
+                "program_object": str(observer_input),
+                "program_object_sha256": observer_input_sha,
+                "observer_source_sha256": digest(HERE / "observe_gc.cpp"),
+                "runtime_sha256": digest(args.runtime),
+                "clang_sha256": digest(args.clang),
+                "lld_sha256": digest(args.lld),
+            }
+        else:
+            emit = run(
+                "helper-emit-llvm",
+                [
+                    args.helper,
+                    "--project",
+                    HERE / case["manifest"],
+                    "--out-object",
+                    observe_dir / "program.o",
+                    "--out-llvm",
+                    observe_dir / "program.ll",
+                    "--opt",
+                    str(opt),
+                ],
+                "build",
+            )
+            if emit["exit"] != 0:
+                raise CaseError("build", f"{identity} helper emit exit {emit['exit']}")
+            link_argv = [
                 args.clang,
                 f"-O{opt}",
                 "-std=c++20",
@@ -776,18 +1250,27 @@ def run_case(case, opt, args, env, report):
                 "-static",
                 "-Wl,--wrap=lang_alloc_v1",
                 "-Wl,--wrap=lang_free_v1",
-            ],
+            ]
+            link_trace = None
+        observe_build = run(
+            "observer-link",
+            link_argv,
             "build",
+            trace_allowed=link_trace,
         )
         if observe_build["exit"] != 0:
             raise CaseError("build", f"{identity} observer link exit {observe_build['exit']}")
-        readelf_obs, problems = elf_is_freestanding(
-            args.readelf, observe_dir / "observe", timeout, env
+        readelf_obs = run(
+            "readelf-observer",
+            [args.readelf, "-l", "-d", observe_dir / "observe"],
+            "static_elf",
+            trace_allowed=aliases(args.readelf) if candidate else None,
         )
-        readelf_obs = record_command(
-            case_dir, "readelf-observer", readelf_obs, args.raw_output_limit
-        )
-        commands.append(readelf_obs)
+        if readelf_obs["exit"] != 0:
+            raise CaseError(
+                "harness", f"{identity} readelf observer exit {readelf_obs['exit']}"
+            )
+        problems = elf_problems(readelf_obs["_raw_stdout"])
         row["observer_elf"] = {
             "path": str(observe_dir / "observe"),
             "problems": problems,
@@ -795,7 +1278,12 @@ def run_case(case, opt, args, env, report):
         if problems:
             raise CaseError("static_elf", f"{identity} observer is not freestanding: {problems}")
 
-        observe_execute = run("observe-execute", [observe_dir / "observe"], "behavior")
+        observe_execute = run(
+            "observe-execute",
+            [observe_dir / "observe"],
+            "behavior",
+            trace_allowed=aliases(observe_dir / "observe") if candidate else None,
+        )
         if observe_execute["exit"] != 0:
             raise CaseError(
                 "source_result",
@@ -804,7 +1292,8 @@ def run_case(case, opt, args, env, report):
         if observe_execute["_raw_stdout"]:
             raise CaseError("source_result", f"{identity} observer wrote to stdout")
 
-        # 4. Exact (address, generation) accounting.
+        # 4. Exact (address, generation) accounting. Use the pre-compaction
+        #    text: large pressure streams are stored under OUT/raw/.
         try:
             metrics = parse_events(observe_execute["_raw_stderr"])
         except ObserverError as error:
@@ -942,6 +1431,20 @@ def classify_outcome(report, catalog, selected, opts, baseline_only):
     return "passed", "selected_scope_passed", False, "single_mutator_selected_scope_cycles_passed"
 
 
+def planned_commands(cases, opts, role):
+    """Exact pre-run budget; never derived from a successful driver exit."""
+    per_run = 7 if role == ROLE_REFERENCE else 6
+    runs = len(cases) * len(opts)
+    return {
+        "role": role,
+        "commands_per_run": per_run,
+        "runs": runs,
+        "case_commands_expected": runs * per_run,
+        "clang_version_commands": 1,
+        "total_expected": runs * per_run + 1,
+    }
+
+
 def compact_report(report, catalog):
     compact_cases = []
     for row in report["cases"]:
@@ -953,9 +1456,12 @@ def compact_report(report, catalog):
                 "id": row["id"],
                 "kind": row["kind"],
                 "opt": row["opt"],
+                "role": row.get("role"),
                 "status": row["status"],
                 "error_kind": row.get("error_kind"),
                 "source_hashes": row.get("source_hashes", {}),
+                "cli_program_object": row.get("cli_program_object"),
+                "observer_link": row.get("observer_link"),
                 "real_program_elf": row.get("real_program_elf"),
                 "observer_elf": row.get("observer_elf"),
                 "metrics": {
@@ -990,8 +1496,13 @@ def compact_report(report, catalog):
     return {
         "schema": COMPACT_SCHEMA,
         "operation_id": report["operation_id"],
+        "role": report.get("role"),
         "mode": report["mode"],
+        "requested_out": report.get("requested_out"),
+        "output_dir": report.get("output_dir"),
+        "compact_out": report.get("compact_out"),
         "status": report["status"],
+        "command_plan": report.get("command_plan"),
         "gc_test_result": report["gc_test_result"],
         "expected_failure": report["expected_failure"],
         "not_implemented": report["not_implemented"],
@@ -1006,14 +1517,15 @@ def compact_report(report, catalog):
         "contract_sha256": report["contract_sha256"],
         "observer_source_sha256": report["observer_source_sha256"],
         "fixture_hashes": report["fixture_hashes"],
+        "inputs": report.get("inputs"),
         "runs": compact_cases,
     }
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cli", type=Path, required=True)
-    parser.add_argument("--helper", type=Path, required=True)
+    parser.add_argument("--helper", type=Path)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--clang", type=Path, required=True)
     parser.add_argument("--readelf", type=Path, required=True)
@@ -1029,11 +1541,61 @@ def main():
     parser.add_argument("--expect-cli-sha256")
     parser.add_argument("--expect-helper-sha256")
     parser.add_argument("--expect-runtime-sha256")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--role",
+        choices=ROLES,
+        default=ROLE_REFERENCE,
+        help="reference keeps the helper LLVM route; candidate links the "
+        "public CLI program.o and never runs the helper",
+    )
+    parser.add_argument("--strace", type=Path)
+    parser.add_argument("--lld", type=Path)
+    return parser
+
+
+def parse_args(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not args.opt:
         args.opt = [0, 2]
+    if args.role == ROLE_REFERENCE:
+        if args.helper is None:
+            parser.error("--helper is required for --role reference")
+    else:
+        if args.expect_helper_sha256:
+            parser.error("--expect-helper-sha256 is reference-only")
+        if args.strace is None:
+            parser.error("--strace is required for --role candidate")
+        if args.lld is None:
+            parser.error("--lld is required for --role candidate")
+    return parser, args
 
-    args.out.mkdir(parents=True, exist_ok=True)
+
+def main():
+    parser, args = parse_args()
+    requested_out = args.out
+    try:
+        if args.role == ROLE_CANDIDATE:
+            args.out = prepare_out(requested_out)
+        else:
+            args.out = prepare_legacy_out(requested_out)
+    except RuntimeError as error:
+        parser.error(str(error))
+    compact_out_requested = args.compact_out
+    if (
+        args.role == ROLE_REFERENCE
+        and Path(args.out).resolve() != Path(requested_out).resolve()
+        and args.compact_out is not None
+    ):
+        args.compact_out = remap_compact_out(
+            args.compact_out, requested_out, args.out
+        )
+    root = Path(args.root).resolve() if args.root else REPO_ROOT
+    try:
+        set_corpus(root)
+    except RuntimeError as error:
+        parser.error(str(error))
+
     catalog_document = json.loads((HERE / "cases.json").read_text())
     catalog = catalog_document["cases"]
     cases = catalog
@@ -1051,9 +1613,42 @@ def main():
             + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
         )
 
+    role = args.role
+    candidate = role == ROLE_CANDIDATE
+    cli_dir = Path(args.cli).resolve().parent
+    cli_runtime_path = cli_dir / "runtime/liblang_native_runtime.a"
+    actual_vec_header = HERE.parents[2] / "runtime/native/vec.hpp"
+    resource_paths = {
+        "runtime": args.runtime,
+        "observer_source": HERE / "observe_gc.cpp",
+        "vec_header": actual_vec_header,
+        "fixtures": HERE / "fixtures",
+        "root_stdlib": root / "stdlib",
+        "cli_stdlib": cli_dir / "stdlib",
+        "cli_runtime": cli_runtime_path,
+    }
+    required_inputs = [
+        "runtime",
+        "observer_source",
+        "vec_header",
+        "fixtures",
+        "root_stdlib",
+    ]
+    if candidate:
+        required_inputs += ["cli_stdlib", "cli_runtime"]
+    inputs_before, missing_before = snapshot_resources(resource_paths)
+    required_missing_before = [
+        name for name in required_inputs if inputs_before.get(name) is None
+    ]
+    fixture_before = {
+        str(path.relative_to(HERE)): digest(path)
+        for path in sorted((HERE / "fixtures").rglob("*"))
+        if path.is_file()
+    }
     report = {
         "schema": SCHEMA,
         "operation_id": catalog_document["operation_id"],
+        "role": role,
         "mode": "baseline-only" if args.baseline_only else "target",
         "status": "failed",
         "gc_test_result": "not_run",
@@ -1062,41 +1657,105 @@ def main():
         "mem02_complete": False,
         "feature_claim": "none",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "requested_out": str(requested_out),
+        "output_dir": str(args.out),
+        "compact_out_requested": (
+            str(compact_out_requested) if compact_out_requested else None
+        ),
+        "compact_out": str(args.compact_out) if args.compact_out else None,
         "root": str(args.root) if args.root else None,
+        "resolved_root": str(root),
         "cases_path": str(HERE / "cases.json"),
         "cases_sha256": digest(HERE / "cases.json"),
         "runner_sha256": digest(Path(__file__)),
         "selftest_sha256": digest(HERE / "selftest_checks.py"),
         "contract_sha256": digest(HERE / "CONTRACT.md"),
         "observer_source_sha256": digest(HERE / "observe_gc.cpp"),
-        "fixture_hashes": {
-            str(path.relative_to(HERE)): digest(path)
-            for path in sorted((HERE / "fixtures").rglob("*"))
-            if path.is_file()
-        },
+        "fixture_hashes": fixture_before,
         "tool_pin": {},
+        "inputs": {
+            "required": required_inputs,
+            "before": inputs_before,
+            "missing_before": missing_before,
+            "required_missing_before": required_missing_before,
+            "after": None,
+            "missing_after": [],
+            "required_missing_after": [],
+            "changed": [],
+            "unchanged": None,
+            "fixture_hashes_before": fixture_before,
+            "fixture_hashes_after": None,
+        },
+        "resources": {
+            "runtime": {
+                "path": str(args.runtime),
+                "sha256": inputs_before.get("runtime"),
+            },
+            "observer_source": {
+                "path": str(HERE / "observe_gc.cpp"),
+                "sha256": inputs_before.get("observer_source"),
+            },
+            "vec_header": {
+                "path": str(actual_vec_header),
+                "sha256": inputs_before.get("vec_header"),
+            },
+            "stdlib_tree_sha256": inputs_before.get("root_stdlib"),
+            "cli_dir": str(cli_dir),
+            "toolchain_dir": str(cli_dir / "toolchain"),
+            "cli_runtime": {
+                "path": str(cli_runtime_path),
+                "sha256": inputs_before.get("cli_runtime"),
+            },
+            "cli_stdlib_tree_sha256": inputs_before.get("cli_stdlib"),
+            "runtime_after": None,
+            "observer_source_after": None,
+            "vec_header_after": None,
+            "stdlib_tree_sha256_after": None,
+            "stdlib_tree_unchanged": None,
+            "cli_runtime_after": None,
+            "cli_stdlib_tree_sha256_after": None,
+            "cli_stdlib_tree_unchanged": None,
+            "fixtures_tree_sha256": inputs_before.get("fixtures"),
+            "fixtures_tree_sha256_after": None,
+            "fixtures_tree_unchanged": None,
+            "clang": file_info(args.clang),
+            "readelf": file_info(args.readelf),
+        },
         "environment": {
             "timeout_seconds": args.timeout,
             "opt_levels": sorted(set(args.opt)),
             "libxml2_lib": str(args.libxml2_lib) if args.libxml2_lib else None,
             "raw_output_limit": args.raw_output_limit,
+            "role": role,
+            "strace": str(args.strace) if args.strace else None,
+            "lld": str(args.lld) if args.lld else None,
         },
         "limitations": LIMITATIONS,
         "cases": [],
     }
+    report["command_plan"] = planned_commands(cases, args.opt, role)
     scope = build_scope(catalog, cases, args.opt)
     report["suite_scope"] = scope
     report["coverage"] = build_coverage(cases, scope)
+    if candidate:
+        report["resources"]["strace"] = file_info(args.strace)
+        report["resources"]["lld"] = file_info(args.lld)
+    if candidate and args.helper is not None:
+        report["unused_options"] = {"helper": str(args.helper)}
 
     # Pin the exact build products. A changed CLI is not a GC result; it makes
     # the run inconclusive unless a stable expected hash was supplied.
     tool_paths = {
         "cli": args.cli,
-        "helper": args.helper,
         "runtime": args.runtime,
         "clang": args.clang,
         "readelf": args.readelf,
     }
+    if candidate:
+        tool_paths["strace"] = args.strace
+        tool_paths["lld"] = args.lld
+    else:
+        tool_paths["helper"] = args.helper
     for name, path in tool_paths.items():
         if not path.is_file():
             report["status"] = "inconclusive"
@@ -1107,31 +1766,57 @@ def main():
                 "expected": {},
                 "changed": {},
             }
-            (args.out / "summary.json").write_text(json.dumps(report, indent=2))
+            write_json(args.out / "summary.json", report)
             print(json.dumps({"status": report["status"], "failure": report["failure"]}))
             return 2
     actual_start = {name: digest(path) for name, path in tool_paths.items()}
+    if (
+        candidate
+        and cli_runtime_path.is_file()
+        and digest(cli_runtime_path) != actual_start["runtime"]
+    ):
+        report["status"] = "inconclusive"
+        report["gc_test_result"] = "inconclusive_tool_pin"
+        report["failure"] = (
+            "candidate runtime does not match the CLI resource runtime"
+        )
+        report["tool_pin"] = {
+            "actual_start": actual_start,
+            "expected": {},
+            "changed": {},
+        }
+        write_json(args.out / "summary.json", report)
+        print(json.dumps({"status": report["status"],
+                          "failure": report["failure"]}))
+        return 2
     expected = {
         "cli": args.expect_cli_sha256 or actual_start["cli"],
-        "helper": args.expect_helper_sha256 or actual_start["helper"],
         "runtime": args.expect_runtime_sha256 or actual_start["runtime"],
         "clang": actual_start["clang"],
         "readelf": actual_start["readelf"],
     }
+    if candidate:
+        expected["strace"] = actual_start["strace"]
+        expected["lld"] = actual_start["lld"]
+    else:
+        expected["helper"] = args.expect_helper_sha256 or actual_start["helper"]
     mismatched = {
         name: {"expected": expected[name], "actual": actual_start[name]}
         for name in ("cli", "helper", "runtime")
-        if expected[name] != actual_start[name]
+        if name in expected and expected[name] != actual_start[name]
     }
-    helper_embedded = str(args.helper.resolve()).encode() in args.cli.read_bytes()
+    helper_embedded = None
+    if not candidate:
+        helper_embedded = str(args.helper.resolve()).encode() in args.cli.read_bytes()
     report["tool_pin"] = {
         "expected": expected,
         "actual_start": actual_start,
         "changed": mismatched,
         "helper_path_embedded_in_cli": helper_embedded,
         "paths": {name: str(path) for name, path in tool_paths.items()},
+        "helper_used": not candidate,
     }
-    if mismatched or not helper_embedded:
+    if mismatched or (not candidate and not helper_embedded):
         report["status"] = "inconclusive"
         report["gc_test_result"] = "inconclusive_tool_pin"
         report["failure"] = (
@@ -1139,7 +1824,7 @@ def main():
             if mismatched
             else "woozyc does not embed the supplied helper path"
         )
-        (args.out / "summary.json").write_text(json.dumps(report, indent=2))
+        write_json(args.out / "summary.json", report)
         print(
             json.dumps(
                 {
@@ -1150,13 +1835,54 @@ def main():
             )
         )
         return 2
-    clang_version = command([args.clang, "--version"], args.timeout, env)
-    report["tool_pin"]["clang_version"] = clang_version
-    if clang_version["exit"] != 0 or "22.1.8" not in clang_version["stdout"]:
+    version_dir = args.out / "tool"
+    version_trace = None
+    if candidate:
+        version_trace = version_dir / "traces" / "clang-version.exec.log"
+    try:
+        clang_version = execute_recorded(
+            [str(Path(args.clang).absolute()), "--version"],
+            args.timeout,
+            env,
+            version_dir,
+            "clang-version",
+            args.raw_output_limit,
+            cwd=HERE,
+            strace=args.strace if candidate else None,
+            trace_file=version_trace,
+            trace_allowed=aliases(args.clang) if candidate else None,
+            kind="harness",
+            extra={"case": None, "opt": None},
+        )
+        require_process_clean(clang_version, "clang --version", "harness")
+    except CaseError as error:
+        report["status"] = "inconclusive"
+        report["gc_test_result"] = "inconclusive_tool_or_build"
+        report["failure"] = str(error)
+        process_path = version_dir / "process" / "clang-version.json"
+        report["tool_pin"]["clang_version_process"] = str(process_path)
+        try:
+            report["tool_pin"]["clang_version"] = strict_json_loads(
+                process_path.read_text()
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+        write_json(args.out / "summary.json", report)
+        print(json.dumps({"status": report["status"],
+                          "failure": report["failure"]}))
+        return 2
+    report["tool_pin"]["clang_version"] = sanitize_row(clang_version)
+    report["tool_pin"]["clang_version_process"] = clang_version.get(
+        "process_path"
+    )
+    if (
+        clang_version["exit"] != 0
+        or "22.1.8" not in clang_version["_raw_stdout"]
+    ):
         report["status"] = "inconclusive"
         report["gc_test_result"] = "inconclusive_tool_or_build"
         report["failure"] = "clang is not the fixed 22.1.8 toolchain"
-        (args.out / "summary.json").write_text(json.dumps(report, indent=2))
+        write_json(args.out / "summary.json", report)
         print(json.dumps({"status": report["status"], "failure": report["failure"]}))
         return 2
 
@@ -1164,8 +1890,11 @@ def main():
         for opt in args.opt:
             run_case(case, opt, args, env, report)
 
+    pin_end_names = tuple(tool_paths)
     actual_end = {
-        name: digest(path) for name, path in tool_paths.items() if name in ("cli", "helper", "runtime")
+        name: digest(path)
+        for name, path in tool_paths.items()
+        if name in pin_end_names
     }
     changed = {
         name: {"start": actual_start[name], "end": actual_end[name]}
@@ -1174,18 +1903,118 @@ def main():
     }
     report["tool_pin"]["actual_end"] = actual_end
     report["tool_pin"]["changed"] = changed
+    inputs_after, missing_after = snapshot_resources(resource_paths)
+    fixture_after = {
+        str(path.relative_to(HERE)): digest(path)
+        for path in sorted((HERE / "fixtures").rglob("*"))
+        if path.is_file()
+    }
+    input_changes = sorted(
+        name for name in inputs_before
+        if inputs_before[name] != inputs_after.get(name)
+    )
+    required_missing_after = [
+        name for name in required_inputs if inputs_after.get(name) is None
+    ]
+    input_bad = bool(
+        input_changes or required_missing_before or required_missing_after
+    )
+    report["inputs"]["after"] = inputs_after
+    report["inputs"]["missing_after"] = missing_after
+    report["inputs"]["required_missing_after"] = required_missing_after
+    report["inputs"]["changed"] = input_changes
+    report["inputs"]["fixture_hashes_after"] = fixture_after
+    report["inputs"]["unchanged"] = not input_bad
+    report["fixture_hashes_after"] = fixture_after
+    report["fixtures_unchanged"] = fixture_before == fixture_after
+    report["resources"]["runtime_after"] = {
+        "path": str(args.runtime),
+        "sha256": inputs_after.get("runtime"),
+    }
+    report["resources"]["observer_source_after"] = {
+        "path": str(HERE / "observe_gc.cpp"),
+        "sha256": inputs_after.get("observer_source"),
+    }
+    report["resources"]["vec_header_after"] = {
+        "path": str(actual_vec_header),
+        "sha256": inputs_after.get("vec_header"),
+    }
+    report["resources"]["stdlib_tree_sha256_after"] = inputs_after.get(
+        "root_stdlib"
+    )
+    report["resources"]["stdlib_tree_unchanged"] = (
+        inputs_before.get("root_stdlib") == inputs_after.get("root_stdlib")
+    )
+    report["resources"]["cli_runtime_after"] = {
+        "path": str(cli_runtime_path),
+        "sha256": inputs_after.get("cli_runtime"),
+    }
+    report["resources"]["cli_stdlib_tree_sha256_after"] = inputs_after.get(
+        "cli_stdlib"
+    )
+    report["resources"]["cli_stdlib_tree_unchanged"] = (
+        inputs_before.get("cli_stdlib") == inputs_after.get("cli_stdlib")
+    )
+    report["resources"]["fixtures_tree_sha256"] = inputs_before.get("fixtures")
+    report["resources"]["fixtures_tree_sha256_after"] = inputs_after.get(
+        "fixtures"
+    )
+    report["resources"]["fixtures_tree_unchanged"] = (
+        inputs_before.get("fixtures") == inputs_after.get("fixtures")
+    )
+    actual_case_commands = sum(len(row["commands"]) for row in report["cases"])
+    clang_actual = 1 if "clang_version" in report["tool_pin"] else 0
+    report["command_plan"]["case_commands_actual"] = actual_case_commands
+    report["command_plan"]["runs_actual"] = len(report["cases"])
+    report["command_plan"]["clang_version_commands_actual"] = clang_actual
+    report["command_plan"]["total_actual"] = actual_case_commands + clang_actual
+    report["command_plan"]["complete"] = (
+        len(report["cases"]) == report["command_plan"]["runs"]
+        and actual_case_commands == report["command_plan"]["case_commands_expected"]
+        and clang_actual == report["command_plan"]["clang_version_commands"]
+    )
 
     status, gc_result, not_implemented, feature_claim = classify_outcome(
         report, catalog, cases, args.opt, args.baseline_only
     )
+    if not report["command_plan"]["complete"] and status in (
+        "passed",
+        "expected_failure",
+    ):
+        status = "inconclusive"
+        gc_result = "inconclusive_tool_or_build"
+        not_implemented = False
+        feature_claim = "none"
+    failure_parts = []
+    if required_missing_before:
+        failure_parts.append(
+            "missing required input before run: "
+            + ", ".join(required_missing_before)
+        )
+    if input_changes:
+        failure_parts.append(
+            "input bytes changed during run: " + ", ".join(input_changes)
+        )
+    if required_missing_after:
+        failure_parts.append(
+            "missing required input after run: "
+            + ", ".join(required_missing_after)
+        )
     if changed:
+        failure_parts.append(
+            "tool bytes changed during run: " + ", ".join(sorted(changed))
+        )
+    if input_bad or changed:
         status = "inconclusive"
         gc_result = "inconclusive_tool_pin"
         not_implemented = False
         feature_claim = "none"
+        report["failure"] = "; ".join(failure_parts)
     report["status"] = status
     report["gc_test_result"] = gc_result
-    report["expected_failure"] = gc_result == "not_implemented" and not changed
+    report["expected_failure"] = (
+        gc_result == "not_implemented" and not changed and not input_bad
+    )
     report["not_implemented"] = not_implemented
     report["feature_claim"] = feature_claim
     report["counts"] = {
@@ -1204,15 +2033,18 @@ def main():
         ),
     }
     report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    (args.out / "summary.json").write_text(json.dumps(report, indent=2))
+    write_json(args.out / "summary.json", report)
     if args.compact_out:
         args.compact_out.parent.mkdir(parents=True, exist_ok=True)
-        args.compact_out.write_text(json.dumps(compact_report(report, catalog), indent=2))
+        write_json(args.compact_out, compact_report(report, catalog))
 
     print(
         json.dumps(
             {
+                "role": report["role"],
                 "mode": report["mode"],
+                "requested_out": report.get("requested_out"),
+                "output_dir": report.get("output_dir"),
                 "status": report["status"],
                 "gc_test_result": report["gc_test_result"],
                 "expected_failure": report["expected_failure"],
@@ -1225,6 +2057,8 @@ def main():
                     for key in ("controls", "cycles", "pressure", "full_case_set")
                 },
                 "counts": report["counts"],
+                "command_plan": report["command_plan"],
+                "inputs_unchanged": report.get("inputs", {}).get("unchanged"),
                 "tool_pin_changed": report["tool_pin"].get("changed", {}),
                 "failed_runs": [
                     {
