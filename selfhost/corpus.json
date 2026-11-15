@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "623e1e83c9a1cd471cf3455e123c4900ccb0a40b",
-  "previous_git_head": "679ff16f489c74d46ee882c93556511db1ab4b5c",
-  "frozen_at": "2026-11-14T23:54:32.424511+00:00",
+  "git_head": "68f69a6be7b3e56542ae0aa750fea9ffd13f434b",
+  "previous_git_head": "623e1e83c9a1cd471cf3455e123c4900ccb0a40b",
+  "frozen_at": "2026-11-15T00:44:55.814551+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Record completed external IO/process, Python language-GC and Unicode public-CLI suites at Source9ede/candidate13a. Enabled cases, source/runtime/runner hashes and ordinary expectations are unchanged; the ordinary driver does not execute these external suites.",
+  "freeze_basis": "Record accepted channels9 and concurrency9 current CLI suites and correct their coarse runner assignment. All existing case expectations/enabled state, frozen files/runtime and runner hashes are unchanged; external suites remain disabled in the ordinary driver.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -44487,14 +44487,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/bounded-mpmc/lang.toml",
@@ -44511,14 +44525,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/capacity-zero/lang.toml",
@@ -44535,14 +44563,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/close-drain/lang.toml",
@@ -44559,14 +44601,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/close-wake/lang.toml",
@@ -44583,14 +44639,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/owned-payload/lang.toml",
@@ -44607,14 +44677,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/try-ops/lang.toml",
@@ -44631,14 +44715,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/unbounded-mpmc/lang.toml",
@@ -44655,14 +44753,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/channels/unbounded-owned/lang.toml",
@@ -44679,14 +44791,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/channels/run_channels.py",
+      "runner_status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "22f99c74-9f89-4cc4-ab86-9da048ad479e",
+        "attempt": "c5aaf39a-dbf5-4048-9939-afd6ade5133b",
+        "ACK_event": 958074,
+        "Root_report": "checks/SH16-channels-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "7b5a5fa39dbf82b458cbb7e02730d6beba6a2521c41b010d84583252bd362c1e",
+        "independent_report": "checks/SH16-channels-fixed-current-independent-20261115.json",
+        "independent_sha256": "7bd603f1601ed940681ed9a7912b8b936b9676b2ae995e919c4b83119310eb3a",
+        "command_count": 128,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/cleanup/cross-module/lang.toml",
@@ -46201,14 +46327,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/detached/lang.toml",
@@ -46225,14 +46365,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/docs-mutex/lang.toml",
@@ -46249,14 +46403,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/docs-thread/lang.toml",
@@ -46273,14 +46441,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/owned/lang.toml",
@@ -46297,14 +46479,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/reentrant-lock/lang.toml",
@@ -46321,14 +46517,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/shared/lang.toml",
@@ -46345,14 +46555,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/unowned-unlock/lang.toml",
@@ -46369,14 +46593,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/concurrency/wrong-owner/lang.toml",
@@ -46393,14 +46631,28 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
-      "runner": "tests/native/run.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner": "tests/native/run_concurrency.py",
+      "runner_status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": {
+        "accepted_task": "6ad0fccc-bf42-48cb-ac2f-d2bc3bad97b6",
+        "attempt": "2eba6e33-3110-4cef-bd4a-28f38657fc75",
+        "ACK_event": 958054,
+        "Root_report": "checks/SH16-concurrency-current-Root-accepted-20261115.json",
+        "Root_report_sha256": "28935f6ded37027786ab71ef771c6a5ab15869251c0e16630ad3640f186afa2a",
+        "independent_report": "checks/SH16-concurrency-current-independent-20261115.json",
+        "independent_sha256": "0619ce976449e05ab1c2c617a084dc050efb3bbaabde6ff777fc276f49e99326",
+        "command_count": 170,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "runtime_difference": "reference4df/7f; candidate0cb/89bd",
+        "scope": "Original dedicated suite only; ordinary corpus still disabled; no stage2/3 completion claim."
+      }
     },
     {
       "id": "project:tests/native/fixtures/arithmetic-literals/lang.toml",
@@ -86041,8 +86293,8 @@
     },
     {
       "path": "tests/native/channels/run_channels.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原channels九例已由当前公开CLI完成两角色O0/O2及全部重复运行，128条命令和原240/60/20秒断言保留；完整输入快照实际先于128条命令，旧晚快照失败保留。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。"
     },
     {
       "path": "tests/native/check_runtime_symbols.py",
@@ -86201,8 +86453,8 @@
     },
     {
       "path": "tests/native/run_concurrency.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原线程与锁九例已由当前公开CLI完成两角色O0/O2、重复执行、静态ELF、文档源码和Python拒绝，170条顶层命令及原30秒限制保留；LLVM内部版本检查单列为构建子调用。通用corpus不调用该专用runner，本行继续停用，原expected/run_expectation不改。"
     },
     {
       "path": "tests/native/run_floating.py",
