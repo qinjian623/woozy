@@ -3,14 +3,14 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "679ff16f489c74d46ee882c93556511db1ab4b5c",
-  "previous_git_head": "0d20de3edcc9ac6f17aecfa154328d203625756d",
-  "frozen_at": "2026-11-14T22:38:35.063812+00:00",
+  "git_head": "623e1e83c9a1cd471cf3455e123c4900ccb0a40b",
+  "previous_git_head": "679ff16f489c74d46ee882c93556511db1ab4b5c",
+  "frozen_at": "2026-11-14T23:54:32.424511+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
-  "freeze_basis": "Runtime tid-cache update based on 679ff16f489c74d46ee882c93556511db1ab4b5c. Existing cases unchanged; refresh runtime/runner hashes and register two internal component runners. Formal readiness is determined from the actual worktree and frozen inputs.",
+  "freeze_basis": "Record completed external IO/process, Python language-GC and Unicode public-CLI suites at Source9ede/candidate13a. Enabled cases, source/runtime/runner hashes and ordinary expectations are unchanged; the ordinary driver does not execute these external suites.",
   "toolchain": {
     "llvm": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8",
     "executables": [
@@ -50275,14 +50275,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/process/run_process.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用公开CLI完成正常和误用项目的O0/O2检查，保留60秒限制、ELF/原始字节、坏参数/环境、Panic及Python拒绝。通用corpus驱动不调用此runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH15-tid-cache-full38-Root-accepted-20261115.json; checks/SH15-tid-cache-full38-independent-20261115.json; checks/SH15-tid-cache-full38-original-budgets-20261115.dxgdii8n/resume-result.json; candidate13a/Source9ede/native0cb-hosted89bd; referencecc6/helper8aaa/native4df-hosted7f。两角色运行库不同；原38条全通过。"
     },
     {
       "id": "project:tests/native/process/misuse/lang.toml",
@@ -50299,14 +50300,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/process/run_process.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用公开CLI完成正常和误用项目的O0/O2检查，保留60秒限制、ELF/原始字节、坏参数/环境、Panic及Python拒绝。通用corpus驱动不调用此runner，本行仍停用，普通预期不改。",
       "tags": [
         "project"
-      ]
+      ],
+      "evidence": "checks/SH15-tid-cache-full38-Root-accepted-20261115.json; checks/SH15-tid-cache-full38-independent-20261115.json; checks/SH15-tid-cache-full38-original-budgets-20261115.dxgdii8n/resume-result.json; candidate13a/Source9ede/native0cb-hosted89bd; referencecc6/helper8aaa/native4df-hosted7f。两角色运行库不同；原38条全通过。"
     },
     {
       "id": "project:tests/native/reference_values_backend/fixtures/function-abi/lang.toml",
@@ -51062,15 +51064,15 @@
         "status": "unrecorded"
       },
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/stdlib-io-errors/run_io_errors.py",
-      "runner_status": "adaptation_required",
-      "reason": "IO error component runner migration and legacy repeated-output directory correction are accepted; product/performance remains failed at the original20-second per-command budget. Candidate72dc O0/O2 builds timed out with exit-9 and no program, so keep this existing row disabled/required. Original destination11bytes, absent-destination, empty stdout/stderr and exit assertions are unchanged; pure fake-process directory controls are not Source success.",
+      "runner_status": "public_cli",
+      "reason": "原专用runner已用公开CLI完成O0/O2编译及执行，保留20秒限制、精确11字节文件、不存在目标、标准流与退出断言。通用corpus驱动不调用此runner，因此本行仍停用，expected和run_expectation不改。新13a/Source9ede+B库已通过；旧72dc/ed1/0c46失败记录保留。",
       "tags": [
         "project"
       ],
-      "evidence": "checks/SH15-io-errors-correction-independent-review-20261114.json; checks/SH15-io-errors-single-correction-20261114.json; checks/SH15-io-errors-public-records-20261114/SH15-io-errors-public-records-20261114.json. Core6/8 with two candidate programs not_run; legacy missing-env2fail and correct-env4pass yield12 retained compiler/program commands, not whole-session count. Original20s candidate failures and original156public+133independent explicit records retained; no new Source/C/LLVM/program/version/network run during integration."
+      "evidence": "checks/SH15-tid-cache-full38-Root-accepted-20261115.json; checks/SH15-tid-cache-full38-independent-20261115.json; checks/SH15-tid-cache-full38-original-budgets-20261115.dxgdii8n/resume-result.json; candidate13a/Source9ede/native0cb-hosted89bd; referencecc6/helper8aaa/native4df-hosted7f。两角色运行库不同；原38条全通过。 早期记录：checks/SH15-io-errors-correction-independent-review-20261114.json; checks/SH15-io-errors-single-correction-20261114.json; checks/SH15-io-errors-public-records-20261114/SH15-io-errors-public-records-20261114.json. Core6/8 with two candidate programs not_run; legacy missing-env2fail and correct-env4pass yield12 retained compiler/program commands, not whole-session count. Original20s candidate failures and original156public+133independent explicit records retained; no new Source/C/LLVM/program/version/network run during integration."
     },
     {
       "id": "project:tests/native/stdlib-pure/lang.toml",
@@ -61618,14 +61620,27 @@
       "kind": "runner_group",
       "operation": "external",
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/native/unicode/run_source.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
+      "reason": "原Unicode Source runner已用13a公开CLI完成Native O0/O2和Python，保留每命令180秒、原程序断言、静态ELF及Unicode18运行库前缀检查。16条命令全部通过。普通corpus不调用该专用runner，本行继续停用；两角色使用不同运行库。",
       "tags": [
         "runner_group"
-      ]
+      ],
+      "evidence": {
+        "Root_report": "checks/SH16-unicode-current-Root-accepted-20261115.json",
+        "Root_sha256": "4d54eb4ef0a26d65f41459e244728e17440a0f2a68e2f3ac93daa6086460e70c",
+        "independent_report": "checks/SH16-unicode-current-independent-20261115.json",
+        "independent_sha256": "10aa1d3dcd109dc9bef8d665c9042ee7135a1d2c3a0c798cbbd56b3c7db3d28d",
+        "accepted_task": "6bf862d5-8bde-4433-a4f0-ab7a4ce9f7ad",
+        "attempt": "26151bf2-992e-4fd8-9784-4613199184d4",
+        "ACK_event": 957285,
+        "commands": 16,
+        "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+        "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+        "auxiliary_observation_correction": "Original16 commands passed; path-only reader correction reused artifacts, no Source replay; old failed report and two input original values retained."
+      }
     },
     {
       "id": "runner:tests/performance/run_plb.py",
@@ -61646,11 +61661,11 @@
       "kind": "runner_group",
       "operation": "external",
       "support": "existing_runner",
-      "adaptation": "required",
+      "adaptation": "ready",
       "enabled": false,
       "runner": "tests/python/language_gc/run_language_gc.py",
-      "runner_status": "component",
-      "reason": "Eight internal Python language-GC observer modes remain disabled/required: ordinary CLI exit assertions cannot express their Weak handles and language collector statistics. The accepted bounded runner and Root atomic command-record correction preserve the observer. Retained 48 main commands/16 observations belong to historical72dc/da69; f90 helper compiled Source is unknown and old727b API is only a symbols aid after exact program.py/langrt.py equality, not current ed1 API proof.",
+      "runner_status": "public_cli",
+      "reason": "当前13a/Source9ede公开CLI的八组语言GC观察已通过：48主命令、16次观察、64生成文件，保留原60秒限制及Weak、引用、自动收集和异常清理断言。普通corpus不调用该专用runner，本行继续停用。f90来源未知，旧55d/727b仅在CLI/API字节相同后辅助符号，当前Source API证明仍为false。",
       "tags": [
         "runner_group"
       ],
@@ -61672,7 +61687,25 @@
         "new_Source_compiler_program_executions": 0,
         "current_Source_same_API_proof": false,
         "reference_compiled_Source_history": "unknown",
-        "scope": "GC observer checks are outside ordinary CLI execution schema; no case enabled. Producer correction also ran three disallowed Python version probes, not validation and not part of the guarded zero-launch pure controls."
+        "scope": "GC observer checks are outside ordinary CLI execution schema; no case enabled. Producer correction also ran three disallowed Python version probes, not validation and not part of the guarded zero-launch pure controls.",
+        "current_cli_623e": {
+          "accepted_task": "5f8a6296-64ce-41f7-ac2c-c4189223a99c",
+          "attempt": "9e60444f-4357-4a80-a11f-ae4067b0b7bd",
+          "ACK_event": 956932,
+          "independent_report": "checks/SH16-python-GC8-current-independent-20261115.json",
+          "independent_sha256": "c773657962cd529637f0ccee719445f8d8201a648e1e18eb0bfb53f82a9065f4",
+          "summary_path": "/home/qin/.local/state/cli-agent-bridge/worktrees/1667f6aaa098e07e483c09e1/.work/SH16-python-language-gc-current-623e/run/summary.json",
+          "summary_sha256": "73d5b86c5ab93ada9e92a091d56106c37a786154a96908fd25c324900266e201",
+          "main_commands": 48,
+          "version_commands": 1,
+          "observer_documents": 16,
+          "generated_files": 64,
+          "candidate_cli": "13a1d3166bc8be5cfbbc90115b9aa253efa0c87ea8423820e275fd329e55904e",
+          "Source116": "9ede8535141200aed2a23a186e1680e3fe0488cfae235f2b30d0690d88d524f9",
+          "current_Source_same_API_proof": false,
+          "reference_compiled_Source_history": "unknown",
+          "historical_API": "55d/727b metadata only after exact CLI/API generated bytes equality"
+        }
       }
     },
     {
@@ -86128,8 +86161,8 @@
     },
     {
       "path": "tests/native/process/run_process.py",
-      "status": "component",
-      "reason": "Accepted test runner for bounded Native process/raw-byte/ELF observations and Python capability rejection. Historical candidate build timeout and unrun program rows remain failures; no complete new CLI pass is claimed."
+      "status": "public_cli",
+      "reason": "Source编译使用公开CLI；原专用runner的完整文件、程序与错误断言已由13a/Source9ede+B库原38测试通过，保留原20/60秒限制。普通corpus不调用此外部runner。历史失败保留，整体验证仍未完成。"
     },
     {
       "path": "tests/native/process/test_controls.py",
@@ -86243,8 +86276,8 @@
     },
     {
       "path": "tests/native/stdlib-io-errors/run_io_errors.py",
-      "status": "component",
-      "reason": "Dedicated IO error component records public CLI build/program results, strict process/exec checks and exact destination/absent-destination observations. Legacy output-directory compatibility is corrected; historical72dc20s timeouts remain failures and the original project row stays disabled/required."
+      "status": "public_cli",
+      "reason": "Source编译使用公开CLI；原专用runner的完整文件、程序与错误断言已由13a/Source9ede+B库原38测试通过，保留原20/60秒限制。普通corpus不调用此外部runner。历史失败保留，整体验证仍未完成。"
     },
     {
       "path": "tests/native/task_frame_gc/run_task_frame_gc.py",
@@ -86303,8 +86336,8 @@
     },
     {
       "path": "tests/native/unicode/run_source.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "原runner的两个Native优化和Python全组由13a公开CLI实际编译运行，原180秒、静态ELF和Unicode18前缀断言均保留；普通corpus不调用该专用runner。"
     },
     {
       "path": "tests/native/vec_graph_publish/run_all.sh",
@@ -86503,8 +86536,8 @@
     },
     {
       "path": "tests/python/language_gc/run_language_gc.py",
-      "status": "component",
-      "reason": "Language GC observer runner: real CLI/API emission and exact generated-byte comparison precede eight GC-specific observations. Historical 72dc/da69 results and old727b symbol aid do not establish a new ed1 API or ordinary public-CLI exit test."
+      "status": "public_cli",
+      "reason": "当前公开CLI生成的两份Python文件已由原八组GC observer实际执行；旧Wz API仅提供经过字节一致检查的符号，Cpp helper仅作参照。普通corpus不调用该专用runner，完整自举仍未完成。"
     },
     {
       "path": "tests/python/language_gc/runner_controls.py",
