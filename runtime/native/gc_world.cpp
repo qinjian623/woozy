@@ -814,11 +814,17 @@ extern "C" void lang_gc_world_leave_fork_stable_v1(void) noexcept {
 
 extern "C" void lang_gc_world_enter_critical_v1(void) noexcept {
   const int32_t tid = current_tid();
-  Node *node = find_and_acquire(tid);
-  if (!node)
-    gc_panic("critical-unregistered");
-
+  // Find, pin and validate the node under the same registry lock that publishes
+  // the new depth. The pin keeps the node alive after the unlock; no other
+  // transition can be interleaved with this critical entry.
   registry_lock();
+  Node *node = find_locked(tid);
+  if (!node) {
+    registry_unlock();
+    gc_panic("critical-unregistered");
+  }
+  __atomic_add_fetch(&node->refs, 1u, __ATOMIC_RELAXED);
+
   if (node->safe_depth != 0 || node->state == kStateSafe) {
     registry_unlock();
     node_release(node);
@@ -846,13 +852,19 @@ extern "C" void lang_gc_world_enter_critical_v1(void) noexcept {
 
 extern "C" void lang_gc_world_leave_critical_v1(void) noexcept {
   const int32_t tid = current_tid();
-  Node *node = find_and_acquire(tid);
-  if (!node)
+  // The depth decrement and the ACTIVE/PARKED decision happen under the same
+  // registry lock that finds and pins the node. If the outermost leave parks,
+  // the pin is held across notify/wait and released after the wakeup.
+  registry_lock();
+  Node *node = find_locked(tid);
+  if (!node) {
+    registry_unlock();
     gc_panic("critical-unregistered");
+  }
+  __atomic_add_fetch(&node->refs, 1u, __ATOMIC_RELAXED);
 
   bool park = false;
   bool notify = false;
-  registry_lock();
   if (node->critical_depth == 0) {
     registry_unlock();
     node_release(node);

@@ -233,4 +233,306 @@ pub func set[T](value Box[T], next T) {
 }
 `;let p=parser.parse(lexer.lex(src.snapshot(8,1,8,"stdlib/box/box.wz",text.bytes(raw))));if !p.has_value || p.recovered {io.println("Box parse error");return;}var st usize=0;var fd usize=0;var param usize=0;for var i usize=0;i<vec.len(p.nodes);i+=1 {if model.ast_kind_id(p.nodes[i].kind)==model.ast_kind_id(model.AstKind.Struct) {st=i;}if model.ast_kind_id(p.nodes[i].kind)==model.ast_kind_id(model.AstKind.Field) {fd=i;}}for ch in p.nodes[st].children {if model.ast_kind_id(p.nodes[ch].kind)==model.ast_kind_id(model.AstKind.GenericParameter) {param=ch;}}var project=model.empty_project();project.modules=[module_record(0,"app",[]),module_record(1,"std/box",[0])];project.files=[p];m.resolved=model.ResolvedProject(project:project,symbols:[sym(0,"i32",model.SymbolKind.BuiltinType,0,0,true),sym(1,"Box",model.SymbolKind.Type,1,st,true),sym(2,"cell",model.SymbolKind.Field,1,fd,false),sym(3,"T",model.SymbolKind.TypeParameter,1,param,false)],occurrences:[],deferred_members:[],self_parameters:[]);let tp=add(inout m,model.TypeKind.TypeParameter,0,[],3);let v=add(inout m,model.TypeKind.Vec,0,[tp],0);let box=add(inout m,model.TypeKind.NominalStruct,0,[4],1);let weak=add(inout m,model.TypeKind.Weak,0,[box],0);m.nominals=[nominal(1,[gp(3)],[field(2,v)])];let size=types.size(m.types);let ops=valueops.classify_value(m,box);io.println("box.actual="+if_bool(valueops.weak_target(m,box))+":"+if_bool(valueops.weak_target(m,weak))+":"+if_bool(valueops.ordinary_copyable(m,box))+":"+if_bool(valueops.owning_value(m,box))+":"+if_bool(valueops.inout_data_type(m,box,[]))+":"+number(usize(classification_slot(valueops.inout_slot(m,box,[]))))+":"+number(usize(classification_kind(ops.kind)))+":"+if_bool(ops.needs_drop)+":"+number(ops.fields[0].type_id)+":"+if_bool(size==types.size(m.types)));m.resolved.project.modules[1].logical_path="app/box";io.println("box.user="+if_bool(valueops.weak_target(m,box)));}catch e model.SupportError {io.println("box.error="+support_message(e));}}
 
-func main() i32 throws os.Error {box_case();values();layout(false);layout(true);try {var a=call_case();report("call-temp-order",inout a);var b=short_case();report("short-bool-borrows",inout b);var c=params_case(false);report("param-modes",inout c);var d=params_case(true);report("borrowed-move-error",inout d);var e=index_case(true);report("local-index-pure",inout e);var f=index_case(false);report("local-index-convert",inout f);var g=await_case();report("await-try-defer",inout g);}catch e model.SupportError {io.println("driver.error="+support_message(e));return 2;}return 0;}
+func add_c(m inout hir.HirModule, kind model.TypeKind, c_type u32,
+            arguments Vec[usize]) usize throws model.SupportError {
+    var value = model.empty_type(kind);
+    value.c_type = c_type;
+    value.type_args = arguments;
+    try {
+        return types.intern(inout m.types, value);
+    } catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message):
+                throw model.SupportError.Invalid(message);
+        }
+    }
+    return 0;
+}
+
+func enum_nominal(sym usize, params Vec[hir.GenericParam],
+                  variants Vec[hir.VariantDecl]) hir.NominalDecl {
+    return hir.NominalDecl(symbol:sym, kind:model.TypeKind.NominalEnum,
+        params:params, fields:[], variants:variants, source:source());
+}
+
+func variant_decl(sym usize, payload Vec[hir.FieldDecl]) hir.VariantDecl {
+    return hir.VariantDecl(symbol:sym, payload:payload, source:source());
+}
+
+func slot_text(module hir.HirModule, id usize, parameters Vec[usize]) string {
+    try {
+        return number(usize(classification_slot(
+            valueops.inout_slot(module, id, parameters))));
+    } catch error model.SupportError {
+        return "E";
+    }
+}
+
+func slot_list(label string, values Vec[string]) throws os.Error {
+    var text = label + "=";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += values[index];
+    }
+    io.println(text);
+}
+
+// Every call below goes through the public inout_slot entry on a real
+// HirModule.  The expected numbers are classifications, not source text.
+func inout_slots() throws os.Error {
+    try {
+        var m = fresh();
+        let u32_type = add(inout m, model.TypeKind.UnsignedInt, 32, [], 0);
+        let float_type = add(inout m, model.TypeKind.Float, 64, [], 0);
+        let function_type = sig(inout m, [], 1, non());
+        let error_type = add(inout m, model.TypeKind.Error, 0, [], 0);
+        let slice_int = add(inout m, model.TypeKind.Slice, 0, [4], 0);
+        let thread = add(inout m, model.TypeKind.ThreadHandle, 0, [], 0);
+        let mutex = add(inout m, model.TypeKind.MutexHandle, 0, [], 0);
+        let condvar = add(inout m, model.TypeKind.CondvarHandle, 0, [], 0);
+        let atomic = add(inout m, model.TypeKind.AtomicI64Handle, 0, [], 0);
+        let ipc = add(inout m, model.TypeKind.IpcHandle, 0, [], 0);
+        let vec_unit = add(inout m, model.TypeKind.Vec, 0, [1], 0);
+        let vec_task = add(inout m, model.TypeKind.Vec, 0, [9], 0);
+        let weak_task = add(inout m, model.TypeKind.Weak, 0, [9], 0);
+        let slice_task = add(inout m, model.TypeKind.Slice, 0, [9], 0);
+        let cf_res = add_c(inout m, model.TypeKind.CForeignResource, 1, []);
+        let cf_ptr = add_c(inout m, model.TypeKind.CForeignPointer, 0, [4]);
+        let cf_buf = add_c(inout m, model.TypeKind.CForeignBuffer, 0, [4]);
+        let cf_rec = add_c(inout m, model.TypeKind.CForeignRecord, 1, []);
+        let cf_cb = add_c(inout m, model.TypeKind.CForeignCallback, 1, []);
+        let cf_opaque = add_c(inout m, model.TypeKind.CForeignOpaque, 1, []);
+        let f_opaque = add(inout m, model.TypeKind.ForeignOpaque, 0, [], 0);
+        let f_callable = add(inout m, model.TypeKind.ForeignCallable, 0, [], 0);
+        let vec_external = add(inout m, model.TypeKind.Vec, 0, [cf_res], 0);
+        let tp_700 = add(inout m, model.TypeKind.TypeParameter, 0, [], 700);
+        let tp_701 = add(inout m, model.TypeKind.TypeParameter, 0, [], 701);
+        let vec_tp = add(inout m, model.TypeKind.Vec, 0, [tp_700], 0);
+        let g_i32 = add(inout m, model.TypeKind.NominalStruct, 0, [4], 900);
+        let g_unit = add(inout m, model.TypeKind.NominalStruct, 0, [1], 900);
+        let g_task = add(inout m, model.TypeKind.NominalStruct, 0, [9], 900);
+        let g_ext = add(inout m, model.TypeKind.NominalStruct, 0, [cf_res], 900);
+        let g_tp = add(inout m, model.TypeKind.NominalStruct, 0, [tp_700], 900);
+        let g_vec_task = add(inout m, model.TypeKind.NominalStruct, 0, [vec_task], 900);
+        let e_i32 = add(inout m, model.TypeKind.NominalEnum, 0, [4], 901);
+        let e_unit = add(inout m, model.TypeKind.NominalEnum, 0, [1], 901);
+        let e_task = add(inout m, model.TypeKind.NominalEnum, 0, [9], 901);
+        let e_ext = add(inout m, model.TypeKind.NominalEnum, 0, [cf_res], 901);
+        let pair_tp = add(inout m, model.TypeKind.NominalStruct, 0,
+            [tp_700, tp_701], 902);
+        let pair_mixed = add(inout m, model.TypeKind.NominalStruct, 0,
+            [4, tp_701], 902);
+        let node = add(inout m, model.TypeKind.NominalStruct, 0, [], 903);
+        let vec_node = add(inout m, model.TypeKind.Vec, 0, [node], 0);
+        let node_bad_task = add(inout m, model.TypeKind.NominalStruct, 0, [], 904);
+        let vec_node_bad_task = add(inout m, model.TypeKind.Vec, 0,
+            [node_bad_task], 0);
+        let node_bad_ext = add(inout m, model.TypeKind.NominalStruct, 0, [], 905);
+        let vec_node_bad_ext = add(inout m, model.TypeKind.Vec, 0,
+            [node_bad_ext], 0);
+        let fail_task_first = add(inout m, model.TypeKind.NominalStruct, 0, [], 906);
+        let fail_ext_first = add(inout m, model.TypeKind.NominalStruct, 0, [], 907);
+        let vec_of_t = add(inout m, model.TypeKind.Vec, 0, [tp_700], 0);
+        let h_vec_task = add(inout m, model.TypeKind.NominalStruct, 0,
+            [vec_task], 910);
+        let h_ext = add(inout m, model.TypeKind.NominalStruct, 0, [cf_res], 910);
+        let h_e_ext = add(inout m, model.TypeKind.NominalStruct, 0, [e_ext], 910);
+        let h_tp = add(inout m, model.TypeKind.NominalStruct, 0, [tp_700], 910);
+        var declarations = vec.empty[hir.NominalDecl]();
+        vec.push(declarations, nominal(900, [gp(700)], [field(910, tp_700)]));
+        vec.push(declarations, nominal(910, [gp(700)], [field(990, vec_of_t)]));
+        vec.push(declarations, enum_nominal(901, [gp(700)],
+            [variant_decl(920, [field(921, tp_700)])]));
+        vec.push(declarations, nominal(902, [gp(700), gp(701)],
+            [field(930, tp_700), field(931, tp_701)]));
+        vec.push(declarations, nominal(903, [],
+            [field(940, vec_node), field(941, 4)]));
+        vec.push(declarations, nominal(904, [],
+            [field(950, vec_node_bad_task), field(951, 9)]));
+        vec.push(declarations, nominal(905, [],
+            [field(960, vec_node_bad_ext), field(961, cf_res)]));
+        vec.push(declarations, nominal(906, [],
+            [field(970, 9), field(971, cf_res)]));
+        vec.push(declarations, nominal(907, [],
+            [field(980, cf_res), field(981, 9)]));
+        let chain = vec.empty[usize]();
+        var inner usize = 4;
+        for var level usize = 0; level < 129; level += 1 {
+            let next = add(inout m, model.TypeKind.NominalStruct, 0, [],
+                1000 + level);
+            vec.push(declarations, nominal(1000 + level, [],
+                [field(1100 + level, inner)]));
+            vec.push(chain, next);
+            inner = next;
+        }
+        let wide_ok = add(inout m, model.TypeKind.NominalStruct, 0, [], 908);
+        let wide_bad = add(inout m, model.TypeKind.NominalStruct, 0, [], 909);
+        var wide_ok_fields = vec.empty[hir.FieldDecl]();
+        for var index usize = 0; index < 65535; index += 1 {
+            vec.push(wide_ok_fields, field(index + 1, 4));
+        }
+        vec.push(declarations, nominal(908, [], wide_ok_fields));
+        var wide_bad_fields = vec.empty[hir.FieldDecl]();
+        for var index usize = 0; index < 65536; index += 1 {
+            vec.push(wide_bad_fields, field(index + 1, 4));
+        }
+        vec.push(declarations, nominal(909, [], wide_bad_fields));
+        m.nominals = declarations;
+
+        let before_size = types.size(m.types);
+        var before = vec.empty[model.Type]();
+        for var id usize = 1; id <= before_size; id += 1 {
+            switch types.find(m.types, id) {
+                case option.Option.Some(value): vec.push(before, value);
+                case option.Option.None: {}
+            }
+        }
+        var none = vec.empty[usize]();
+        var p700 = vec.empty[usize]();
+        vec.push(p700, 700);
+        var p701 = vec.empty[usize]();
+        vec.push(p701, 701);
+        var pboth = vec.empty[usize]();
+        vec.push(pboth, 700);
+        vec.push(pboth, 701);
+
+        var scalar = vec.empty[string]();
+        vec.push(scalar, slot_text(m, 4, none));
+        vec.push(scalar, slot_text(m, 2, none));
+        vec.push(scalar, slot_text(m, 3, none));
+        vec.push(scalar, slot_text(m, 5, none));
+        vec.push(scalar, slot_text(m, 6, none));
+        vec.push(scalar, slot_text(m, u32_type, none));
+        vec.push(scalar, slot_text(m, float_type, none));
+        vec.push(scalar, slot_text(m, function_type, none));
+        vec.push(scalar, slot_text(m, error_type, none));
+        slot_list("slots.scalar", scalar);
+
+        var handles = vec.empty[string]();
+        vec.push(handles, slot_text(m, 7, none));
+        vec.push(handles, slot_text(m, slice_int, none));
+        vec.push(handles, slot_text(m, 8, none));
+        vec.push(handles, slot_text(m, thread, none));
+        vec.push(handles, slot_text(m, mutex, none));
+        vec.push(handles, slot_text(m, condvar, none));
+        vec.push(handles, slot_text(m, atomic, none));
+        vec.push(handles, slot_text(m, ipc, none));
+        slot_list("slots.handle", handles);
+
+        var units = vec.empty[string]();
+        vec.push(units, slot_text(m, 1, none));
+        vec.push(units, slot_text(m, vec_unit, none));
+        vec.push(units, slot_text(m, g_unit, none));
+        slot_list("slots.unit", units);
+
+        var tasks = vec.empty[string]();
+        vec.push(tasks, slot_text(m, 9, none));
+        vec.push(tasks, slot_text(m, vec_task, none));
+        vec.push(tasks, slot_text(m, weak_task, none));
+        vec.push(tasks, slot_text(m, slice_task, none));
+        slot_list("slots.task", tasks);
+
+        var externals = vec.empty[string]();
+        vec.push(externals, slot_text(m, cf_res, none));
+        vec.push(externals, slot_text(m, cf_ptr, none));
+        vec.push(externals, slot_text(m, cf_buf, none));
+        vec.push(externals, slot_text(m, cf_rec, none));
+        vec.push(externals, slot_text(m, cf_cb, none));
+        vec.push(externals, slot_text(m, cf_opaque, none));
+        vec.push(externals, slot_text(m, f_opaque, none));
+        vec.push(externals, slot_text(m, f_callable, none));
+        vec.push(externals, slot_text(m, vec_external, none));
+        slot_list("slots.external", externals);
+
+        var typeparams = vec.empty[string]();
+        vec.push(typeparams, slot_text(m, tp_700, none));
+        vec.push(typeparams, slot_text(m, tp_700, p700));
+        vec.push(typeparams, slot_text(m, vec_tp, none));
+        vec.push(typeparams, slot_text(m, vec_tp, p700));
+        vec.push(typeparams, slot_text(m, g_tp, none));
+        vec.push(typeparams, slot_text(m, g_tp, p700));
+        vec.push(typeparams, slot_text(m, g_tp, p701));
+        slot_list("slots.typeparam", typeparams);
+
+        var generic_structs = vec.empty[string]();
+        vec.push(generic_structs, slot_text(m, g_i32, none));
+        vec.push(generic_structs, slot_text(m, g_task, none));
+        vec.push(generic_structs, slot_text(m, g_unit, none));
+        vec.push(generic_structs, slot_text(m, g_ext, none));
+        vec.push(generic_structs, slot_text(m, g_vec_task, none));
+        vec.push(generic_structs, slot_text(m, g_tp, p700));
+        slot_list("slots.generic-struct", generic_structs);
+
+        var private_substitution = vec.empty[string]();
+        vec.push(private_substitution, slot_text(m, h_vec_task, none));
+        vec.push(private_substitution, slot_text(m, h_ext, none));
+        vec.push(private_substitution, slot_text(m, h_e_ext, none));
+        vec.push(private_substitution, slot_text(m, h_tp, p700));
+        vec.push(private_substitution, slot_text(m, h_tp, none));
+        slot_list("slots.private-substitution", private_substitution);
+
+        var generic_enums = vec.empty[string]();
+        vec.push(generic_enums, slot_text(m, e_i32, none));
+        vec.push(generic_enums, slot_text(m, e_task, none));
+        vec.push(generic_enums, slot_text(m, e_unit, none));
+        vec.push(generic_enums, slot_text(m, e_ext, none));
+        slot_list("slots.generic-enum", generic_enums);
+
+        var recursive = vec.empty[string]();
+        vec.push(recursive, slot_text(m, node, none));
+        vec.push(recursive, slot_text(m, node_bad_task, none));
+        vec.push(recursive, slot_text(m, node_bad_ext, none));
+        slot_list("slots.recursive", recursive);
+
+        var failures = vec.empty[string]();
+        vec.push(failures, slot_text(m, fail_task_first, none));
+        vec.push(failures, slot_text(m, fail_ext_first, none));
+        slot_list("slots.first-failure", failures);
+
+        var parameter_sets = vec.empty[string]();
+        vec.push(parameter_sets, slot_text(m, pair_tp, p700));
+        vec.push(parameter_sets, slot_text(m, pair_tp, p701));
+        vec.push(parameter_sets, slot_text(m, pair_tp, pboth));
+        vec.push(parameter_sets, slot_text(m, pair_mixed, pboth));
+        vec.push(parameter_sets, slot_text(m, pair_mixed, p700));
+        vec.push(parameter_sets, slot_text(m, pair_tp, none));
+        slot_list("slots.parameters", parameter_sets);
+
+        var adjacent = vec.empty[string]();
+        vec.push(adjacent, slot_text(m, g_tp, p700));
+        vec.push(adjacent, slot_text(m, g_tp, none));
+        vec.push(adjacent, slot_text(m, g_tp, p701));
+        vec.push(adjacent, slot_text(m, g_tp, p700));
+        slot_list("slots.adjacent", adjacent);
+
+        var depths = vec.empty[string]();
+        vec.push(depths, slot_text(m, chain[127], none));
+        vec.push(depths, slot_text(m, chain[128], none));
+        slot_list("slots.depth", depths);
+
+        var visited = vec.empty[string]();
+        vec.push(visited, slot_text(m, wide_ok, none));
+        vec.push(visited, slot_text(m, wide_bad, none));
+        slot_list("slots.visited", visited);
+
+        var same = types.size(m.types) == before_size;
+        if same {
+            for var index usize = 0; index < vec.len(before); index += 1 {
+                switch types.find(m.types, index + 1) {
+                    case option.Option.Some(value):
+                        if !types.equal(before[index], value) {
+                            same = false;
+                        }
+                    case option.Option.None: same = false;
+                }
+            }
+        }
+        io.println("slots.context=" + if_bool(same));
+    } catch e model.SupportError {
+        io.println("slots.error=" + support_message(e));
+    }
+}
+
+func main() i32 throws os.Error {inout_slots();box_case();values();layout(false);layout(true);try {var a=call_case();report("call-temp-order",inout a);var b=short_case();report("short-bool-borrows",inout b);var c=params_case(false);report("param-modes",inout c);var d=params_case(true);report("borrowed-move-error",inout d);var e=index_case(true);report("local-index-pure",inout e);var f=index_case(false);report("local-index-convert",inout f);var g=await_case();report("await-try-defer",inout g);}catch e model.SupportError {io.println("driver.error="+support_message(e));return 2;}return 0;}

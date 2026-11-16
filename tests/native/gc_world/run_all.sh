@@ -197,6 +197,16 @@ if build_step "host O2" "$COMPILER" "${COMMON[@]}" -O2 -g \
   run_expect "host O2" 180 0 "GC_WORLD_HOST_OK" "$BUILD_DIR/gc_world_o2"
 fi
 
+# The critical single-lock test includes gc_world.cpp itself so it can read the
+# private ticket-lock acquisition counter; do not also link gc_world.o here.
+if build_step "critical single-lock" "$COMPILER" "${COMMON[@]}" -O2 -g \
+    "$SCRIPT_DIR/gc_world_critical_single_lock_test.cpp" \
+    "$ROOT/runtime/native/alloc.cpp" "$SCRIPT_DIR/test_alloc_wrap.cpp" \
+    "${HOST_WRAP[@]}" -o "$BUILD_DIR/gc_world_critical_single_lock"; then
+  run_expect "critical single-lock" 120 0 "GC_WORLD_CRITICAL_SINGLE_LOCK_OK" \
+    "$BUILD_DIR/gc_world_critical_single_lock"
+fi
+
 if build_step "host ASAN+UBSAN" "$COMPILER" "${COMMON[@]}" -O1 -g \
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     "$SCRIPT_DIR/gc_world_test.cpp" "$ROOT/runtime/native/gc_world.cpp" \

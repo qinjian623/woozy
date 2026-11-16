@@ -1,6 +1,7 @@
 #include "lang/hir/hir.hpp"
 #include "hir/ownership.hpp"
 #include <iostream>
+#include <set>
 #include <sstream>
 using namespace lang;using namespace lang::hir;
 TypeId add(HirModule&m,TypeKind k,unsigned bits=0,std::vector<TypeId>a={},uint64_t d=0){Type t;t.kind=k;t.bits=bits;t.type_args=a;t.declaration=SymbolId(d);return m.types.intern(t);}
@@ -55,4 +56,50 @@ pub func set[T](value Box[T], next T) {
 }
 )BOX";auto s=std::make_shared<SourceSnapshot>(FileId(8),RevisionId(1),SourceSnapshotId(8),"stdlib/box/box.wz",text);auto l=lex(s);auto parsed=parse(*l.value);if(!parsed.success())throw std::runtime_error("Box parse");auto file=*parsed.value;size_t st=0,fd=0,gp=0;for(size_t i=0;i<file.nodes.size();++i){if(file.nodes[i].kind==AstKind::Struct)st=i;if(file.nodes[i].kind==AstKind::Field)fd=i;}for(auto ch:file.nodes[st].children)if(file.node(ch).kind==AstKind::GenericParameter)gp=ch.value;auto p=std::make_shared<modules::Project>();p->modules={{ModuleId(0),"app","app","app",{},{},{},{},{}},{ModuleId(1),"std/box","std/box","box",{std::make_shared<AstFile>(file)},{},{},{},{}}};auto r=std::make_shared<modules::ResolvedProject>();r->project=p;for(auto [name,kind,nd,exp]:{std::tuple{"i32",modules::SymbolKind::builtin_type,size_t(0),true},std::tuple{"Box",modules::SymbolKind::type,st,true},std::tuple{"cell",modules::SymbolKind::field,fd,false},std::tuple{"T",modules::SymbolKind::type_parameter,gp,false}}){modules::Symbol x;x.id=SymbolId(r->symbols.size());x.name=name;x.kind=kind;x.module=ModuleId(x.id.value?1:0);x.definition=modules::NodeRef{x.module,0,AstNodeId(nd)};x.exported=exp;r->symbols.push_back(x);}m.resolved=r;auto tp=add(m,TypeKind::TypeParameter,0,{},3);auto vec=add(m,TypeKind::Vec,0,{tp});auto box=add(m,TypeKind::NominalStruct,0,{TypeId(4)},1);auto weak=add(m,TypeKind::Weak,0,{box});NominalDecl d;d.symbol=SymbolId(1);d.kind=TypeKind::NominalStruct;d.params={{SymbolId(3),{},{}}};d.fields={{SymbolId(2),vec,false,{}}};m.nominals={d};auto size=m.types.size();auto ops=classify_value(m,box);std::cout<<"box.actual="<<weak_target(m,box)<<":"<<weak_target(m,weak)<<":"<<ordinary_copyable(m,box)<<":"<<owning_value(m,box)<<":"<<inout_data_type(m,box)<<":"<<unsigned(inout_slot(m,box))<<":"<<unsigned(ops.kind)<<":"<<ops.needs_drop<<":"<<ops.fields[0].type.value<<":"<<(size==m.types.size())<<"\n";p->modules[1].logical_path="app/box";std::cout<<"box.user="<<weak_target(m,box)<<"\n";}
 
-int main(){box_case();values();layout(false);layout(true);report("call-temp-order",call_case());report("short-bool-borrows",short_case());report("param-modes",params_case(false));report("borrowed-move-error",params_case(true));report("local-index-pure",index_case(true));report("local-index-convert",index_case(false));report("await-try-defer",await_case());}
+TypeId add_c(HirModule&m,TypeKind k,uint32_t c,std::vector<TypeId>a={}){Type t;t.kind=k;t.c_type=c;t.type_args=a;return m.types.intern(t);}
+NominalDecl enum_nominal(uint64_t sym,std::vector<GenericParam> params,std::vector<VariantDecl> variants){NominalDecl d;d.symbol=SymbolId(sym);d.kind=TypeKind::NominalEnum;d.params=params;d.fields={};d.variants=variants;return d;}
+VariantDecl variant_decl(uint64_t sym,std::vector<FieldDecl> payload){VariantDecl v;v.symbol=SymbolId(sym);v.payload=payload;return v;}
+std::string slot_text(const HirModule&m,TypeId id,const std::set<uint64_t>&p){try{return std::to_string(unsigned(inout_slot(m,id,p)));}catch(...){return "E";}}
+void slot_list(const std::string&label,const std::vector<std::string>&values){std::cout<<label<<"=";for(size_t i=0;i<values.size();++i){if(i)std::cout<<",";std::cout<<values[i];}std::cout<<"\n";}
+
+// Every call below goes through the public inout_slot entry on a real
+// HirModule.  The expected numbers are classifications, not source text.
+void inout_slots(){auto m=fresh();auto u32_type=add(m,TypeKind::UnsignedInt,32);auto float_type=add(m,TypeKind::Float,64);auto function_type=sig(m,{},TypeId(1));auto error_type=add(m,TypeKind::Error);auto slice_int=add(m,TypeKind::Slice,0,{TypeId(4)});auto thread=add(m,TypeKind::ThreadHandle);auto mutex=add(m,TypeKind::MutexHandle);auto condvar=add(m,TypeKind::CondvarHandle);auto atomic=add(m,TypeKind::AtomicI64Handle);auto ipc=add(m,TypeKind::IpcHandle);auto vec_unit=add(m,TypeKind::Vec,0,{TypeId(1)});auto vec_task=add(m,TypeKind::Vec,0,{TypeId(9)});auto weak_task=add(m,TypeKind::Weak,0,{TypeId(9)});auto slice_task=add(m,TypeKind::Slice,0,{TypeId(9)});auto cf_res=add_c(m,TypeKind::CForeignResource,1);auto cf_ptr=add_c(m,TypeKind::CForeignPointer,0,{TypeId(4)});auto cf_buf=add_c(m,TypeKind::CForeignBuffer,0,{TypeId(4)});auto cf_rec=add_c(m,TypeKind::CForeignRecord,1);auto cf_cb=add_c(m,TypeKind::CForeignCallback,1);auto cf_opaque=add_c(m,TypeKind::CForeignOpaque,1);auto f_opaque=add(m,TypeKind::ForeignOpaque);auto f_callable=add(m,TypeKind::ForeignCallable);auto vec_external=add(m,TypeKind::Vec,0,{cf_res});auto tp_700=add(m,TypeKind::TypeParameter,0,{},700);auto tp_701=add(m,TypeKind::TypeParameter,0,{},701);auto vec_tp=add(m,TypeKind::Vec,0,{tp_700});auto g_i32=add(m,TypeKind::NominalStruct,0,{TypeId(4)},900);auto g_unit=add(m,TypeKind::NominalStruct,0,{TypeId(1)},900);auto g_task=add(m,TypeKind::NominalStruct,0,{TypeId(9)},900);auto g_ext=add(m,TypeKind::NominalStruct,0,{cf_res},900);auto g_tp=add(m,TypeKind::NominalStruct,0,{tp_700},900);auto g_vec_task=add(m,TypeKind::NominalStruct,0,{vec_task},900);auto e_i32=add(m,TypeKind::NominalEnum,0,{TypeId(4)},901);auto e_unit=add(m,TypeKind::NominalEnum,0,{TypeId(1)},901);auto e_task=add(m,TypeKind::NominalEnum,0,{TypeId(9)},901);auto e_ext=add(m,TypeKind::NominalEnum,0,{cf_res},901);auto pair_tp=add(m,TypeKind::NominalStruct,0,{tp_700,tp_701},902);auto pair_mixed=add(m,TypeKind::NominalStruct,0,{TypeId(4),tp_701},902);auto node=add(m,TypeKind::NominalStruct,0,{},903);auto vec_node=add(m,TypeKind::Vec,0,{node});auto node_bad_task=add(m,TypeKind::NominalStruct,0,{},904);auto vec_node_bad_task=add(m,TypeKind::Vec,0,{node_bad_task});auto node_bad_ext=add(m,TypeKind::NominalStruct,0,{},905);auto vec_node_bad_ext=add(m,TypeKind::Vec,0,{node_bad_ext});auto fail_task_first=add(m,TypeKind::NominalStruct,0,{},906);auto fail_ext_first=add(m,TypeKind::NominalStruct,0,{},907);auto vec_of_t=add(m,TypeKind::Vec,0,{tp_700});auto h_vec_task=add(m,TypeKind::NominalStruct,0,{vec_task},910);auto h_ext=add(m,TypeKind::NominalStruct,0,{cf_res},910);auto h_e_ext=add(m,TypeKind::NominalStruct,0,{e_ext},910);auto h_tp=add(m,TypeKind::NominalStruct,0,{tp_700},910);
+std::vector<NominalDecl> decls;
+auto decl=[](uint64_t sym,std::vector<GenericParam> params,std::vector<FieldDecl> fields){NominalDecl d;d.symbol=SymbolId(sym);d.kind=TypeKind::NominalStruct;d.params=params;d.fields=fields;return d;};
+decls.push_back(decl(900,{{SymbolId(700),{},{}}},{{SymbolId(910),tp_700,false,{}}}));
+decls.push_back(decl(910,{{SymbolId(700),{},{}}},{{SymbolId(990),vec_of_t,false,{}}}));
+decls.push_back(enum_nominal(901,{{SymbolId(700),{},{}}},{variant_decl(920,{{SymbolId(921),tp_700,false,{}}})}));
+decls.push_back(decl(902,{{SymbolId(700),{},{}},{SymbolId(701),{},{}}},{{SymbolId(930),tp_700,false,{}},{SymbolId(931),tp_701,false,{}}}));
+decls.push_back(decl(903,{},{{SymbolId(940),vec_node,false,{}},{SymbolId(941),TypeId(4),false,{}}}));
+decls.push_back(decl(904,{},{{SymbolId(950),vec_node_bad_task,false,{}},{SymbolId(951),TypeId(9),false,{}}}));
+decls.push_back(decl(905,{},{{SymbolId(960),vec_node_bad_ext,false,{}},{SymbolId(961),cf_res,false,{}}}));
+decls.push_back(decl(906,{},{{SymbolId(970),TypeId(9),false,{}},{SymbolId(971),cf_res,false,{}}}));
+decls.push_back(decl(907,{},{{SymbolId(980),cf_res,false,{}},{SymbolId(981),TypeId(9),false,{}}}));
+std::vector<TypeId> chain;TypeId inner=TypeId(4);
+for(size_t level=0;level<129;++level){auto next=add(m,TypeKind::NominalStruct,0,{},1000+level);decls.push_back(decl(1000+level,{},{{SymbolId(1100+level),inner,false,{}}}));chain.push_back(next);inner=next;}
+auto wide_ok=add(m,TypeKind::NominalStruct,0,{},908);auto wide_bad=add(m,TypeKind::NominalStruct,0,{},909);
+std::vector<FieldDecl> wide_ok_fields;for(size_t i=0;i<65535;++i)wide_ok_fields.push_back({SymbolId(i+1),TypeId(4),false,{}});
+std::vector<FieldDecl> wide_bad_fields;for(size_t i=0;i<65536;++i)wide_bad_fields.push_back({SymbolId(i+1),TypeId(4),false,{}});
+decls.push_back(decl(908,{},wide_ok_fields));decls.push_back(decl(909,{},wide_bad_fields));
+m.nominals=decls;
+std::vector<Type> before;auto before_size=m.types.size();for(size_t i=1;i<=before_size;++i)before.push_back(*m.types.find(TypeId(i)));
+std::set<uint64_t> none,p700,p701,pboth;p700.insert(700);p701.insert(701);pboth.insert(700);pboth.insert(701);
+slot_list("slots.scalar",{slot_text(m,TypeId(4),none),slot_text(m,TypeId(2),none),slot_text(m,TypeId(3),none),slot_text(m,TypeId(5),none),slot_text(m,TypeId(6),none),slot_text(m,u32_type,none),slot_text(m,float_type,none),slot_text(m,function_type,none),slot_text(m,error_type,none)});
+slot_list("slots.handle",{slot_text(m,TypeId(7),none),slot_text(m,slice_int,none),slot_text(m,TypeId(8),none),slot_text(m,thread,none),slot_text(m,mutex,none),slot_text(m,condvar,none),slot_text(m,atomic,none),slot_text(m,ipc,none)});
+slot_list("slots.unit",{slot_text(m,TypeId(1),none),slot_text(m,vec_unit,none),slot_text(m,g_unit,none)});
+slot_list("slots.task",{slot_text(m,TypeId(9),none),slot_text(m,vec_task,none),slot_text(m,weak_task,none),slot_text(m,slice_task,none)});
+slot_list("slots.external",{slot_text(m,cf_res,none),slot_text(m,cf_ptr,none),slot_text(m,cf_buf,none),slot_text(m,cf_rec,none),slot_text(m,cf_cb,none),slot_text(m,cf_opaque,none),slot_text(m,f_opaque,none),slot_text(m,f_callable,none),slot_text(m,vec_external,none)});
+slot_list("slots.typeparam",{slot_text(m,tp_700,none),slot_text(m,tp_700,p700),slot_text(m,vec_tp,none),slot_text(m,vec_tp,p700),slot_text(m,g_tp,none),slot_text(m,g_tp,p700),slot_text(m,g_tp,p701)});
+slot_list("slots.generic-struct",{slot_text(m,g_i32,none),slot_text(m,g_task,none),slot_text(m,g_unit,none),slot_text(m,g_ext,none),slot_text(m,g_vec_task,none),slot_text(m,g_tp,p700)});
+slot_list("slots.private-substitution",{slot_text(m,h_vec_task,none),slot_text(m,h_ext,none),slot_text(m,h_e_ext,none),slot_text(m,h_tp,p700),slot_text(m,h_tp,none)});
+slot_list("slots.generic-enum",{slot_text(m,e_i32,none),slot_text(m,e_task,none),slot_text(m,e_unit,none),slot_text(m,e_ext,none)});
+slot_list("slots.recursive",{slot_text(m,node,none),slot_text(m,node_bad_task,none),slot_text(m,node_bad_ext,none)});
+slot_list("slots.first-failure",{slot_text(m,fail_task_first,none),slot_text(m,fail_ext_first,none)});
+slot_list("slots.parameters",{slot_text(m,pair_tp,p700),slot_text(m,pair_tp,p701),slot_text(m,pair_tp,pboth),slot_text(m,pair_mixed,pboth),slot_text(m,pair_mixed,p700),slot_text(m,pair_tp,none)});
+slot_list("slots.adjacent",{slot_text(m,g_tp,p700),slot_text(m,g_tp,none),slot_text(m,g_tp,p701),slot_text(m,g_tp,p700)});
+slot_list("slots.depth",{slot_text(m,chain[127],none),slot_text(m,chain[128],none)});
+slot_list("slots.visited",{slot_text(m,wide_ok,none),slot_text(m,wide_bad,none)});
+bool same=m.types.size()==before.size();for(size_t i=0;same&&i<before.size();++i){auto t=m.types.find(TypeId(i+1));if(!t||!(*t==before[i]))same=false;}std::cout<<"slots.context="<<same<<"\n";}
+
+int main(){inout_slots();box_case();values();layout(false);layout(true);report("call-temp-order",call_case());report("short-bool-borrows",short_case());report("param-modes",params_case(false));report("borrowed-move-error",params_case(true));report("local-index-pure",index_case(true));report("local-index-convert",index_case(false));report("await-try-defer",await_case());}

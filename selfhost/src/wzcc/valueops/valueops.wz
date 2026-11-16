@@ -538,7 +538,7 @@ func memo_put(memo Vec[MemoEntry], id usize, slot hir.InoutSlot) {
     vec.push(memo, MemoEntry(type_id: id, slot: slot));
 }
 
-func inout_slot_visit(module hir.HirModule, scratch inout types.Context,
+func inout_slot_visit(module hir.HirModule, scratch inout PrivateContext,
                       parameters Vec[usize], memo Vec[MemoEntry],
                       visited inout usize, id usize, member bool, depth usize)
     hir.InoutSlot throws model.SupportError {
@@ -554,7 +554,7 @@ func inout_slot_visit(module hir.HirModule, scratch inout types.Context,
         return memo[usize(known)].slot;
     }
     var value = model.empty_type(model.TypeKind.Error);
-    switch types.find(scratch, id) {
+    switch private_find(module, scratch, id) {
         case option.Option.Some(found): value = found;
         case option.Option.None: return hir.InoutSlot.Unsupported;
     }
@@ -637,8 +637,8 @@ func inout_slot_visit(module hir.HirModule, scratch inout types.Context,
             }
             var outcome = hir.InoutSlot.Allowed;
             for field in nominal.fields {
-                let concrete = substitute_support(inout scratch, field.type_id,
-                    substitutions);
+                let concrete = private_substitute(module, inout scratch,
+                    field.type_id, substitutions);
                 let nested = inout_slot_visit(module, inout scratch,
                     parameters, memo, inout visited, concrete, true,
                     depth + 1);
@@ -650,7 +650,7 @@ func inout_slot_visit(module hir.HirModule, scratch inout types.Context,
             if kind_is_slot(outcome, hir.InoutSlot.Allowed) {
                 for variant in nominal.variants {
                     for field in variant.payload {
-                        let concrete = substitute_support(inout scratch,
+                        let concrete = private_substitute(module, inout scratch,
                             field.type_id, substitutions);
                         let nested = inout_slot_visit(module, inout scratch,
                             parameters, memo, inout visited, concrete, true,
@@ -711,7 +711,7 @@ func kind_is_slot(left hir.InoutSlot, right hir.InoutSlot) bool {
 pub func inout_slot(module hir.HirModule, type_id usize,
                     parameters Vec[usize]) hir.InoutSlot
     throws model.SupportError {
-    var scratch = types.clone_context(module.types);
+    var scratch = PrivateContext(value: types.context(), ready: false);
     let memo = vec.empty[MemoEntry]();
     var visited usize = 0;
     return inout_slot_visit(module, inout scratch, parameters, memo,
