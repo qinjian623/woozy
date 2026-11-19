@@ -1,12 +1,14 @@
-# Woozy 语言教程
+# Woozy Language Tutorial
 
-Woozy 使用静态类型，支持局部类型推断、泛型、结构体、枚举和可声明的错误。函数、值、作用域与容器的规则在不同后端保持一致。
+[简体中文](TUTORIAL.cn.md)
 
-这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
+Woozy is statically typed and supports local type inference, generics, structs, enums, and declared errors. The rules for functions, values, scopes, and collections are the same across backends.
 
-## 1. 先读一个程序
+Start with a complete program, then work through the syntax one feature at a time. If you already know another programming language and want a shorter overview, see the [quick start](QUICKSTART.md). Examples use `.wz` files. For setup instructions, see the [build guide](../development/docs/BUILD.md). For library APIs, see the [standard library guide](STDLIB.md).
 
-从输出一行文字开始。这是一个完整程序：
+## 1. Read a program
+
+This program prints one line of text.
 
 ```wz
 package main;
@@ -18,9 +20,9 @@ func main() throws os.Error {
 }
 ```
 
-`import "std/io" as io;` 导入输出函数。`io.println` 写出字符串并补一个换行。`throws os.Error` 声明输出可能失败，错误处理在后面的章节介绍。这个程序用于 Linux x86_64 Native 后端，运行时输出 `Hello, world!`。
+`import "std/io" as io;` makes the output functions available as `io`. `io.println` writes the string followed by a newline. `throws os.Error` declares that output can fail. The error handling section shows how to handle that case. On the native Linux x86_64 backend, this program prints `Hello, world!`.
 
-下面是另一个完整程序，用来计算一组分数的总和；与上例分别阅读和保存：
+The next program adds a list of scores. Save it separately from the first example.
 
 ```wz
 package main;
@@ -40,86 +42,84 @@ func main() i32 {
 }
 ```
 
-`package main;` 声明这个文件所属的包。`sum` 接收一组 `i32` 整数，遍历后返回总和；`main` 是程序入口，这里的 `0` 表示正常退出。
+`package main;` declares which package the file belongs to. `sum` takes a list of `i32` integers, loops over them, and returns their sum. `main` is the program's entry point. Returning `0` signals a successful exit.
 
-几个基本写法：
+- Put the type after the name, as in `scores Vec[i32]` or `total i32`.
+- Declare functions with `func` and put the return type after the parameter list.
+- End simple statements with a semicolon and enclose blocks in braces.
+- Use `let` for a binding you cannot reassign and `var` for a binding you can reassign.
+- Use `return` to return a value. The final expression in a function body is not returned automatically.
 
-- 类型放在名称后面：`scores Vec[i32]`、`total i32`。
-- 函数用 `func` 声明，返回类型写在参数列表后面。
-- 简单语句以分号结束，代码块用花括号包围。
-- `let` 声明不能重新赋值的绑定，`var` 声明可以重新赋值的绑定。
-- `return` 明确返回一个值，函数体最后的表达式不会自动返回。
+Treat the examples in each section separately. Combine nearby declarations and calls where indicated. Short examples say whether they belong inside a function or at the top level, so they do not each need their own `main`. Comments show expected values. To print strings or bytes, see [std/os](OS.md).
 
-以下各节的示例独立阅读，按说明组合相邻的声明与调用，不要把所有片段拼到同一个文件。短片段会说明写在函数体内还是作为顶层声明；它们不需要各自再重复一个 `main`。代码注释标出预期值；需要输出字符串或字节时，使用 [std/os](OS.md)。
+## 2. Comments, bindings, and scope
 
-## 2. 注释、绑定与作用域
-
-单行注释以 `//` 开始。`/* ... */` 可以跨行，但块注释不能嵌套：
+A single-line comment starts with `//`. A block comment starts with `/*` and ends with `*/`. Block comments can span lines, and nesting is invalid.
 
 ```wz
-// 在函数体内
+// Inside a function body
 let initial i32 = 10;
 var count = initial;
-count += 2;  // count 为 12
-/* initial 和 count 都是 i32。
-   count 的类型由初始化式推断。 */
+count += 2;  // count is 12
+/* Both initial and count are i32.
+   The type of count is inferred from its initializer. */
 ```
 
-给 `initial` 重新赋值会报错。`let` 和 `var` 都必须初始化；后续赋值不能改变已经确定的类型。局部绑定可以省略类型，函数参数、结构体字段必须写类型。
+Reassigning `initial` is an error. Both `let` and `var` need an initializer, and later assignments must preserve the binding's type. You can omit the type of a local binding. Function parameters and struct fields require a type.
 
-`const` 要求初始值能在编译期确定，可以写在顶层或局部作用域中：
+A `const` needs an initializer known at compile time. You can declare it at the top level or in a local scope.
 
 ```wz
 const PassingScore i32 = 60;
 const Greeting string = "你好，Woozy";
 ```
 
-普通函数调用、Vec 和外部对象不能作为 `const` 的初始值。纯 struct/enum 的递归常量构造及常量字段读取可以使用。
+Ordinary function calls, Vec values, and foreign objects are invalid as constant initializers. You can construct constant structs and enums recursively and read fields of constant values.
 
-花括号引入局部作用域。同一作用域不能重复声明同名绑定，内层作用域可以遮蔽外层名称：
+Braces introduce a local scope. Names must be unique within a scope. An inner scope can shadow an outer name.
 
 ```wz
-// 在函数体内
+// Inside a function body
 let x i32 = 1;
 {
-    let x = x + 1;  // 右边读取外层 x，内层 x 为 2
+    let x = x + 1;  // The right side reads the outer x. The inner x is 2.
 }
-let original = x;   // 仍为 1
+let original = x;   // Still 1
 ```
 
-新绑定在初始化完成后才可见。分支、循环体、switch 分支和 catch 也有各自的局部作用域。
+A new binding becomes visible after its initializer finishes. Branches, loop bodies, switch arms, and catch blocks also have their own local scopes.
 
-## 3. 基础类型与字面量
+## 3. Primitive types and literals
 
-| 类型 | 用途 |
+| Type | Meaning |
 | --- | --- |
-| `bool` | `true` 或 `false` |
-| `i8`、`i16`、`i32`、`i64` | 指定位宽的有符号整数 |
-| `u8`、`u16`、`u32`、`u64` | 指定位宽的无符号整数 |
-| `isize`、`usize` | 位宽由目标决定的整数 |
-| `f32`、`f64` | IEEE 754 浮点数 |
-| `string` | 不可变 UTF-8 字符串 |
-| `Unit` | 不携带数据的值类型，常用于无返回数据的函数 |
+| `bool` | `true` or `false` |
+| `i8`, `i16`, `i32`, `i64` | Signed integers of the specified width |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers of the specified width |
+| `isize`, `usize` | Integers whose width depends on the target |
+| `f32`, `f64` | IEEE 754 floating-point numbers |
+| `string` | An immutable UTF-8 string |
+| `Unit` | A value type with no data, often used for functions that return no data |
 
-数字可以写成下面这些形式：
+Here are several ways to write numbers.
 
 ```wz
-// 在函数体内
-let decimal = 1_000;  // 默认 i64
+// Inside a function body
+let decimal = 1_000;  // Defaults to i64
 let binary = 0b1010;
 let octal = 0o755;
 let hex = 0xFF;
-let ratio = 0.25;     // 默认 f64
-let scale f32 = 1e3;  // 上下文指定 f32
+let ratio = 0.25;     // Defaults to f64
+let scale f32 = 1e3;  // The context supplies f32
 let small u8 = 10;
 ```
 
-没有上下文时，整数字面量默认是 `i64`，浮点字面量默认是 `f64`。字面量可以由上下文确定类型，已经有具体类型的变量不会因此自动转换。数字不支持 `123i32` 一类类型后缀；`.5`、`1.` 和 `007` 也不是合法写法。
+Without a type context, integer literals default to `i64` and floating-point literals to `f64`. Context can determine a literal's type. Variables that already have a concrete type keep it. Type suffixes such as `123i32` are invalid, as are `.5`, `1.`, and `007`.
 
-字符串用双引号，支持换行、制表符和 Unicode 转义；反引号包围的原始字符串不处理转义，可以跨行：
+Double-quoted strings support newline, tab, and Unicode escapes. Backticks enclose raw strings, which treat backslashes literally and can span lines.
 
 ```wz
-// 在函数体内
+// Inside a function body
 let greeting = "你好";
 let lines = "第一行\n第二行";
 let same_greeting = "\u{4F60}\u{597D}";
@@ -128,50 +128,50 @@ let message = `第一行
 第二行`;
 ```
 
-没有单引号字符字面量、字符串插值或 `\xHH` 转义。`string` 是不可变 UTF-8 值，可以保存、复制、传参和放入聚合类型。拼接、相等和排序已经可用；比较按 UTF-8 字节内容进行，不做 Unicode 正规化。
+Single-quoted character literals, string interpolation, and `\xHH` escapes are unavailable. A `string` is an immutable UTF-8 value. You can store it, copy it, pass it as an argument, and put it inside an aggregate. String operations include concatenation, equality, and ordering. Comparisons use UTF-8 bytes without Unicode normalization.
 
-`std/text` 的 `len` 按 Unicode 码点计数，字符串索引也返回 `u32` 码点，切片端点同样是码点位置。需要字节时用 `text.bytes`，从字节建立字符串用 `text.from_bytes`；后者严格检查 UTF-8，失败抛出 `text.Error`。先导入 `std/text`：
+`std/text` counts Unicode code points with `len`. String indexing returns a `u32` code point, and slice endpoints also use code point positions. Use `text.bytes` to get the bytes and `text.from_bytes` to build a string. Invalid UTF-8 makes `text.from_bytes` throw `text.Error`. Import `std/text` first.
 
 ```wz
 import "std/text" as text;
 ```
 
-以下写在函数体内：
+Put the following code inside a function body.
 
 ```wz
 let sample = "a你😀";
-let count = text.len(sample);            // 3 个码点
-let byte_count = text.byte_len(sample);  // 8 个字节
-let second = sample[1];                  // 20320，u32
+let count = text.len(sample);            // 3 code points
+let byte_count = text.byte_len(sample);  // 8 bytes
+let second = sample[1];                  // 20320, a u32
 let tail = sample[1:3];                  // "你😀"
 let raw = text.bytes(sample);            // Vec[u8]
-raw[0] = 98;                             // 修改字节容器不影响 sample
+raw[0] = 98;                             // Editing raw leaves sample intact
 try {
     let restored = text.from_bytes(text.bytes(sample));
 } catch error text.Error {
-    // 输入不是合法 UTF-8
+    // The input is not valid UTF-8.
 }
 ```
 
-`string` 可以用 `+` 拼接，也可以用 `==`、`!=` 和大小比较。`var` 整体绑定支持 `+=`：
+Concatenate strings with `+` and compare them with `==`, `!=`, or the ordering operators. You can use `+=` to update a whole `var` binding.
 
 ```wz
 var greeting = "你好";
-greeting += "，Woozy";  // 建立新字符串
+greeting += "，Woozy";  // Creates a new string
 ```
 
-字段、索引和 `let` 绑定的字符串不能直接 `+=`，需要写成 `target = target + suffix`。字符串 `const` 的初始值仍须在编译期确定，`const C = "a" + "b";` 会报错；const 只接受能在编译期确定的字符串值。
+String `+=` applies to whole `var` bindings only. For an assignable field or indexed element, write `target = target + suffix` instead. A string constant needs a value that can be determined at compile time. For example, `const C = "a" + "b";` is an error.
 
-## 4. 运算与转换
+## 4. Operators and conversions
 
-算术使用 `+ - * / %`，比较使用 `== != < <= > >=`。`%` 只接受整数；具体类型是否支持某种运算由类型检查决定，例如不能因为整数支持 `==` 就推断 Vec 也支持。
+Use `+ - * / %` for arithmetic and `== != < <= > >=` for comparisons. The remainder operator `%` requires integers. The type checker determines which operations a concrete type supports. For example, integer equality does not imply Vec equality.
 
-逻辑运算使用 `!`、`&&`、`||`，后两者短路求值。位运算使用 `~`、`&`、`|`、`^`、`<<`、`>>`。赋值和复合赋值是语句，不是表达式。
+The logical operators are `!`, `&&`, and `||`. The last two short-circuit. The bitwise operators are `~`, `&`, `|`, `^`, `<<`, and `>>`. Assignment and compound assignment are statements.
 
-不同具体数值类型不会自动混算。显式转换写作 `目标类型(值)`：
+To combine different concrete numeric types, convert explicitly with `Type(value)`.
 
 ```wz
-// 在函数体内
+// Inside a function body
 let count i32 = 7;
 let wide i64 = i64(count);
 let average f64 = f64(count) / 2.0;  // 3.5
@@ -179,23 +179,23 @@ let truncated = i32(3.9);           // 3
 let negative = i32(-3.9);           // -3
 ```
 
-整数到整数的转换检查范围；浮点转整数先向零截断，再检查整数范围。能在编译期确定失败就报错，动态越界、NaN 或无穷转整数产生 Panic。
+Integer-to-integer conversions check the target range. A float-to-integer conversion truncates toward zero before checking the range. Conversions known to fail are compile errors. At runtime, converting an out-of-range value, NaN, or infinity to an integer panics.
 
-定宽整数的加减乘会回绕。例如：
+Fixed-width integer addition, subtraction, and multiplication wrap.
 
 ```wz
-// 在函数体内
+// Inside a function body
 let highest i8 = 127;
 let wrapped = highest + 1;  // -128
-let quotient i32 = -7 / 3;  // -2，向零截断
-let remainder i32 = -7 % 3; // -1，符号随被除数
+let quotient i32 = -7 / 3;  // -2, truncated toward zero
+let remainder i32 = -7 % 3; // -1, with the sign of the dividend
 ```
 
-整数除零和非法移位产生 Panic。浮点除零按 IEEE 754 得到 Inf 或 NaN。浮点运算按 `f32` 或 `f64` 精度执行，不默认启用放宽精度的运算规则。完整数值细节见 [SEMANTICS.md](SEMANTICS.md#4-数值运行语义)。
+Integer division by zero and invalid shifts panic. Floating-point division by zero gives Inf or NaN according to IEEE 754. Floating-point operations use `f32` or `f64` precision, with relaxed-precision rules disabled by default. For details, see the [numeric rules](SEMANTICS.md#4-数值运行语义).
 
-## 5. 函数与调用
+## 5. Functions and calls
 
-顶层函数声明：
+Declare a top-level function with `func`.
 
 ```wz
 func add(left i32, right i32) i32 {
@@ -203,9 +203,9 @@ func add(left i32, right i32) i32 {
 }
 ```
 
-省略返回类型表示返回 `Unit`，可以直接执行到函数体末尾。非 `Unit` 函数的所有正常结束分支必须返回值。
+Omit the return type for a `Unit` function, which can run to the end of its body. A function with any other return type must return a value on every path that completes normally.
 
-已声明 `add` 后，在函数体内可以这样调用：
+After declaring `add`, you can call it from inside a function body.
 
 ```wz
 let positional = add(2, 3);              // 5
@@ -213,11 +213,11 @@ let named = add(right: 3, left: 2);       // 5
 let mixed = add(2, right: 3);            // 5
 ```
 
-位置实参必须在命名实参前。被调用者和实参按源码从左到右求值，参数名不会改变副作用的先后顺序。函数不支持默认参数、可变参数或同名重载。
+Positional arguments come before named arguments. The callee and arguments are evaluated from left to right as written, regardless of the parameter names. Functions have no default arguments, variadic parameters, or overloading by name.
 
-普通参数的绑定只读。需要改一个数值时，先建局部 `var`；修改调用者变量的 `inout` 会在后面介绍。
+Ordinary parameter bindings are read-only. To change a numeric value, assign it to a local `var` first. A later section shows how to use `inout` to modify a caller's variable.
 
-函数也能作为值传递。下面的声明和调用展示了函数类型及函数字面量：
+Functions can also be passed as values. This example declares a function type and creates a function literal.
 
 ```wz
 func apply(operation func(i32) i32, value i32) i32 {
@@ -232,9 +232,9 @@ func calculate() i32 {
 }
 ```
 
-函数类型记录参数类型、参数模式、返回类型和错误类型，不保留参数标签；通过函数值调用时只能使用位置实参。
+A function type records its parameter types and modes, return type, and error type. Parameter labels are omitted, so calls through function values use positional arguments only.
 
-函数字面量可以捕获创建它的函数中的局部变量。捕获发生在创建时：数值等直接值保存当时的副本，Vec、Box 等共享对象仍指向同一个对象。捕获绑定在函数值内只读，但可以通过已有接口修改共享对象的内容。下面的函数返回的读取器离开创建它的作用域后仍然可用：
+A function literal can capture local variables from the function that creates it. Capture happens when the literal is evaluated. Values such as numbers are copied at that point. Capturing a Vec or Box shares the same object. Captured bindings are read-only within the function value, and shared objects remain mutable through their APIs. The reader returned below keeps working after the scope that created it has exited.
 
 ```wz
 func make_reader(seed i32) (func() i32) {
@@ -248,7 +248,7 @@ func read_value() i32 {
 }
 ```
 
-普通 `func` 复制捕获值；`move func(...) { ... }` 会移动所有实际捕获的拥有值，例如 Vec，而数值等直接值仍按普通规则复制。被移动的原绑定在重新初始化前不能读取：
+A plain `func` copies its captured values. A `move func(...) { ... }` transfers the owned values it captures, such as a Vec. Values such as numbers still copy normally. Reinitialize a binding before reading it after a move.
 
 ```wz
 func moved_capture() i32 {
@@ -260,7 +260,7 @@ func moved_capture() i32 {
 }
 ```
 
-方法也可以保存为函数值。创建 `value.method` 时会保存接收者的逻辑副本。之后重新绑定原变量，或替换普通按值字段，不会改变已保存的函数值；但 Vec 等引用字段仍共享同一对象，修改其内容会被看到。move-Self 方法同样可以绑定，绑定值可复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法：
+A method can also be stored as a function value. Evaluating `value.method` saves a logical copy of the receiver. Rebinding the original variable or replacing its value fields leaves the saved copy intact. Reference fields, such as Vec fields, still share an object, and updates to its contents are visible through the saved receiver. A method with a `move Self` receiver can also be bound. Its function value can be copied and called repeatedly. Each call copies the saved receiver and moves the new copy into the method.
 
 ```wz
 struct Counter {
@@ -279,14 +279,14 @@ func repeat_bound() i32 {
 }
 ```
 
-inout-Self 方法不能作为函数值保存。捕获的值会随函数值一起复制和释放。
+Methods with an `inout Self` receiver cannot be stored as function values. Captured values are copied and released along with the function value.
 
-## 6. 分支与循环
+## 6. Branches and loops
 
-条件必须是 `bool`，不会把 `0`、空容器等当成假：
+Conditions require a `bool`. Zero and empty containers do not count as false.
 
 ```wz
-// 在函数体内
+// In a function body
 let score i32 = 72;
 var passed = false;
 if score >= 60 {
@@ -296,15 +296,15 @@ if score >= 60 {
 }
 ```
 
-循环统一使用 `for`。三段式循环、条件循环和无限循环分别这样写：
+Woozy uses `for` for three-clause loops, conditional loops, and infinite loops.
 
 ```wz
-// 在函数体内
+// In a function body
 var total i32 = 0;
 for var i i32 = 0; i < 4; i += 1 {
     total += i;
 }
-// total 为 6，i 在循环外不可见
+// total is 6. i is out of scope after the loop.
 
 var remaining i32 = 3;
 for remaining > 0 {
@@ -320,14 +320,14 @@ for {
 }
 ```
 
-`break` 退出最近的循环或 switch，`continue` 跳到下一轮循环。遍历 Vec 使用 `for element in values`，见下一节。
+`break` exits the innermost loop or switch. `continue` skips to the next loop iteration. To iterate over a Vec, use `for element in values`, as shown in the next section.
 
-## 7. Vec：列表、索引与切片
+## 7. Vec literals, indexing, and slicing
 
-`Vec[T]` 是元素类型为 `T` 的容器，列表字面量会建立 Vec：
+`Vec[T]` holds elements of type `T`. A list literal creates a Vec.
 
 ```wz
-// 在函数体内
+// In a function body
 let values Vec[i32] = [12, 18, 20];
 let first = values[0];       // 12
 let first_two = values[0:2]; // [12, 18]
@@ -336,25 +336,25 @@ var total i32 = 0;
 for value in values {
     total += value;
 }
-// total 为 50
+// total is 50
 ```
 
-列表元素必须能确定为同一种元素类型，推断不依赖元素顺序。空列表需要上下文提供类型。切片左闭右开，端点可以省略；新 Vec 复制选中的元素。
+All elements in a list must resolve to the same type. Type inference gives the same result regardless of element order. An empty list needs a type from context. A slice includes the start index and excludes the end index. You can omit either endpoint. The new Vec copies the selected elements.
 
-Vec 赋值共享同一个容器：
+Assigning a Vec shares the same container.
 
 ```wz
-// 在函数体内
+// In a function body
 let scores Vec[i32] = [12, 18, 20];
 let alias = scores;
-alias[0] = 15;               // scores[0] 也变成 15
+alias[0] = 15;               // scores[0] is now 15 too
 let copy = scores[0:2];
-copy[0] = 99;                // scores[0] 仍为 15
+copy[0] = 99;                // scores[0] is still 15
 ```
 
-`let` 禁止给名称重新赋值，也禁止修改本语言值的字段，但允许修改共享 Vec 的元素。切片复制元素的值；若元素也是 Vec，里面的容器仍会共享，不是递归深复制。
+`let` prevents reassignment and changes to the fields of a Woozy value. You can still change elements of a shared Vec. A slice copies each element by value. If an element is itself a Vec, the copy shares that inner container.
 
-`std/vec` 提供长度和可变操作，使用前写 `import "std/vec" as vec;`。以下写在函数体内：
+`std/vec` provides operations to inspect the length and modify the container. Add `import "std/vec" as vec;` before using the following code in a function body.
 
 ```wz
 let items = vec.empty[i32]();
@@ -362,18 +362,18 @@ vec.reserve(items, 8);
 vec.push(items, 12);
 vec.push(items, 18);
 let last = vec.pop(items); // option.Option[i32]
-vec.resize(items, 4, 0);   // 长度变为 4，新增元素填 0
+vec.resize(items, 4, 0);   // Length is now 4, with new elements set to 0
 let capacity = vec.capacity(items);
-vec.clear(items);          // 长度为 0，容量保留
+vec.clear(items);          // Length is 0 and capacity is unchanged
 ```
 
-`vec.pop` 在空 Vec 上返回 `None`。`resize` 变大时用给定值填充，变小时截断。`clear` 不释放容量。Vec 赋值共享同一个容器，这些操作会改变所有别名看到的内容。
+`vec.pop` returns `None` on an empty Vec. When `resize` grows a Vec, it fills the new elements with the given value. When it shrinks a Vec, it truncates the elements. `clear` keeps the allocated capacity. Since Vec assignment shares the container, changes are visible through every alias.
 
-Vec 没有负索引。越界下标、非法切片会产生 Panic。遍历期间可以修改已有元素，不能改变正在遍历的 Vec 的长度或存储；不要在循环里 push、pop、resize、clear 或 reserve。
+Vec indices must be nonnegative. Out-of-bounds indices and invalid slices cause a Panic. You can update existing elements while iterating. Keep the length and storage of the Vec fixed during the loop, so avoid calling `push`, `pop`, `resize`, `clear`, or `reserve` on it.
 
-### 共享单元与弱引用
+### Shared cells and weak references
 
-`std/box.Box[T]` 保存一个可修改的值。复制 Box 会得到指向同一个单元的句柄，`box.get` 读取当前值，`box.set` 替换它：
+`std/box.Box[T]` stores a mutable value. Copying a Box gives you a handle to the same cell. `box.get` reads the current value and `box.set` replaces it.
 
 ```wz
 import "std/box" as box;
@@ -386,7 +386,7 @@ func shared_cell() i32 {
 }
 ```
 
-`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`。目标已经没有强引用时升级得到 `None`：
+`Weak[T]` is a built-in type for storing a weak reference without extending the target's lifetime. `std/weak` provides three operations. Valid targets include Vec, function values, `Box[T]`, and reference-counted shared handles. Plain struct and enum values, strings, file and socket descriptors, and foreign Python or C objects cannot be used directly as targets. `weak.empty[T]()` creates an empty weak reference. `weak.downgrade[T](value)` creates one from an existing strong reference. `weak.upgrade(w)` returns an `option.Option[T]`. If the target has no strong references left, it returns `None`.
 
 ```wz
 import "std/option" as option;
@@ -413,13 +413,13 @@ func observe_values() i32 {
 }
 ```
 
-Weak 可以保存到 struct、enum、Vec 和泛型值中，但不能把普通按值聚合当成可弱引用的对象。接口见 [标准库](STDLIB.md)。
+Weak references can be stored in structs, enums, Vecs, and generic values. Plain value aggregates cannot serve as weak reference targets. See the [standard library guide](STDLIB.md) for the API.
 
-由 Vec、Box 和闭包形成的纯 Woozy 强引用环会自动回收；涉及任务或协程帧的环尚未完成，具体范围见 [开发记录](../development/docs/LANGUAGE_DOC_FACTS.md)。
+Woozy automatically collects cycles made up of strong references among pure Woozy Vecs, Boxes, and closures. Support for cycles involving tasks or coroutine frames is still incomplete. See the [development notes](../development/docs/LANGUAGE_DOC_FACTS.md) for details.
 
-## 8. 结构体与方法
+## 8. Structs and methods
 
-顶层声明一个结构体和它的方法：
+Declare the struct and its method at the top level.
 
 ```wz
 struct Point {
@@ -434,23 +434,23 @@ impl Point {
 }
 ```
 
-结构体字段必须写类型。构造时要初始化全部字段，没有字段默认值。`Self` 表示当前实现的类型，接收者写在方法第一个参数的位置。
+Declare the type of every struct field. Initialize all fields when constructing a struct, since fields have no default values. `Self` is the type being implemented. The receiver is the first parameter of a method.
 
-声明上面的类型后，在函数体内：
+Once you have declared the type above, use it in a function body.
 
 ```wz
 var point = Point(x: 3, y: 4);
 let length = point.squared_length();  // 25
 let saved = point;
 point.x = 6;
-// saved.x 仍为 3，point.x 为 6
+// saved.x is still 3. point.x is 6.
 ```
 
-结构体按字段复制；整数等值字段各有自己的值，Vec 字段复制后仍共享容器。通过 `let` 绑定的结构体不能直接修改字段。
+Structs copy field by field. An integer field gets an independent copy of its value. A Vec field continues to share the container. A struct bound with `let` does not allow direct field updates.
 
-## 9. 枚举与模式匹配
+## 9. Enums and pattern matching
 
-枚举描述几个互斥的情况，每个变体可以携带不同的数据。顶层声明：
+An enum describes several mutually exclusive cases. Each variant can carry different data. Declare the enum and functions at the top level.
 
 ```wz
 enum Verdict {
@@ -475,9 +475,9 @@ func accepted(verdict Verdict) bool {
 }
 ```
 
-无数据变体用 `Verdict.Fail`，带数据变体用构造调用。`case Verdict.Pass(total):` 取出携带的分数，`total` 只在这个分支内可见。
+Use `Verdict.Fail` for a variant without data. Call the constructor for a variant that carries data. `case Verdict.Pass(total):` extracts the score. `total` is visible only in that branch.
 
-`switch` 不穿透到下一分支，而且必须覆盖全部可能值。上面列全了两个变体；bool 可以列出 `true`、`false`。不能列全的值需要 `default:`、`case _:` 或其他总匹配分支：
+`switch` cases do not fall through and must cover every possible value. The example above covers both variants. A switch on `bool` can list `true` and `false`. If you cannot list all values, add `default:`, `case _:`, or another catch-all branch.
 
 ```wz
 func category(code i32) i32 {
@@ -492,11 +492,11 @@ func category(code i32) i32 {
 }
 ```
 
-主体表达式只求值一次。裸标识符模式总是新建绑定；`case limit:` 不表示“和外面的 limit 比较”。`_` 匹配任何值而不创建可读名称。当前不支持范围模式、guard 或 switch 表达式。
+The subject expression is evaluated once. A bare identifier pattern always creates a new binding. For example, `case limit:` binds the subject to a new name instead of comparing it with an outer `limit`. `_` matches any value without introducing a name you can read. Range patterns, guards, and switch expressions are currently unsupported.
 
-## 10. 普通参数、move 与 inout
+## 10. Ordinary parameters, move, and inout
 
-普通参数不消耗调用者的值。数值按值复制，Vec 仍指向共享容器，参数名本身只读。下面的函数允许修改 Vec 内容：
+Ordinary parameters leave the caller's value available. Numeric values are copied and Vec values continue to share the container. The parameter binding itself is read-only. The following function changes a Vec element.
 
 ```wz
 func replace_first(values Vec[i32], value i32) {
@@ -504,7 +504,7 @@ func replace_first(values Vec[i32], value i32) {
 }
 ```
 
-需要修改调用者的变量存储时，双方都写 `inout`：
+Use `inout` in both the declaration and the call to modify the caller's storage.
 
 ```wz
 func increment(value inout i32) {
@@ -518,9 +518,9 @@ func changed() i32 {
 }
 ```
 
-`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置可以是数值、bool、递归只含平凡值的有限 struct/enum，也可以是 Vec/Slice 容器本身、string、函数值、Weak、dyn 和含拥有字段的聚合；被调用方可以整体替换它们，旧值恰好释放一次。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝，`Task` 与外部 C resource 的 `inout` 报 `E_CAPABILITY_UNAVAILABLE`。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
+`inout` accepts writable `var` bindings, existing `inout` parameters, their nested fields, and container elements. Examples include `swap(inout state.left, inout state.right)`, `bump(inout values[0])`, and `grow(inout items[1].count)`. Eligible locations can hold numbers, bools, finite structs or enums containing only trivial values recursively, Vec or Slice containers themselves, strings, function values, Weak or dyn values, and aggregates with owned fields. The callee can replace the entire value, releasing the old value exactly once. A single call can borrow distinct named fields or provably different literal indices separately. The compiler rejects overlapping access paths, conflicting accesses to the whole container, and dynamic index conflicts. Using `inout` with `Task` or a foreign C resource reports `E_CAPABILITY_UNAVAILABLE`. Vec and Slice handles can share an object through copied bindings, structs or enums, function return values, or closures. While an element is borrowed with `inout`, the compiler conservatively rejects other accesses that might alias it.
 
-转交一个拥有值时使用 `move`：
+Use `move` to transfer ownership of a value.
 
 ```wz
 func take_first(values move Vec[i32]) i32 {
@@ -531,18 +531,18 @@ func transferred() i32 {
     let values Vec[i32] = [12, 18];
     let kept = values;
     let first = take_first(move values);
-    // 这里不能再读 values；kept 仍可使用共享容器
+    // values is no longer readable. kept can still use the shared container.
     return first + kept[1];  // 30
 }
 ```
 
-移动后，绑定重新初始化之前不能读取。移动不会清空其他别名，也不会深复制容器。普通参数不能直接被移动，必须先取得本地副本。
+After a move, reinitialize the binding before reading it again. Other aliases remain intact and the container is not deep-copied. To move an ordinary parameter, first make a local copy.
 
-方法的接收者遵守同样的规则。普通 `value.method()` 不自动移动或取得可写访问；方法声明需要 `move` 或 `inout` 接收者时，调用写作 `(move value).take()` 或 `(inout value).change()`。
+Method receivers follow the same rules. An ordinary `value.method()` call neither moves the receiver nor grants writable access. If the receiver declaration uses `move` or `inout`, write the call as `(move value).take()` or `(inout value).change()`.
 
-## 11. 可声明的错误
+## 11. Declared errors
 
-`throws E` 表示函数可能抛出 `E` 类型的错误，正常返回值仍是声明的类型：
+`throws E` means the function may throw an error of type `E`. On success, it still returns its declared result type.
 
 ```wz
 enum ScoreError {
@@ -565,7 +565,7 @@ func checked_sum(scores Vec[i32]) i32 throws ScoreError {
 }
 ```
 
-`require_score` 抛出的错误会自动从 `checked_sum` 继续传播，调用处不逐次加 `?`。调用者必须声明兼容的 `throws`，或者用 `try/catch` 处理。已声明上面两个函数后，可以写：
+Errors from `require_score` propagate automatically through `checked_sum`, so the call needs no `?` marker. The caller must declare a compatible `throws` or handle the error with `try/catch`. With both functions declared, you can write the following.
 
 ```wz
 func handled() i32 {
@@ -574,33 +574,33 @@ func handled() i32 {
     } catch error ScoreError {
         switch error {
             case ScoreError.Negative(value):
-                return value;  // 本例返回 -1
+                return value;  // Returns -1 in this example
         }
     }
 }
 ```
 
-错误类型可以是普通枚举，不必实现特殊 Error trait。自行定义的 `Result[T, E]` 也是普通数据，不会自动触发错误传播。标准库的 `std/result.Result[T,E]` 同样是普通 enum，变体是 `result.Result.Ok` 和 `result.Result.Err`；构造泛型 enum 时写完整类型实参，例如 `result.Result[i32,i32].Ok(7)`，跨包匹配写 `result.Result.Ok(value)`。捕获错误不会撤销已经发生的容器修改或外部操作。
+An ordinary enum can serve as an error type without implementing a special Error trait. A custom `Result[T, E]` is an ordinary value and does not trigger error propagation. The standard library's `std/result.Result[T,E]` is also an ordinary enum with `result.Result.Ok` and `result.Result.Err` variants. Write out the type arguments when constructing a generic enum, as in `result.Result[i32,i32].Ok(7)`. When matching it from another package, write `result.Result.Ok(value)`. Catching an error leaves any container changes or external operations already performed in effect.
 
-越界、整数除零等运行失败称为 Panic，不能由 typed catch 恢复。可预期、需要调用者处理的错误应通过 `throws` 表达。
+Runtime failures such as out-of-bounds access and integer division by zero cause a Panic, which a typed catch cannot recover from. Use `throws` for expected errors that callers need to handle.
 
-## 12. defer 与代码块退出
+## 12. defer and leaving a block
 
-`defer` 在当前代码块退出时执行，后注册的先执行：
+A `defer` runs when control leaves the current block. The last registered action runs first.
 
 ```wz
-// 在函数体内
+// Inside a function body
 var order i32 = 0;
 {
     defer { order = order * 10 + 1; }
     defer { order = order * 10 + 2; }
 }
-// 离开这个块后，order 为 21
+// After this block, order is 21
 ```
 
-它属于声明所在的词法块，不会一律等到函数结束。正常退出、`return`、`break`、`continue`、typed throw 都执行离开代码块时的清理；Panic 不保证执行。
+A `defer` belongs to the lexical block where it is declared. Cleanup runs when control reaches the end of the block or leaves it through `return`, `break`, `continue`, or a typed throw. A Panic can skip cleanup.
 
-`defer` 读取执行时的变量值。返回表达式则在清理前求值并保存：
+A `defer` reads the variable values in effect when it runs. A return expression is evaluated and saved before cleanup.
 
 ```wz
 func before_cleanup(value inout i32) i32 {
@@ -611,18 +611,18 @@ func before_cleanup(value inout i32) i32 {
 func demonstrate() i32 {
     var value i32 = 10;
     let returned = before_cleanup(inout value);
-    // returned 为 10，value 为 11
+    // returned is 10 and value is 11
     return returned + value;  // 21
 }
 ```
 
-需要给 defer 保存快照时，先建一个新绑定。defer 内不能向外 `return`、`break`、`continue` 或传播 typed error；它可以在内部自行处理错误。
+Create a new binding first if a `defer` needs a snapshot. A deferred block can handle errors internally. It cannot `return`, `break`, or `continue` out of the deferred block or propagate a typed error from it.
 
-## 13. 包、文件与可见性
+## 13. Packages, files, and visibility
 
-同一目录里的 `.wz` 文件属于同一个包，必须声明相同的包名。顶层声明在同包文件之间可见，不需要相互 import。
+The `.wz` files in one directory belong to the same package and must declare the same package name. Top-level declarations are visible across files in that package without imports.
 
-跨包访问使用 import 别名，声明需要加 `pub`。假设 `app` 是项目源码根，`app/stats` 表示根目录下的 `stats/` 包，其中 `stats.wz` 可以写：
+To access a declaration from another package, give the import an alias and mark the declaration `pub`. Suppose `app` names the project's source root. Then `app/stats` names the package in the `stats/` directory, where `stats.wz` can contain the following.
 
 ```wz
 package stats;
@@ -632,7 +632,7 @@ pub func passed(total i32) bool {
 }
 ```
 
-另一个包里的文件通过逻辑模块名导入：
+A file in another package imports it by its logical module name.
 
 ```wz
 package main;
@@ -644,11 +644,11 @@ func main() i32 {
 }
 ```
 
-import 别名仅在当前文件有效。导入名不带 `.wz` 后缀；包不能循环导入，但函数之间可以递归调用。顶层可以声明 const、类型、函数、trait 和 impl，当前不允许顶层 `let/var` 动态初始化。
+An import alias applies only in the file that declares it. Import names omit the `.wz` extension. Package imports must be acyclic, and functions can call each other recursively. Top-level declarations can define constants, types, functions, traits, and implementations. Top-level `let` and `var` bindings with dynamic initialization are currently unsupported.
 
-## 14. 泛型与 trait
+## 14. Generics and traits
 
-类型参数放在方括号里。下面是一个泛型结构体和泛型函数：
+Type parameters go in square brackets. Here is a generic struct and a generic function.
 
 ```wz
 struct Pair[T] {
@@ -661,15 +661,15 @@ func identity[T](value T) T {
 }
 ```
 
-声明后，在函数体内：
+Use the declarations in a function body as follows.
 
 ```wz
 let pair = Pair[i32](first: 12, second: 18);
 let explicit = identity[i32](pair.first);  // 12
-let inferred = identity(pair.second);     // 从参数推断 T 为 i32，值为 18
+let inferred = identity(pair.second);     // The argument gives T = i32 and the result is 18
 ```
 
-泛型函数只能执行类型参数已声明支持的操作。需要调用类型上的方法时，用 trait 声明约束，再提供 impl：
+A generic function can use only the operations declared for its type parameter. To call a method on a type parameter, add a trait constraint and supply an implementation.
 
 ```wz
 trait Ordered {
@@ -690,9 +690,9 @@ func smaller[T Ordered](left T, right T) T {
 }
 ```
 
-`smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum；在 `std/option` 包内部才可以省略成 `Option.Some(value)`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
+`smaller[i32](12, 18)` returns `12`. When constructing a generic enum, supply all type arguments, as in `option.Option[i32].Some(1)`. From another package, match the variant with `option.Option.Some(value)`. Both `std/option.Option` and `std/result.Result` are ordinary generic enums. The shorter pattern `Option.Some(value)` is available inside the `std/option` package. The type must explicitly implement the trait, even if it already has a method with the same name. A type parameter can have at most one named constraint, and traits can themselves take type parameters. One type can implement the same trait with different type arguments. An ambiguous call is a compile error, and the expected return type does not resolve it.
 
-当前不支持 C++ 模板特化、常量泛型或关联类型。需要运行时多态时，可以让具体值转换成一个 `dyn Trait` 值，再通过 trait 方法调用：
+C++-style template specialization, const generics, and associated types are currently unsupported. For runtime polymorphism, convert a concrete value to a `dyn Trait` value and call a trait method on it.
 
 ```wz
 trait Area {
@@ -714,11 +714,11 @@ func area_of_shape() i32 {
 }
 ```
 
-`dyn Trait` 的方法必须是普通 `self Self` 接收者，所有非接收者参数必须是普通按值参数；`move` 或 `inout` 参数（例如 `move i32`）同样不能用于 dyn。方法不能有自身的泛型参数，也不能返回 `Self`、抛出错误或在非接收者参数中使用 `Self`。每个具体值必须有恰好一个完整 trait 实现。`Vec[dyn Trait]` 可以保存不同具体类型的值。完整规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
+A method on `dyn Trait` must take an ordinary `self Self` receiver and ordinary by-value parameters. That excludes both `move` and `inout` parameters, including `move i32`. The method cannot declare its own type parameters, return `Self`, throw errors, or use `Self` in a non-receiver parameter. Each concrete value needs exactly one complete implementation of the trait. A `Vec[dyn Trait]` can hold values of different concrete types. See [generics and traits](SEMANTICS.md#6-泛型和-trait) for the full rules.
 
-### 自定义迭代器
+### Custom iterators
 
-实现 `std/iter.Iterator[T]` 后，类型就能用于 for-in。next 通过 inout 修改迭代器，返回 Some 产生一个元素，返回 None 结束：
+Implement `std/iter.Iterator[T]` to use a type in a for-in loop. The `next` method updates the iterator through `inout`. It returns `Some` to yield an element or `None` to end iteration.
 
 ```wz
 package app;
@@ -747,19 +747,19 @@ func main() i32 {
 }
 ```
 
-for 只求值一次，并推进它保存的迭代器副本，所以这里 source.value 仍是 0。副本里的 Vec 等引用字段仍共享对象。要直接推进自己的可写变量，可调用 `(inout cursor).next()`。
+The loop evaluates its source once, saves a copy of the iterator, and advances that copy. In this example, `source.value` stays at 0. Reference fields such as Vec still share the same objects after copying. To advance your own mutable iterator variable, call `(inout cursor).next()`.
 
-next 不能 throws；需要逐项报告错误时，让元素类型 T 为 Result。一个类型若有多个不同 Iterator 实参实现，直接 for-in 会报歧义；带明确 Iterator 约束的泛型函数可选定相应实现。只有同名 next 方法不够，必须实现标准 trait。
+The `next` method cannot declare `throws`. Use a Result as the element type `T` to report an error for an individual element. If a type implements Iterator with several different type arguments, a direct for-in loop is ambiguous. A generic function with a specific Iterator constraint can select the corresponding implementation. The loop requires an implementation of the standard trait, even if the type already has a method named `next`.
 
-## 15. 线程与共享数据
+## 15. Threads and shared data
 
-线程入口使用无捕获函数，工作数据通过参数传入。`thread.spawn[A](function, argument)` 创建线程，`thread.join(job)` 等待并取得 i64 结果；创建和等待可能抛出 `os.Error`。
+A thread entry point is a function without captures, and it receives its data through an argument. `thread.spawn[A](function, argument)` starts a thread, and `thread.join(job)` waits for it and returns an `i64` result. Both calls can throw `os.Error`.
 
-Vec 传给线程后仍共享容器。多个线程读写同一份可变数据时，用 `std/sync` 的 Mutex 保护访问；Condvar 用于等待共享条件，AtomicI64 用于原子计数。引用计数的原子操作不会代替这些同步。完整示例和接口见 [线程与同步](CONCURRENCY.md)。
+Passing a Vec to a thread shares the same container. When multiple threads access shared mutable data, protect it with a Mutex from `std/sync`. Use Condvar to wait for a shared condition and AtomicI64 for an atomic counter. Atomic reference counting protects the reference count itself. See [threads and synchronization](CONCURRENCY.md) for full examples and APIs.
 
-## 16. 常用标准库
+## 16. Common standard library modules
 
-标准库按 `std/...` 导入。下面完整文件用 `std/text` 拆分输入，用 `std/strconv` 解析整数，再用 `std/io` 输出总和：
+Import standard library modules using `std/...`. This complete program splits input with `std/text`, parses integers with `std/strconv`, and prints their sum with `std/io`.
 
 ```wz
 package main;
@@ -783,12 +783,12 @@ func main() throws os.Error {
 }
 ```
 
-`std/io.println` 补换行，`std/io.eprintln` 写到标准错误。文件读写用 `std/fs`，文件和缓冲 I/O 用 `std/os`、`std/io`，时间、随机、数学、网络、线程和同步见 [标准库](STDLIB.md)、[系统接口](OS.md) 和 [线程与同步](CONCURRENCY.md)。
+`std/io.println` adds a newline, and `std/io.eprintln` writes to standard error. Use `std/fs` to read and write files, and `std/os` and `std/io` for file and buffered I/O. For time, randomness, math, networking, threads, and synchronization, see the [standard library guide](STDLIB.md), [system interfaces](OS.md), and [threads and synchronization](CONCURRENCY.md).
 
-`std/fs` 的 `read_text`、`write_text` 等函数会打开并关闭文件；直接使用 `os.File` 或 `io.Reader`/`io.Writer` 时，关闭和 `flush` 由调用者负责。详细规则见 [标准库](STDLIB.md)。
+Functions such as `std/fs.read_text` and `std/fs.write_text` open and close files for you. When you work directly with `os.File`, `io.Reader`, or `io.Writer`, you are responsible for closing and calling `flush`. See the [standard library guide](STDLIB.md) for details.
 
-## 继续阅读
+## Further reading
 
-[快速入门](QUICKSTART.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作，[标准库](STDLIB.md) 按模块列出接口和资源规则。
+The [quick start](QUICKSTART.md) focuses on the differences experienced programmers are likely to encounter. [SEMANTICS.md](SEMANTICS.md) defines the exact behavior of numbers, copying, errors, and cleanup. The [lexical and syntax reference](../baseline/LEXICAL_SYNTAX.md) covers literals and declarations. [System interfaces](OS.md) covers output, file I/O, and process operations. The [standard library guide](STDLIB.md) lists APIs and resource rules by module.
 
-章节组织参考了 [Rust Book](https://github.com/rust-lang/book/blob/main/src/SUMMARY.md) 与 [Go Tour 基础篇](https://github.com/golang/website/blob/master/_content/tour/basics.article)。示例和规则以 Woozy 为准。
+The chapter structure draws on the [Rust Book](https://github.com/rust-lang/book/blob/main/src/SUMMARY.md) and the [basics section of the Tour of Go](https://github.com/golang/website/blob/master/_content/tour/basics.article). The examples and language rules are specific to Woozy.

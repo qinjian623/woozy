@@ -264,7 +264,7 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 
 ## std/iter
 
-`Iterator[T]` 是 for-in 使用的标准 trait，声明 `func next(cursor inout Self) option.Option[T]`。for 只求值一次，按普通规则复制迭代器并推进副本；引用字段仍共享对象。next 不抛错，可用 Result 作为元素类型。完整示例见[自定义迭代器](TUTORIAL.md#自定义迭代器)。
+`Iterator[T]` 是 for-in 使用的标准 trait，声明 `func next(cursor inout Self) option.Option[T]`。for 只求值一次，按普通规则复制迭代器并推进副本；引用字段仍共享对象。next 不抛错，可用 Result 作为元素类型。完整示例见[自定义迭代器](TUTORIAL.cn.md#自定义迭代器)。
 
 ## std/async
 

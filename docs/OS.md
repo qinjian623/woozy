@@ -95,6 +95,6 @@ pub enum Error {
 
 `code` 保留 Linux 错误码，`completed` 表示本次高级操作在失败前已完成的字节数。一次读写在失败时为 0；`write_all` 可能已经完成一部分。NoProgress 没有对应的内核错误码，因此只携带已完成字节数。
 
-用 `try/catch` 捕获 `os.Error`，再用 `switch` 区分错误类别并取出 `code` 和 `completed`；写法见 [教程的错误处理一节](TUTORIAL.md#11-可声明的错误)。需要继续发送时，从已完成字节之后开始，不能把整段数据重新写一遍。
+用 `try/catch` 捕获 `os.Error`，再用 `switch` 区分错误类别并取出 `code` 和 `completed`；写法见 [教程的错误处理一节](TUTORIAL.cn.md#11-可声明的错误)。需要继续发送时，从已完成字节之后开始，不能把整段数据重新写一遍。
 
 `close` 的中断不能套用写入的重试方式：Linux 可能已经释放描述符，重试可能关闭随后复用该号码的文件。因此 `close` 报错后不自动重试。
