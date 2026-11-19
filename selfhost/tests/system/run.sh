@@ -10,13 +10,14 @@
 #   * --opt 0 and --opt 2 dumps are identical, so the metadata is static;
 #   * counts, per-operation parameter counts, operation/name uniqueness.
 #
-# Environment overrides: WOOZYC, WOOZY_LD_LIBRARY_PATH, CXX.
+# Environment overrides: WOOZYC, WOOZY_TOOLCHAIN_ROOT, WOOZY_LD_LIBRARY_PATH, CXX.
 set -u -o pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 stage0=${WOOZYC:-$root/build/woozy-stdlib-native/woozyc}
-libs=${WOOZY_LD_LIBRARY_PATH:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib:/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib}
+toolchains=${WOOZY_TOOLCHAIN_ROOT:-$root/../toolchains}
+libs=${WOOZY_LD_LIBRARY_PATH:-$toolchains/llvm-22.1.8/lib:$toolchains/libxml2-legacy-2.13.9/usr/lib}
 cxx=${CXX:-c++}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/system-metadata.XXXXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT

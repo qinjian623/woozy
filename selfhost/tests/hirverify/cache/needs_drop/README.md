@@ -49,9 +49,11 @@ program; the benchmark is not measured under strace.
 Run with the fixed Python 3.12.15 interpreter:
 
 ```sh
-/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+MAIN="${WOOZY_WORK_DIR:-$(dirname "$(git rev-parse --show-toplevel)")}"
+"${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python" \
   -B selfhost/tests/hirverify/cache/needs_drop/run.py \
-  --work-dir /home/qin/Work/language-dev-20261103/checks/SH15-hir-needs-drop-cache-20261114
+  --work-dir "$MAIN/checks/SH15-hir-needs-drop-cache-20261114"
 ```
 
 Every command has a finite deadline and uses the shared

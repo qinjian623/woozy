@@ -11,7 +11,7 @@
     "nproc": 16
   },
   "compiler_version": "woozyc 0.1.0-bootstrap (compiler-dev/1)\n",
-  "cpp_version": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin\n",
+  "cpp_version": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: ${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin\n",
   "primary_cpu": 1,
   "original_cpus": [
     1,

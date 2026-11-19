@@ -33,12 +33,12 @@ TASK = "native-fannkuch-redux-preparation"
 OPERATION_ID = "language-classic-fannkuch-prepare-20261109"
 PREPARE_SCHEMA = "compiler-dev/native-fannkuch-preparation/1"
 PERFORMANCE_DIR = Path(__file__).resolve().parent
-DEFAULT_ORACLE_DIR = Path(
-    "/home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109"
+WORKTREE = PERFORMANCE_DIR.parents[2]
+DEFAULT_ORACLE_DIR = (
+    WORKTREE.parent / "checks/fannkuch-oracle-20261109"
 )
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit"
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit"
 )
 N_VALUES = (3, 4, 5, 6, 7)
 TARGET_FLAGS = (

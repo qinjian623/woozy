@@ -25,6 +25,12 @@ from zoneinfo import ZoneInfo, available_timezones, reset_tzpath
 
 import tzif
 
+ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_TOOLCHAINS = Path(
+    os.environ.get("LANG_TOOLCHAINS")
+    or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+    or ROOT.parent / "toolchains")
+
 UTC = timezone.utc
 EPOCH_NAIVE = datetime(1970, 1, 1)
 EPOCH_UTC = datetime(1970, 1, 1, tzinfo=UTC)
@@ -1087,6 +1093,7 @@ def main() -> int:
     parser.add_argument("--cli", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--zoneinfo", type=Path, default=Path("/usr/share/zoneinfo"))
+    parser.add_argument("--toolchains", type=Path, default=DEFAULT_TOOLCHAINS)
     args = parser.parse_args()
 
     args.zoneinfo = args.zoneinfo.resolve()
@@ -1101,9 +1108,8 @@ def main() -> int:
             return 2
     out.mkdir(parents=True, exist_ok=True)
 
-    toolchain_lib = Path(
-        "/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib"
-    )
+    toolchain_lib = (args.toolchains /
+                     "libxml2-legacy-2.13.9/usr/lib")
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(toolchain_lib) + ":" + env.get("LD_LIBRARY_PATH", "")
 

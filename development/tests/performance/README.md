@@ -69,8 +69,10 @@ Prepare validates fixtures and artifacts, but does not produce formal timing
 samples. Use a new `--out` path each time.
 
 ```sh
-export PY=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
-export MAIN=/home/qin/Work/language-dev-20261103
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+REPO="$(git rev-parse --show-toplevel)"
+export MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
+export PY="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
 export RELEASE="$MAIN/builds/t10-python-backend-root-integration/release"
 export LLVM="$MAIN/toolchains/llvm-22.1.8/bin"
 export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
@@ -82,7 +84,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
-  --compiler-root "$MAIN/compiler" \
+  --compiler-root "$REPO" \
   --ld-library-path "$XML" \
   --cpu 4
 ```
@@ -134,7 +136,7 @@ directory. It reuses the prepared binaries and fixed inputs:
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
-  --compiler-root "$MAIN/compiler" \
+  --compiler-root "$REPO" \
   --ld-library-path "$XML" \
   --cpu 4
 ```

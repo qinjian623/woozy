@@ -77,18 +77,20 @@ durations only, not performance samples. The run also writes `oracle.json`,
 
 ## Running
 
-The production tools used by the recorded preparation run are under
-`/home/qin/Work/language-dev-20261103`; `compiler-root` must point at the main
-compiler checkout. The script may run from that checkout or from a worker
+The production tools used by the recorded preparation run are under the
+development work directory (the repository's parent by default; set
+`WOOZY_WORK_DIR` to override); `compiler-root` must point at the main
+compiler checkout (`$REPO`). The script may run from that checkout or from a worker
 worktree, but the supplied `woozyc`, helper, and runtime must be under
 `compiler-root` (the worker must not point them at a worker build). The CMake
 cache must record `BUILD_TESTING=OFF`, and the script does not rebuild or
 replace the supplied tools.
 
 ```sh
-export MAIN=/home/qin/Work/language-dev-20261103
+REPO="$(git rev-parse --show-toplevel)"
+export MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
 export PY="$MAIN/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
-export RELEASE="$MAIN/compiler/build/native-perf-release"
+export RELEASE="$REPO/build/native-perf-release"
 export LLVM="$MAIN/toolchains/llvm-22.1.8/bin"
 export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
@@ -98,7 +100,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
-  --compiler-root "$MAIN/compiler" \
+  --compiler-root "$REPO" \
   --ld-library-path "$XML" \
   --cpu 4
 ```

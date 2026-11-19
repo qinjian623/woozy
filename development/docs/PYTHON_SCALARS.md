@@ -72,7 +72,7 @@ API 测试另确认共用检查及 emit 前后公开类型数量不变。
 ### 实际验证
 
 环境：Linux x86_64、GNU 16.2.1、LLVM=OFF，独立执行解释器为
-`/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`。
+`${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`。
 check/build 仍为 C++，正式 CLI 子进程的 PATH 只含会失败的 Python 命令；执行阶段使用解释器
 绝对路径。未安装第三方库，未安装或修改系统 Python。
 
@@ -128,7 +128,8 @@ helper 的 metadata/HIR 带不同构建临时目录的绝对源码位置，因�
 各 JSON 中的 `/tmp/lang-python-pod-{debug,release}` 目录保存生成程序和逐项原始结果。
 
 ```sh
-PY312=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+PY312="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
 cmake -S . -B /tmp/lang-python-pod-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$PY312" -DLANG_TEST_PYTHON="$PY312"
 cmake --build /tmp/lang-python-pod-debug -j4
@@ -223,7 +224,7 @@ Native 执行与比较由另一 agent 负责，本次未测；聚合执行、ARC
 任务：T06；operation_id：`language-t06-python-scalars-20261103`；契约：`compiler-dev/1`。
 本次在 T04 提交 `b8ccf384a16e85141994995fe1869fd5fc084100` 的独立工作目录实现并运行验证。
 公共 HIR、`lang_sema` 与既有 `runtime/python/langrt.py` 均已实际读取；T04 的依赖结果另见
-`/home/qin/Work/language-dev-20261103/checks/t04-verification.json`。
+`<dev-work-dir>/checks/t04-verification.json`。
 
 ## 文件与 API
 
@@ -332,7 +333,8 @@ tests/helper 通过 `lang_sema` 使用 GMPXX、toml++ 和 json-c；测试期间�
 本次独立验证命令，在本工作目录执行：
 
 ```sh
-py=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+py="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
 "$py" --version
 cmake -S tests/python -B build/t06-debug -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$py"
@@ -346,7 +348,7 @@ ctest --test-dir build/t06-release --output-on-failure -j4
 
 cmake -S tests/python -B build/t06-sanitized -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF \
-  -DCMAKE_CXX_COMPILER=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
+  -DCMAKE_CXX_COMPILER="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
   -DCMAKE_CXX_FLAGS='-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer' \
   -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DLANG_PYTHON312="$py"
 cmake --build build/t06-sanitized -j4

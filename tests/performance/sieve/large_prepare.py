@@ -35,8 +35,8 @@ import run_native as common  # noqa: E402
 
 PERFORMANCE_DIR = Path(__file__).resolve().parent
 WORKTREE = PERFORMANCE_DIR.parents[2]
-MAIN = Path("/home/qin/Work/language-dev-20261103")
-MAIN_TEMPLATES = MAIN / "compiler/tests/performance/sieve"
+MAIN = WORKTREE.parent
+MAIN_TEMPLATES = WORKTREE / "tests/performance/sieve"
 
 
 def _load(name, path):
@@ -69,7 +69,7 @@ PREPARE_SCHEMA = "compiler-dev/native-sieve-large-preparation/1"
 DEFAULT_ORACLE_DIR = (
     MAIN / "checks/eight-algorithm-large-oracles-20261110")
 DEFAULT_PYTHON_HELPER = (
-    MAIN / "compiler/build/native-cli-release/tests/python/lang_python_emit")
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit")
 N_VALUES = (1000000, 10000000)
 EXISTING_CASES = (
     "n1000000-r1", "n1000000-r2", "n10000000-r1", "n10000000-r2")

@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import run_native as common  # noqa: E402
 
 PERFORMANCE_DIR = Path(__file__).resolve().parent
+WORKTREE = PERFORMANCE_DIR.parents[2]
 
 
 def _load(name, path):
@@ -84,12 +85,10 @@ CORRECTION_OPERATION_ID = "language-matmul-large-correction1-20261110"
 INHERITED_SCRIPT_SHA256 = (
     "112ec990e1f3ef41ad2fc76d137bbbd80cd90884d9ed6ee13ed6a7ecd43f3933")
 PREPARE_SCHEMA = "compiler-dev/native-matmul-large-preparation/1"
-DEFAULT_ORACLE_DIR = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "eight-algorithm-large-oracles-20261110")
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit")
+DEFAULT_ORACLE_DIR = (
+    WORKTREE.parent / "checks/eight-algorithm-large-oracles-20261110")
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit")
 N_VALUES = (128, 512)
 RESULTS_SHA256 = (
     "e5a58627690ce535086cc3477e819e1f2a45dcb0bebd1ffe2a100b7b4e8f366c")

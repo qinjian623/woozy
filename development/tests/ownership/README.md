@@ -113,7 +113,7 @@ woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend native 
 woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend python --format json
 ```
 
-实际二进制为 `/home/qin/Work/language-dev-20261103/compiler/build/native-cli/langc`，版本 `0.1.0-bootstrap (compiler-dev/1)`，源码版本 `e808169`。逐项 argv、绝对路径、退出码和原始 native/python JSON 保存在 `/tmp/language-t09-ownership-fixtures-correction-20261104/checks.json`；`/tmp` 中的机器记录不属于本目录。
+实际二进制为 `build/native-cli/langc`，版本 `0.1.0-bootstrap (compiler-dev/1)`，源码版本 `e808169`。逐项 argv、绝对路径、退出码和原始 native/python JSON 保存在 `/tmp/language-t09-ownership-fixtures-correction-20261104/checks.json`；`/tmp` 中的机器记录不属于本目录。
 
 | 检查 | 实际结果 |
 | --- | --- |

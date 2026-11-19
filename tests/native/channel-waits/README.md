@@ -64,9 +64,10 @@ of the Root tree (with its `wait_for` registry) and this worktree's stdlib
 overlay:
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 tests/native/channel-waits/run.py \
   --cli /tmp/con02-build/woozyc --root . --out /tmp/con02/stable-waits \
-  --ld-library-path /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib
+  --ld-library-path "${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib"
 ```
 
 The driver runs O0/O2, checks static ELF (no `INTERP`/`NEEDED`), checks panic

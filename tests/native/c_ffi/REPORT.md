@@ -14,13 +14,14 @@ FFI01 as fully complete.
 Configure/build:
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 cmake -S . -B build/ffi01 -G Ninja -DLANG_ENABLE_LLVM=ON \
-  -DLLVM_DIR=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib/cmake/llvm \
-  -Dzstd_STATIC_LIBRARY=/home/qin/Work/language-dev-20261103/toolchains/zstd-1.5.7/lib/libzstd.a \
-  -DCMAKE_CXX_COMPILER=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-  -DCMAKE_C_COMPILER=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang \
-  -DLANG_TEST_PYTHON=/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python \
-  -DLANG_T10_PYTHON=/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python
+  -DLLVM_DIR="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/lib/cmake/llvm" \
+  -Dzstd_STATIC_LIBRARY="${WOOZY_TOOLCHAIN_ROOT}/zstd-1.5.7/lib/libzstd.a" \
+  -DCMAKE_CXX_COMPILER="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+  -DCMAKE_C_COMPILER="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang" \
+  -DLANG_TEST_PYTHON="${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python" \
+  -DLANG_T10_PYTHON="${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python"
 cmake --build build/ffi01 -j8
 ```
 

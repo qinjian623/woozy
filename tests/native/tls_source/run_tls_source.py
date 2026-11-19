@@ -25,11 +25,12 @@ ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 PROJECTS = HERE / "projects"
 PEER = HERE / "python_peer.py"
-DEFAULT_CXX = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++")
-LEGACY_XML = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/"
-    "libxml2-legacy-2.13.9/usr/lib")
+TOOLCHAINS = Path(
+    os.environ.get("LANG_TOOLCHAINS")
+    or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+    or ROOT.parent / "toolchains")
+DEFAULT_CXX = TOOLCHAINS / "llvm-22.1.8/bin/clang++"
+LEGACY_XML = TOOLCHAINS / "libxml2-legacy-2.13.9/usr/lib"
 CHILDREN = []
 
 

@@ -29,21 +29,27 @@ WORKTREE = HERE.parents[2]
 CHECK = WORKTREE / "checks/binarytrees-large-preparation-20261110"
 PERF = HERE
 OBSERVER = PERF / "large_observer.cpp"
-ORACLE = Path("/home/qin/Work/language-dev-20261103/checks/"
-              "eight-algorithm-large-oracles-20261110/binarytrees.json")
+TOOLCHAINS = Path(
+    os.environ.get("LANG_TOOLCHAINS")
+    or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+    or WORKTREE.parent / "toolchains")
+BUILD_ROOT = Path(
+    os.environ.get("WOOZY_PERF_BUILD")
+    or WORKTREE / "build/native-perf-release")
+ORACLE = Path(
+    os.environ.get("LANG_BINARYTREES_LARGE_ORACLE")
+    or WORKTREE.parent / "checks/eight-algorithm-large-oracles-20261110/"
+    "binarytrees.json")
 ORACLE_SHA = "608d851358c559bbad5fe0ecf3d9eeafe9ba510e0444cba02780e6eb5e280528"
-LLVM_BIN = Path("/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin")
-LD_LIBRARY_PATH = ("/home/qin/Work/language-dev-20261103/toolchains/"
-                   "libxml2-legacy-2.13.9/usr/lib")
-PYTHON = Path("/home/qin/Work/language-dev-20261103/toolchains/python/"
-              "cpython-3.12.15-linux-x86_64-gnu/bin/python3.12")
+LLVM_BIN = TOOLCHAINS / "llvm-22.1.8/bin"
+LD_LIBRARY_PATH = str(TOOLCHAINS / "libxml2-legacy-2.13.9/usr/lib")
+PYTHON = Path(
+    os.environ.get("LANG_BINARYTREES_LARGE_PYTHON")
+    or TOOLCHAINS / "python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12")
 TOOLS = {
-    "langc": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
-                  "native-perf-release/woozyc"),
-    "helper": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
-                   "native-perf-release/native/lang_native_helper"),
-    "runtime": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
-                    "native-perf-release/native/liblang_native_runtime.a"),
+    "langc": BUILD_ROOT / "woozyc",
+    "helper": BUILD_ROOT / "native/lang_native_helper",
+    "runtime": BUILD_ROOT / "native/liblang_native_runtime.a",
 }
 TOOL_SHA = {
     "langc": "a17e1cc3753371a3588db3b44a5fab36e3caff1440f9889997e416008bab73ec",

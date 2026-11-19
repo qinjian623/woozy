@@ -15,13 +15,14 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--root", type=Path,
-                    default=Path(os.environ.get("WOOZY_CORPUS_ROOT", ROOT)))
+                    default=Path(os.environ.get("WOOZY_CORPUS_ROOT") or ROOT))
 parser.add_argument("--inventory", type=Path,
                     default=ROOT / "selfhost/corpus.json")
 parser.add_argument("--stage0", type=Path)
 parser.add_argument("--toolchains", type=Path,
-                    default=Path(os.environ.get(
-                        "WOOZY_TOOLCHAINS", ROOT.parent / "toolchains")))
+                    default=Path(os.environ.get("WOOZY_TOOLCHAINS")
+                                 or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+                                 or ROOT.parent / "toolchains"))
 options = parser.parse_args()
 CORPUS_ROOT = options.root.resolve()
 INVENTORY = options.inventory.resolve()

@@ -6,3 +6,6 @@
 *.pyc
 /reports/
 /.local/
+/.work/
+/.work-tmp/
+/tests/native/c_retained_capturing/.build/

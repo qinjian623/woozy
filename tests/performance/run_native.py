@@ -411,6 +411,41 @@ def case_metadata(case):
     }
 
 
+def legacy_resource_query(record):
+    if record["status"] != "exited" or record["exit"] != 2:
+        return False
+    # Old CLIs reject the unknown query with one plain top-level diagnostic.
+    # A wrapped E_TOOLCHAIN_MISSING or JSON diagnostics document is not an old
+    # CLI and must remain a failure.
+    output = [record[stream].strip() for stream in ("stdout", "stderr")
+              if record[stream].strip()]
+    return len(output) == 1 and re.fullmatch(r"E_DRIVER_ARGUMENT:[^\n]*", output[0]) is not None
+
+
+def binary_resource_paths(langc, env, cpu):
+    record = command([str(langc), "--__resource-paths"], timeout=30,
+                     env=env, cpu=cpu)
+    if record["status"] == "exited" and record["exit"] == 0:
+        paths = parse_json_stdout(record, "woozyc --__resource-paths")
+        try:
+            return {
+                "helper": paths["helper"],
+                "runtime": paths["runtime"]["native"],
+                "clang": paths["toolchain"]["clang"],
+                "ld.lld": paths["toolchain"]["ld.lld"],
+            }
+        except (KeyError, TypeError) as error:
+            raise PerfError(
+                f"woozyc --__resource-paths is incomplete: {paths}") from error
+    detail = (record["stdout"] + record["stderr"]).strip()
+    if legacy_resource_query(record):
+        # Old seeds use their embedded macros as the actual paths.
+        return None
+    if record.get("error"):
+        detail = record["error"] + ": " + detail
+    raise PerfError(f"woozyc --__resource-paths failed: {detail[-4000:]}")
+
+
 def build_tree_info(args, env, cpu):
     build_dir = args.langc.parent.resolve()
     ninja_path = build_dir / "build.ninja"
@@ -440,21 +475,44 @@ def build_tree_info(args, env, cpu):
         "LANG_NATIVE_LLD": args.llvm_bin / "ld.lld",
     }
     actual = {}
-    for key, requested_path in requested.items():
-        found = values.get(key, set())
-        if len(found) != 1:
-            raise PerfError(
-                f"{ninja_path}: expected exactly one {key} definition, found {sorted(found)}"
-            )
-        actual_path = Path(next(iter(found))).absolute()
-        requested_path = requested_path.absolute()
-        if actual_path != requested_path:
-            raise PerfError(
-                f"{ninja_path}: {key} is {actual_path}, requested {requested_path}"
-            )
-        if not actual_path.is_file():
-            raise PerfError(f"{ninja_path}: {key} target is missing: {actual_path}")
-        actual[key] = actual_path
+    actual_paths = binary_resource_paths(args.langc, env, cpu)
+    if actual_paths is None:
+        path_source = "legacy_macros"
+        for key, requested_path in requested.items():
+            found = values.get(key, set())
+            if len(found) != 1:
+                raise PerfError(
+                    f"{ninja_path}: expected exactly one {key} definition, found {sorted(found)}"
+                )
+            actual_path = Path(next(iter(found))).absolute()
+            requested_path = requested_path.absolute()
+            if actual_path != requested_path:
+                raise PerfError(
+                    f"{ninja_path}: {key} is {actual_path}, requested {requested_path}"
+                )
+            if not actual_path.is_file():
+                raise PerfError(f"{ninja_path}: {key} target is missing: {actual_path}")
+            actual[key] = actual_path
+    else:
+        path_source = "resource_paths"
+        resolved = {
+            "LANG_NATIVE_HELPER": actual_paths["helper"],
+            "LANG_NATIVE_RUNTIME": actual_paths["runtime"],
+            "LANG_NATIVE_CLANG": actual_paths["clang"],
+            "LANG_NATIVE_LLD": actual_paths["ld.lld"],
+        }
+        for key, requested_path in requested.items():
+            actual_path = Path(resolved[key]).absolute()
+            requested_path = requested_path.absolute()
+            if (actual_path != requested_path and
+                    actual_path.resolve(strict=False) !=
+                    requested_path.resolve(strict=False)):
+                raise PerfError(
+                    f"woozyc actual {key} is {actual_path}, requested {requested_path}"
+                )
+            if not actual_path.is_file():
+                raise PerfError(f"woozyc actual {key} is missing: {actual_path}")
+            actual[key] = actual_path
     cache_text = cache_path.read_text(encoding="utf-8")
     build_type_match = re.search(r"^CMAKE_BUILD_TYPE:STRING=(.*)$", cache_text, re.MULTILINE)
     if build_type_match is None or not build_type_match.group(1).strip():
@@ -484,6 +542,7 @@ def build_tree_info(args, env, cpu):
         "build_ninja": {"path": str(ninja_path), "sha256": sha256_file(ninja_path)},
         "cmake_cache": {"path": str(cache_path), "sha256": sha256_file(cache_path)},
         "cmake_build_type": build_type,
+        "path_source": path_source,
         "defines": {key: str(actual[key]) for key in requested},
         "actual_tools": actual_tools,
     }
@@ -1697,8 +1756,30 @@ def self_test():
             for path in (helper, clang, lld):
                 path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 path.chmod(0o700)
-            runtime.touch()
+            runtime.write_text("archive", encoding="utf-8")
             (build / "CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=Release\n")
+            cli_path = build / "woozyc"
+
+            def write_cli(payload):
+                cli_path.write_text(
+                    "#!" + str(Path(sys.executable).resolve()) + "\n"
+                    "import json\n"
+                    f"print(json.dumps({payload!r}))\n",
+                    encoding="utf-8")
+                cli_path.chmod(0o700)
+
+            payload = {
+                "schema_version": 1,
+                "helper": str(helper),
+                "runtime": {"native": str(runtime),
+                            "hosted": str(build / "hosted.a")},
+                "toolchain": {"opt": str(build / "opt"),
+                              "llc": str(build / "llc"),
+                              "clang": str(clang),
+                              "ld.lld": str(lld)},
+                "ninja": str(build / "ninja"),
+            }
+            write_cli(payload)
             cli = (
                 "build CMakeFiles/woozyc.dir/main.cpp.o: CXX_COMPILER__woozyc_Release main.cpp\n"
                 f'  DEFINES = -DLANG_NATIVE_HELPER=\\"{helper}\\"\n')
@@ -1711,17 +1792,68 @@ def self_test():
                 '  DEFINES = -DLANG_NATIVE_HELPER=\\"/missing/test-helper\\"\n')
             ninja = build / "build.ninja"
             ninja.write_text(cli + native + probe)
-            args = argparse.Namespace(langc=build / "woozyc", helper=helper,
+            args = argparse.Namespace(langc=cli_path, helper=helper,
                                       runtime=runtime, llvm_bin=build)
             tree = build_tree_info(args, os.environ.copy(), None)
-            add("production-helper-not-test-probe",
+            add("actual-resource-paths",
+                tree["path_source"] == "resource_paths" and
                 tree["defines"]["LANG_NATIVE_HELPER"] == str(helper))
-            for name, text in (
-                ("missing-production-helper-rejected", native + probe),
-                ("wrong-production-helper-rejected", cli.replace(str(helper), "/wrong/helper") + native + probe),
-                ("conflicting-production-helper-rejected", cli + cli.replace(str(helper), "/other/helper") + native + probe),
-            ):
-                ninja.write_text(text)
+
+            write_cli(dict(payload, helper=str(build / "missing-helper")))
+            missing_helper = build / "missing-helper"
+            missing_args = argparse.Namespace(
+                langc=cli_path, helper=missing_helper, runtime=runtime,
+                llvm_bin=build)
+            rejected = False
+            try:
+                build_tree_info(missing_args, os.environ.copy(), None)
+            except PerfError:
+                rejected = True
+            add("missing-actual-helper-rejected", rejected)
+
+            write_cli(dict(payload, helper=str(helper)))
+            wrong_args = argparse.Namespace(
+                langc=cli_path, helper=build / "other-helper",
+                runtime=runtime, llvm_bin=build)
+            rejected = False
+            try:
+                build_tree_info(wrong_args, os.environ.copy(), None)
+            except PerfError:
+                rejected = True
+            add("actual-helper-mismatch-rejected", rejected)
+
+            cli_path.write_text(
+                "#!" + str(Path(sys.executable).resolve()) + "\n"
+                "import sys\n"
+                "sys.stderr.write('E_DRIVER_ARGUMENT: expected --help, --version, "
+                "check, build, lsp or capabilities\\n')\n"
+                "sys.exit(2)\n", encoding="utf-8")
+            cli_path.chmod(0o700)
+            tree = build_tree_info(args, os.environ.copy(), None)
+            add("legacy-macro-fallback",
+                tree["path_source"] == "legacy_macros" and
+                tree["defines"]["LANG_NATIVE_HELPER"] == str(helper))
+            ninja.write_text(native + probe)
+            rejected = False
+            try:
+                build_tree_info(args, os.environ.copy(), None)
+            except PerfError:
+                rejected = True
+            add("legacy-missing-production-helper-rejected", rejected)
+
+            for name, stream, text in (
+                    ("wrapped-driver-argument-rejected", "stderr",
+                     "E_TOOLCHAIN_MISSING: native helper resource paths failed: "
+                     "E_DRIVER_ARGUMENT: legacy\n"),
+                    ("json-driver-argument-rejected", "stdout",
+                     '{"status":"error","diagnostics":'
+                     '[{"code":"E_DRIVER_ARGUMENT"}]}\n')):
+                cli_path.write_text(
+                    "#!" + str(Path(sys.executable).resolve()) + "\n"
+                    "import sys\n"
+                    f"sys.{stream}.write({text!r})\n"
+                    "sys.exit(2)\n", encoding="utf-8")
+                cli_path.chmod(0o700)
                 rejected = False
                 try:
                     build_tree_info(args, os.environ.copy(), None)

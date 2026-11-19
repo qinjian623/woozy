@@ -154,16 +154,19 @@ invalid `--timeout` exits before any output directory is prepared.
 ## Run
 
 ```sh
-PY312=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+PY312="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
+MAIN="${WOOZY_WORK_DIR:-$(dirname "$(git rev-parse --show-toplevel)")}"
+BUILD_WORKTREE="${WOOZY_BUILD_WORKTREE:?set WOOZY_BUILD_WORKTREE to the worktree with .work/gc-registry-index/build-new}"
 
 "$PY312" -s tests/python/weak_source/run_weak_source.py \
-  --cli /home/qin/.local/state/cli-agent-bridge/worktrees/0a0ca4cad6525fc6d10ec8f3/.work/gc-registry-index/build-new/woozyc \
+  --cli "$BUILD_WORKTREE/.work/gc-registry-index/build-new/woozyc" \
   --helper build/woozy-stdlib-native/tests/python/lang_python_emit \
-  --candidate-cli /home/qin/Work/language-dev-20261103/checks/selfhost-stage123-opt2-arityfixed-20261114.oob1x0_v/stage1/woozyc \
-  --api-driver /home/qin/Work/language-dev-20261103/checks/SH12f-python-slice-single-correction-20261114/run-candidate-28/driver/root/pythonobs \
+  --candidate-cli "$MAIN/checks/selfhost-stage123-opt2-arityfixed-20261114.oob1x0_v/stage1/woozyc" \
+  --api-driver "$MAIN/checks/SH12f-python-slice-single-correction-20261114/run-candidate-28/driver/root/pythonobs" \
   --root . --out /tmp/weak-source-results --python "$PY312" \
-  --strace /home/qin/Work/language-dev-20261103/toolchains/strace-7.2/usr/bin/strace \
-  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
+  --strace "${WOOZY_TOOLCHAIN_ROOT}/strace-7.2/usr/bin/strace" \
+  --toolchain-root "${WOOZY_TOOLCHAIN_ROOT}" \
   --timeout 120
 ```
 

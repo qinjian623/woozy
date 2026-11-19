@@ -39,6 +39,8 @@ build/llvm/lang_llvm_probe
 
 仅接受 LLVM_PACKAGE_VERSION 精确等于 22.1.8。lang_llvm_probe 只打印版本；同一选项还构建独立的 native helper、对象发射器和运行库。正式 native build 通过 argv 启动 helper，使用指定的 Clang/LLD 链接，不执行生成程序。探针本身不能代替代码生成和运行检查。不要提交本机 LLVM_DIR 或构建缓存。
 
+系统已安装 LLVM 22.1.8 时，可以用 `-DLLVM_DIR="$(llvm-config --cmakedir)"` 配置。工具和 LLVM 库分别安装时，可加 `-DWOOZY_LLVM_TOOLS_DIR` 指向含 `opt`、`llc`、`clang` 和 `ld.lld` 的目录。C++ 版和 Woozy 自写版都可设置 `WOOZY_LLVM_BIN`，相对值从编译器所在目录解析，默认使用同目录下的 `toolchain/`。搬动编译器时，同时复制标准库、运行库和 C++ 版的 Native helper。目标机器的 LLVM 工具可通过 `WOOZY_LLVM_BIN` 指定。
+
 已验证的独立工具链版本、来源和摘要见 contracts/toolchain.lock.json。本机的官方 Linux 包另外需要 libxml2.so.2 和静态 zstd：兼容库取自验证过发行签名的 Arch libxml2-legacy，zstd 1.5.7 从官方源码构建并核对发布的 SHA-256。系统库没有被替换。
 
 本机复查 LLVM 接入时，使用外层 toolchains/ 中的目录：

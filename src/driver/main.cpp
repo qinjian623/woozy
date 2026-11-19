@@ -5,6 +5,7 @@
 #include "lang/backend/python.hpp"
 #include "lang/support/process.hpp"
 #include "lang/support/publish.hpp"
+#include "lang/support/resource.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -15,6 +16,7 @@
 #include <limits>
 #include <iostream>
 #include <string_view>
+#include <system_error>
 #include <unistd.h>
 
 namespace {
@@ -44,6 +46,78 @@ bool diagnostic_document(const std::string& text, int exit) {
     return valid;
 }
 #endif
+std::string native_helper() {
+    if (auto path = lang::find_resource("native/lang_native_helper"))
+        return path->string();
+    if (auto path = lang::find_resource("lang_native_helper"))
+        return path->string();
+    throw std::system_error(ENOENT, std::generic_category(), "lang_native_helper");
+}
+int report_resource_paths() {
+    try {
+        auto* root = json_object_new_object();
+        json_object_object_add(root, "schema_version", json_object_new_int(1));
+        std::optional<std::string> driver_stdlib;
+        if (auto stdlib = lang::find_resource("stdlib")) {
+            driver_stdlib = stdlib->string();
+            json_object_object_add(root, "stdlib",
+                                   json_object_new_string(driver_stdlib->c_str()));
+        }
+        std::optional<std::string> helper;
+        try {
+            helper = native_helper();
+        } catch (const std::exception&) {}
+        if (helper) {
+            json_object_object_add(root, "helper",
+                                   json_object_new_string(helper->c_str()));
+            auto result = lang::run_process({*helper, "--__resource-paths"});
+            if (result.signalled || result.exit_code != 0)
+                throw std::runtime_error("native helper resource paths failed: " +
+                                         result.output);
+            auto* parsed = json_tokener_parse(result.output.c_str());
+            if (!parsed || !json_object_is_type(parsed, json_type_object)) {
+                if (parsed) json_object_put(parsed);
+                throw std::runtime_error(
+                    "native helper returned invalid resource paths");
+            }
+            auto* helper_stdlib = json_object_object_get(parsed, "stdlib");
+            if (!helper_stdlib ||
+                !json_object_is_type(helper_stdlib, json_type_string)) {
+                json_object_put(parsed);
+                throw std::runtime_error("native helper did not report stdlib");
+            }
+            if (!driver_stdlib) {
+                json_object_put(parsed);
+                throw std::runtime_error("driver did not resolve stdlib");
+            }
+            const std::string helper_stdlib_path =
+                json_object_get_string(helper_stdlib);
+            std::error_code error;
+            if (!fs::equivalent(*driver_stdlib, helper_stdlib_path, error) || error) {
+                json_object_put(parsed);
+                throw std::runtime_error(
+                    "native helper stdlib does not match driver stdlib: " +
+                    helper_stdlib_path + " != " + *driver_stdlib);
+            }
+            json_object_object_del(root, "stdlib");
+            json_object_object_add(
+                root, "stdlib",
+                json_object_new_string(helper_stdlib_path.c_str()));
+            for (const char* key : {"runtime", "toolchain", "ninja"}) {
+                auto* value = json_object_object_get(parsed, key);
+                if (value) json_object_object_add(root, key, json_object_get(value));
+            }
+            json_object_put(parsed);
+        }
+        std::cout << json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN)
+                  << '\n';
+        json_object_put(root);
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "E_TOOLCHAIN_MISSING: " << error.what() << '\n';
+        return 2;
+    }
+}
 void write_python(const fs::path& out, const lang::backend::python::Output& output) {
     lang::StagingDir stage(out, ".woozyc-XXXXXX");
     auto write = [&](const char* name, const std::string& text) {
@@ -92,7 +166,7 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
         if (!syntax) {
             auto native_build = [&]() {
 #ifdef LANG_NATIVE_HELPER
-                std::vector<std::string> args{LANG_NATIVE_HELPER, "--project", path,
+                std::vector<std::string> args{native_helper(), "--project", path,
                                               "--out-dir", out, "--opt", opt ? opt : "0"};
                 if (package_objects) args.push_back("--package-objects");
                 if (cache_directory) {
@@ -177,6 +251,10 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 &&
+        (std::string_view(argv[1]) == "--__resource-paths" ||
+         std::string_view(argv[1]) == "--__resource_paths"))
+        return report_resource_paths();
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: woozyc --help | --version\n"
                      "       woozyc check --syntax-only [--format json] FILE\n"

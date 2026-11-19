@@ -22,6 +22,16 @@ pub func source_partition_tools(root string) Vec[string] throws os.Error {
     return [];
 }
 
+pub func llvm_bin(bundle string) string throws os.Error {
+    switch process.getenv("WOOZY_LLVM_BIN") {
+        case option.Option.Some(value): {
+            if value != "" { return path.join(bundle, value); }
+        }
+        case option.Option.None: {}
+    }
+    return path.join(bundle, "toolchain");
+}
+
 // Ninja is a build tool selected by configuration or the caller's PATH.
 pub func ninja() string throws os.Error {
     switch process.getenv("WOOZY_NINJA") {

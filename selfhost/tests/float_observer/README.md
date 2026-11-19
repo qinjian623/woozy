@@ -52,15 +52,38 @@ modules, stdlib, runtime) come from that root and are hashed as read.
 ## Modes
 
 ```sh
+# Required inputs; every ${NAME:?} expansion fails when unset or empty.
+#   FROZEN_ROOT    frozen source tree copied from the accepted run
+#   OLD_CLI        pre-fix CLI recorded in the accepted proof
+#   CONTROLS_WORK  new, empty directory for the six-area controls
+root="${FROZEN_ROOT:?set FROZEN_ROOT}"
+old="${OLD_CLI:?set OLD_CLI}"
+controls_work="${CONTROLS_WORK:?set CONTROLS_WORK}"
+
 # short six-area controls
 python3 selfhost/tests/float_observer/run.py --controls-only \
-  --root <frozen-root> --work-dir <new-empty-dir>
+  --root "$root" --work-dir "$controls_work" \
+  --old-candidate "$old"
+```
+
+```sh
+# Required inputs; every ${NAME:?} expansion fails when unset or empty.
+#   FROZEN_ROOT      frozen source tree copied from the accepted run
+#   DRIVER           Wz driver built from that frozen source
+#   DRIVER_EVIDENCE  successful build record proving the driver's provenance
+#   CANDIDATE        accepted canonical stage-1 CLI (61785485...)
+#   FULL_WORK        new, separate directory for the full numeric run
+root="${FROZEN_ROOT:?set FROZEN_ROOT}"
+driver="${DRIVER:?set DRIVER}"
+evidence="${DRIVER_EVIDENCE:?set DRIVER_EVIDENCE}"
+candidate="${CANDIDATE:?set CANDIDATE}"
+full_work="${FULL_WORK:?set FULL_WORK}"
 
 # canonical full numeric run
 python3 selfhost/tests/float_observer/run.py --profile full \
-  --root <frozen-root> --driver-binary <driver> \
-  --driver-build-evidence <evidence.json> \
-  --candidate-cli <canonical-6178> --work-dir <new-empty-dir>
+  --root "$root" --driver-binary "$driver" \
+  --driver-build-evidence "$evidence" \
+  --candidate-cli "$candidate" --work-dir "$full_work"
 ```
 
 Full profile uses the original 10 floating fixtures (76 probes), the original

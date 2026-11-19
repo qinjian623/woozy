@@ -2,6 +2,7 @@
 #include "lang/modules/parse_cache.hpp"
 #include "lang/modules/project.hpp"
 #include "lang/support/input.hpp"
+#include "lang/support/resource.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -83,10 +84,9 @@ struct Loader {
   Loader(SourceManager &manager, std::stop_token token,
          const ProjectOptions &opts)
       : sm(manager), stop(token), options(opts) {
-#ifdef LANG_STD_SOURCE_ROOT
     if (!options.std_source_root && !options.std_binding_bundle)
-      options.std_source_root = fs::path(LANG_STD_SOURCE_ROOT);
-#endif
+      if (auto root = find_resource("stdlib"))
+        options.std_source_root = *root;
   }
   void error(std::string code, std::string msg,
              std::optional<SourceSpan> span = {},

@@ -9,7 +9,8 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
-LLVM_ROOT=${LANG_LLVM_ROOT:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8}
+TOOLCHAINS=${LANG_TOOLCHAINS:-$ROOT/../toolchains}
+LLVM_ROOT=${LANG_LLVM_ROOT:-$TOOLCHAINS/llvm-22.1.8}
 COMPILER=${CXX:-$LLVM_ROOT/bin/clang++}
 BUILD_DIR=${TID_CACHE_BUILD_DIR:-$ROOT/.work/gc_tid_cache-build}
 

@@ -108,17 +108,18 @@ pub func to_vec[T](value Slice[T]) Vec[T]
 推荐命令（本工作树私有构建，LLVM 22.1.8）：
 
 ```sh
-export LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib:$LD_LIBRARY_PATH
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+export LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib:$LD_LIBRARY_PATH"
 cmake --build build-slice --target lang_slice_forged_test lang_native_helper lang_native_runtime woozyc
 ./build-slice/tests/native/lang_slice_forged_test tests/native/slice_source/fixtures/core/lang.toml
 python3 tests/native/slice_source/run_slice_source.py \
   --cli build-slice/woozyc \
   --helper build-slice/native/lang_native_helper \
-  --clang /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang \
-  --lld /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/ld.lld \
+  --clang "${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang" \
+  --lld "${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/ld.lld" \
   --runtime build-slice/native/liblang_native_runtime.a \
   --root . --out /tmp/slice-source-results \
-  --ld-library-path /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib
+  --ld-library-path "${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib"
 ```
 
 CTest 注册 patch 是 `tests/native/CMakeLists.txt` 中

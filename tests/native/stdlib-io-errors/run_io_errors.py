@@ -35,8 +35,10 @@ DESTINATION = b'copied\x00\xf0\x9f\x98\x80'
 DESTINATION_HEX = '636f7069656400f09f9880'
 ABSENT = 'absent-destination'
 TOOL_NAMES = ('opt', 'llc', 'clang', 'clang++', 'ld.lld')
-DEFAULT_TOOLCHAINS = Path(os.environ.get(
-    'LANG_TOOLCHAINS', '/home/qin/Work/language-dev-20261103/toolchains'))
+DEFAULT_TOOLCHAINS = Path(
+    os.environ.get('LANG_TOOLCHAINS')
+    or os.environ.get('WOOZY_TOOLCHAIN_ROOT')
+    or ROOT.parent / 'toolchains')
 
 
 class RunnerError(RuntimeError):

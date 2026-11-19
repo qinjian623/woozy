@@ -103,8 +103,9 @@ pub func close[T](pipe Channel[T]);
 验证使用固定的 Native CLI 与 legacy libxml2 运行库：
 
 ```sh
-CLI=/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc
-export LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CLI=build/woozy-stdlib-native/woozyc
+export LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib"
 python3 tests/native/channels/run_channels.py \
   --cli "$CLI" --root "$PWD" --out /tmp/channel-verification \
   --ld-library-path "$LD_LIBRARY_PATH"

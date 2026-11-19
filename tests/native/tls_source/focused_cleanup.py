@@ -34,11 +34,12 @@ HERE = Path(__file__).resolve().parent
 PROJECT_SOURCE = HERE / "projects/request_probe/src"
 CLOSE_WRAPPER = HERE / "focused_close_wrapper.c"
 TLS_WRAPPER = HERE / "focused_tls_wrapper.c"
-LEGACY_XML = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/"
-    "libxml2-legacy-2.13.9/usr/lib")
-DEFAULT_CXX = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++")
+TOOLCHAINS = Path(
+    os.environ.get("LANG_TOOLCHAINS")
+    or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+    or ROOT.parent / "toolchains")
+LEGACY_XML = TOOLCHAINS / "libxml2-legacy-2.13.9/usr/lib"
+DEFAULT_CXX = TOOLCHAINS / "llvm-22.1.8/bin/clang++"
 
 
 def environment():

@@ -79,11 +79,12 @@ Use the repository's pinned LLVM 22 toolchain and the legacy libxml2 runtime for
 CTest JUnit output:
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 cmake -S tests/native/slice -B /tmp/lang-slice-build -G Ninja \
-  -DCMAKE_CXX_COMPILER=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
+  -DCMAKE_CXX_COMPILER="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
   -DCMAKE_BUILD_TYPE=
 cmake --build /tmp/lang-slice-build -j2
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
   ctest --test-dir /tmp/lang-slice-build --output-on-failure \
   --output-junit /tmp/slice-ctest.xml
 ```

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -27,9 +28,7 @@ SELFHOST = ROOT / "selfhost" / "src" / "wzcc"
 STDLIB = ROOT / "stdlib"
 CORPUS = ROOT / "selfhost" / "corpus.py"
 SMALL_FIXTURE = ROOT / "tests" / "iterator" / "fixtures" / "concrete-counter"
-DEFAULT_WORK = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "SH15-hir-needs-drop-cache-20261114")
+DEFAULT_WORK = ROOT / "build" / "needs-drop-cache-runs"
 
 BASE_HEAD = "5bedfabb8a369afdf778180ce02e60d28ee8573a"
 BASE_SOURCE116_MAP = (
@@ -37,47 +36,24 @@ BASE_SOURCE116_MAP = (
 CURRENT_SOURCE116_MAP = (
     "0c46f7ea6ad2487f574f91147bca062708ef2cdefd0b76fdc1d068eb8a5bcd76")
 
-DEFAULT_STAGE0 = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "selfhost-stage123-opt2-const-scratch-20261114.gsscllih/"
-    "resources/stage0/woozyc")
-FIXED_HELPER = Path(
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/"
-    "0a0ca4cad6525fc6d10ec8f3/.work/gc-registry-index/build-new/native/"
-    "lang_native_helper")
-FIXED_NATIVE_RUNTIME = Path(
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/"
-    "0a0ca4cad6525fc6d10ec8f3/.work/gc-registry-index/build-new/native/"
-    "liblang_native_runtime.a")
-FIXED_HOSTED_RUNTIME = Path(
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/"
-    "0a0ca4cad6525fc6d10ec8f3/.work/gc-registry-index/build-new/native/"
-    "liblang_hosted_runtime.a")
-FIXED_EMBEDDED_STDLIB = Path(
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/"
-    "0a0ca4cad6525fc6d10ec8f3/stdlib")
-FIXED_LLVM = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8")
-FIXED_CLANG = FIXED_LLVM / "bin" / "clang"
-FIXED_LLD = FIXED_LLVM / "bin" / "ld.lld"
-FIXED_LLC = FIXED_LLVM / "bin" / "llc"
-FIXED_OPT = FIXED_LLVM / "bin" / "opt"
-FIXED_STRACE = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/strace-7.2/usr/bin/strace")
-FIXED_LIBXML = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/"
-    "libxml2-legacy-2.13.9/usr/lib/libxml2.so.2.13.9")
+DEFAULT_TOOLCHAIN = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT") or
+                         (ROOT.parent / "toolchains"))
+DEFAULT_BUILD = ROOT / "build" / "woozy-stdlib-native"
+DEFAULT_STAGE0 = DEFAULT_BUILD / "woozyc"
+FIXED_RUNTIME_DIR = DEFAULT_BUILD / "native"
+FIXED_HELPER = FIXED_RUNTIME_DIR / "lang_native_helper"
+FIXED_EMBEDDED_STDLIB = ROOT / "stdlib"
 
 EXPECTED = {
-    FIXED_HELPER: "3b2e489d88997d7c76ff9ae4827aa560c2547fb1832ebdf7f9427b42f376649e",
-    FIXED_NATIVE_RUNTIME: "4df15518f676291522878563e86bb71c99e53d3dad8872f620ec5515acc3a702",
-    FIXED_HOSTED_RUNTIME: "7f113be3fab32a62c263a1681ca2b3b34b76a63d6f74f679cce2ac7586a1f75b",
-    FIXED_CLANG: "31a40dc31f3c15a47aa119aa148f339bf363d8f61202ddbdacbd3f24b71ba113",
-    FIXED_LLD: "a37ea59e863b4c1fd95ead6a905f7ddb461f7d90d4f30d2d76bcbb2ae9588b1d",
-    FIXED_LLC: "75312287569eb638c8540a8282b5e611cd438de694ebc9e116921bdc252fdc21",
-    FIXED_OPT: "fc19bcd0ab81c35746c93aad355e8bb81f34ab070e98014cf06ce8433e91d4b1",
-    FIXED_STRACE: "28ed5493ecf611b83ac0d0398cc1c4f09a228afaa7fce4737d14c8599cc796e2",
-    FIXED_LIBXML: "7e05bdfecc5871ebb5628e501e94e7ea51af592dc8f285decb679177c45dda7f",
+    "helper": "3b2e489d88997d7c76ff9ae4827aa560c2547fb1832ebdf7f9427b42f376649e",
+    "native_runtime": "4df15518f676291522878563e86bb71c99e53d3dad8872f620ec5515acc3a702",
+    "hosted_runtime": "7f113be3fab32a62c263a1681ca2b3b34b76a63d6f74f679cce2ac7586a1f75b",
+    "clang": "31a40dc31f3c15a47aa119aa148f339bf363d8f61202ddbdacbd3f24b71ba113",
+    "ld_lld": "a37ea59e863b4c1fd95ead6a905f7ddb461f7d90d4f30d2d76bcbb2ae9588b1d",
+    "llc": "75312287569eb638c8540a8282b5e611cd438de694ebc9e116921bdc252fdc21",
+    "opt": "fc19bcd0ab81c35746c93aad355e8bb81f34ab070e98014cf06ce8433e91d4b1",
+    "strace": "28ed5493ecf611b83ac0d0398cc1c4f09a228afaa7fce4737d14c8599cc796e2",
+    "libxml2_legacy": "7e05bdfecc5871ebb5628e501e94e7ea51af592dc8f285decb679177c45dda7f",
 }
 STDLIB_MAP = "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47"
 STAGE0_SHA = "565da3f6aa0b7f342ac5ba9523b5495643c1e44daaa5ecbb072e5906bd1a1fe4"
@@ -159,26 +135,33 @@ def checked_file(path: Path, expected: str | None = None) -> dict[str, object]:
     return record
 
 
-def verify_fixed(stage0: Path) -> dict[str, object]:
+def verify_fixed(stage0: Path, toolchain: Path, helper: Path,
+                 runtime_dir: Path,
+                 embedded_stdlib: Path) -> dict[str, object]:
     record: dict[str, object] = {
         "stage0": checked_file(stage0, STAGE0_SHA),
     }
-    for name, path in (("helper", FIXED_HELPER),
-                       ("native_runtime", FIXED_NATIVE_RUNTIME),
-                       ("hosted_runtime", FIXED_HOSTED_RUNTIME),
-                       ("clang", FIXED_CLANG),
-                       ("ld_lld", FIXED_LLD),
-                       ("llc", FIXED_LLC),
-                       ("opt", FIXED_OPT),
-                       ("strace", FIXED_STRACE),
-                       ("libxml2_legacy", FIXED_LIBXML)):
-        record[name] = checked_file(path, EXPECTED.get(path))
-    embedded = tree_hashes(FIXED_EMBEDDED_STDLIB, (".wz",))
+    llvm = toolchain / "llvm-22.1.8"
+    for name, path in (("helper", helper),
+                       ("native_runtime",
+                        runtime_dir / "liblang_native_runtime.a"),
+                       ("hosted_runtime",
+                        runtime_dir / "liblang_hosted_runtime.a"),
+                       ("clang", llvm / "bin" / "clang"),
+                       ("ld_lld", llvm / "bin" / "ld.lld"),
+                       ("llc", llvm / "bin" / "llc"),
+                       ("opt", llvm / "bin" / "opt"),
+                       ("strace", toolchain / "strace-7.2/usr/bin/strace"),
+                       ("libxml2_legacy",
+                        toolchain / "libxml2-legacy-2.13.9/usr/lib" /
+                        "libxml2.so.2.13.9")):
+        record[name] = checked_file(path, EXPECTED[name])
+    embedded = tree_hashes(embedded_stdlib, (".wz",))
     current = tree_hashes(STDLIB, (".wz",))
     if map_sha(embedded) != STDLIB_MAP or map_sha(current) != STDLIB_MAP:
         fail("stdlib identity differs from the fixed map")
     record["embedded_stdlib"] = {
-        "path": str(FIXED_EMBEDDED_STDLIB),
+        "path": str(embedded_stdlib),
         "files": len(embedded),
         "sha256": map_sha(embedded),
     }
@@ -187,6 +170,9 @@ def verify_fixed(stage0: Path) -> dict[str, object]:
         "files": len(current),
         "sha256": map_sha(current),
     }
+    record["stage0_build"] = verify_stage0_routing(
+        stage0_build_record(stage0, toolchain), helper, runtime_dir,
+        embedded_stdlib, embedded)
     python_path = Path(sys.executable).resolve()
     python_record = checked_file(python_path)
     python_record["version"] = platform.python_version()
@@ -197,6 +183,67 @@ def verify_fixed(stage0: Path) -> dict[str, object]:
     record["runner"] = checked_file(Path(__file__).resolve())
     return record
 
+
+def load_bootstrap_support():
+    path = ROOT / "selfhost/bootstrap.py"
+    spec = importlib.util.spec_from_file_location(
+        "woozy_bootstrap_support", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["woozy_bootstrap_support"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def stage0_build_record(stage0, toolchain):
+    """Read the build configuration that fixed the pinned stage0's inputs.
+
+    A pinned stage0 SHA proves which bytes run, not which helper, runtime
+    archives or stdlib those bytes were built to load.  Refuse when that
+    configuration cannot be read instead of assuming the hashed resources are
+    the ones stage0 uses.
+    """
+    try:
+        return load_bootstrap_support().inspect_stage0(
+            stage0, toolchain / "llvm-22.1.8")
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(
+            "stage0 build configuration is inaccessible; refusing to assume "
+            f"the hashed resources are the ones it loads: {error}") from error
+
+
+def verify_stage0_routing(stage0, helper: Path, runtime_dir: Path,
+                          embedded_stdlib: Path, stdlib_files
+                          ) -> dict[str, object]:
+    """Require stage0's own configuration to name the hashed resources."""
+    targets = {
+        "LANG_NATIVE_HELPER": helper,
+        "LANG_NATIVE_RUNTIME": runtime_dir / "liblang_native_runtime.a",
+        "LANG_HOSTED_RUNTIME": runtime_dir / "liblang_hosted_runtime.a",
+        "LANG_STD_SOURCE_ROOT": embedded_stdlib,
+    }
+    macros = stage0["build"]["macros"]
+    for name, path in targets.items():
+        configured = Path(macros[name]).resolve(strict=True)
+        if configured != path.resolve(strict=True):
+            raise RuntimeError(
+                f"stage0 {name} routes to {configured}, not the hashed {path}")
+    routed = stage0["stdlib"]["files"]
+    if routed != stdlib_files:
+        changed = sorted(name for name in set(routed) | set(stdlib_files)
+                         if routed.get(name) != stdlib_files.get(name))
+        raise RuntimeError(
+            "stage0 stdlib routing differs from the hashed stdlib: "
+            f"{changed[:8]}")
+    return {
+        "macros": dict(macros),
+        "build_ninja": stage0["build"]["build_ninja"],
+        "build_ninja_sha256": stage0["build"]["build_ninja_sha256"],
+        "cmake_cache": stage0["build"]["cmake_cache"],
+        "cmake_cache_sha256": stage0["build"]["cmake_cache_sha256"],
+        "uses_copied_resources": stage0["uses_copied_resources"],
+    }
 
 def source_snapshot() -> dict[str, object]:
     files = tree_hashes(ROOT / "selfhost" / "src", (".wz",))
@@ -277,14 +324,15 @@ def stage_project(work: Path) -> Path:
     return project
 
 
-def environment(work: Path) -> dict[str, str]:
+def environment(work: Path, toolchain: Path) -> dict[str, str]:
     env = dict(os.environ)
-    env["LD_LIBRARY_PATH"] = f"{FIXED_LLVM / 'lib'}:{FIXED_LIBXML.parent}"
+    env["LD_LIBRARY_PATH"] = (f"{toolchain / 'llvm-22.1.8' / 'lib'}:"
+                              f"{toolchain / 'libxml2-legacy-2.13.9/usr/lib'}")
     env["TMPDIR"] = str(work / "tmp")
     env["LC_ALL"] = "C"
     env["LANG"] = "C.UTF-8"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PATH"] = f"{FIXED_LLVM / 'bin'}:/usr/bin:/bin"
+    env["PATH"] = f"{toolchain / 'llvm-22.1.8' / 'bin'}:/usr/bin:/bin"
     (work / "tmp").mkdir(parents=True, exist_ok=True)
     return env
 
@@ -540,6 +588,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--woozyc", default=str(DEFAULT_STAGE0),
                         help="fixed stage-0 compiler")
+    parser.add_argument("--toolchain-root", default=str(DEFAULT_TOOLCHAIN),
+                        help="LLVM/libxml2 toolchain root "
+                             f"(default: {DEFAULT_TOOLCHAIN})")
+    parser.add_argument("--helper", default=str(FIXED_HELPER),
+                        help="fixed lang_native_helper "
+                             f"(default: {FIXED_HELPER})")
+    parser.add_argument("--runtime-dir", default=str(FIXED_RUNTIME_DIR),
+                        help="native/hosted runtime archives "
+                             f"(default: {FIXED_RUNTIME_DIR})")
+    parser.add_argument("--embedded-stdlib", default=str(FIXED_EMBEDDED_STDLIB),
+                        help="stage-0 embedded stdlib to compare with the "
+                             f"worktree (default: {FIXED_EMBEDDED_STDLIB})")
     parser.add_argument("--work-dir", default=str(DEFAULT_WORK),
                         help="parent directory for retained run artifacts")
     parser.add_argument("--timeout", type=finite_timeout, default=1800.0,
@@ -554,10 +614,14 @@ def main() -> int:
     if args.iterations <= 0:
         parser.error("--iterations must be positive")
     stage0 = Path(args.woozyc).expanduser().resolve()
+    toolchain = Path(args.toolchain_root).expanduser().resolve()
+    helper = Path(args.helper).expanduser().resolve()
+    runtime_dir = Path(args.runtime_dir).expanduser().resolve()
+    embedded_stdlib = Path(args.embedded_stdlib).expanduser().resolve()
     parent = Path(args.work_dir).expanduser().resolve()
     parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="needs-drop-cache-", dir=parent))
-    env = environment(work)
+    env = environment(work, toolchain)
     state: dict[str, object] = {
         "operation_id": "SH15-hir-needs-drop-cache-20261114",
         "status": "running",
@@ -565,7 +629,8 @@ def main() -> int:
         "runner_argv": [sys.executable, *sys.argv],
     }
     try:
-        fixed = verify_fixed(stage0)
+        fixed = verify_fixed(stage0, toolchain, helper, runtime_dir,
+                             embedded_stdlib)
         large = generate_large_fixture(work / "fixtures" / "large", 40)
         project = stage_project(work)
         source = source_snapshot()
@@ -620,7 +685,8 @@ def main() -> int:
         trace_dir.mkdir()
         exec_log = trace_dir / "exec.log"
         trace_argv = [
-            str(FIXED_STRACE), "--seccomp-bpf", "-f", "-qq", "-s", "16384",
+            str(toolchain / "strace-7.2/usr/bin/strace"),
+            "--seccomp-bpf", "-f", "-qq", "-s", "16384",
             "-e", "trace=execve,execveat", "-o", str(exec_log),
             str(program), "1", str(small_manifest), str(STDLIB),
         ]
@@ -657,7 +723,8 @@ def main() -> int:
 
         source_after = source_snapshot()
         tests_after = test_snapshot()
-        fixed_after = verify_fixed(stage0)
+        fixed_after = verify_fixed(stage0, toolchain, helper, runtime_dir,
+                                   embedded_stdlib)
         after = frozen_record(stage0, large, project, source_after,
                               tests_after, fixed_after)
         (work / "inputs.after.json").write_text(

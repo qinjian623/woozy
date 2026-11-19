@@ -8,11 +8,21 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("bootstrap", ROOT / "selfhost/bootstrap.py")
 bootstrap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bootstrap)
+
+OLD_CLI_ARGUMENT = (
+    "E_DRIVER_ARGUMENT: expected --help, --version, check, build, "
+    "lsp or capabilities")
+OLD_CLI_GUARD = (
+    "import sys\n"
+    "if sys.argv[1:] == ['--__resource-paths']:\n"
+    f"    sys.stderr.write({OLD_CLI_ARGUMENT!r} + '\\n')\n"
+    "    sys.exit(2)\n")
 
 
 def check_trace_audit(work):
@@ -37,6 +47,39 @@ def check_trace_audit(work):
             pass
         else:
             raise AssertionError(f"accepted unverified execution: {text}")
+
+
+def check_stage0_resource_paths(work):
+    seed = work / "resource-seed"
+    seed.write_bytes(b"fixture")
+    responses = [
+        (2, "", OLD_CLI_ARGUMENT + "\n", None),
+        (2, "", "E_TOOLCHAIN_MISSING: helper rejected E_DRIVER_ARGUMENT: "
+            + OLD_CLI_ARGUMENT + "\n", RuntimeError),
+        (2, '{"status":"error","diagnostics":[{"code":"E_DRIVER_ARGUMENT"}]}',
+         "", RuntimeError),
+        (1, "Traceback (most recent call last):\nE_DRIVER_ARGUMENT: "
+            + OLD_CLI_ARGUMENT + "\n", "", RuntimeError),
+        (2, "warning\n" + OLD_CLI_ARGUMENT + "\n", "", RuntimeError),
+    ]
+    with mock.patch.object(
+            bootstrap, "open", mock.mock_open(read_data=b"\x7fELF fixture"),
+            create=True):
+        for code, stdout, stderr, expected in responses:
+            completed = argparse.Namespace(
+                returncode=code, stdout=stdout, stderr=stderr)
+            with mock.patch.object(bootstrap.subprocess, "run",
+                                   return_value=completed):
+                if expected is None:
+                    assert bootstrap._stage0_resource_paths(seed, {}) is None
+                else:
+                    try:
+                        bootstrap._stage0_resource_paths(seed, {})
+                    except expected:
+                        pass
+                    else:
+                        raise AssertionError(
+                            f"accepted stage0 resource failure: {stdout}{stderr}")
 
 
 def check_source_copy(work):
@@ -84,7 +127,7 @@ def compiler_body(mutation=None):
             lines.append(f"target = pathlib.Path({str(target)!r})")
             lines.append("target.write_bytes(target.read_bytes() + b'mutated\\n')")
     lines += ["print(json.dumps({'status': 'ok'}), flush=True)"]
-    return "\n".join(lines) + "\n"
+    return OLD_CLI_GUARD + "\n".join(lines) + "\n"
 
 
 def compiler_body_with_actions(actions):
@@ -93,6 +136,8 @@ def compiler_body_with_actions(actions):
 
 
 def make_fixture(work, name, seed_body):
+    if "--__resource-paths" not in seed_body:
+        seed_body = OLD_CLI_GUARD + seed_body
     fixture = work / name
     (fixture / "selfhost/src").mkdir(parents=True)
     (fixture / "selfhost/src/main.wz").write_text(
@@ -393,6 +438,68 @@ def check_stage0_macro_retargets(work):
             name, sorted(record["input_changes"]))
 
 
+def check_stage0_route_rechecks(work):
+    def prepare(work, name, action):
+        case_work = work / ("route-" + name)
+        case_work.mkdir()
+        fixture = make_fixture(case_work, "fixture", compiler_body())
+        alias = fixture["fixture"] / "seed-build/helper-entry"
+        alias.symlink_to(fixture["helper"])
+        route_file = fixture["fixture"] / "seed-build/resource-paths.json"
+        route = {
+            "stdlib": str(fixture["fixture"] / "stdlib"),
+            "helper": str(alias),
+            "runtime": {
+                "native": str(fixture["runtime"]
+                              / "liblang_native_runtime.a"),
+                "hosted": str(fixture["runtime"]
+                              / "liblang_hosted_runtime.a"),
+            },
+            "toolchain": {
+                "opt": str(fixture["toolchain"] / "bin/opt"),
+                "llc": str(fixture["toolchain"] / "bin/llc"),
+                "clang": str(fixture["toolchain"] / "bin/clang"),
+                "ld.lld": str(fixture["toolchain"] / "bin/ld.lld"),
+            },
+            "ninja": str(fixture["toolchain"] / "bin/clang"),
+        }
+        route_file.write_text(json.dumps(route))
+        write_executable(fixture["seed"], compiler_body_with_actions(action(
+            fixture, alias, route_file, route)))
+        bootstrap.ROOT = fixture["fixture"]
+        with mock.patch.object(
+                bootstrap, "_stage0_resource_paths",
+                side_effect=lambda seed, env: json.loads(route_file.read_text())):
+            try:
+                bootstrap.run(bootstrap_args(case_work, fixture))
+            except RuntimeError as error:
+                assert "frozen inputs changed" in str(error), (name, error)
+            else:
+                raise AssertionError(f"bootstrap accepted route change {name}")
+        report = read_report(fixture)
+        assert report["failed_stage"] == "stage1", (name, report)
+        return report["stages"][0]["input_changes"]
+
+    def retarget(fixture, alias, route_file, route):
+        replacement = fixture["fixture"] / "seed-build/replacement-helper"
+        replacement.write_bytes(b"replacement helper\n")
+        return (f"target = pathlib.Path({str(alias)!r})\n"
+                "target.unlink()\n"
+                f"target.symlink_to({str(replacement)!r})\n")
+
+    def mismatch(fixture, alias, route_file, route):
+        replacement = fixture["fixture"] / "seed-build/replacement-helper"
+        replacement.write_bytes(b"replacement helper\n")
+        changed = dict(route, helper=str(replacement))
+        return (f"pathlib.Path({str(route_file)!r}).write_text("
+                f"{json.dumps(changed)!r})\n")
+
+    assert "files/stage0/helper" in prepare(work, "retarget", retarget)
+    changes = prepare(work, "mismatch", mismatch)
+    assert "files/stage0/helper" in changes, sorted(changes)
+    assert "paths/stage0_route/helper" in changes, sorted(changes)
+
+
 def check_stage_exception_status(work):
     fixture = make_fixture(
         work, "missing-program-fixture",
@@ -430,17 +537,37 @@ def check_unconfirmed_seed(work):
     assert report["failed_stage"] == "stage0"
 
 
+def check_stack_limit():
+    r = bootstrap.resource
+    argv = ["bootstrap.py", "--out-dir", "unused", "--stages", "2", "--opt", "0"]
+    minimum = 16 * 1024 * 1024
+    for limit in (minimum // 2, minimum * 2, r.RLIM_INFINITY):
+        with (mock.patch.object(sys, "argv", argv),
+              mock.patch.object(bootstrap, "run") as run,
+              mock.patch.object(r, "getrlimit", return_value=(limit, r.RLIM_INFINITY)),
+              mock.patch.object(r, "setrlimit") as set_limit):
+            assert bootstrap.main() == 0
+            run.assert_called_once()
+            if limit == minimum // 2:
+                set_limit.assert_called_once_with(r.RLIMIT_STACK, (minimum, r.RLIM_INFINITY))
+            else:
+                set_limit.assert_not_called()
+
+
 with tempfile.TemporaryDirectory(prefix="woozy-bootstrap-check-") as directory:
     work = Path(directory)
     check_trace_audit(work)
     check_source_copy(work)
     check_timeout_process_group(work)
     check_detached_pipe_is_bounded(work)
+    check_stage0_resource_paths(work)
     check_stable_control(work)
     check_input_mutations(work)
     check_stage0_macro_retargets(work)
+    check_stage0_route_rechecks(work)
     check_stage_exception_status(work)
     check_unconfirmed_seed(work)
+    check_stack_limit()
 
 print("PASS: bootstrap execution audit, bounded timeout, frozen inputs, "
       "stage0 CMake inputs, and synthetic stage control")

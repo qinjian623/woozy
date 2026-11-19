@@ -5,7 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CLANG_DIR="${CLANG_DIR:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin}"
+TOOLCHAINS="${LANG_TOOLCHAINS:-$ROOT/../toolchains}"
+CLANG_DIR="${CLANG_DIR:-$TOOLCHAINS/llvm-22.1.8/bin}"
 CXX="${CXX:-$CLANG_DIR/clang++}"
 CC="${CC:-$CLANG_DIR/clang}"
 AR="${AR:-$CLANG_DIR/llvm-ar}"
@@ -13,7 +14,7 @@ READELF="${READELF:-$CLANG_DIR/llvm-readelf}"
 NM="${NM:-$CLANG_DIR/llvm-nm}"
 BUILD="${BUILD:-$ROOT/tests/native/hosted/.build}"
 # The fixed LLVM 22.1.8 ld.lld was built against the legacy libxml2 package.
-LIBXML_LEGACY="${LIBXML_LEGACY:-/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib}"
+LIBXML_LEGACY="${LIBXML_LEGACY:-$TOOLCHAINS/libxml2-legacy-2.13.9/usr/lib}"
 export LD_LIBRARY_PATH="$LIBXML_LEGACY${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-120}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-90}"

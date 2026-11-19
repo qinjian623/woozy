@@ -57,7 +57,8 @@ The self-test checks the selected template identity, rendering, and
 cross-algorithm prepare-report rejection without building a compiler fixture.
 
 ```sh
-export PY=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+export PY="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
 "$PY" tests/performance/run_sort.py --self-test --algorithm quick
 ```
 
@@ -67,7 +68,8 @@ Native IR, verifies the IR with `opt`, requires the formal `program.o` to equal
 the helper-exported object byte-for-byte, and runs four wrong-golden rejections.
 
 ```sh
-export MAIN=/home/qin/Work/language-dev-20261103
+REPO="$(git rev-parse --show-toplevel)"
+export MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
 export RELEASE="$MAIN/builds/independent-runtime-root-integration/release"
 export LLVM="$MAIN/toolchains/llvm-22.1.8/bin"
 export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
@@ -78,7 +80,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
-  --compiler-root "$MAIN/compiler" \
+  --compiler-root "$REPO" \
   --ld-library-path "$XML" \
   --cpu 4
 ```

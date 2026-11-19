@@ -61,14 +61,15 @@ already provide the needed operations. See §4 for the runtime-shape evidence.
 
 All commands were run in this worktree with GNU C++ Release, `LANG_ENABLE_LLVM=OFF`,
 and CPython 3.12.15 from
-`/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`.
+`${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`.
 
 Focused build (no shared CMake edit):
 
 ```sh
+: "${PYTHON312:?set PYTHON312 to the Python 3.12 executable}"
 cmake -S tests/python/reference_values_backend -B build/reference-values-focused \
   -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DLANG_RV_PYTHON312=<python3.12>
+  -DLANG_RV_PYTHON312="$PYTHON312"
 cmake --build build/reference-values-focused -j 8
 ctest --test-dir build/reference-values-focused --output-on-failure
 ```
@@ -99,8 +100,9 @@ ctest --test-dir build/reference-values-focused --output-on-failure
 Full root suite (same worktree, all shared tests unchanged):
 
 ```sh
+: "${PYTHON312:?set PYTHON312 to the Python 3.12 executable}"
 cmake -S . -B build/reference-values-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=ON -DLANG_PYTHON312=<python3.12>
+  -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=ON -DLANG_PYTHON312="$PYTHON312"
 cmake --build build/reference-values-release -j 8
 ctest --test-dir build/reference-values-release -j 4 --output-on-failure
 # 46/46 passed, 0 skipped

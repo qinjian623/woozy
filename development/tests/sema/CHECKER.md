@@ -112,26 +112,28 @@ GMP 为检查器实际依赖；json-c 只供测试读取已发布 cases.json，�
 首版子任务的独立构建命令（用于初稿验证，当前主目录集成命令见下文）：
 
 ```sh
+REPO="$(git rev-parse --show-toplevel)"
 cmake -S . -B /tmp/language-t04-build -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF
 cmake --build /tmp/language-t04-build -j4
 g++ -std=c++20 -O2 -DNDEBUG -Wall -Wextra -Wpedantic -Werror -Iinclude \
   tests/sema/check_test.cpp src/sema/check.cpp src/hir/hir.cpp \
   /tmp/language-t04-build/liblang_modules.a /tmp/language-t04-build/liblang_frontend.a \
   -ltomlplusplus -ljson-c -lgmpxx -lgmp -o /tmp/language-t04-build/check_test-release
-/tmp/language-t04-build/check_test-release /home/qin/Work/language-dev-20261103/compiler
+/tmp/language-t04-build/check_test-release "$REPO"
 ctest --test-dir /tmp/language-t04-build --output-on-failure
 ```
 
 完整 ASan/UBSan 构建不借用未插桩的项目库：
 
 ```sh
+REPO="$(git rev-parse --show-toplevel)"
 clang++ -std=c++20 -O1 -g -DNDEBUG -fsanitize=address,undefined \
   -fno-omit-frame-pointer -Iinclude tests/sema/check_test.cpp src/sema/check.cpp \
   src/hir/hir.cpp src/support/source.cpp src/support/diagnostic.cpp src/support/input.cpp \
   src/syntax/lexer.cpp src/syntax/parser.cpp src/modules/project.cpp src/modules/resolve.cpp \
   -ltomlplusplus -ljson-c -lgmpxx -lgmp -o /tmp/language-t04-build/check_test-sanitized
 ASAN_OPTIONS=detect_leaks=0 /tmp/language-t04-build/check_test-sanitized \
-  /home/qin/Work/language-dev-20261103/compiler
+  "$REPO"
 ```
 
 单项目只做静态检查：`check_test-release --project /absolute/path/lang.toml`。

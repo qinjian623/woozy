@@ -31,9 +31,10 @@ from datetime import datetime, timezone
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-DEFAULT_TOOLCHAIN = ROOT.parent / "toolchains"
-DEFAULT_SOURCE_ROOT = Path("/home/qin/Work/language-dev-20261103/checks/generic-arity-source-integration-20261114/clean-repo/selfhost/src")
-DEFAULT_STDLIB = Path("/home/qin/.local/state/cli-agent-bridge/worktrees/0a0ca4cad6525fc6d10ec8f3/stdlib")
+DEFAULT_TOOLCHAIN = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT") or
+                         (ROOT.parent / "toolchains"))
+DEFAULT_SOURCE_ROOT = ROOT / "selfhost/src"
+DEFAULT_STDLIB = ROOT / "stdlib"
 SOURCE116_MAP_SHA = "727b72dd473a5b2c6b2e9212e7d496131db9141bc4c9371ba60d25ddbf6eefef"
 STDLIB_MAP_SHA = "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47"
 

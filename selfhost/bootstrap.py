@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SELFHOST = Path(__file__).resolve().parent
 if str(SELFHOST) not in sys.path:
     sys.path.insert(0, str(SELFHOST))
-from corpus import TOOL_NAMES, _run_process_impl, _timeout_number, parse_trace  # noqa: E402
+from corpus import (  # noqa: E402
+    DEFAULT_LIBXML, DEFAULT_LLVM, TOOL_NAMES,
+    _run_process_impl, _timeout_number, parse_trace,
+)
 
 STAGE0_MACROS = (
     "LANG_STD_SOURCE_ROOT",
@@ -112,7 +116,96 @@ def _required_file(path, label):
     return path.resolve(strict=True)
 
 
-def inspect_stage0(seed, toolchain, package_objects=False):
+def _stage0_resource_paths(seed, env):
+    try:
+        with open(seed, "rb") as source:
+            if source.read(4) != b"\x7fELF":
+                return None
+    except OSError:
+        return None
+    try:
+        completed = subprocess.run(
+            [str(seed), "--__resource-paths"], env=env,
+            capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(
+            f"cannot inspect stage0 resource paths: {error}") from error
+    output = (completed.stdout + completed.stderr).strip()
+    # Old C++ seeds do not implement the private query. Keep their strict
+    # embedded-macro proof; a new seed that fails to resolve resources is an
+    # error rather than a reason to fall back to stale build configuration.
+    if output == (
+            "E_DRIVER_ARGUMENT: expected --help, --version, check, build, "
+            "lsp or capabilities"):
+        return None
+    if completed.returncode == 0:
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"stage0 resource paths are not JSON: {completed.stdout!r}"
+            ) from error
+        if not isinstance(value, dict):
+            raise RuntimeError("stage0 resource paths are not an object")
+        return value
+    raise RuntimeError(f"stage0 resource paths failed: {output}")
+
+
+def _stage0_route_paths(actual):
+    try:
+        toolchain = actual["toolchain"]
+        package_tools = {
+            name: toolchain[name] for name in ("opt", "llc")
+            if name in toolchain
+        }
+        if "ninja" in actual:
+            package_tools["ninja"] = actual["ninja"]
+        return {
+            "stdlib": actual["stdlib"],
+            "helper": actual["helper"],
+            "runtime": {
+                "liblang_native_runtime.a": actual["runtime"]["native"],
+                "liblang_hosted_runtime.a": actual["runtime"]["hosted"],
+            },
+            "tools": {
+                "clang": toolchain["clang"],
+                "ld.lld": toolchain["ld.lld"],
+            },
+            "package_tools": package_tools,
+        }
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(
+            f"stage0 resource paths are incomplete: {actual}") from error
+
+
+def _stage0_stored_route(stage0):
+    try:
+        return {
+            "stdlib": stage0["stdlib"].get(
+                "reported_path", stage0["stdlib"]["path"]),
+            "helper": stage0["helper"].get(
+                "reported_path", stage0["helper"]["path"]),
+            "runtime": {
+                name: stage0["runtime"][name].get(
+                    "reported_path", stage0["runtime"][name]["path"])
+                for name in RUNTIME_ARCHIVES
+            },
+            "tools": {
+                name: stage0["tools"][name].get(
+                    "reported_path", stage0["tools"][name]["path"])
+                for name in ("clang", "ld.lld")
+            },
+            "package_tools": {
+                name: item.get("reported_path", item["path"])
+                for name, item in stage0.get("package_tools", {}).items()
+            },
+        }
+    except KeyError as error:
+        raise RuntimeError(
+            f"stage0 stored resource paths are incomplete: {stage0}") from error
+
+
+def inspect_stage0(seed, toolchain, package_objects=False, env=None):
     """Read the CMake build configuration that fixed the C++ seed's inputs."""
     seed = _required_file(seed, "stage0 seed")
     build_dir = seed.parent
@@ -150,22 +243,57 @@ def inspect_stage0(seed, toolchain, package_objects=False):
     if missing:
         raise RuntimeError(f"stage0 build configuration lacks {missing}: {build_ninja}")
 
-    stdlib = Path(macros["LANG_STD_SOURCE_ROOT"])
-    helper = Path(macros["LANG_NATIVE_HELPER"])
-    runtime = {
+    actual = _stage0_resource_paths(seed, env if env is not None else os.environ)
+    path_source = "legacy_macros" if actual is None else "resource_paths"
+    package_actual = None
+    if actual is None:
+        stdlib_reported = Path(macros["LANG_STD_SOURCE_ROOT"])
+        helper_reported = Path(macros["LANG_NATIVE_HELPER"])
+        runtime_reported = {
+            "liblang_native_runtime.a": Path(macros["LANG_NATIVE_RUNTIME"]),
+            "liblang_hosted_runtime.a": Path(macros["LANG_HOSTED_RUNTIME"]),
+        }
+        cpp_tools_reported = {
+            "clang": Path(macros["LANG_NATIVE_CLANG"]),
+            "ld.lld": Path(macros["LANG_NATIVE_LLD"]),
+        }
+    else:
+        try:
+            stdlib_reported = Path(actual["stdlib"])
+            helper_reported = Path(actual["helper"])
+            runtime_reported = {
+                "liblang_native_runtime.a": Path(actual["runtime"]["native"]),
+                "liblang_hosted_runtime.a": Path(actual["runtime"]["hosted"]),
+            }
+            cpp_tools_reported = {
+                "clang": Path(actual["toolchain"]["clang"]),
+                "ld.lld": Path(actual["toolchain"]["ld.lld"]),
+            }
+            package_actual = {
+                "opt": Path(actual["toolchain"]["opt"]),
+                "llc": Path(actual["toolchain"]["llc"]),
+                "ninja": Path(actual["ninja"]),
+            }
+        except (KeyError, TypeError) as error:
+            raise RuntimeError(
+                f"stage0 resource paths are incomplete: {actual}") from error
+
+    stdlib_macro = Path(macros["LANG_STD_SOURCE_ROOT"])
+    helper_macro = Path(macros["LANG_NATIVE_HELPER"])
+    runtime_macros = {
         "liblang_native_runtime.a": Path(macros["LANG_NATIVE_RUNTIME"]),
         "liblang_hosted_runtime.a": Path(macros["LANG_HOSTED_RUNTIME"]),
     }
-    cpp_tools = {
+    cpp_tool_macros = {
         "clang": Path(macros["LANG_NATIVE_CLANG"]),
         "ld.lld": Path(macros["LANG_NATIVE_LLD"]),
     }
+    stdlib = stdlib_reported
+    helper = helper_reported
+    runtime = dict(runtime_reported)
+    cpp_tools = dict(cpp_tools_reported)
     if not stdlib.is_dir():
         raise RuntimeError(f"stage0 stdlib input is missing: {stdlib}")
-    stdlib_macro = stdlib
-    helper_macro = helper
-    runtime_macros = dict(runtime)
-    cpp_tool_macros = dict(cpp_tools)
     helper = _required_file(helper, "stage0 helper")
     runtime = {name: _required_file(path, f"stage0 {name}")
                for name, path in runtime.items()}
@@ -175,10 +303,10 @@ def inspect_stage0(seed, toolchain, package_objects=False):
         name: (toolchain / "bin" / name).resolve(strict=True)
         for name in ("clang", "ld.lld")
     }
-    for name, actual in cpp_tools.items():
-        if actual != selected_tools[name]:
+    for name, actual_tool in cpp_tools.items():
+        if actual_tool != selected_tools[name]:
             raise RuntimeError(
-                f"stage0 {name} differs from --toolchain: {actual} != "
+                f"stage0 {name} differs from --toolchain: {actual_tool} != "
                 f"{selected_tools[name]}")
     package_tools = {}
     if package_objects:
@@ -186,26 +314,36 @@ def inspect_stage0(seed, toolchain, package_objects=False):
                             ("llc", "LANG_NATIVE_LLC"),
                             ("ninja", "LANG_NATIVE_NINJA")):
             macro_path = _single_macro(helper_defines, macro, build_ninja)
-            actual = _required_file(macro_path, f"stage0 {name}")
-            if name != "ninja" and actual != (toolchain / "bin" / name).resolve(strict=True):
-                raise RuntimeError(f"stage0 {name} differs from --toolchain: {actual}")
-            package_tools[name] = {"path": str(actual), "macro_path": macro_path,
-                                   "sha256": digest(actual)}
+            reported = (package_actual[name] if package_actual is not None
+                        else Path(macro_path))
+            actual_tool = _required_file(
+                reported if package_actual is not None else macro_path,
+                f"stage0 {name}")
+            if name != "ninja" and actual_tool != (toolchain / "bin" / name).resolve(strict=True):
+                raise RuntimeError(f"stage0 {name} differs from --toolchain: {actual_tool}")
+            package_tools[name] = {"path": str(actual_tool),
+                                   "reported_path": str(reported),
+                                   "macro_path": macro_path,
+                                   "sha256": digest(actual_tool)}
     return {
         **({"package_tools": package_tools} if package_objects else {}),
+        "path_source": path_source,
         "seed": {"path": str(seed), "sha256": digest(seed)},
-        "helper": {"path": str(helper), "macro_path": str(helper_macro),
-                   "sha256": digest(helper)},
+        "helper": {"path": str(helper), "reported_path": str(helper_reported),
+                   "macro_path": str(helper_macro), "sha256": digest(helper)},
         "stdlib": {"path": str(stdlib.resolve()),
+                   "reported_path": str(stdlib_reported),
                    "macro_path": str(stdlib_macro),
                    "files": _tree_hashes(stdlib)},
         "runtime": {
-            name: {"path": str(path), "macro_path": str(runtime_macros[name]),
+            name: {"path": str(path), "reported_path": str(runtime_reported[name]),
+                   "macro_path": str(runtime_macros[name]),
                    "sha256": digest(path)}
             for name, path in runtime.items()
         },
         "tools": {
-            name: {"path": str(path), "macro_path": str(cpp_tool_macros[name]),
+            name: {"path": str(path), "reported_path": str(cpp_tools_reported[name]),
+                   "macro_path": str(cpp_tool_macros[name]),
                    "sha256": digest(path)}
             for name, path in cpp_tools.items()
         },
@@ -231,33 +369,48 @@ def _freeze_reference(source, destination):
     return source_hash
 
 
+def _check_stage0_path(item, label):
+    reported = Path(item.get("reported_path", item["path"]))
+    if str(reported.resolve(strict=True)) != item["path"]:
+        raise RuntimeError(f"stage0 {label} target changed: {reported}")
+
+
 def _compare_stage0_inputs(stage0, resources):
     macros = stage0["build"]["macros"]
-    if str(Path(macros["LANG_STD_SOURCE_ROOT"]).resolve(strict=True)) != \
-            stage0["stdlib"]["path"]:
-        raise RuntimeError(
-            f"stage0 stdlib target changed: {macros['LANG_STD_SOURCE_ROOT']}")
-    if str(Path(macros["LANG_NATIVE_HELPER"]).resolve(strict=True)) != \
-            stage0["helper"]["path"]:
-        raise RuntimeError(
-            f"stage0 helper target changed: {macros['LANG_NATIVE_HELPER']}")
-    for name in RUNTIME_ARCHIVES:
-        macro = ("LANG_NATIVE_RUNTIME" if name == "liblang_native_runtime.a"
-                 else "LANG_HOSTED_RUNTIME")
-        if str(Path(macros[macro]).resolve(strict=True)) != \
-                stage0["runtime"][name]["path"]:
+    source = stage0.get("path_source", "legacy_macros")
+    if source == "legacy_macros":
+        if str(Path(macros["LANG_STD_SOURCE_ROOT"]).resolve(strict=True)) != \
+                stage0["stdlib"]["path"]:
             raise RuntimeError(
-                f"stage0 {name} target changed: {macros[macro]}")
-    for name in ("clang", "ld.lld"):
-        macro = "LANG_NATIVE_CLANG" if name == "clang" else "LANG_NATIVE_LLD"
-        if str(Path(macros[macro]).resolve(strict=True)) != \
-                stage0["tools"][name]["path"]:
+                f"stage0 stdlib target changed: {macros['LANG_STD_SOURCE_ROOT']}")
+        if str(Path(macros["LANG_NATIVE_HELPER"]).resolve(strict=True)) != \
+                stage0["helper"]["path"]:
             raise RuntimeError(
-                f"stage0 {name} target changed: {macros[macro]}")
+                f"stage0 helper target changed: {macros['LANG_NATIVE_HELPER']}")
+        for name in RUNTIME_ARCHIVES:
+            macro = ("LANG_NATIVE_RUNTIME" if name == "liblang_native_runtime.a"
+                     else "LANG_HOSTED_RUNTIME")
+            if str(Path(macros[macro]).resolve(strict=True)) != \
+                    stage0["runtime"][name]["path"]:
+                raise RuntimeError(
+                    f"stage0 {name} target changed: {macros[macro]}")
+        for name in ("clang", "ld.lld"):
+            macro = "LANG_NATIVE_CLANG" if name == "clang" else "LANG_NATIVE_LLD"
+            if str(Path(macros[macro]).resolve(strict=True)) != \
+                    stage0["tools"][name]["path"]:
+                raise RuntimeError(
+                    f"stage0 {name} target changed: {macros[macro]}")
+    else:
+        _check_stage0_path(stage0["stdlib"], "stdlib")
+        _check_stage0_path(stage0["helper"], "helper")
+        for name in RUNTIME_ARCHIVES:
+            _check_stage0_path(stage0["runtime"][name], name)
+        for name in ("clang", "ld.lld"):
+            _check_stage0_path(stage0["tools"][name], name)
     seed_entry = stage0["seed"].get("entry_path", stage0["seed"]["path"])
     if str(Path(seed_entry).resolve(strict=True)) != stage0["seed"]["path"]:
         raise RuntimeError(f"stage0 seed target changed: {seed_entry}")
-    actual_stdlib = _tree_hashes(macros["LANG_STD_SOURCE_ROOT"])
+    actual_stdlib = _tree_hashes(stage0["stdlib"]["path"])
     frozen_stdlib = _tree_hashes(resources / "stdlib")
     if actual_stdlib != frozen_stdlib:
         changed = sorted(set(actual_stdlib) ^ set(frozen_stdlib) |
@@ -265,26 +418,22 @@ def _compare_stage0_inputs(stage0, resources):
                           if actual_stdlib.get(name) != frozen_stdlib[name]})
         raise RuntimeError(
             f"stage0 stdlib differs from frozen copy: {changed}")
-    runtime_macros = {
-        "liblang_native_runtime.a": "LANG_NATIVE_RUNTIME",
-        "liblang_hosted_runtime.a": "LANG_HOSTED_RUNTIME",
-    }
-    for name, macro in runtime_macros.items():
+    for name in RUNTIME_ARCHIVES:
         frozen = digest(resources / "runtime" / name)
-        actual = digest(Path(macros[macro]))
+        actual = digest(Path(stage0["runtime"][name]["path"]))
         if actual != frozen:
             raise RuntimeError(
                 f"stage0 {name} differs from frozen copy: "
-                f"{macros[macro]} {actual} != {frozen}")
+                f"{stage0['runtime'][name]['path']} {actual} != {frozen}")
     for name in PYTHON_RUNTIME:
         if not (resources / "runtime/python" / name).is_file():
             raise RuntimeError(f"frozen Python runtime is missing: {name}")
     frozen_helper = digest(resources / "stage0/lang_native_helper")
-    actual_helper = digest(Path(macros["LANG_NATIVE_HELPER"]))
+    actual_helper = digest(Path(stage0["helper"]["path"]))
     if actual_helper != frozen_helper:
         raise RuntimeError(
             f"stage0 helper differs from frozen copy: "
-            f"{macros['LANG_NATIVE_HELPER']} {actual_helper} != {frozen_helper}")
+            f"{stage0['helper']['path']} {actual_helper} != {frozen_helper}")
     frozen_seed = digest(resources / "stage0/woozyc")
     seed_entry = stage0["seed"].get("entry_path", stage0["seed"]["path"])
     actual_seed = digest(Path(seed_entry))
@@ -293,20 +442,16 @@ def _compare_stage0_inputs(stage0, resources):
             f"stage0 seed differs from frozen copy: "
             f"{seed_entry} {actual_seed} != {frozen_seed}")
     for name in ("clang", "ld.lld"):
-        macro = "LANG_NATIVE_CLANG" if name == "clang" else "LANG_NATIVE_LLD"
-        actual = digest(Path(macros[macro]))
+        actual = digest(Path(stage0["tools"][name]["path"]))
         frozen = digest(resources / "toolchain" / name)
         if actual != frozen:
             raise RuntimeError(
                 f"stage0 {name} differs from frozen tool: "
-                f"{macros[macro]} {actual} != {frozen}")
-
-
+                f"{stage0['tools'][name]['path']} {actual} != {frozen}")
     for name, item in stage0.get("package_tools", {}).items():
-        if str(Path(item["macro_path"]).resolve(strict=True)) != item["path"]:
-            raise RuntimeError(f"stage0 {name} target changed: {item['macro_path']}")
+        _check_stage0_path(item, name)
         frozen = resources / ("stage0/ninja" if name == "ninja" else f"toolchain/{name}")
-        if digest(Path(item["macro_path"])) != digest(frozen):
+        if digest(Path(item["path"])) != digest(frozen):
             raise RuntimeError(f"stage0 {name} differs from frozen copy")
 
 
@@ -339,8 +484,24 @@ def _add_file(snapshot, key, path, strict=True):
     snapshot["paths"][key] = str(target)
 
 
-def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=None):
+def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=None,
+                   env=None):
     snapshot = {"files": {}, "paths": {}}
+    source = stage0.get("path_source", "legacy_macros")
+    route = None
+    if source == "resource_paths":
+        try:
+            actual = _stage0_resource_paths(
+                stage0["seed"]["path"], env if env is not None else os.environ)
+        except RuntimeError:
+            if env is not None:
+                raise
+            actual = None
+        if actual is not None:
+            route = _stage0_route_paths(actual)
+        elif env is None:
+            route = _stage0_stored_route(stage0)
+    unavailable = source == "resource_paths" and route is None
     _add_tree(snapshot, "compiler_sources", output / "source/src", strict)
     _add_file(snapshot, "compiler_manifest", output / "source/lang.toml", strict)
     _add_tree(snapshot, "stdlib_sources", output / "resources/stdlib", strict)
@@ -359,7 +520,10 @@ def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=Non
     if entry is not None:
         _add_file(snapshot, "stage0/seed_entry", entry, strict)
     _add_file(snapshot, "stage0/seed", stage0["seed"]["path"], strict)
-    _add_file(snapshot, "stage0/helper", stage0["helper"]["path"], strict)
+    if not unavailable:
+        _add_file(snapshot, "stage0/helper",
+                  route["helper"] if route is not None
+                  else stage0["helper"]["path"], strict)
     _add_file(snapshot, "stage0_frozen/seed", output / "resources/stage0/woozyc",
               strict)
     _add_file(snapshot, "stage0_frozen/helper",
@@ -369,21 +533,45 @@ def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=Non
     _add_file(snapshot, "stage0/cmake_cache", stage0["build"]["cmake_cache"],
               strict)
     macros = stage0["build"]["macros"]
-    _add_tree(snapshot, "stage0_macro/LANG_STD_SOURCE_ROOT",
-              macros["LANG_STD_SOURCE_ROOT"], strict)
-    for macro in STAGE0_FILE_MACROS:
-        _add_file(snapshot, f"stage0_macro/{macro}", macros[macro], strict)
-    _add_tree(snapshot, "stage0/stdlib", stage0["stdlib"]["path"], strict)
-    for name in RUNTIME_ARCHIVES:
-        _add_file(snapshot, f"stage0/runtime/{name}",
-                  stage0["runtime"][name]["path"], strict)
-    for name in ("clang", "ld.lld"):
-        _add_file(snapshot, f"stage0/tools/{name}", stage0["tools"][name]["path"],
-                  strict)
+    if source == "legacy_macros":
+        _add_tree(snapshot, "stage0_macro/LANG_STD_SOURCE_ROOT",
+                  macros["LANG_STD_SOURCE_ROOT"], strict)
+        for macro in STAGE0_FILE_MACROS:
+            _add_file(snapshot, f"stage0_macro/{macro}", macros[macro], strict)
+    if not unavailable:
+        _add_tree(snapshot, "stage0/stdlib",
+                  route["stdlib"] if route is not None
+                  else stage0["stdlib"]["path"], strict)
+        for name in RUNTIME_ARCHIVES:
+            _add_file(snapshot, f"stage0/runtime/{name}",
+                      route["runtime"][name] if route is not None
+                      else stage0["runtime"][name]["path"], strict)
+        for name in ("clang", "ld.lld"):
+            _add_file(snapshot, f"stage0/tools/{name}",
+                      route["tools"][name] if route is not None
+                      else stage0["tools"][name]["path"], strict)
     for name, item in stage0.get("package_tools", {}).items():
-        _add_file(snapshot, f"stage0/package_tools/{name}", item["macro_path"], strict)
+        if not unavailable:
+            path = (route["package_tools"].get(name) if route is not None
+                    else item["path"])
+            if path is not None:
+                _add_file(snapshot, f"stage0/package_tools/{name}", path,
+                          strict)
         if name == "ninja":
             _add_file(snapshot, "stage0_frozen/ninja", output / "resources/stage0/ninja", strict)
+    if route is not None:
+        for key in ("stdlib", "helper"):
+            snapshot["paths"][f"stage0_route/{key}"] = str(route[key])
+        for name in RUNTIME_ARCHIVES:
+            snapshot["paths"][f"stage0_route/runtime/{name}"] = str(
+                route["runtime"][name])
+        for name in ("clang", "ld.lld"):
+            snapshot["paths"][f"stage0_route/tools/{name}"] = str(
+                route["tools"][name])
+        for name in stage0.get("package_tools", {}):
+            if name in route["package_tools"]:
+                snapshot["paths"][f"stage0_route/package_tools/{name}"] = str(
+                    route["package_tools"][name])
     for name, path in (source_make_tools or {}).items():
         _add_file(snapshot, f"source_make_tools/{name}", path, strict)
     snapshot["paths"]["selected_toolchain"] = str(toolchain.resolve())
@@ -459,6 +647,7 @@ def run(args):
             (tools / name).symlink_to(executable)
             allowed_tools.add(str(executable))
         environment = dict(os.environ)
+        environment.pop("WOOZY_LLVM_BIN", None)
         source_make_tools = {}
         if uses_source_make:
             source_make_tools = {name: Path(path) for name, path in {
@@ -489,7 +678,8 @@ def run(args):
 
         stage_label = "stage0"
         stage0 = inspect_stage0(stage0_path, toolchain,
-                                package_objects=getattr(args, "source_make", False))
+                                package_objects=getattr(args, "source_make", False),
+                                env=environment)
         stage0["seed"]["entry_path"] = str(stage0_entry)
         frozen_stage0 = resources / "stage0"
         frozen_stage0.mkdir()
@@ -502,7 +692,8 @@ def run(args):
         _compare_stage0_inputs(stage0, resources)
         report["stage0"] = stage0
         expected_inputs = _frozen_inputs(output, stage0, toolchain, strict=True,
-                                         source_make_tools=source_make_tools)
+                                         source_make_tools=source_make_tools,
+                                         env=environment)
         _compare_stage0_inputs(stage0, resources)
         report["frozen_inputs"] = expected_inputs
         expected_digest = _snapshot_digest(expected_inputs)
@@ -512,7 +703,8 @@ def run(args):
         for generation in range(1, args.stages + 1):
             stage_label = f"stage{generation}"
             before = _frozen_inputs(output, stage0, toolchain, strict=False,
-                                    source_make_tools=source_make_tools)
+                                    source_make_tools=source_make_tools,
+                                    env=environment)
             if before != expected_inputs:
                 raise RuntimeError(
                     f"frozen inputs changed before {stage_label}: "
@@ -523,7 +715,7 @@ def run(args):
             stage = output / stage_label
             stage.mkdir()
             for name in ("stdlib", "runtime", "toolchain"):
-                (stage / name).symlink_to(resources / name, target_is_directory=True)
+                (stage / name).symlink_to(Path("..") / "resources" / name, target_is_directory=True)
             command = [str(compiler), "build", "--project",
                        str(output / "source/lang.toml"), "--backend", "native",
                        "--opt", args.opt, "--out-dir", str(stage / "build"),
@@ -560,7 +752,8 @@ def run(args):
 
                 failures = []
                 after = _frozen_inputs(output, stage0, toolchain, strict=False,
-                                    source_make_tools=source_make_tools)
+                                    source_make_tools=source_make_tools,
+                                    env=environment)
                 if after != expected_inputs:
                     record["input_changes"] = _input_changes(
                         expected_inputs, after)
@@ -637,12 +830,10 @@ def main():
                         help="parallel source Make workers (default: 1)")
     parser.add_argument("--source-make", action="store_true",
                         help="use package objects for stage 1 and source Make for stages 2 and 3")
-    parser.add_argument("--toolchain", type=Path,
-                        default=ROOT.parent / "toolchains/llvm-22.1.8")
+    parser.add_argument("--toolchain", type=Path, default=DEFAULT_LLVM)
     parser.add_argument("--runtime-dir", type=Path,
                         default=ROOT / "build/woozy-stdlib-native/native")
-    parser.add_argument("--libxml-dir", type=Path,
-                        default=ROOT.parent / "toolchains/libxml2-legacy-2.13.9/usr/lib")
+    parser.add_argument("--libxml-dir", type=Path, default=DEFAULT_LIBXML)
     parser.add_argument("--strace", help="strace executable (default: find strace on PATH)")
     parser.add_argument("--timeout", type=float, default=7200)
     args = parser.parse_args()
@@ -651,6 +842,14 @@ def main():
     if _timeout_number(args.timeout) is None:
         parser.error("timeout must be a positive finite number")
     try:
+        if args.stages > 1 and args.opt == "0":
+            # O0 compiler workers can exhaust Linux's 8 MiB default stack.
+            minimum = 16 * 1024 * 1024
+            soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+            if soft != resource.RLIM_INFINITY and soft < minimum:
+                if hard != resource.RLIM_INFINITY and hard < minimum:
+                    raise RuntimeError("O0 self-hosting requires a stack limit of at least 16 MiB")
+                resource.setrlimit(resource.RLIMIT_STACK, (minimum, hard))
         run(args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(error, file=sys.stderr)

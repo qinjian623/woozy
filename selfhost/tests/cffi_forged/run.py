@@ -37,12 +37,11 @@ DEFAULT_BINDING = ROOT / "tests/native/c_ffi/bindings/fixture.json"
 DEFAULT_CPP_TEST = ROOT / "tests/native/c_ffi/forged_test.cpp"
 DEFAULT_CPP_CONTRACT = ROOT / "tests/native/c_ffi/CONTRACT.md"
 DEFAULT_CPP_RUNNER = ROOT / "tests/native/c_ffi/run_c_ffi.py"
-DEFAULT_SEED = Path("/home/qin/.local/state/cli-agent-bridge/worktrees/"
-                    "0a0ca4cad6525fc6d10ec8f3/.work/gc-registry-index/"
-                    "build-new/woozyc")
-DEFAULT_STDLIB = Path("/home/qin/.local/state/cli-agent-bridge/worktrees/"
-                      "0a0ca4cad6525fc6d10ec8f3/stdlib")
-DEFAULT_TOOLCHAIN = Path("/home/qin/Work/language-dev-20261103/toolchains")
+DEFAULT_BUILD = ROOT / "build" / "woozy-stdlib-native"
+DEFAULT_SEED = DEFAULT_BUILD / "woozyc"
+DEFAULT_STDLIB = ROOT / "stdlib"
+DEFAULT_TOOLCHAIN = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT") or
+                         (ROOT.parent / "toolchains"))
 DEFAULT_STRACE = DEFAULT_TOOLCHAIN / "strace-7.2/usr/bin/strace"
 EXPECTED_SOURCE116 = "ed1c65fb9889606a713f03cc4e02d7bd6d818c58e4937610554cdd3f3e866a09"
 EXPECTED_STDLIB = "473aa54b5ce5c1bbae4985d0d187528aa056a72ddc1737c3f05d3abb9623bd47"
@@ -130,6 +129,66 @@ def load_corpus_support():
     return module
 
 
+def load_bootstrap_support():
+    path = ROOT / "selfhost/bootstrap.py"
+    spec = importlib.util.spec_from_file_location(
+        "woozy_bootstrap_support", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["woozy_bootstrap_support"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def stage0_build_record(seed, toolchain):
+    """Read the build configuration that fixed the pinned stage0's inputs.
+
+    A pinned seed SHA proves which bytes run, not which helper, runtime
+    archives or stdlib those bytes were built to load.  Refuse when that
+    configuration cannot be read instead of assuming the hashed resources are
+    the ones stage0 uses.
+    """
+    try:
+        return load_bootstrap_support().inspect_stage0(
+            seed, toolchain / "llvm-22.1.8")
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(
+            "stage0 build configuration is inaccessible; refusing to assume "
+            f"the hashed resources are the ones it loads: {error}") from error
+
+
+def verify_stage0_routing(stage0, helper, runtime_dir, stdlib, stdlib_files):
+    """Require stage0's own configuration to name the hashed resources."""
+    targets = {
+        "LANG_NATIVE_HELPER": Path(helper),
+        "LANG_NATIVE_RUNTIME": Path(runtime_dir) / "liblang_native_runtime.a",
+        "LANG_HOSTED_RUNTIME": Path(runtime_dir) / "liblang_hosted_runtime.a",
+        "LANG_STD_SOURCE_ROOT": Path(stdlib),
+    }
+    macros = stage0["build"]["macros"]
+    for name, path in targets.items():
+        configured = Path(macros[name]).resolve(strict=True)
+        if configured != path.resolve(strict=True):
+            raise RuntimeError(
+                f"stage0 {name} routes to {configured}, not the hashed {path}")
+    routed = stage0["stdlib"]["files"]
+    if routed != stdlib_files:
+        changed = sorted(name for name in set(routed) | set(stdlib_files)
+                         if routed.get(name) != stdlib_files.get(name))
+        raise RuntimeError(
+            "stage0 stdlib routing differs from the hashed stdlib: "
+            f"{changed[:8]}")
+    return {
+        "macros": dict(macros),
+        "build_ninja": stage0["build"]["build_ninja"],
+        "build_ninja_sha256": stage0["build"]["build_ninja_sha256"],
+        "cmake_cache": stage0["build"]["cmake_cache"],
+        "cmake_cache_sha256": stage0["build"]["cmake_cache_sha256"],
+        "uses_copied_resources": stage0["uses_copied_resources"],
+    }
+
+
 def finite_timeout(text):
     try:
         value = float(text)
@@ -177,16 +236,17 @@ def exec_aliases(paths):
     return sorted(result)
 
 
-def engine_resources(seed, toolchain, strace, stdlib):
-    build = seed.parent
+def engine_resources(seed, helper, runtime_dir, toolchain, strace, stdlib):
     llvm = toolchain / "llvm-22.1.8/bin"
     tools = {name: file_record(llvm / name) for name in TOOL_NAMES}
     stdlib_files = tree_map(stdlib, ".wz")
     resources = {
         "seed": file_record(seed),
-        "helper": file_record(build / "native/lang_native_helper"),
-        "native_runtime": file_record(build / "native/liblang_native_runtime.a"),
-        "hosted_runtime": file_record(build / "native/liblang_hosted_runtime.a"),
+        "helper": file_record(helper),
+        "native_runtime": file_record(
+            runtime_dir / "liblang_native_runtime.a"),
+        "hosted_runtime": file_record(
+            runtime_dir / "liblang_hosted_runtime.a"),
         "strace": file_record(strace),
         "tools": tools,
         "stdlib": {"path": str(stdlib), "files": stdlib_files,
@@ -211,6 +271,9 @@ def engine_resources(seed, toolchain, strace, stdlib):
     if len(stdlib_files) != 37:
         raise RuntimeError(f"fixed stdlib must contain 37 .wz files: "
                            f"{len(stdlib_files)}")
+    resources["stage0_build"] = verify_stage0_routing(
+        stage0_build_record(seed, toolchain), helper, runtime_dir, stdlib,
+        stdlib_files)
     return resources
 
 
@@ -454,6 +517,12 @@ def main(argv=None):
     sys.dont_write_bytecode = True
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=Path, default=DEFAULT_SEED)
+    parser.add_argument("--helper", type=Path,
+                        help="fixed lang_native_helper "
+                             "(default: <seed>/native/lang_native_helper)")
+    parser.add_argument("--runtime-dir", type=Path,
+                        help="native/hosted runtime archives "
+                             "(default: <seed>/native)")
     parser.add_argument("--toolchain-root", type=Path, default=DEFAULT_TOOLCHAIN)
     parser.add_argument("--strace", type=Path, default=DEFAULT_STRACE)
     parser.add_argument("--stdlib", type=Path, default=DEFAULT_STDLIB)
@@ -516,7 +585,10 @@ def main(argv=None):
     llvm_bin = toolchain / "llvm-22.1.8/bin"
     tool_paths = {name: (llvm_bin / name).resolve(strict=True)
                   for name in TOOL_NAMES}
-    helper = (seed.parent / "native/lang_native_helper").resolve(strict=True)
+    runtime_dir = (args.runtime_dir or
+                   (seed.parent / "native")).resolve(strict=True)
+    helper = (args.helper or
+              (runtime_dir / "lang_native_helper")).resolve(strict=True)
     build_timeout = args.build_timeout
     measure_timeout = args.measure_timeout
     failures = []
@@ -608,7 +680,8 @@ def main(argv=None):
             "component": {"path": str(component),
                           "files": tree_map(component),
                           "map_sha256": json_hash(tree_map(component))},
-            "engine": engine_resources(seed, toolchain, strace, stdlib),
+            "engine": engine_resources(seed, helper, runtime_dir, toolchain,
+                                       strace, stdlib),
             "forged_project": {
                 "manifest": file_record(manifest),
                 "source": {

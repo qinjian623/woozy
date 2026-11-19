@@ -101,7 +101,7 @@ timeout 900 tests/native/c_callback_runtime/run_callback_tests.sh
 
 The script builds the hosted archive from the published manifest sources plus
 `runtime/hosted/c_callback.cpp` with the canonical LLVM 22.1.8 toolchain,
-`LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib:/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib`,
+`LD_LIBRARY_PATH=${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/lib:${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib`,
 links both harnesses against it and runs them with timeouts. It writes to a
 temporary directory by default; set `C_CALLBACK_BUILD_DIR` to keep artifacts.
 

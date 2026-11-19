@@ -16,7 +16,8 @@ The archive contains:
 Use the fixed LLVM 22.1.8 Clang toolchain from the project development notes:
 
 ```sh
-tc=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+tc="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin"
 cmake -S stdlib/tls/addon -B build/tls-addon -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER="$tc/clang++" \

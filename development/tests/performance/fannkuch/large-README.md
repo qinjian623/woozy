@@ -19,7 +19,7 @@ timing, records no throughput, and makes no speedup or `<=2x` claim.
 ## Fixed large expectations
 
 The only expected values are read from the hash-pinned frozen oracle at
-`/home/qin/Work/language-dev-20261103/checks/fannkuch-large-oracle-20261110`.
+`<dev-work-dir>/checks/fannkuch-large-oracle-20261110`.
 The script verifies `results.json`, `inputs.json`, `verify.py`, the oracle's
 `source_sha256` map, all four n=7..10 records, the ordered trace SHA-256 values,
 and the permuted-record comparison flags before and after the run.
@@ -83,7 +83,7 @@ Command line:
 All four final runs used the same script and tool hashes, CPU 4, and the
 dedicated production Release tree. Output root:
 
-`/home/qin/Work/language-dev-20261103/checks/fannkuch-large-prepare-20261110`
+`<dev-work-dir>/checks/fannkuch-large-prepare-20261110`
 
 | Run | n | rounds | Report SHA-256 | Status |
 | --- | --- | --- | --- | --- |
@@ -93,18 +93,19 @@ dedicated production Release tree. Output root:
 | `n10-r2` | 10 | 2 | `8f3828162e6c4a280d98c39f4f5b358e0c7af59e64fc26740fa43cebf61c367a` | passed |
 
 A combined index is at
-`/home/qin/Work/language-dev-20261103/checks/fannkuch-large-prepare-20261110/summary.json`
+`<dev-work-dir>/checks/fannkuch-large-prepare-20261110/summary.json`
 (SHA-256 `b8435c377fe17e0ef2e9f9079a0b0fdd4117e8a6ecb2047b15a608199504d5e7`).
 
 Exact command template (one run shown):
 
 ```sh
-export MAIN=/home/qin/Work/language-dev-20261103
-export RELEASE="$MAIN/compiler/build/native-perf-release"
+REPO="$(git rev-parse --show-toplevel)"
+export MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
+export RELEASE="$REPO/build/native-perf-release"
 export LLVM="$MAIN/toolchains/llvm-22.1.8/bin"
 export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 export PY="$MAIN/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
-export PYHELPER="$MAIN/compiler/build/native-cli-release/tests/python/lang_python_emit"
+export PYHELPER="$REPO/build/native-cli-release/tests/python/lang_python_emit"
 
 "$PY" -B -s tests/performance/fannkuch/large_prepare.py \
   --out "$MAIN/checks/fannkuch-large-prepare-20261110/n9-r1-final" \
@@ -113,7 +114,7 @@ export PYHELPER="$MAIN/compiler/build/native-cli-release/tests/python/lang_pytho
   --python "$PY" --python-helper "$PYHELPER" \
   --langc "$RELEASE/langc" --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
-  --llvm-bin "$LLVM" --compiler-root "$MAIN/compiler" \
+  --llvm-bin "$LLVM" --compiler-root "$REPO" \
   --ld-library-path "$XML" --cpu 4
 ```
 

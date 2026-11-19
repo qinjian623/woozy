@@ -13,7 +13,8 @@ add_library(lang_frontend STATIC
   src/syntax/parser.cpp)
 target_include_directories(lang_frontend PUBLIC include)
 target_compile_features(lang_frontend PUBLIC cxx_std_20)
-add_library(lang_driver_process STATIC src/support/process.cpp src/support/publish.cpp)
+add_library(lang_driver_process STATIC src/support/process.cpp src/support/publish.cpp
+  src/support/resource.cpp)
 target_include_directories(lang_driver_process PUBLIC include)
 target_compile_features(lang_driver_process PUBLIC cxx_std_20)
 find_package(tomlplusplus CONFIG REQUIRED)
@@ -21,8 +22,17 @@ find_package(json-c CONFIG REQUIRED)
 add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp src/modules/parse_cache.cpp)
 target_link_libraries(lang_modules PUBLIC lang_frontend
   PRIVATE tomlplusplus::tomlplusplus json-c::json-c lang_driver_process)
+# Retained for build-tree introspection; sources resolve resources relative to
+# the executable so these paths are not embedded in compiler binaries.
 target_compile_definitions(lang_modules PRIVATE
   LANG_STD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+  file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}/stdlib"
+    "${CMAKE_BINARY_DIR}/stdlib" SYMBOLIC RESULT lang_stdlib_link)
+  if(lang_stdlib_link)
+    message(FATAL_ERROR "cannot create build-tree stdlib resource: ${lang_stdlib_link}")
+  endif()
+endif()
 add_library(lang_hir STATIC src/hir/hir.cpp src/hir/system_operation.cpp src/hir/ownership.cpp
   src/hir/pattern_analysis.cpp src/hir/literal_value.cpp src/hir/constant_value.cpp src/hir/identity.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
@@ -81,6 +91,16 @@ if(BUILD_TESTING)
         --fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental/fixtures)
     endif()
     add_subdirectory(tests/native)
+    if(TARGET langc_native_invalid_json_probe AND TARGET lang_native_exit2_helper)
+      add_custom_target(lang_invalid_json_helper_link
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+          "$<TARGET_FILE_DIR:langc_native_invalid_json_probe>/native"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+          "$<TARGET_FILE:lang_native_exit2_helper>"
+          "$<TARGET_FILE_DIR:langc_native_invalid_json_probe>/native/lang_native_helper"
+        DEPENDS lang_native_exit2_helper)
+      add_dependencies(langc_native_invalid_json_probe lang_invalid_json_helper_link)
+    endif()
     add_subdirectory(tests/selfhost)
   endif()
   add_subdirectory(tests/python)

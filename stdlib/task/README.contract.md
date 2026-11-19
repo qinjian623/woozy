@@ -114,8 +114,8 @@ pub func ready[R](future Future[R]) bool;
 ## 验证记录
 
 环境：Linux x86_64，Native 后端，固定 CLI
-`/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc`，
-固定 `LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib`。
+`build/woozy-stdlib-native/woozyc`，
+固定 `LD_LIBRARY_PATH=${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib`。
 
 验收程序使用真实 Native O0/O2、原子 started 门和最大并发计数证明 worker 并行，
 覆盖多 submitter/多 waiter、背压、close 排空、close/submit 竞争、拥有结果复制、

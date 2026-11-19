@@ -58,10 +58,11 @@ CASE ordinary-python ... result=accept ... call=0
 ## 复现
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 selfhost/tests/python_capability/run.py \
-  --woozyc /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
-  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
-  --build-dir /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native \
+  --woozyc build/woozy-stdlib-native/woozyc \
+  --toolchain-root "${WOOZY_TOOLCHAIN_ROOT}" \
+  --build-dir build/woozy-stdlib-native \
   --work-dir /tmp/python-capability-final \
   --timeout 1200 --opts 0,2
 ```

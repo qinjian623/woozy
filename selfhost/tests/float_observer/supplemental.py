@@ -57,8 +57,7 @@ PROBE_RESULT_TYPES = {
     "f64-panic-skip": "f64",
     "f64-float-zero-in-defer": "f64",
 }
-DEFAULT_PYTHON = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python")
+DEFAULT_PYTHON = run.DEFAULT_PYTHON
 
 
 def manifest_text():
@@ -911,9 +910,7 @@ def main(argv=None) -> int:
     parser.add_argument("--driver-build-evidence", type=Path, required=True)
     parser.add_argument("--candidate-cli", type=Path, required=True)
     parser.add_argument("--accepted-proof", type=Path, required=True)
-    parser.add_argument("--woozyc", type=Path,
-                        default=Path("/home/qin/Work/language-dev-20261103/"
-                                     "compiler/build/woozy-stdlib-native/woozyc"))
+    parser.add_argument("--woozyc", type=Path, default=run.DEFAULT_BOOTSTRAP)
     parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
     parser.add_argument("--toolchain", type=Path, default=run.DEFAULT_TOOLCHAIN)
     parser.add_argument("--strace", type=Path, default=run.DEFAULT_STRACE)

@@ -7,6 +7,12 @@ import os
 from pathlib import Path
 import subprocess
 
+ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_TOOLCHAINS = Path(
+    os.environ.get('LANG_TOOLCHAINS')
+    or os.environ.get('WOOZY_TOOLCHAIN_ROOT')
+    or ROOT.parent / 'toolchains')
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -51,16 +57,17 @@ def main():
     for name in ('cli', 'root', 'out', 'clang'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--lld', type=Path)
+    parser.add_argument('--toolchains', type=Path, default=DEFAULT_TOOLCHAINS)
     args = parser.parse_args()
-    args.cli, args.root, args.out = (
-        p.resolve() for p in (args.cli, args.root, args.out))
+    args.cli, args.root, args.out, args.toolchains = (
+        p.resolve() for p in (args.cli, args.root, args.out, args.toolchains))
     # Keep the clang++ spelling: resolving the symlink to clang-22 selects C mode.
     args.clang = args.clang.absolute()
     args.lld = (args.lld or (args.clang.parent / 'ld.lld')).absolute()
     args.out.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    legacy_libxml = Path('/home/qin/Work/language-dev-20261103/toolchains/'
-                         'libxml2-legacy-2.13.9/usr/lib')
+    legacy_libxml = (args.toolchains /
+                     'libxml2-legacy-2.13.9/usr/lib')
     if legacy_libxml.is_dir():
         old = env.get('LD_LIBRARY_PATH')
         env['LD_LIBRARY_PATH'] = str(legacy_libxml) + (':' + old if old else '')

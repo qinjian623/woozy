@@ -10,7 +10,7 @@
 - 不新增 `direct_call` opcode。保留现有 `Op::call`、`Exit::try_call` 和 callee-first inputs；按已验证 HIR origin 的 `Call.kind/direct_symbol` 区分直接/间接。直接源码调用使用原 signature；间接 Fn 才拆 `code/env` 并使用带 env 的调用。
 - `Weak[T]` 是 builtin；`std/weak` 只提供 `empty`、`downgrade`、`upgrade`，`upgrade` 返回 `std/option.Option[T]`；不增加 `is_alive`/`is_empty`。
 - Box、Thread、Mutex 等按 exact canonical 声明识别；Box 只接受 canonical `std/box.Box` 的私有 `cell Vec[T]`，不接受同名/同布局用户 struct，也不递归解包任意单字段 struct。
-- `Box` 已由 Root 落在 `/home/qin/Work/language-dev-20261103/compiler/stdlib/box/box.wz`：`pub struct Box[T] { cell Vec[T]; }`。worker 直接集成该版本，不另建实现。
+- `Box` 已由 Root 落在 `stdlib/box/box.wz`：`pub struct Box[T] { cell Vec[T]; }`。worker 直接集成该版本，不另建实现。
 
 ## 2. C1--C7 缺陷修正（先列结论，后文给 schema）
 

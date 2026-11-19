@@ -869,7 +869,7 @@ func write_sections(name string, sections Vec[string]) throws os.Error {
 
 func link_arguments(state MakeState, compile_program_object bool) Vec[string] throws os.Error {
     let root = resources.directory();
-    let tools = root + "/toolchain";
+    let tools = resources.llvm_bin(root);
     let result = vec.empty[string]();
     if compile_program_object {
         vec.push(result, tools + "/ld.lld"); vec.push(result, "-r");

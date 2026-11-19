@@ -3,19 +3,20 @@
 Operation: `native-source-weak-operations-20261112`
 
 Environment: Linux x86_64, LLVM/Clang/LLD `22.1.8`
-(`/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8`). The legacy
+(`${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8`). The legacy
 `ld.lld` driver needs
-`LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib`.
+`LD_LIBRARY_PATH=${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib`.
 Build timeout 300 s, program timeout 120 s, no C++ ASAN.
 
 ## Source Weak runner
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 tests/native/weak_source/run_weak_source.py \
   --cli /tmp/weak-test-build/woozyc \
   --helper /tmp/weak-test-build/native/lang_native_helper \
   --root . \
-  --ld-library-path /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+  --ld-library-path "${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
   --out /tmp/weak-source-final
 ```
 

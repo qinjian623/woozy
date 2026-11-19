@@ -77,7 +77,7 @@ Root; it is not included by this worktree.
 
 The GC-aware runtime ABI copied into `runtime/native/async.cpp` and
 `runtime/native/async.hpp` is the reviewed input from
-`/home/qin/Work/language-dev-20261103/checks/extensions-20261111/task-gc-runtime-accepted-input/`.
+`<dev-work-dir>/checks/extensions-20261111/task-gc-runtime-accepted-input/`.
 It is not new implementation in this task.
 
 | file | SHA-256 |

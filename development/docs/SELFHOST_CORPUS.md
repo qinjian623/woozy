@@ -190,7 +190,7 @@ Native 发布物检查现在扫描 `out/` 下全部条目，包括 `program.o`�
 
 ## 3. Root 重新冻结
 
-catalog 来源：`/home/qin/Work/language-dev-20261103/compiler`，只读。
+catalog 来源：`<repo>`，只读。
 
 ```text
 previous_git_head: 191ccbddef99ffe56a86291257f6c2bc52db1a7b
@@ -353,14 +353,16 @@ python3 selfhost/corpus.py coverage
 冻结 inventory 本身没有刷新真实源码 hash：
 
 ```bash
-git clone --shared /home/qin/Work/language-dev-20261103/compiler /tmp/sh10f-root-3d7139b
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+REPO="$(git rev-parse --show-toplevel)"
+git clone --shared "$REPO" /tmp/sh10f-root-3d7139b
 git -C /tmp/sh10f-root-3d7139b checkout 3d7139bc10cab5d62cb4e04c614db8d86e5ee871
 # test copy: /tmp/sh10f-inventory-test.json（只改 contracts/selfhost.json hash）
 python3 tests/selfhost/corpus_test.py \
   --root /tmp/sh10f-root-3d7139b \
   --inventory /tmp/sh10f-inventory-test.json \
-  --stage0 /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
-  --toolchains /home/qin/Work/language-dev-20261103/toolchains
+  --stage0 "$REPO/build/woozy-stdlib-native/woozyc" \
+  --toolchains "${WOOZY_TOOLCHAIN_ROOT}"
 # exit 0
 # PASS: strict JSON, timeout/signal, cleanup, artifacts, expectations,
 #       coverage, public-CLI harness expectations, stage0 harness, and
@@ -530,7 +532,7 @@ python3 tests/selfhost/corpus_test.py \
 清单必须记录该语料目录实际使用的字节。源码哈希改变仍会失败，参数不会放宽冻结检查。本轮使用 3d7139b 的临时 clone 和只更新一个已知变化
 `contracts/selfhost.json` hash 的临时清单，完整小测试退出 0；冻结清单本身没有刷新 hash。使用未更新的原清单仍因该哈希失配而非零退出。这次没有运行 368 项已启用子集、完整语料或三代自举。
 
-本轮派生脚本与 checks/SH10f-corpus-public-cli-20261113/ 原始证据保留在开发工作目录 `/home/qin/.local/state/cli-agent-bridge/worktrees/295bf1a9b0de0cddc75560ee`；该相对路径和生成命令指这个工作目录，不是安装后的编译器接口。Root已补五项not_ready分类断言；这批结果只是参考C++兼容性记录，完整候选对照和相对exec修复另行检查。
+本轮派生脚本与 checks/SH10f-corpus-public-cli-20261113/ 原始证据保留在 agent 工作树 `<worktree>`；该相对路径和生成命令指这个工作目录，不是安装后的编译器接口。Root已补五项not_ready分类断言；这批结果只是参考C++兼容性记录，完整候选对照和相对exec修复另行检查。
 
 相对exec路径拒绝已与bootstrap修正合并；保留绝对路径白名单、超时/信号和有限清理检查。完整Source候选、完整语料和三代构建仍未执行。
 

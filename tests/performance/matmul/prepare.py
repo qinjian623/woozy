@@ -103,13 +103,12 @@ MATMUL_ORACLE_SHA256 = (
 PERFORMANCE_DIR = Path(__file__).resolve().parent
 WORKTREE = PERFORMANCE_DIR.parents[2]
 RUNTIME_VEC_HEADER = WORKTREE / "runtime/native/vec.hpp"
-DEFAULT_ORACLE = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "algorithm-reference-inputs-20261109/matmul-exact-small-oracle.json"
+DEFAULT_ORACLE = (
+    WORKTREE.parent / "checks/algorithm-reference-inputs-20261109/"
+    "matmul-exact-small-oracle.json"
 )
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit"
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit"
 )
 # Fixed x86_64 generic C++20 target.  -ffp-contract=off and -fno-fast-math keep
 # separate multiply/add rounding and forbid FMA.  -fno-vectorize and

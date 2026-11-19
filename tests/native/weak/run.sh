@@ -9,8 +9,9 @@
 set -euo pipefail
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-LLVM_ROOT="${LANG_LLVM_ROOT:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8}"
-LIBXML2_ROOT="${LANG_LIBXML2_ROOT:-/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9}"
+TOOLCHAINS="${LANG_TOOLCHAINS:-$SOURCE_ROOT/../toolchains}"
+LLVM_ROOT="${LANG_LLVM_ROOT:-$TOOLCHAINS/llvm-22.1.8}"
+LIBXML2_ROOT="${LANG_LIBXML2_ROOT:-$TOOLCHAINS/libxml2-legacy-2.13.9}"
 CXX="${CXX:-${LLVM_ROOT}/bin/clang++}"
 NM="${NM:-${LLVM_ROOT}/bin/llvm-nm}"
 READELF="${READELF:-${LLVM_ROOT}/bin/llvm-readelf}"

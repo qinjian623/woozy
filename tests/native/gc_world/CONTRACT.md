@@ -551,8 +551,9 @@ six critical misuse modes, and a critical-overflow build/runtime check) was
 rerun with the fixed toolchain:
 
 ```bash
-CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CXX="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 GC_WORLD_BUILD_DIR=/tmp/gc-world-regression-callback-20261112 \
 bash tests/native/gc_world/run_all.sh
 # SUMMARY pass=42 fail=0 skip=0
@@ -561,8 +562,9 @@ bash tests/native/gc_world/run_all.sh
 New callback-API suite:
 
 ```bash
-CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CXX="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 GC_WORLD_CALLBACK_BUILD_DIR=/tmp/gc-world-callback-20261112 \
 bash tests/native/gc_world/run_callback_all.sh
 # SUMMARY pass=26 fail=0 skip=0
@@ -588,8 +590,9 @@ GC_WORLD_CALLBACK_HOST_OK allocations=21
 Independent F1 rerun against the current source:
 
 ```bash
-CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CXX="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 $CXX -std=c++20 -pthread -Wall -Wextra -Werror -I runtime/native -O2 -g \
   /tmp/gc-callback-independent-pi-20261112/repro_register_in_callback.cpp \
   runtime/native/gc_world.cpp runtime/native/alloc.cpp \

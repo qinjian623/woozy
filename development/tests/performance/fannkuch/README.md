@@ -15,7 +15,7 @@ permutation.
 ## Fixed cases
 
 The expected values are read from the frozen oracle at
-`/home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109`. Prepare
+`<dev-work-dir>/checks/fannkuch-oracle-20261109`. Prepare
 verifies the result, input, 5 traces, and 5 expected-output files before and
 after the run.
 
@@ -114,15 +114,17 @@ Use the dedicated production Release tree with `BUILD_TESTING=OFF`. Output paths
 must not already exist.
 
 ```sh
-export MAIN=/home/qin/Work/language-dev-20261103
-export RELEASE="$MAIN/compiler/build/native-perf-release"
+REPO="$(git rev-parse --show-toplevel)"
+export MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
+export RELEASE="$REPO/build/native-perf-release"
 export LLVM="$MAIN/toolchains/llvm-22.1.8/bin"
 export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 export PY="$MAIN/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
-export PYHELPER="$MAIN/compiler/build/native-cli-release/tests/python/lang_python_emit"
+export PYHELPER="$REPO/build/native-cli-release/tests/python/lang_python_emit"
+OUT="${OUT:?set OUT to a new preparation output directory}"
 
 "$PY" -B -s tests/performance/fannkuch/prepare.py \
-  --out build/fannkuch-prepare-<new-name> \
+  --out "$OUT" \
   --oracle-dir "$MAIN/checks/fannkuch-oracle-20261109" \
   --python "$PY" \
   --python-helper "$PYHELPER" \
@@ -130,7 +132,7 @@ export PYHELPER="$MAIN/compiler/build/native-cli-release/tests/python/lang_pytho
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
-  --compiler-root "$MAIN/compiler" \
+  --compiler-root "$REPO" \
   --ld-library-path "$XML" \
   --cpu 4
 ```

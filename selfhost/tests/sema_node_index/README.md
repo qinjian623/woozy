@@ -36,9 +36,11 @@ not claim overall O(M log M) insertion or a full compiler speedup.
 Run with the fixed Python 3.12.15 interpreter:
 
 ```sh
-/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+MAIN="${WOOZY_WORK_DIR:-$(dirname "$(git rev-parse --show-toplevel)")}"
+"${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python" \
   -B selfhost/tests/sema_node_index/run.py \
-  --work-dir /home/qin/Work/language-dev-20261103/checks/SH15-sema-node-index-lower-bound-20261114
+  --work-dir "$MAIN/checks/SH15-sema-node-index-lower-bound-20261114"
 ```
 
 The runner verifies the fixed stage-0/helper/runtime/LLVM inputs, records

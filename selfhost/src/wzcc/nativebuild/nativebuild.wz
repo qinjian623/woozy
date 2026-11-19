@@ -34,6 +34,13 @@ func abort(code string, phase string, kind model.FailureKind, message string,
            notes Vec[string]) Failure {
     return Failure.Abort(kind, diagnostic(code, phase, message, notes));
 }
+func llvm_tools(root string) string throws Failure {
+    try { return resources.llvm_bin(root); }
+    catch problem os.Error {
+        throw abort("E_TOOLCHAIN_MISSING", "codegen", model.FailureKind.Environment,
+            "cannot read WOOZY_LLVM_BIN: " + os_text(problem), []);
+    }
+}
 func os_text(problem os.Error) string {
     switch problem {
         case os.Error.System(code, completed):
@@ -146,7 +153,7 @@ func link_tool(argv Vec[string], capture string, adapter bool) throws Failure {
 
 func compile(output nativeemit.Output, project model.Project, stage toolio.Stage,
              optimization u32, root string) throws Failure {
-    let tools = root + "/toolchain";
+    let tools = llvm_tools(root);
     let capture = stage.path + "/tool-output";
     let source = stage.path + "/input.ll";
     let optimized = stage.path + "/verified.ll";
@@ -204,7 +211,7 @@ func ninja_escape(value string) string throws Failure {
 func compile_packages(inputs Vec[PackageInput], project model.Project, stage toolio.Stage,
                       optimization u32, root string, cache frontcache.Context, emit_nanoseconds u64) throws Failure {
     try {
-    let tools = root + "/toolchain";
+    let tools = llvm_tools(root);
     let capture = stage.path + "/tool-output";
     check_versions(tools, capture);
     var archive = root + "/runtime/liblang_native_runtime.a";
@@ -228,7 +235,8 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
                     case option.Option.None: throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal, "missing package emission", []);
                 }
                 misses += 1;
-                plan += "build " + name + ".verified.ll: opt " + name + ".ll\nbuild " + name + ".o: object " + name + ".verified.ll\n";
+                plan += "build " + name + ".verified.ll: opt " + name + ".ll\nbuild " + name +
+                    ".o: object " + name + ".verified.ll\n";
             }
         }
         objects += " " + name + ".o";

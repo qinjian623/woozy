@@ -48,11 +48,6 @@ EVIDENCE_SCHEMA = "woozy/c-retained-capturing-public-records/1"
 PROPOSAL_SCHEMA = "woozy/c-retained-capturing-proposal/1"
 FAMILY_PREFIX = "tests/native/c_retained_capturing/"
 
-CANONICAL_LD_LIBRARY_PATH = (
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib:"
-    "/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib"
-)
-
 SOURCE_PROJECTS = (
     "probe",
     "move_capture",
@@ -490,6 +485,13 @@ class Runner:
             if args.toolchain
             else self.clang.parent
         )
+        toolchain_root = self.toolchain.parents[1]
+        self.llvm_lib = self.toolchain.parent / "lib"
+        self.legacy_xml = (
+            toolchain_root / "libxml2-legacy-2.13.9/usr/lib"
+        )
+        self.canonical_ld_library_path = ":".join(
+            (str(self.llvm_lib), str(self.legacy_xml)))
         self.helper = Path(args.helper).resolve() if args.helper else None
         self.stdlib = Path(args.stdlib).resolve() if args.stdlib else None
         self.native_runtime = (
@@ -737,7 +739,7 @@ class Runner:
         # LLVM/libxml directory follows it so the compiler's tools resolve.
         fixture_env = str(self.fixture_dir)
         existing = self.env.get("LD_LIBRARY_PATH")
-        library_path = [fixture_env, CANONICAL_LD_LIBRARY_PATH]
+        library_path = [fixture_env, self.canonical_ld_library_path]
         if existing:
             library_path.append(existing)
         self.env["LD_LIBRARY_PATH"] = ":".join(library_path)
@@ -843,10 +845,7 @@ class Runner:
             "fixture-c": HERE / "fixture/capturing_fixture.c",
             "fixture-header": HERE / "fixture/capturing_fixture.h",
             "cmake": HERE / "CMakeLists.txt",
-            "libxml2": Path(
-                "/home/qin/Work/language-dev-20261103/toolchains/"
-                "libxml2-legacy-2.13.9/usr/lib/libxml2.so.2.13.9"
-            ),
+            "libxml2": self.legacy_xml / "libxml2.so.2.13.9",
         }
         if self.helper is not None:
             entries["reference-helper"] = self.helper

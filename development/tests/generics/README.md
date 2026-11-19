@@ -11,7 +11,7 @@ operation_id: language-t07-source-fixtures-20261104
 
 自检 passed：27 个 ID 唯一，manifest 全部存在、可按 TOML 读取且 package.name=app。正反例数量：{'accept': 13, 'reject': 14}。
 
-语法验证 passed：现成 `/home/qin/Work/language-dev-20261103/compiler/build/frontend-debug/woozyc check --syntax-only <file>` 的逐文件实际退出码如下。首轮字段顺序例的参数模式位置写错，修正为 `n inout i32` 后重新验证全部源文件。
+语法验证 passed：现成 `build/frontend-debug/woozyc check --syntax-only <file>` 的逐文件实际退出码如下。首轮字段顺序例的参数模式位置写错，修正为 `n inout i32` 后重新验证全部源文件。
 
 类型检查 not_run，执行 not_run。当前 checker 预计 E_CAPABILITY_UNAVAILABLE；未用完整 checker 验证此预测。语法通过未证明类型检查、执行通过或 T07 功能完成。
 

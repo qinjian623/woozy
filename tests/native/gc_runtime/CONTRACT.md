@@ -289,8 +289,9 @@ Controller suite with the fixed LLVM 22.1.8 toolchain and legacy libxml2
 runtime:
 
 ```bash
-CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CXX="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 GC_RUNTIME_BUILD_DIR=/tmp/gc-runtime-20261112 \
 bash tests/native/gc_runtime/run_all.sh
 ```
@@ -325,8 +326,9 @@ with `LANG_NATIVE_PANIC:v1:gc-runtime:fork-in-gc-callback`.
 The accepted world suite was rerun unchanged for regression:
 
 ```bash
-CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+CXX="${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++" \
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 GC_WORLD_BUILD_DIR=/tmp/gc-world-regression-20261112 \
 bash tests/native/gc_world/run_all.sh
 # SUMMARY pass=42 fail=0 skip=0

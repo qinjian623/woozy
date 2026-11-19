@@ -8,6 +8,7 @@
 #include "lang/sema/front_cache.hpp"
 #include "lang/support/cache_io.hpp"
 #include "lang/support/file_digest.hpp"
+#include "lang/support/resource.hpp"
 #include <charconv>
 #include <chrono>
 #include <algorithm>
@@ -21,10 +22,166 @@
 #include <iostream>
 #include <json-c/json.h>
 #include <map>
+#include <system_error>
 
 using namespace lang;
 namespace {
 namespace fs = std::filesystem;
+bool version_token(std::string_view text) {
+  constexpr std::string_view version = "22.1.8";
+  auto part = [](char c) { return (c >= '0' && c <= '9') || c == '.'; };
+  for (auto at = text.find(version); at != std::string_view::npos;
+       at = text.find(version, at + 1)) {
+    const bool before = at == 0 || !part(text[at - 1]);
+    const auto end = at + version.size();
+    const bool after = end == text.size() || !part(text[end]);
+    if (before && after) return true;
+  }
+  return false;
+}
+[[noreturn]] void tool_error(const std::string &message) {
+  throw std::system_error(EINVAL, std::generic_category(), message);
+}
+struct LlvmTools {
+  fs::path opt, llc, clang, lld;
+};
+void verify_tool(const fs::path &path, std::string_view name) {
+  if (!is_executable_file(path))
+    throw std::system_error(ENOENT, std::generic_category(),
+                            "not an executable LLVM tool: " + path.string());
+  auto result = run_process({path.string(), "--version"});
+  if (result.signalled || result.exit_code != 0 || !version_token(result.output))
+    tool_error(std::string(name) + " is not pinned LLVM 22.1.8: " +
+               path.string() + "\n" + result.output);
+}
+LlvmTools verified_tools(const fs::path &directory) {
+  LlvmTools tools{directory / "opt", directory / "llc",
+                  directory / "clang", directory / "ld.lld"};
+  verify_tool(tools.opt, "opt");
+  verify_tool(tools.llc, "llc");
+  verify_tool(tools.clang, "clang");
+  verify_tool(tools.lld, "ld.lld");
+  return tools;
+}
+std::optional<fs::path> environment_tools() {
+  const char *value = std::getenv("WOOZY_LLVM_BIN");
+  if (!value || !*value) return std::nullopt;
+  fs::path directory(value);
+  if (!directory.is_absolute()) {
+    auto root = resource_root();
+    if (!root)
+      throw std::system_error(ENOENT, std::generic_category(),
+                              "relative WOOZY_LLVM_BIN needs a package root");
+    directory = *root / directory;
+  }
+  if (!fs::is_directory(directory))
+    throw std::system_error(ENOENT, std::generic_category(),
+                            "WOOZY_LLVM_BIN is not a directory: " +
+                                directory.string());
+  return directory;
+}
+const LlvmTools &llvm_tools() {
+  static const LlvmTools tools = [] {
+    if (auto directory = environment_tools())
+      return verified_tools(*directory);
+    for (const auto &root : resource_roots()) {
+      if (auto directory = find_resource_at(root, "toolchain")) {
+        if (!fs::is_directory(*directory))
+          tool_error("LLVM resource is not a directory: " +
+                     directory->string());
+        return verified_tools(*directory);
+      }
+    }
+    std::string last_error;
+    for (const auto &directory : path_directories()) {
+      if (!is_executable_file(directory / "opt") ||
+          !is_executable_file(directory / "llc") ||
+          !is_executable_file(directory / "clang") ||
+          !is_executable_file(directory / "ld.lld"))
+        continue;
+      try {
+        return verified_tools(directory);
+      } catch (const std::system_error &error) {
+        last_error = error.what();
+      }
+    }
+    if (!last_error.empty()) tool_error(last_error);
+    throw std::system_error(ENOENT, std::generic_category(),
+                            "pinned LLVM 22.1.8 tool directory not found");
+  }();
+  return tools;
+}
+fs::path llvm_tool(std::string_view name) {
+  const auto &tools = llvm_tools();
+  if (name == "opt") return tools.opt;
+  if (name == "llc") return tools.llc;
+  if (name == "clang") return tools.clang;
+  if (name == "ld.lld") return tools.lld;
+  throw std::invalid_argument("unknown LLVM tool: " + std::string(name));
+}
+fs::path ninja_tool() {
+  if (auto resource = find_resource("toolchain/ninja")) {
+    if (!is_executable_file(*resource))
+      throw std::system_error(ENOENT, std::generic_category(),
+                              "ninja resource is not executable: " +
+                                  resource->string());
+    return *resource;
+  }
+  if (auto path = find_program("ninja")) return *path;
+  throw std::system_error(ENOENT, std::generic_category(), "ninja not found");
+}
+fs::path runtime_archive(bool hosted) {
+  const std::string name =
+      hosted ? "liblang_hosted_runtime.a" : "liblang_native_runtime.a";
+  for (const auto &root : resource_roots()) {
+    for (const auto &relative : {std::string("runtime/") + name, name}) {
+      if (auto candidate = find_resource_at(root, relative)) {
+        if (!fs::is_regular_file(*candidate))
+          throw std::system_error(EINVAL, std::generic_category(),
+                                  "runtime archive is not a regular file: " +
+                                      candidate->string());
+        return *candidate;
+      }
+    }
+  }
+  throw std::system_error(ENOENT, std::generic_category(),
+                          "native runtime not found: " + name);
+}
+int report_resource_paths() {
+  try {
+    const auto &tools = llvm_tools();
+    auto *root = json_object_new_object();
+    json_object_object_add(root, "schema_version", json_object_new_int(1));
+    if (auto stdlib = find_resource("stdlib"))
+      json_object_object_add(root, "stdlib",
+                             json_object_new_string(stdlib->string().c_str()));
+    auto *runtime = json_object_new_object();
+    json_object_object_add(runtime, "native",
+                           json_object_new_string(runtime_archive(false).string().c_str()));
+    json_object_object_add(runtime, "hosted",
+                           json_object_new_string(runtime_archive(true).string().c_str()));
+    json_object_object_add(root, "runtime", runtime);
+    auto *toolchain = json_object_new_object();
+    json_object_object_add(toolchain, "opt",
+                           json_object_new_string(tools.opt.string().c_str()));
+    json_object_object_add(toolchain, "llc",
+                           json_object_new_string(tools.llc.string().c_str()));
+    json_object_object_add(toolchain, "clang",
+                           json_object_new_string(tools.clang.string().c_str()));
+    json_object_object_add(toolchain, "ld.lld",
+                           json_object_new_string(tools.lld.string().c_str()));
+    json_object_object_add(root, "toolchain", toolchain);
+    json_object_object_add(root, "ninja",
+                           json_object_new_string(ninja_tool().string().c_str()));
+    std::cout << json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN)
+              << '\n';
+    json_object_put(root);
+    return 0;
+  } catch (const std::exception &error) {
+    std::cerr << "E_TOOLCHAIN_MISSING: " << error.what() << '\n';
+    return 2;
+  }
+}
 struct WriteError : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
@@ -110,11 +267,16 @@ PhaseResult<std::monostate> package_build(const hir::VerifiedHirModule &checked,
     result.diagnostics.push_back({"E_CAPABILITY_UNAVAILABLE", "codegen", "error", "package objects do not yet support C binding adapters"});
     return result;
   }
+  const auto opt = llvm_tool("opt");
+  const auto llc = llvm_tool("llc");
+  const auto lld = llvm_tool("ld.lld");
+  const auto clang = llvm_tool("clang");
+  const auto ninja = ninja_tool();
   StagingDir stage(directory, ".woozyc-packages-XXXXXX");
-  std::string plan = "rule opt\n  command = " + ninja_escape(shell_quote(LANG_NATIVE_OPT)) +
+  std::string plan = "rule opt\n  command = " + ninja_escape(shell_quote(opt.string())) +
       " -S -passes='verify,default<O" + std::to_string(options.optimization) +
       ">,verify' -verify-each -mtriple=" + options.triple +
-      " -mcpu=generic $in -o $out\nrule object\n  command = " + ninja_escape(shell_quote(LANG_NATIVE_LLC)) +
+      " -mcpu=generic $in -o $out\nrule object\n  command = " + ninja_escape(shell_quote(llc.string())) +
       " -filetype=obj -O=" + std::to_string(options.optimization) +
       " -mtriple=" + options.triple +
       " -mcpu=generic -relocation-model=pic -code-model=small $in -o $out\n";
@@ -183,19 +345,19 @@ PhaseResult<std::monostate> package_build(const hir::VerifiedHirModule &checked,
         ".o: object " + name + ".verified.ll\n";
     objects += " " + name + ".o";
   }
-  plan += "rule combine\n  command = " + ninja_escape(shell_quote(LANG_NATIVE_LLD)) +
+  plan += "rule combine\n  command = " + ninja_escape(shell_quote(lld.string())) +
       " -r $in -o $out\nbuild program.o: combine" + objects + "\n";
-  const auto runtime = project.hosted ? LANG_HOSTED_RUNTIME : LANG_NATIVE_RUNTIME;
-  std::string link = shell_quote(LANG_NATIVE_CLANG) + " --target=" + options.triple +
-      " --ld-path=" + shell_quote(LANG_NATIVE_LLD);
+  const auto runtime = runtime_archive(project.hosted);
+  std::string link = shell_quote(clang.string()) + " --target=" + options.triple +
+      " --ld-path=" + shell_quote(lld.string());
   link += project.hosted ? " -Wl,-u,lang_hosted_startup_v1 -pthread" : " -nostdlib -static";
   std::string link_flags;
   for (const auto &dir : project.c_library_dirs) link_flags += " -L" + shell_quote(dir.string());
   for (const auto &lib : project.c_libraries) link_flags += " -l" + shell_quote(lib);
   plan += "rule link\n  command = " + ninja_escape(link) + " $in" + ninja_escape(link_flags) + " -o $out\nbuild program: link" + objects +
-      " " + ninja_escape(runtime) + "\ndefault program program.o\n";
+      " " + ninja_escape(runtime.string()) + "\ndefault program program.o\n";
   write((stage.path() / "build.ninja").string(), plan);
-  const auto execution = run_process({LANG_NATIVE_NINJA, "-C", stage.path().string(), "-v"});
+  const auto execution = run_process({ninja.string(), "-C", stage.path().string(), "-v"});
   write((stage.path() / "package-build.log").string(), execution.output);
   if (execution.exit_code != 0 || execution.signalled) {
     result.failure = execution.signalled || execution.exit_code == 126 || execution.exit_code == 127
@@ -318,8 +480,15 @@ int run(int argc, char **argv) {
           (args.contains("--driver-fingerprint") ? args.at("--driver-fingerprint") : "standalone-helper"));
       fingerprint.string(args.contains("--opt") ? args.at("--opt") : "0");
       fingerprint.string(args.contains("--target") ? args.at("--target") : "x86_64-unknown-linux-gnu");
-      for (const auto &path : {fs::path("/proc/self/exe"), fs::path(LANG_NATIVE_RUNTIME), fs::path(LANG_HOSTED_RUNTIME),
-           fs::path(LANG_NATIVE_OPT), fs::path(LANG_NATIVE_LLC), fs::path(LANG_NATIVE_CLANG), fs::path(LANG_NATIVE_LLD), fs::path(LANG_NATIVE_NINJA)}) {
+      const auto native_runtime = runtime_archive(false);
+      const auto hosted_runtime = runtime_archive(true);
+      const auto opt = llvm_tool("opt");
+      const auto llc = llvm_tool("llc");
+      const auto clang = llvm_tool("clang");
+      const auto lld = llvm_tool("ld.lld");
+      const auto ninja = ninja_tool();
+      for (const auto &path : {fs::path("/proc/self/exe"), native_runtime,
+           hosted_runtime, opt, llc, clang, lld, ninja}) {
         fingerprint.string(tool_digests.get(path));
       }
       const auto digest = sha256(fingerprint.bytes);
@@ -407,12 +576,19 @@ int run(int argc, char **argv) {
       const auto program = stage.path() / "program";
       const auto adapter_c = stage.path() / "c_adapter.c";
       const auto adapter_o = stage.path() / "c_adapter.o";
-      std::vector<const char *> dependencies{LANG_NATIVE_CLANG, LANG_NATIVE_LLD,
-                                             LANG_NATIVE_RUNTIME};
-      if (frozen_project.hosted) dependencies.push_back(LANG_HOSTED_RUNTIME);
-      for (const char *dependency : dependencies)
+      const auto clang = llvm_tool("clang");
+      const auto lld = llvm_tool("ld.lld");
+      const auto native_runtime = runtime_archive(false);
+      fs::path hosted_runtime;
+      std::vector<fs::path> dependencies{clang, lld, native_runtime};
+      if (frozen_project.hosted) {
+        hosted_runtime = runtime_archive(true);
+        dependencies.push_back(hosted_runtime);
+      }
+      for (const auto &dependency : dependencies)
         if (!fs::is_regular_file(dependency))
-          throw std::system_error(ENOENT, std::generic_category(), dependency);
+          throw std::system_error(ENOENT, std::generic_category(),
+                                  dependency.string());
       write(object.string(), out.object.data(), out.object.size());
       if (out.triple != "x86_64-unknown-linux-gnu" &&
           (out.triple.rfind("x86_64-", 0) != 0 || out.triple.find("linux") == std::string::npos)) {
@@ -425,7 +601,7 @@ int run(int argc, char **argv) {
       bool has_adapter = !out.c_adapter_source.empty();
       if (has_adapter) {
         write(adapter_c.string(), out.c_adapter_source);
-        auto compile = run_process({LANG_NATIVE_CLANG, "--target=" + out.triple,
+        auto compile = run_process({clang.string(), "--target=" + out.triple,
                                     "-std=c11", "-O2", "-fPIC", "-c",
                                     adapter_c.string(), "-o", adapter_o.string()});
         if (compile.exit_code != 0) {
@@ -442,7 +618,7 @@ int run(int argc, char **argv) {
           return report(failed);
         }
       }
-      std::vector<std::string> link{LANG_NATIVE_CLANG, "--target=" + out.triple};
+      std::vector<std::string> link{clang.string(), "--target=" + out.triple};
       if (frozen_project.hosted) {
         link.push_back("-Wl,-u,lang_hosted_startup_v1");
         link.push_back("-pthread");
@@ -450,10 +626,11 @@ int run(int argc, char **argv) {
         link.push_back("-nostdlib");
         link.push_back("-static");
       }
-      link.push_back("--ld-path=" LANG_NATIVE_LLD);
+      link.push_back("--ld-path=" + lld.string());
       link.push_back(object.string());
       if (has_adapter) link.push_back(adapter_o.string());
-      link.push_back(frozen_project.hosted ? LANG_HOSTED_RUNTIME : LANG_NATIVE_RUNTIME);
+      link.push_back(frozen_project.hosted ? hosted_runtime.string()
+                                           : native_runtime.string());
       for (const auto &dir : frozen_project.c_library_dirs)
         link.push_back("-L" + dir.string());
       for (const auto &library : frozen_project.c_libraries)
@@ -548,6 +725,10 @@ bool flushed(std::ostream &stream) {
 }
 } // namespace
 int main(int argc, char **argv) {
+  if (argc == 2 &&
+      (std::string_view(argv[1]) == "--__resource-paths" ||
+       std::string_view(argv[1]) == "--__resource_paths"))
+    return report_resource_paths();
   const int status = run(argc, argv);
   const bool stdout_ok = flushed(std::cout);
   const bool stderr_ok = flushed(std::cerr);

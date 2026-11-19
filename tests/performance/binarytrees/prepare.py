@@ -106,13 +106,13 @@ OFFICIAL_SIZE = 223
 PERFORMANCE_DIR = Path(__file__).resolve().parent
 WORKTREE = PERFORMANCE_DIR.parents[2]
 RUNTIME_VEC_HEADER = WORKTREE / "runtime/native/vec.hpp"
-DEFAULT_OFFICIAL = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "algorithm-reference-inputs-20261109/binarytrees-n10.txt"
+DEFAULT_OFFICIAL = (
+    WORKTREE.parent / "checks/algorithm-reference-inputs-20261109/"
+    "binarytrees-n10.txt"
 )
-DEFAULT_OFFICIAL_CHECK = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "algorithm-reference-inputs-20261109/binarytrees-oracle-check.json"
+DEFAULT_OFFICIAL_CHECK = (
+    WORKTREE.parent / "checks/algorithm-reference-inputs-20261109/"
+    "binarytrees-oracle-check.json"
 )
 TARGET_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-march=x86-64", "-mtune=generic",

@@ -8,11 +8,11 @@ source-level `Weak[T]`, Root safepoints, or the whole MEM02 goal.
 ## Fixed toolchain
 
 ```text
-clang++: /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++
+clang++: ${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/clang++
          clang version 22.1.8 (ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
-ld.lld:  /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/ld.lld
+ld.lld:  ${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin/ld.lld
          LLD 22.1.8 (same LLVM build)
-legacy:  /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9
+legacy:  ${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9
 ```
 
 ## Command and result

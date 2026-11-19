@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import run_native as common  # noqa: E402
 
 PERFORMANCE_DIR = Path(__file__).resolve().parent
+WORKTREE = PERFORMANCE_DIR.parents[2]
 
 
 def _load(name, path):
@@ -64,11 +65,10 @@ CONTRACT = "compiler-dev/1"
 TASK = "native-fannkuch-large-preparation"
 OPERATION_ID = "language-fannkuch-large-prepare-20261110"
 PREPARE_SCHEMA = "compiler-dev/native-fannkuch-large-preparation/1"
-DEFAULT_ORACLE_DIR = Path(
-    "/home/qin/Work/language-dev-20261103/checks/fannkuch-large-oracle-20261110")
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit")
+DEFAULT_ORACLE_DIR = (
+    WORKTREE.parent / "checks/fannkuch-large-oracle-20261110")
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit")
 N_VALUES = (9, 10)
 ORACLE_N_VALUES = (7, 8, 9, 10)
 EXPECTED = {7: (228, 16), 8: (1616, 22), 9: (8629, 30), 10: (73196, 38)}
@@ -83,8 +83,7 @@ PINNED_SHA = {
     "inputs.json": "70fd05c73f054919619128a93a4d572f44a287416a4be8353839581e61a60da6",
     "verify.py": "0990beebb7d54d6869f512ef32d5c1c39065ceb1bdf907dadca383b5894a220c",
 }
-OLD_ORACLE = Path(
-    "/home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109")
+OLD_ORACLE = WORKTREE.parent / "checks/fannkuch-oracle-20261109"
 TARGET_FLAGS = legacy.TARGET_FLAGS
 TEMPLATE_NAMES = ("fannkuch.wz.in", "reference.cpp.in")
 FORBIDDEN = ("asm", "volatile", "noinline", "optnone", "__attribute__")

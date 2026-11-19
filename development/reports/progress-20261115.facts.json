@@ -7,7 +7,7 @@
     "remote_latest_saved_confirmation": {
       "commit": "7a79db7ce098267817f67a318835d28f64c20c6a",
       "at": "2026-11-15T05:28:05.419332+00:00",
-      "repo": "https://github.com/qinjian623/woozy",
+      "repo": "<private-remote>",
       "isPrivate": true,
       "report": "checks/SH18-publish-reviewed-fixes-20261115.cmbq6bsp/final.json"
     },
@@ -1235,167 +1235,167 @@
   ],
   "evidence_files": {
     "PLAN.md": {
-      "path": "/home/qin/Work/language-dev-20261103/PLAN.md",
+      "path": "<dev-work-dir>/PLAN.md",
       "sha256": "4f547a536c05268c6899602d6aa3cfdffc834aa161aa7c05c2f0f4d1e23cc440",
       "bytes": 110591
     },
     "STATUS.md": {
-      "path": "/home/qin/Work/language-dev-20261103/STATUS.md",
+      "path": "<dev-work-dir>/STATUS.md",
       "sha256": "ac26e3d905184de2a347d68562cfec0878ff864474660c97f9e37eab055e246b",
       "bytes": 53072
     },
     "checks/current-selfhost-continuation-20261113.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/current-selfhost-continuation-20261113.json",
+      "path": "<dev-work-dir>/checks/current-selfhost-continuation-20261113.json",
       "sha256": "bc75de727964caa6410df4f038207a9507d51debbaf026da488e32845186f8c2",
       "bytes": 222295
     },
     "compiler/contracts/selfhost.json": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/contracts/selfhost.json",
+      "path": "<dev-work-dir>/compiler/contracts/selfhost.json",
       "sha256": "dd7cbb7f3130bfde9b1a2a5c055a18934bb2ffd2c261265bc73cc2ec7ab03f92",
       "bytes": 22993
     },
     "compiler/README.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/README.md",
+      "path": "<dev-work-dir>/compiler/README.md",
       "sha256": "d259f2c357781cde2c9907f2dd37c96d30cbb439d3af3ed4a6a02cc4ef643dc1",
       "bytes": 6206
     },
     "compiler/development/docs/SELFHOST_CONTRACT.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_CONTRACT.md",
+      "path": "<dev-work-dir>/compiler/development/docs/SELFHOST_CONTRACT.md",
       "sha256": "fa91fae925f1566359d978d1538ce75f88597f9546b9a117cfea65640f252bda",
       "bytes": 18729
     },
     "compiler/development/docs/SELFHOST_BACKENDS.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_BACKENDS.md",
+      "path": "<dev-work-dir>/compiler/development/docs/SELFHOST_BACKENDS.md",
       "sha256": "e38f5900ea9a80fe5a63bdad469d7117ffa2129970b93ac5fa06478ab8a1fcdf",
       "bytes": 4107
     },
     "compiler/development/docs/SELFHOST_NATIVEEMIT.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_NATIVEEMIT.md",
+      "path": "<dev-work-dir>/compiler/development/docs/SELFHOST_NATIVEEMIT.md",
       "sha256": "1d9c9c459d2f163c61b6812486a6b62b89dce9c76aaae91d9b970cef17fc48f5",
       "bytes": 24181
     },
     "compiler/development/docs/SELFHOST_SEMA.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_SEMA.md",
+      "path": "<dev-work-dir>/compiler/development/docs/SELFHOST_SEMA.md",
       "sha256": "4096200da983decbdf67674e22d4b9511eeab5c3f275568e050ee092b6a5c7bb",
       "bytes": 30463
     },
     "compiler/development/docs/SELFHOST_BOOTSTRAP.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/docs/SELFHOST_BOOTSTRAP.md",
+      "path": "<dev-work-dir>/compiler/development/docs/SELFHOST_BOOTSTRAP.md",
       "sha256": "9fc115b6c53bbc00260b7e3b49c0c8ac2a1d0b948b05afddcd4df9946648cb83",
       "bytes": 4137
     },
     "compiler/development/tests/selfhost/README.md": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/development/tests/selfhost/README.md",
+      "path": "<dev-work-dir>/compiler/development/tests/selfhost/README.md",
       "sha256": "80bfdd5ce4582629973e1c80e6b5f77f89e6b02b7c9d97727a0a8e88f43ff77b",
       "bytes": 3813
     },
     "compiler/selfhost/corpus.json": {
-      "path": "/home/qin/Work/language-dev-20261103/compiler/selfhost/corpus.json",
+      "path": "<dev-work-dir>/compiler/selfhost/corpus.json",
       "sha256": "76a7a303c5f89277d8f8aa7ba86ab1a791b6bc6153e7b8814b0b3eaf800f7b66",
       "bytes": 3865626
     },
     "checks/SH17-remaining-required-runner-execution-plan-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-remaining-required-runner-execution-plan-20261115.json",
+      "path": "<dev-work-dir>/checks/SH17-remaining-required-runner-execution-plan-20261115.json",
       "sha256": "7791de9d2f16990ea5b52c30b604674b8b69a9f9c15b94b6e5a4b0eb096a63c8",
       "bytes": 173335
     },
     "checks/SH18-new-bd1-stage1-Root-accepted-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-new-bd1-stage1-Root-accepted-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-new-bd1-stage1-Root-accepted-20261115.json",
       "sha256": "278bba46ad8f71b5088f225da6a30f3502c263ce0eb73700e92f26f97290d7ab",
       "bytes": 1381
     },
     "checks/SH18-new-bd1-corpus985-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-new-bd1-corpus985-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-new-bd1-corpus985-independent-20261115.json",
       "sha256": "6eff1eae3537b6bd76a51afcb470fde979420a8b9ac8f320332907ab558abd38",
       "bytes": 7421
     },
     "checks/SH18-T10-fixed-source-current-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-T10-fixed-source-current-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-T10-fixed-source-current-independent-20261115.json",
       "sha256": "4f0157e3e00d0d5a08d0889a5a4b0e1e7727faba1ebcfa64ddda37848b68a8e9",
       "bytes": 42167
     },
     "checks/SH18-CFFI-fixed-LLD-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-CFFI-fixed-LLD-independent-20261115.json",
       "sha256": "09bf2c044687753b47ed5b9fd1b02cc6efa7c9a2f1dd49972ab6035a0865f46f",
       "bytes": 19277
     },
     "checks/SH18-five-public-groups-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-five-public-groups-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-five-public-groups-independent-20261115.json",
       "sha256": "ab2b57683ca99fc04e8d097ecbc794dfa76b992afbda4e5b699805d0e5e72034",
       "bytes": 24313
     },
     "checks/SH18-automatic-GC-full-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-automatic-GC-full-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-automatic-GC-full-independent-20261115.json",
       "sha256": "186314387ece74825876126c2da8416f602b64e683f0fb0015173e3715f81311",
       "bytes": 59153
     },
     "checks/SH18-python-cases-anonymous-full-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-python-cases-anonymous-full-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-python-cases-anonymous-full-independent-20261115.json",
       "sha256": "30dc6086f46195b3cc52583026e1e2e7060ed3954e8f82ecd0750e306054f616",
       "bytes": 237250
     },
     "checks/SH18-python-slice-string-full-independent-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-python-slice-string-full-independent-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-python-slice-string-full-independent-20261115.json",
       "sha256": "890d1061a3a1aa28f1e04766960a6ef3ba5cdb6180b67b152c9c1a165275a61d",
       "bytes": 624014
     },
     "checks/SH18-event962730-Root-review-20261115.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-event962730-Root-review-20261115.json",
+      "path": "<dev-work-dir>/checks/SH18-event962730-Root-review-20261115.json",
       "sha256": "bcbf66b5a55f732adfa1c89c3b0d12ee8fc914469f28faab34652bbffb4e7c77",
       "bytes": 2132
     },
     "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json",
+      "path": "<dev-work-dir>/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/completion.json",
       "sha256": "97795e35f2bff8fbf2da03c769e7116837c5f5cc3072e47dcd4c679d9dcc0894",
       "bytes": 10936
     },
     "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json",
+      "path": "<dev-work-dir>/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/bootstrap/result.json",
       "sha256": "efa6f67e09a024f2775f7446cd56cc22b3f3e94ce0abdde96a47cce244924527",
       "bytes": 59358
     },
     "checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
+      "path": "<dev-work-dir>/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
       "sha256": "c80f3b52ac395f2765da1e3dc31362c6d9e0de522fc53faffd5bc6e79a60a731",
       "bytes": 4008
     },
     "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json",
+      "path": "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/completion.json",
       "sha256": "f3bb0d981c89639cd048bb87e49b39610a5debcc4dd2692be738f8cd43dd693f",
       "bytes": 6428
     },
     "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json",
+      "path": "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/result.json",
       "sha256": "4b1747dd8034dd63451e570784ed9fd6f3387fb6b59c92e9bde9cc317e0a516d",
       "bytes": 59616
     },
     "checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json",
+      "path": "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/stage-records/stage2/process.json",
       "sha256": "06797f69c021624e83c86b933ef1297daecf6324ee826e27eb1b257c30d20340",
       "bytes": 3787
     },
     "checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
+      "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
       "sha256": "702e81046e40b88e25cdc8154dac43678b935c1b6fed63a341356e9c5fa8d97d",
       "bytes": 2393
     },
     "checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
+      "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
       "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
       "bytes": 3877673
     },
     "checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/amendment.json": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/amendment.json",
+      "path": "<dev-work-dir>/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/amendment.json",
       "sha256": "c5849be69585853394ec4aa9187166256fec3ed854a10adca3b3d5cf76e16b3d",
       "bytes": 1058
     },
     "checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
+      "path": "<dev-work-dir>/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
       "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
       "bytes": 76564
     },
     "checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
+      "path": "<dev-work-dir>/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
       "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
       "bytes": 65989
     }
@@ -1413,8 +1413,8 @@
   "publication_actual": {
     "checked_at": "2026-11-15T11:06:08.595700+00:00",
     "scope": "只读检查中断后私有候选；本轮只写本报告",
-    "candidate_directory": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza",
-    "repository": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source",
+    "candidate_directory": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza",
+    "repository": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source",
     "actual_HEAD": "d8b7e39ac4e24c4fcde2561b785fd00c5b8ab26a",
     "base_HEAD": "7a79db7ce098267817f67a318835d28f64c20c6a",
     "tracked_worktree_diff": "",
@@ -1561,7 +1561,7 @@
       "all985_framed_raw_substrings_SHA256": "2545e198a8eec317571a9267b195f39b54448b5708a8e9d4f063ef52e95865ce",
       "all_files_and_refreeze_unchanged": true,
       "catalog": {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/selfhost/corpus.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/selfhost/corpus.json",
         "exists": true,
         "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
         "size": 3877673
@@ -1591,13 +1591,13 @@
           {
             "relative": "tests/native/automatic_gc/run_automatic_gc.py",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/run_automatic_gc.py",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/run_automatic_gc.py",
               "exists": true,
               "sha256": "86a147649502c0155b171f8a19a885f67b88e77d81dc4b9cde33af4a22886eb4",
               "size": 47924
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/run_automatic_gc.py",
               "exists": true,
               "sha256": "51ea21aaf3c3ec902cf6384a74e7415299d4c5a561225e04546cbbc35b1c5486",
               "size": 76564
@@ -1607,13 +1607,13 @@
           {
             "relative": "tests/native/automatic_gc/CONTRACT.md",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/CONTRACT.md",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/CONTRACT.md",
               "exists": true,
               "sha256": "dcc7753c2b922b7070c13586d38f96ad2e40e996b5b6624f6204e6538ec8e93b",
               "size": 11912
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/CONTRACT.md",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/CONTRACT.md",
               "exists": true,
               "sha256": "c992d2eeddaa83ed4a7e920b6f99b310c4d4f47152835488d31aaca78bd7eaa4",
               "size": 16751
@@ -1623,13 +1623,13 @@
           {
             "relative": "tests/native/automatic_gc/test_public_port_controls.py",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/test_public_port_controls.py",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/native/automatic_gc/test_public_port_controls.py",
               "exists": false,
               "sha256": null,
               "size": null
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/test_public_port_controls.py",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-automatic-GC-preparation-20261115.kvins3cg/source/tests/native/automatic_gc/test_public_port_controls.py",
               "exists": true,
               "sha256": "329b1100f90a63d86953f18bf62cce6a8f6a73bad860ed965b8706acb2858298",
               "size": 45829
@@ -1646,13 +1646,13 @@
           {
             "relative": "tests/python/run_cases.py",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/run_cases.py",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/run_cases.py",
               "exists": true,
               "sha256": "4ba70aec3d8ee08d530375bf2242881591a28076dac1d3e2a94ab62f6282ea9c",
               "size": 23947
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/run_cases.py",
               "exists": true,
               "sha256": "5b367d4af82e3ee8c627e1e2f78e529a1ff80c16712b36f8f081ab936ed1263f",
               "size": 65989
@@ -1662,13 +1662,13 @@
           {
             "relative": "tests/python/python_cases_public_controls.py",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/python_cases_public_controls.py",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/python_cases_public_controls.py",
               "exists": false,
               "sha256": null,
               "size": null
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/python_cases_public_controls.py",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/python_cases_public_controls.py",
               "exists": true,
               "sha256": "c3ca5d06879abbf7bd5a607b1926570c2eefb2f0a51b32b735ea771fc3ddd8eb",
               "size": 41385
@@ -1678,13 +1678,13 @@
           {
             "relative": "tests/python/PYTHON_CASES_PUBLIC.md",
             "candidate": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/PYTHON_CASES_PUBLIC.md",
+              "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/source/tests/python/PYTHON_CASES_PUBLIC.md",
               "exists": false,
               "sha256": null,
               "size": null
             },
             "accepted_copy": {
-              "path": "/home/qin/Work/language-dev-20261103/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/PYTHON_CASES_PUBLIC.md",
+              "path": "<dev-work-dir>/checks/SH18-reviewed-python-cases-preparation-20261115.k98txkbu/source/tests/python/PYTHON_CASES_PUBLIC.md",
               "exists": true,
               "sha256": "7146e21cee51b8accf16b721e5f415a75b20ccffab1f20e7e05f51f258812a5a",
               "size": 7358
@@ -1783,85 +1783,85 @@
     ],
     "existing_artifacts": [
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-final.json",
         "exists": true,
         "sha256": "702e81046e40b88e25cdc8154dac43678b935c1b6fed63a341356e9c5fa8d97d",
         "size": 2393
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-catalog.json",
         "exists": true,
         "sha256": "885cc6c6b88e24452a4fa421d359cc4748ec68aca72252e15fa8b993d6ac96c3",
         "size": 3877673
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-commit.txt",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/A5-commit.txt",
         "exists": true,
         "sha256": "50966508b7159b3f97a33b448de11fd62df9330e36ac38dc442adecb75528dec",
         "size": 41
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog-proposal.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog-proposal.json",
         "exists": true,
         "sha256": "a02c3bba1663c9f9e0b267e9b811d70d1a4473e7deec6e661580e8f4ba938cb0",
         "size": 36818
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog.diff",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/catalog.diff",
         "exists": true,
         "sha256": "319af39249aa60ca3e0f968fa83800e483227604f59567e531ad01ff3a5bd62d",
         "size": 27061
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/staged.patch",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/staged.patch",
         "exists": true,
         "sha256": "5d2f56dcdd8f26a50bfc8895a61510b50d8cdd9fc94bb6d17ad61f6f4b57e715",
         "size": 27061
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stdout",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stdout",
         "exists": true,
         "sha256": "27acbd83a98f64b1c9bb615d25ebf088a18dc2511385fbc58d230816b95681d5",
         "size": 126
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stderr",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/commit.stderr",
         "exists": true,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "size": 0
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.json",
         "exists": true,
         "sha256": "33d09322492922f2cab1d756d9f02e4a8b92a6b68b906bdee1f2d2f7b1a61dba",
         "size": 73937
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.stderr",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-freeze.stderr",
         "exists": true,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "size": 0
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-receipt.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/formal-receipt.json",
         "exists": true,
         "sha256": "70ee9ddda2bf596080458196b600c0c0a6a9201e45ec57a3c168ec5b135093ee",
         "size": 690
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-inventory.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-inventory.json",
         "exists": true,
         "sha256": "ba0ca2b5bfb49e7deacb8892660ff96db9df6992dc244dcf7619a737f46e2044",
         "size": 97
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-tree.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/tracked-tree.json",
         "exists": true,
         "sha256": "1c0484e5833bf461612a1f5b53bae12c221f90dccbe06ea7474ff3ec945e3703",
         "size": 247
       },
       {
-        "path": "/home/qin/Work/language-dev-20261103/checks/SH18-A5-metadata-preparation-20261115.nhorteza/clone-receipt.json",
+        "path": "<dev-work-dir>/checks/SH18-A5-metadata-preparation-20261115.nhorteza/clone-receipt.json",
         "exists": true,
         "sha256": "123c72d8489716d72be184c79d5e0c93342dd7d1ef5d689e24fde5c44f231f23",
         "size": 191618
@@ -1884,7 +1884,7 @@
     "status": "direct_stack_exhaustion_confirmed_source_symbol_unmapped",
     "actual_stage2": {
       "argv": [
-        "/home/qin/Work/language-dev-20261103/toolchains/strace-7.2/usr/bin/strace",
+        "<dev-work-dir>/toolchains/strace-7.2/usr/bin/strace",
         "--seccomp-bpf",
         "-f",
         "-qq",
@@ -1893,17 +1893,17 @@
         "-e",
         "trace=execve,execveat",
         "-o",
-        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/exec.log",
-        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
+        "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/exec.log",
+        "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
         "build",
         "--project",
-        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/source/lang.toml",
+        "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/source/lang.toml",
         "--backend",
         "native",
         "--opt",
         "2",
         "--out-dir",
-        "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/build",
+        "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage2/build",
         "--format",
         "json"
       ],
@@ -1919,7 +1919,7 @@
     "failed_pid": 3195289,
     "failed_start_ticks": 52384650,
     "candidate": {
-      "path": "/home/qin/Work/language-dev-20261103/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
+      "path": "<dev-work-dir>/checks/SH18-gc16384-matching-bootstrap-preparation-20261115.m4tchg16/bootstrap/stage1/woozyc",
       "sha256": "fc7882516a53383d3d3305698b13079e10c90b9cc38a4fe9154195edfb986f11"
     },
     "core": {
@@ -1994,7 +1994,7 @@
     "public_bd1_comparison": {
       "Source116_same": true,
       "runtime_variant": "public0cb/89bd",
-      "process_path": "/home/qin/Work/language-dev-20261103/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
+      "process_path": "<dev-work-dir>/checks/SH17-T10-integrated-preparation-20261115.7j4srukf/controller-stage123/stage2/process.json",
       "actual_stage2": {
         "exit": -9,
         "timed_out": true,
@@ -2022,7 +2022,7 @@
           "3195289"
         ],
         "exit": 0,
-        "stdout_path": "/home/qin/Work/language-dev-20261103/checks/SH19-stage2-segv-initial-20261115-data/gdb-local-stack.txt",
+        "stdout_path": "<dev-work-dir>/checks/SH19-stage2-segv-initial-20261115-data/gdb-local-stack.txt",
         "stderr_scope": "only debugger warnings/errors retained; no journal environment metadata",
         "stderr_warnings": [],
         "core_dump_copy_retained": false,
@@ -2066,7 +2066,7 @@
       },
       "second_scope": "registers+20frames+8instructions; no arguments/locals/environment",
       "first_scope": "registers+32frames+8instructions+file mappings, process metadata preamble removed",
-      "selected_stack_path": "/home/qin/Work/language-dev-20261103/checks/SH19-stage2-segv-initial-20261115-data/gdb-bounded-stdout.txt"
+      "selected_stack_path": "<dev-work-dir>/checks/SH19-stage2-segv-initial-20261115-data/gdb-bounded-stdout.txt"
     },
     "source_mapping_limitations": [
       "The actual ELF has lang.fn.ID symbols and no usable Wz line/name debug information. The retained stage1build contains only program.o/program, not NativeIR/LLVM text or resolver symbol-name metadata.",

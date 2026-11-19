@@ -35,16 +35,16 @@
 
 ## 检查记录
 
-构建目录和详细日志留在本机，不提交到语言仓库。以下位置相对 /home/qin/Work/language-dev-20261103：
+构建目录和详细日志留在本机，不提交到语言仓库。以下 `build/` 位置相对本仓库根目录；`<dev-work-dir>/` 是本仓库外的开发工作目录，仅作历史记录占位，不表示仓库内存在该目录：
 
-- compiler/build/woozy-stdlib-native/final-ctest.log：Clang 22.1.8、LLVM 开启、Release，113/113 通过。
-- compiler/build/woozy-stdlib-frontend/final-ctest.log：GCC、LLVM 关闭、Release，44/44 通过。
-- compiler/build/woozy-stdlib-native/tests/native/stdlib-results/：11 个程序/后端组合，含真实文件、网络与线程内 JSON，检查 ELF 无 INTERP/NEEDED。
-- compiler/build/woozy-stdlib-native/tests/native/collections-results/：5 个程序分别在 Native O0/O2/Python 3.12 运行，另有 38 个合法与 34 个非法 JSON 输入。
-- compiler/build/woozy-stdlib-native/tests/native/map-budget-results/ 与 recursive-json-results/：泛型限制和深层 JSON 检查。
-- checks/woozy-stdlib-20261111/：最终汇总、74 项第三方源码/许可证核对、9 处独立程序所需修改、19951 个随机浮点位型比较和文档程序检查。
-- checks/woozy-stdlib-process-ipc-20261111-v1/：进程/IPC 的运行库、独立 ELF 和源码程序检查。
-- checks/woozy-stdlib-sort-20261111/{quick,merge}/prepare.json：65536 元素、1 轮，Woozy/C++ O0/O2、LLVM IR、目标文件一致和错误参考值拒绝。此次没有正式测速。
+- build/woozy-stdlib-native/final-ctest.log：Clang 22.1.8、LLVM 开启、Release，113/113 通过。
+- build/woozy-stdlib-frontend/final-ctest.log：GCC、LLVM 关闭、Release，44/44 通过。
+- build/woozy-stdlib-native/tests/native/stdlib-results/：11 个程序/后端组合，含真实文件、网络与线程内 JSON，检查 ELF 无 INTERP/NEEDED。
+- build/woozy-stdlib-native/tests/native/collections-results/：5 个程序分别在 Native O0/O2/Python 3.12 运行，另有 38 个合法与 34 个非法 JSON 输入。
+- build/woozy-stdlib-native/tests/native/map-budget-results/ 与 recursive-json-results/：泛型限制和深层 JSON 检查。
+- <dev-work-dir>/checks/woozy-stdlib-20261111/：最终汇总、74 项第三方源码/许可证核对、9 处独立程序所需修改、19951 个随机浮点位型比较和文档程序检查。
+- <dev-work-dir>/checks/woozy-stdlib-process-ipc-20261111-v1/：进程/IPC 的运行库、独立 ELF 和源码程序检查。
+- <dev-work-dir>/checks/woozy-stdlib-sort-20261111/{quick,merge}/prepare.json：65536 元素、1 轮，Woozy/C++ O0/O2、LLVM IR、目标文件一致和错误参考值拒绝。此次没有正式测速。
 
 ## 当前限制
 

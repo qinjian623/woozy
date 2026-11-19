@@ -25,10 +25,11 @@ headers, and the LLVM/libxml2 toolchain used by that build. Build artifacts are
 not committed.
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 selfhost/tests/hirverify/run.py \
-  --woozyc /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
-  --build-dir /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native \
-  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
+  --woozyc build/woozy-stdlib-native/woozyc \
+  --build-dir build/woozy-stdlib-native \
+  --toolchain-root "${WOOZY_TOOLCHAIN_ROOT}" \
   --work-dir /tmp/hirverify-repro \
   --timeout 900 \
   --program-timeout 30
@@ -173,9 +174,10 @@ is a comparator-level control, not a test of a specific collision in the
 116-source compiler input.
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 selfhost/tests/hirverify/cache/run.py \
-  --woozyc /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
-  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
+  --woozyc build/woozy-stdlib-native/woozyc \
+  --toolchain-root "${WOOZY_TOOLCHAIN_ROOT}" \
   --work-dir /tmp/hirverify-cache-repro \
   --iterations 2
 ```

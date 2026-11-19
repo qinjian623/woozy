@@ -305,7 +305,7 @@ child and reports the actual `output_dir`; candidate mode still refuses a
 non-empty output directory.
 
 `run.sh` defaults to the fixed Root build products under
-`/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native` and
+`build/woozy-stdlib-native` and
 LLVM 22.1.8; override with `WOOZY_NATIVE_BUILD`, `WOOZY_LLVM`, `WOOZY_LIBXML2`.
 The legacy libxml2 directory is prepended to `LD_LIBRARY_PATH` for `ld.lld`.
 

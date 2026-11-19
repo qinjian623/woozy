@@ -1,5 +1,6 @@
 #include "lang/backend/python.hpp"
 #include "lang/sema/check.hpp"
+#include "lang/support/resource.hpp"
 #include "lang/version.hpp"
 #include <filesystem>
 #include <fstream>
@@ -40,8 +41,29 @@ int failure(SourceManager &sources, const char *code, const std::exception &e,
             << '\n';
   return static_cast<int>(exit);
 }
+int resource_paths() {
+  auto stdlib = find_resource("stdlib");
+  if (!stdlib) {
+    std::cerr << "E_TOOLCHAIN_MISSING: stdlib resource not found\n";
+    return 2;
+  }
+  std::unique_ptr<json_object, decltype(&json_object_put)> root(
+      json_object_new_object(), json_object_put);
+  json_object_object_add(root.get(), "schema_version",
+                         json_object_new_int(1));
+  json_object_object_add(root.get(), "stdlib",
+                         json_object_new_string(stdlib->string().c_str()));
+  std::cout << json_object_to_json_string_ext(root.get(),
+                                               JSON_C_TO_STRING_PLAIN)
+            << '\n';
+  return 0;
+}
 } // namespace
 int main(int argc, char **argv) {
+  if (argc == 2 &&
+      (std::string_view(argv[1]) == "--__resource-paths" ||
+       std::string_view(argv[1]) == "--__resource_paths"))
+    return resource_paths();
   SourceManager sources;
   try {
     fs::path manifest, out, std_binding;

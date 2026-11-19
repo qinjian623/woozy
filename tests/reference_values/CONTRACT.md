@@ -167,8 +167,9 @@ compile failure as a passing negative.
 1. **Syntax only.** Every one of the 24 fixtures was checked with:
 
    ```sh
-   /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
-     check --syntax-only <fixture>/src/main.wz --format json
+   FIXTURE="${FIXTURE:?set FIXTURE to a fixture directory name}"
+   build/woozy-stdlib-native/woozyc \
+     check --syntax-only "$FIXTURE/src/main.wz" --format json
    ```
 
    Result: all exit `0`, `status=ok`, no diagnostics. This proves parsing only,

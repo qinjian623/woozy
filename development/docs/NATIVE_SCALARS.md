@@ -312,7 +312,8 @@ Panic 直接终止，不进入 typed catch，不执行语言 defer；本阶段�
 没有联网下载或替换系统库。以下 `tc` 指向外层 toolchains，路径由调用者提供：
 
 ```sh
-tc=/home/qin/Work/language-dev-20261103/toolchains
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+tc="${WOOZY_TOOLCHAIN_ROOT}"
 export LD_LIBRARY_PATH="$tc/libxml2-legacy-2.13.9/usr/lib"
 cmake -S tests/native -B /tmp/language-t05-native-build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \

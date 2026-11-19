@@ -22,6 +22,11 @@ import sys
 PROGRAM_TIMEOUT = 20
 BUILD_TIMEOUT = 180
 FIXTURE_ROOT = "tests/native/stdlib-collections"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_TOOLCHAINS = Path(
+    os.environ.get("LANG_TOOLCHAINS")
+    or os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+    or ROOT.parent / "toolchains")
 
 
 class NumberToken(str):
@@ -309,8 +314,7 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--python", default="python3.12")
-    parser.add_argument("--toolchains", type=Path,
-                        default=Path("/home/qin/Work/language-dev-20261103/toolchains"))
+    parser.add_argument("--toolchains", type=Path, default=DEFAULT_TOOLCHAINS)
     args = parser.parse_args()
     root = args.root.resolve()
     out = args.out.resolve()

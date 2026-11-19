@@ -1,4 +1,4 @@
-"""Pure controls for finite JSON and both exec trace forms; launch nothing."""
+"""Pure controls for finite JSON, both exec trace forms and stage0 routing; launch nothing."""
 import contextlib
 import importlib.util
 import json
@@ -47,6 +47,20 @@ def main():
             for call in ['2 execveat(AT_FDCWD, "/unexpected/tool", [], 0x0, 0) = 0\n','2 execve("/unexpected/tool", [], 0x0) = -1 ENOENT (No such file or directory)\n','2 execveat(4, "", [], 0x0, AT_EMPTY_PATH) = 0\n']:
                 rejects('unexpected or unresolved exec '+str(len(checks)),lambda call=call:trace('1 execve("/program", [], 0x0) = 0\n'+call))
             rejects('empty trace',lambda:trace(''))
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary)
+            helper=base/'lang_native_helper';helper.write_bytes(b'helper\n')
+            native=base/'liblang_native_runtime.a';native.write_bytes(b'native\n')
+            hosted=base/'liblang_hosted_runtime.a';hosted.write_bytes(b'hosted\n')
+            stdlib=base/'stdlib';stdlib.mkdir();(stdlib/'std.wz').write_bytes(b'package fixture;\n')
+            files=runner.tree_hashes(stdlib,('.wz',))
+            stage0={'build':{'macros':{'LANG_NATIVE_HELPER':str(helper),'LANG_NATIVE_RUNTIME':str(native),'LANG_HOSTED_RUNTIME':str(hosted),'LANG_STD_SOURCE_ROOT':str(stdlib)},'build_ninja':str(base/'build.ninja'),'build_ninja_sha256':'0'*64,'cmake_cache':str(base/'CMakeCache.txt'),'cmake_cache_sha256':'1'*64},'stdlib':{'files':files},'uses_copied_resources':False}
+            routed=runner.verify_stage0_routing(stage0,helper,base,stdlib,files)
+            require('stage0 routing accepted',routed['macros']['LANG_NATIVE_HELPER']==str(helper))
+            wrong=json.loads(json.dumps(stage0));wrong['build']['macros']['LANG_NATIVE_HELPER']=str(stdlib/'std.wz')
+            rejects('stage0 helper routing mismatch',lambda:runner.verify_stage0_routing(wrong,helper,base,stdlib,files))
+            wrong=json.loads(json.dumps(stage0));wrong['stdlib']['files']={'std.wz':'0'*64}
+            rejects('stage0 stdlib routing mismatch',lambda:runner.verify_stage0_routing(wrong,helper,base,stdlib,files))
         require('no external launch attempts',launches==[])
     result={'status':'passed','checks':checks,'external_launch_attempts':launches}
     print(json.dumps(result));return result

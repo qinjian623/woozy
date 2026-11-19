@@ -70,8 +70,8 @@ Accepted fast seed and helper used:
 - seed `5caa3550ab489e404cde9ea1bcc13fef39ce3e386dc1ef2e6e5bc3b8723ed03e`
 - helper `0df0cea068d1bf1d123f5738c7561028f6334d2fdd63d3031d6f2afe7f3ee120`
 
-Real A was taken from Root `/home/qin/Work/language-dev-20261103/compiler/
-selfhost/src/wzcc/sema`; shared six files matched Root hashes.  HIR verifier
+Real A was taken from Root `<repo>` at `selfhost/src/wzcc/sema`; shared six
+files matched Root hashes.  HIR verifier
 was not used (its four formal fixes are not accepted yet).
 
 - Per-file syntax checks: pass (8/8 B files).
@@ -106,10 +106,11 @@ Earlier failed runtime and long-build/interruption records are retained under
 ## Reproduce
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 python3 selfhost/tests/sema_b/run.py --slim --run \
   --woozyc /absolute/path/to/accepted-seed/woozyc \
-  --a-dir /home/qin/Work/language-dev-20261103/compiler/selfhost/src/wzcc/sema \
-  --toolchain-root /home/qin/Work/language-dev-20261103/toolchains \
+  --a-dir selfhost/src/wzcc/sema \
+  --toolchain-root "${WOOZY_TOOLCHAIN_ROOT}" \
   --work-dir build/sema-b-repro --timeout 1200
 
 python3 selfhost/tests/sema_b/compare_cpp.py \

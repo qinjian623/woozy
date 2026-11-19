@@ -9,13 +9,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CLANG_DIR="${CLANG_DIR:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin}"
+TOOLCHAINS="${LANG_TOOLCHAINS:-$ROOT/../toolchains}"
+CLANG_DIR="${CLANG_DIR:-$TOOLCHAINS/llvm-22.1.8/bin}"
 CXX="${CXX:-$CLANG_DIR/clang++}"
 CC="${CC:-$CLANG_DIR/clang}"
 AR="${AR:-$CLANG_DIR/llvm-ar}"
 # Canonical hosted library path; ld.lld needs the legacy libxml2 package.
-LIBXML_LEGACY="${LIBXML_LEGACY:-/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib}"
-LLVM_LIB="${LLVM_LIB:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib}"
+LIBXML_LEGACY="${LIBXML_LEGACY:-$TOOLCHAINS/libxml2-legacy-2.13.9/usr/lib}"
+LLVM_LIB="${LLVM_LIB:-$TOOLCHAINS/llvm-22.1.8/lib}"
 export LD_LIBRARY_PATH="$LLVM_LIB:$LIBXML_LEGACY${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 if [[ -n "${C_CALLBACK_BUILD_DIR:-}" ]]; then

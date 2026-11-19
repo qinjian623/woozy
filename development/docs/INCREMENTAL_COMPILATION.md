@@ -55,7 +55,7 @@ NodeRef 到 parent/子序号/命名声明、symbol 到实例/owner 及已经计�
 
 仍需完成：公开类型/已检查泛型及其可达私有依赖的完整持久接口、完整语言 HIR 按包导入、跨包 checker/NativeIR 工作的移除、Ninja 前端依赖任务及并行。两版编译器已通过本轮针对检查；尚无正式 Source O2 性能比较或三代自举结果。
 
-外置工作记录：`/home/qin/Work/language-dev-20261103/checks/SH31-source-module-incremental-20261117/`。`progress.md` 和 `job.json` 按实际进展更新；v1/v2 报告对应各自冻结的源码与二进制，不能混用。
+外置工作记录：`<dev-work-dir>/checks/SH31-source-module-incremental-20261117/`。`progress.md` 和 `job.json` 按实际进展更新；v1/v2 报告对应各自冻结的源码与二进制，不能混用。
 
 ## 删除缓存与重建
 

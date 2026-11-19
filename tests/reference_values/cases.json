@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "operation_id": "woozy-reference-source-cases-20261112",
   "root_base": "9f1ab40",
-  "root_cli": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc",
+  "root_cli": "build/woozy-stdlib-native/woozyc",
   "feature_status": "planned / not implemented at the recorded base",
   "summary": "Independent source fixtures and expected values for capturing closures, bound method values, function values, indirect callee cleanup, thread capture, and source Weak. Syntax is validated with the existing Root CLI; no compiler, runtime, shared CMake, stdlib, or RED-test registration is changed.",
   "case_count": 24,

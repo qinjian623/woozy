@@ -77,14 +77,13 @@ OFFICIAL_SIZE = 5011
 PERFORMANCE_DIR = Path(__file__).resolve().parent
 WORKTREE = PERFORMANCE_DIR.parents[2]
 RUNTIME_VEC_HEADER = WORKTREE / "runtime/native/vec.hpp"
-DEFAULT_OFFICIAL = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "algorithm-reference-inputs-20261109/mandelbrot-n200.pbm"
+DEFAULT_OFFICIAL = (
+    WORKTREE.parent / "checks/algorithm-reference-inputs-20261109/"
+    "mandelbrot-n200.pbm"
 )
 DEFAULT_OFFICIAL_CHECK = DEFAULT_OFFICIAL.with_name("mandelbrot-oracle-check.json")
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit"
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit"
 )
 TARGET_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-march=x86-64", "-mtune=generic",

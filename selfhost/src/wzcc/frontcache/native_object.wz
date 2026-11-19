@@ -13,8 +13,9 @@ pub func configure(directory string, optimization string, target string) Context
     let bytes = vec.empty[u8](); put_string(bytes, "wz-package-build/1");
     put_string(bytes, optimization); put_string(bytes, target);
     let root = resources.directory();
+    let tools = resources.llvm_bin(root);
     for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a", root + "/runtime/liblang_hosted_runtime.a",
-        root + "/toolchain/opt", root + "/toolchain/llc", root + "/toolchain/clang", root + "/toolchain/ld.lld", resources.ninja()] {
+        tools + "/opt", tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.ninja()] {
         put_string(bytes, file_digest(cache, path));
     }
     cache.fingerprint = hash_bytes(bytes); return cache;
@@ -29,10 +30,10 @@ pub func configure_source_make(directory string, optimization string,
     let bytes = vec.empty[u8](); put_string(bytes, "wz-source-make-build/1");
     put_string(bytes, optimization); put_string(bytes, target);
     let root = resources.directory();
+    let tools = resources.llvm_bin(root);
     for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a",
-        root + "/runtime/liblang_hosted_runtime.a", root + "/toolchain/opt",
-        root + "/toolchain/llc", root + "/toolchain/clang",
-        root + "/toolchain/ld.lld", resources.make()] {
+        root + "/runtime/liblang_hosted_runtime.a", tools + "/opt",
+        tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.make()] {
         put_string(bytes, file_digest(cache, path));
     }
     if optimization == "2" {

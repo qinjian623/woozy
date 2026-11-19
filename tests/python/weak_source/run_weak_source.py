@@ -33,6 +33,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -840,25 +841,125 @@ def default_stdlib_root(binary: Path, label: str) -> Path:
     return root
 
 
-def reference_stdlib_roots(args) -> dict[str, dict]:
+def _strict_resource_json(text: str, label: str, what: str):
+    try:
+        return json.loads(text, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, CorpusError) as error:
+        raise RuntimeError(
+            f"{label}: {what} are not strict JSON: {text!r}: {error}") from error
+
+
+def _legacy_cli_argument(record: subprocess.CompletedProcess) -> bool:
+    """Recognize only the old CLI's plain top-level argument diagnostic."""
+    if record.returncode != 2:
+        return False
+    for stream, other in ((record.stdout, record.stderr),
+                          (record.stderr, record.stdout)):
+        if other.strip():
+            continue
+        lines = [line.strip() for line in stream.splitlines() if line.strip()]
+        if (len(lines) == 1
+                and (lines[0] == "E_DRIVER_ARGUMENT"
+                     or lines[0].startswith("E_DRIVER_ARGUMENT:"))):
+            return True
+    return False
+
+
+def _legacy_helper_argument(record: subprocess.CompletedProcess,
+                            label: str) -> bool:
+    """Recognize only the old helper's JSON E_DRIVER_ARGUMENT diagnostic."""
+    if record.returncode != 2 or record.stderr.strip():
+        return False
+    text = record.stdout.strip()
+    if not text:
+        return False
+    document = _strict_resource_json(text, label, "legacy helper diagnostics")
+    if (not isinstance(document, dict)
+            or document.get("status") != "error"):
+        return False
+    diagnostics = document.get("diagnostics")
+    return (isinstance(diagnostics, list) and bool(diagnostics)
+            and all(isinstance(item, dict)
+                    and item.get("code") == "E_DRIVER_ARGUMENT"
+                    for item in diagnostics))
+
+
+def _resource_paths(binary: Path, label: str,
+                    env: dict[str, str] | None = None) -> dict | None:
+    """Read actual resource paths, or a strict legacy argument rejection.
+
+    A missing private query is accepted only for the two exact old tool
+    signatures.  Launch failures, timeouts, wrapped errors and malformed JSON
+    are harness failures; they must never enable an ELF fallback.
+    """
+    try:
+        completed = subprocess.run(
+            [str(binary), "--__resource-paths"], capture_output=True,
+            text=True, timeout=30, check=False, env=env)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(
+            f"{label}: cannot query resource paths: {error}") from error
+    if completed.returncode == 0:
+        value = _strict_resource_json(
+            completed.stdout, label, "resource paths")
+        if not isinstance(value, dict):
+            raise RuntimeError(f"{label}: resource paths are not an object")
+        return value
+    lower = label.lower()
+    allow_cli = "helper" not in lower
+    allow_helper = "cli" not in lower
+    if allow_cli and _legacy_cli_argument(completed):
+        return None
+    if allow_helper and _legacy_helper_argument(completed, label):
+        return None
+    output = (completed.stdout + completed.stderr).strip()
+    raise RuntimeError(f"{label}: resource paths failed: {output[-4000:]}")
+
+
+def _stdlib_root_from_paths(paths: dict, label: str) -> Path:
+    try:
+        root = Path(paths["stdlib"])
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(f"{label}: resource paths have no stdlib") from error
+    if not root.is_absolute() or not root.is_dir():
+        raise RuntimeError(
+            f"{label}: resource stdlib is not an absolute directory: {root}")
+    if not any(path.is_file() for path in root.rglob("*.wz")):
+        raise RuntimeError(f"{label}: resource stdlib has no Wz sources: {root}")
+    return root.resolve()
+
+
+def reference_stdlib_roots(args,
+                           env: dict[str, str] | None = None) -> dict[str, dict]:
     found: dict[str, dict] = {}
     for label, binary in (("reference_cli", args.cli),
                           ("reference_helper", args.helper)):
         if binary is None or not binary.is_file():
             continue
-        root = default_stdlib_root(binary, label)
+        # An old artifact that is not executable cannot be probed, but the
+        # existing strict ELF proof can still establish its embedded root.
+        paths = (_resource_paths(binary, label, env)
+                 if os.access(binary, os.X_OK) else None)
+        if paths is None:
+            root = default_stdlib_root(binary, label)
+            source = "legacy_embedded_path"
+        else:
+            root = _stdlib_root_from_paths(paths, label)
+            source = "resource_paths"
         sources = sorted(path for path in root.rglob("*.wz")
                          if path.is_file())
         found[label] = {
             "root": str(root),
             "wz_files": len(sources),
+            "path_source": source,
             "equals_owner_stdlib_tree": (
                 root.resolve() == (args.root / "stdlib").resolve()),
         }
     return found
 
 
-def snapshot_inputs(args, resources: Path | None) -> dict[str, str]:
+def snapshot_inputs(args, resources: Path | None,
+                    env: dict[str, str] | None = None) -> dict[str, str]:
     paths: set[Path] = set()
     for manifest in manifest_paths(args.root).values():
         for path in manifest.parent.rglob("*"):
@@ -888,13 +989,11 @@ def snapshot_inputs(args, resources: Path | None) -> dict[str, str]:
         for path in (resources / "runtime").rglob("*.py"):
             if path.is_file():
                 paths.add(path)
-    # Actual default stdlib roots embedded in the reference C++ binaries.
-    for label, binary in (("reference_cli", args.cli),
-                          ("reference_helper", args.helper)):
-        if binary is not None and binary.is_file():
-            for path in default_stdlib_root(binary, label).rglob("*.wz"):
-                if path.is_file():
-                    paths.add(path)
+    # Actual default stdlib roots used by the reference C++ binaries.
+    for record in reference_stdlib_roots(args, env).values():
+        for path in Path(record["root"]).rglob("*.wz"):
+            if path.is_file():
+                paths.add(path)
     if args.toolchain_root is not None:
         for relative in (
             "llvm-22.1.8/bin/opt",
@@ -910,7 +1009,8 @@ def snapshot_inputs(args, resources: Path | None) -> dict[str, str]:
     return {str(path): digest(path) for path in sorted(paths)}
 
 
-def input_summary(snapshot: dict[str, str], args, resources: Path | None) -> dict:
+def input_summary(snapshot: dict[str, str], args, resources: Path | None,
+                  env: dict[str, str] | None = None) -> dict:
     def count(predicate) -> int:
         return sum(1 for key in snapshot if predicate(key))
 
@@ -941,7 +1041,7 @@ def input_summary(snapshot: dict[str, str], args, resources: Path | None) -> dic
         "reference_cli": str(args.cli) if args.cli else None,
         "reference_helper": str(args.helper) if args.helper else None,
         "candidate_resources": str(resources) if resources else None,
-        "reference_stdlib": reference_stdlib_roots(args),
+        "reference_stdlib": reference_stdlib_roots(args, env),
         "note": "counts summarize the hash inventory; they are not a tree claim",
     }
 
@@ -1052,9 +1152,9 @@ def main() -> int:
         "out": str(args.out),
     })
     try:
-        summary["inputs_before"] = snapshot_inputs(args, resources)
+        summary["inputs_before"] = snapshot_inputs(args, resources, env)
         summary["input_summary"] = input_summary(
-            summary["inputs_before"], args, resources)
+            summary["inputs_before"], args, resources, env)
         version = run_command([args.python, "--version"], args.out,
                               PYTHON_VERSION_TIMEOUT_SECONDS, args.out, log,
                               "python-version", env)
@@ -1103,7 +1203,7 @@ def main() -> int:
         summary["legacy_cmake_timeout_exceeded"] = (
             summary["elapsed_seconds"] > LEGACY_CMAKE_TIMEOUT_SECONDS)
         try:
-            summary["inputs_after"] = snapshot_inputs(args, resources)
+            summary["inputs_after"] = snapshot_inputs(args, resources, env)
         except Exception as error:
             summary["inputs_after"] = {"error": str(error)}
             summary["status"] = "failed"

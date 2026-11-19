@@ -9,8 +9,8 @@
 host:       Linux 7.2.15-1-omarchy x86_64
 clang++:    clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
 ld.lld:     LLD 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
-llvm root:  /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8
-legacy:     /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9
+llvm root:  ${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8
+legacy:     ${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9
             libxml2-legacy-2.13.9-2-x86_64.pkg.tar.zst
             sha256 aac28a52e81422935e3bfa44044030640c5d525ad8f65a9672a3ab7139974652
             ld.lld 通过 LD_LIBRARY_PATH 使用该包内的 libxml2.so.2
@@ -178,7 +178,7 @@ invalidation，并验证与已 accepted GC kernel 的组合顺序。仍不代表
 ```text
 clang++: clang version 22.1.8 (ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
 ld.lld:  LLD 22.1.8 (same LLVM build)
-legacy:  /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9
+legacy:  ${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9
 ```
 
 新增行为：`lang_weak_invalidate_slot_v1` 在 Weak 锁内把 canonical slot 换成
@@ -193,7 +193,7 @@ legacy:  /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9
 
 ```sh
 LANG_WEAK_BUILD_DIR=/tmp/gcweak-all-weak LANG_WEAK_KEEP_BUILD=1 \
-  timeout 900s /home/qin/.local/state/cli-agent-bridge/worktrees/7ef7d7b0ec1c290ef3f51ece/tests/native/weak/run.sh
+  timeout 900s tests/native/weak/run.sh
 ```
 
 结果：O2 host、O0 host、ASAN/UBSAN、O2 `-nostdlib` 静态 ELF、O0

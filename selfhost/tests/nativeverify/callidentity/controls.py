@@ -262,7 +262,8 @@ def plumbing_tree(work: pathlib.Path, name: str, exit_code: int):
 
 
 def build_path_plumbing(work: pathlib.Path) -> None:
-    toolchain = pathlib.Path("/home/qin/Work/language-dev-20261103/toolchains")
+    toolchain = pathlib.Path(
+        os.environ.get("WOOZY_TOOLCHAIN_ROOT") or CI.DEFAULT_TOOLCHAIN)
     accepted_root, accepted_stage0 = plumbing_tree(work, "plumbing-ok", 0)
     code = CI.main(["--woozyc", str(accepted_stage0),
                     "--source-root", str(accepted_root / "src"),

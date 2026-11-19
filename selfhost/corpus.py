@@ -60,10 +60,12 @@ HARNESS_EXCLUSIONS = {
     "selfhost/corpus.json",
     "tests/selfhost/corpus_test.py",
 }
-DEFAULT_LLVM = ROOT.parent / "toolchains/llvm-22.1.8"
-DEFAULT_STRACE = ROOT.parent / "toolchains/strace-7.2/usr/bin/strace"
-DEFAULT_PYTHON = ROOT.parent / "toolchains/t10-python-cpu/venv/bin/python"
-DEFAULT_LIBXML = ROOT.parent / "toolchains/libxml2-legacy-2.13.9/usr/lib"
+TOOLCHAIN_ROOT = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT")
+                      or ROOT.parent / "toolchains")
+DEFAULT_LLVM = TOOLCHAIN_ROOT / "llvm-22.1.8"
+DEFAULT_STRACE = TOOLCHAIN_ROOT / "strace-7.2/usr/bin/strace"
+DEFAULT_PYTHON = TOOLCHAIN_ROOT / "t10-python-cpu/venv/bin/python"
+DEFAULT_LIBXML = TOOLCHAIN_ROOT / "libxml2-legacy-2.13.9/usr/lib"
 
 
 class CorpusError(RuntimeError):
@@ -2055,7 +2057,7 @@ def run(args):
         context = preflight(args)
         known_roots = {str(path.resolve()) for path in context["roots"]}
         for value in inventory.get("repository_roots", []):
-            path = Path(value)
+            path = context["root"] / value
             if str(path.resolve()) not in known_roots:
                 context["roots"].append(path)
                 known_roots.add(str(path.resolve()))

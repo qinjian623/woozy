@@ -49,9 +49,11 @@ MODULE_DIR = REPO / "selfhost/src/wzcc/toml"
 DRIVER = REPO / "selfhost/tests/toml/driver.wz"
 CASES = REPO / "selfhost/tests/toml/cases"
 DEFAULT_CLI = REPO / "build/woozy-stdlib-native/woozyc"
+TOOLCHAIN_ROOT = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT") or
+                      (REPO.parent / "toolchains"))
 LIBRARY_PATH = (
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/lib:"
-    "/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib"
+    f"{TOOLCHAIN_ROOT / 'llvm-22.1.8/lib'}:"
+    f"{TOOLCHAIN_ROOT / 'libxml2-legacy-2.13.9/usr/lib'}"
 )
 CURATED_MANIFESTS = [
     "selfhost/lang.toml",

@@ -16,8 +16,9 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 
-LLVM_ROOT=${LANG_LLVM_ROOT:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8}
-LIBXML2_ROOT=${LANG_LIBXML2_ROOT:-/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9}
+TOOLCHAINS=${LANG_TOOLCHAINS:-$ROOT/../toolchains}
+LLVM_ROOT=${LANG_LLVM_ROOT:-$TOOLCHAINS/llvm-22.1.8}
+LIBXML2_ROOT=${LANG_LIBXML2_ROOT:-$TOOLCHAINS/libxml2-legacy-2.13.9}
 if [ -n "${CXX:-}" ]; then
   COMPILER=$CXX
 else

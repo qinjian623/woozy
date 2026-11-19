@@ -67,9 +67,9 @@
   "current_environment": {
     "head_commit": "51363f5",
     "head_subject": "Enable Vec ownership in both backends and verify value transfers",
-    "worktree": "/home/qin/.local/state/cli-agent-bridge/worktrees/d3f462ee99f0fc72ea6c575f",
+    "worktree": ".local/evidence/3920228ad4c1/d3f462ee99f0fc72ea6c575f",
     "compiler_source": "current source tree at 51363f5; built without LLVM in /tmp",
-    "build_command": "cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=OFF /home/qin/.local/state/cli-agent-bridge/worktrees/d3f462ee99f0fc72ea6c575f && ninja langc",
+    "build_command": "cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=OFF .local/evidence/3920228ad4c1/d3f462ee99f0fc72ea6c575f && ninja langc",
     "compiler_version": "langc 0.1.0-bootstrap (compiler-dev/1)",
     "compiler_artifact": "/tmp/language-t10-binding-fixtures-20261104/build/langc",
     "tooling_read": [

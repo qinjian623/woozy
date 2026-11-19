@@ -40,7 +40,10 @@ class FakeCommands:
                   "timeout_s": timeout, "cpu": cpu}
         if self.on_command is not None:
             self.on_command(argv, result)
-        if "check" in argv:
+        if "--__resource-paths" in argv:
+            result["exit"] = 2
+            result["stderr"] = "E_DRIVER_ARGUMENT: unsupported command\n"
+        elif "check" in argv:
             result["stdout"] = '{"status":"ok"}\n'
         elif "build" in argv:
             directory = Path(argv[argv.index("--out-dir") + 1])

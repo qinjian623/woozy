@@ -7,7 +7,7 @@ This file records pre-release measurements made with the old `langc` / `.wz` nam
 状态：`done`（仅正确性与编译产物准备；正式计时 `not_run`）
 
 本文件续接已拒绝的 task74bf6eb0，不新增扩展任务。已按
-`/home/qin/Work/language-dev-20261103/checks/fannkuch-first-delivery-review-20261109.md`
+`<dev-work-dir>/checks/fannkuch-first-delivery-review-20261109.md`
 修正真实 Source 观察器、实际 visit 符号识别、Source 负控制和公共准备代码复用。
 没有提交、推送或另派 agent；未修改主仓、冻结 oracle、公共 runtime 或其他算法。
 
@@ -41,23 +41,23 @@ This file records pre-release measurements made with the old `langc` / `.wz` nam
 
 - 源码基线：worktree HEAD `36555eba3cb81790662965d172fb29189b2a33a1`（`36555eb`）；
   相对 `163ba5c` 只有三份文档变化，编译器代码相同。
-- 主仓：`/home/qin/Work/language-dev-20261103/compiler`，HEAD 相同。运行前后
+- 主仓：`<repo>`，HEAD 相同。运行前后
   未修改主仓文件；只保留原有未跟踪项 `not a tty`。
 - 本轮使用专门 production Release：
-  `/home/qin/Work/language-dev-20261103/compiler/build/native-perf-release`，
+  `build/native-perf-release`，
   `CMAKE_BUILD_TYPE=Release`，同一 `36555eb` 源码，`BUILD_TESTING=OFF`。
   该构建的四个 `LANG_NATIVE_*` 定义均唯一，公共 `run_native.py` 检查通过，
   没有筛宏放宽。
 - `lang_python_emit`：
-  `/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/tests/python/lang_python_emit`
+  `build/native-cli-release/tests/python/lang_python_emit`
   稳定同版本构建；SHA 已记录。
 - 冻结 oracle：
-  `/home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109`。
+  `<dev-work-dir>/checks/fannkuch-oracle-20261109`。
   `results.json`、`inputs.json`、5 份 trace、5 份 expected-output 共 12 份文件
   在运行前后 SHA-256 完全一致。n3..7 trace 为 6/24/120/720/5040 行，共 5910 行。
-- 固定 LLVM：`/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8`。
-- 固定 CPython：`/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`。
-- 运行环境：`LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib`；
+- 固定 LLVM：`${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8`。
+- 固定 CPython：`${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`。
+- 运行环境：`LD_LIBRARY_PATH=${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib`；
   子进程固定到 CPU 4。
 - 原 r1..r6 运行日志仍保留（`/tmp/fannkuch-prepare-run-r1..r6.log`），r6 构建目录未改；本次新输出使用独立目录，不覆盖 r6。
 
@@ -119,19 +119,23 @@ Source 与 C++ 继续使用相同的单线程迭代 count 数组生成顺序（�
 最终通过运行使用新的独立输出目录：
 
 ```sh
-cd /home/qin/.local/state/cli-agent-bridge/worktrees/d693d88ef078d52c8f30f9be
-/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12 \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+REPO="$(git rev-parse --show-toplevel)"
+WORKTREE="${WOOZY_WORKTREE:-$REPO}"
+MAIN="${WOOZY_WORK_DIR:-$(dirname "$REPO")}"
+cd "$WORKTREE"
+"${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12" \
   -B -s tests/performance/fannkuch/prepare.py \
   --out build/fannkuch-prepare-20261109-correction-r10 \
-  --oracle-dir /home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109 \
-  --python /home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12 \
-  --python-helper /home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/tests/python/lang_python_emit \
-  --langc /home/qin/Work/language-dev-20261103/compiler/build/native-perf-release/langc \
-  --helper /home/qin/Work/language-dev-20261103/compiler/build/native-perf-release/native/lang_native_helper \
-  --runtime /home/qin/Work/language-dev-20261103/compiler/build/native-perf-release/native/liblang_native_runtime.a \
-  --llvm-bin /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin \
-  --compiler-root /home/qin/Work/language-dev-20261103/compiler \
-  --ld-library-path /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+  --oracle-dir "$MAIN/checks/fannkuch-oracle-20261109" \
+  --python "${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12" \
+  --python-helper "$REPO/build/native-cli-release/tests/python/lang_python_emit" \
+  --langc "$REPO/build/native-perf-release/langc" \
+  --helper "$REPO/build/native-perf-release/native/lang_native_helper" \
+  --runtime "$REPO/build/native-perf-release/native/liblang_native_runtime.a" \
+  --llvm-bin "${WOOZY_TOOLCHAIN_ROOT}/llvm-22.1.8/bin" \
+  --compiler-root "$REPO" \
+  --ld-library-path "${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
   --cpu 4
 ```
 

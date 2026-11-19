@@ -37,7 +37,7 @@ Run from the repository root:
 
 ```sh
 python3 -B -s tests/native/http/run_http.py \
-  --cli /home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc \
+  --cli build/woozy-stdlib-native/woozyc \
   --out /tmp/http-results
 ```
 

@@ -82,10 +82,10 @@
     },
     "paths": {
       "cli": "/tmp/woozy-auto-gc-pin-20261112/woozyc",
-      "helper": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/native/lang_native_helper",
-      "runtime": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/native/liblang_native_runtime.a",
-      "clang": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang",
-      "readelf": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/llvm-readelf"
+      "helper": "build/woozy-stdlib-native/native/lang_native_helper",
+      "runtime": "build/woozy-stdlib-native/native/liblang_native_runtime.a",
+      "clang": ".toolchains/llvm-22.1.8/bin/clang",
+      "readelf": ".toolchains/llvm-22.1.8/bin/llvm-readelf"
     }
   },
   "runs": [

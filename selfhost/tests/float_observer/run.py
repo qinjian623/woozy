@@ -35,20 +35,16 @@ import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_ROOT = Path("/home/qin/Work/language-dev-20261103/compiler")
-DEFAULT_PROOF = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "native-function-type-fix-accepted-20261114.json")
+REPO = HERE.parents[2]
+TOOLCHAIN_ROOT = Path(os.environ.get("WOOZY_TOOLCHAIN_ROOT") or
+                      (REPO.parent / "toolchains"))
+EVIDENCE_ROOT = REPO.parent / "checks"
+DEFAULT_ROOT = REPO
+DEFAULT_PROOF = EVIDENCE_ROOT / "native-function-type-fix-accepted-20261114.json"
 DEFAULT_BOOTSTRAP = DEFAULT_ROOT / "build/woozy-stdlib-native/woozyc"
-DEFAULT_TOOLCHAIN = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin")
-DEFAULT_STRACE = Path(
-    "/home/qin/Work/language-dev-20261103/toolchains/strace-7.2/usr/bin/strace")
-DEFAULT_PYTHON = Path("/home/qin/.local/bin/python3.12")
-OLD_PROVISIONAL = Path(
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/"
-    "1e2b5cd360f827f9ab921891/reports/selfhost-stage1-full-20261113/"
-    "bootstrap-opt0-final/stage1/woozyc")
+DEFAULT_TOOLCHAIN = TOOLCHAIN_ROOT / "llvm-22.1.8/bin"
+DEFAULT_STRACE = TOOLCHAIN_ROOT / "strace-7.2/usr/bin/strace"
+DEFAULT_PYTHON = TOOLCHAIN_ROOT / "t10-python-cpu/venv/bin/python"
 TOOLS = ("opt", "llc", "clang", "clang++", "ld.lld")
 REPRESENTATIVE = (
     "f32-round-ties-even", "f64-round-ties-even",
@@ -1131,7 +1127,8 @@ def main(argv=None) -> int:
     parser.add_argument("--driver-binary", type=Path)
     parser.add_argument("--driver-build-evidence", type=Path)
     parser.add_argument("--candidate-cli", type=Path)
-    parser.add_argument("--old-candidate", type=Path, default=OLD_PROVISIONAL)
+    parser.add_argument("--old-candidate", type=Path,
+                        help="pre-fix CLI; required with --controls-only")
     parser.add_argument("--accepted-proof", type=Path, default=DEFAULT_PROOF)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--work-dir", type=Path)
@@ -1156,6 +1153,12 @@ def main(argv=None) -> int:
     bootstrap = args.woozyc.resolve()
     toolchain = args.toolchain.resolve()
     if args.controls_only:
+        if args.old_candidate is None:
+            parser.error("--controls-only requires --old-candidate: the pre-fix "
+                         "CLI recorded in the accepted proof is an external "
+                         "input")
+        if not args.accepted_proof.is_file():
+            parser.error(f"accepted proof is absent: {args.accepted_proof}")
         work = prepare_work_dir(
             args.work_dir.resolve() if args.work_dir else
             Path(tempfile.mkdtemp(prefix="float-controls-")))
@@ -1186,7 +1189,7 @@ def main(argv=None) -> int:
     recorder.run_process = harness.run_process
     HarnessActive.float_expected = harness.float_expected
     env = dict(os.environ)
-    compat = "/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib"
+    compat = str(TOOLCHAIN_ROOT / "libxml2-legacy-2.13.9/usr/lib")
     env["LD_LIBRARY_PATH"] = compat + (
         ":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"

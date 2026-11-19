@@ -10,9 +10,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
-BUILD="${WOOZY_NATIVE_BUILD:-/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native}"
-LLVM="${WOOZY_LLVM:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8}"
-LIBXML2="${WOOZY_LIBXML2:-/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib}"
+TOOLCHAINS="${LANG_TOOLCHAINS:-$REPO_ROOT/../toolchains}"
+BUILD="${WOOZY_NATIVE_BUILD:-$REPO_ROOT/build/woozy-stdlib-native}"
+LLVM="${WOOZY_LLVM:-$TOOLCHAINS/llvm-22.1.8}"
+LIBXML2="${WOOZY_LIBXML2:-$TOOLCHAINS/libxml2-legacy-2.13.9/usr/lib}"
 OUT="${1:-/tmp/woozy-automatic-gc}"
 if [[ "$OUT" == --* || -z "$OUT" ]]; then
   OUT=/tmp/woozy-automatic-gc

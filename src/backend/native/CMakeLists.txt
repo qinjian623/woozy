@@ -1,9 +1,8 @@
 # May be added after the root frontend targets, or by tests/native standalone.
-find_package(LLVM REQUIRED CONFIG)
-find_package(json-c CONFIG REQUIRED)
-if(NOT LLVM_PACKAGE_VERSION STREQUAL "22.1.8")
-  message(FATAL_ERROR "LLVM 22.1.8 required; found ${LLVM_PACKAGE_VERSION}")
+if(NOT COMMAND woozy_llvm_libraries)
+  include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/LLVM.cmake")
 endif()
+find_package(json-c CONFIG REQUIRED)
 get_filename_component(LANG_NATIVE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 add_library(lang_native_ir STATIC
   ${LANG_NATIVE_ROOT}/src/ir/lower.cpp ${LANG_NATIVE_ROOT}/src/ir/verify.cpp)
@@ -13,7 +12,7 @@ add_library(lang_native STATIC emit.cpp c_ffi.cpp)
 target_link_libraries(lang_native PUBLIC lang_native_ir)
 target_include_directories(lang_native SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native PRIVATE -fno-rtti)
-llvm_map_components_to_libnames(LANG_NATIVE_LLVM_LIBS Core Support nativecodegen Passes)
+woozy_llvm_libraries(LANG_NATIVE_LLVM_LIBS Core Support nativecodegen Passes)
 target_link_libraries(lang_native PRIVATE ${LANG_NATIVE_LLVM_LIBS})
 add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/alloc.cpp
@@ -83,6 +82,8 @@ find_program(LANG_NATIVE_NINJA NAMES ninja REQUIRED)
 add_executable(lang_native_helper helper.cpp)
 target_include_directories(lang_native_helper SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(lang_native_helper PRIVATE lang_sema lang_native lang_driver_process json-c::json-c)
+# Retained for build-tree introspection; the helper resolves these resources
+# relative to its executable so they are not embedded as binary path strings.
 target_compile_definitions(lang_native_helper PRIVATE
   LANG_NATIVE_RUNTIME="$<TARGET_FILE:lang_native_runtime>"
   LANG_HOSTED_RUNTIME="$<TARGET_FILE:lang_hosted_runtime>"
@@ -92,3 +93,34 @@ target_compile_definitions(lang_native_helper PRIVATE
   LANG_NATIVE_LLC="${LLVM_TOOLS_BINARY_DIR}/llc"
   LANG_NATIVE_NINJA="${LANG_NATIVE_NINJA}")
 add_dependencies(lang_native_helper lang_native_runtime lang_hosted_runtime)
+
+# Build-tree resources use symlinks only. Relocated bundles may preserve these
+# links or replace them with actual pinned LLVM 22.1.8 tools and archives.
+set(LANG_NATIVE_RESOURCE_TOOLCHAIN "${CMAKE_BINARY_DIR}/toolchain")
+file(MAKE_DIRECTORY "${LANG_NATIVE_RESOURCE_TOOLCHAIN}")
+foreach(tool IN ITEMS opt llc clang clang++ ld.lld)
+  if(EXISTS "${LLVM_TOOLS_BINARY_DIR}/${tool}")
+    file(CREATE_LINK "${LLVM_TOOLS_BINARY_DIR}/${tool}"
+      "${LANG_NATIVE_RESOURCE_TOOLCHAIN}/${tool}" SYMBOLIC RESULT link_error)
+    if(link_error)
+      message(FATAL_ERROR "cannot create ${tool} resource link: ${link_error}")
+    endif()
+  endif()
+endforeach()
+file(CREATE_LINK "${LANG_NATIVE_NINJA}"
+  "${LANG_NATIVE_RESOURCE_TOOLCHAIN}/ninja" SYMBOLIC RESULT link_error)
+if(link_error)
+  message(FATAL_ERROR "cannot create ninja resource link: ${link_error}")
+endif()
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+  set(LANG_NATIVE_RESOURCE_RUNTIME "${CMAKE_BINARY_DIR}/runtime")
+  file(MAKE_DIRECTORY "${LANG_NATIVE_RESOURCE_RUNTIME}")
+  add_custom_command(TARGET lang_native_runtime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+      "$<TARGET_FILE:lang_native_runtime>"
+      "${LANG_NATIVE_RESOURCE_RUNTIME}/liblang_native_runtime.a")
+  add_custom_command(TARGET lang_hosted_runtime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+      "$<TARGET_FILE:lang_hosted_runtime>"
+      "${LANG_NATIVE_RESOURCE_RUNTIME}/liblang_hosted_runtime.a")
+endif()

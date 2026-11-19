@@ -4,7 +4,7 @@
   "prepared_at": "2026-11-17T14:48:45+0800",
   "kind": "source fixtures + reference expectations only",
   "reference": {
-    "woozyc": "/home/qin/Work/language-dev-20261103/checks/SH21-stage2-performance-fix-20261116.k98_xl5k/new-matching-seed/cpp-build/woozyc",
+    "woozyc": ".local/evidence/a12c36ad110f/woozyc",
     "woozyc_sha256": "c48984719ccb02e1b00d9e8119d2d3f61bcc4db0507b4aa51d22365b6475012c",
     "helper_sha256": "a1786592f70940fd814358a5fcc2df25098f07ce7a83eeb5d6e1d5146a82047b",
     "runtime_stdlib": "checks/SH21-stage2-performance-fix-20261116.k98_xl5k/combined-stage123/resources"

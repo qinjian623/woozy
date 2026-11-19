@@ -45,13 +45,13 @@
 
 - 初版候选锁：`../initial/candidate-lock.json`，SHA-256 `347acdb51fb6ba1b1e696d7a2e015cff53fa5f40c5439cdef53fb07397db6000`。
 - 修正引用：`candidate-lock-reference.json`。
-- wheelhouse：`/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/wheelhouse`；修正前后 11 个 wheel SHA-256 相同。
+- wheelhouse：`${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/wheelhouse`；修正前后 11 个 wheel SHA-256 相同。
 
 ## 证据与命令
 
 实际命令、退出码和日志：`commands.log`；结构化汇总：`summary.json`；修正报告：`report.md`。均在：
 
-`/home/qin/Work/language-dev-20261103/checks/t10-cpu-conformance/correction/`
+`<dev-work-dir>/checks/t10-cpu-conformance/correction/`
 
 初版证据未被覆盖：
 

@@ -80,13 +80,11 @@ OPERATION_ID = "language-mandelbrot-large-preparation-20261110"
 PREPARE_SCHEMA = "compiler-dev/native-mandelbrot-large-preparation/1"
 N_VALUES = (512, 2048)
 ITERATIONS = 50
-DEFAULT_ORACLE_DIR = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "eight-algorithm-large-oracles-20261110"
+DEFAULT_ORACLE_DIR = (
+    WORKTREE.parent / "checks/eight-algorithm-large-oracles-20261110"
 )
-DEFAULT_PYTHON_HELPER = Path(
-    "/home/qin/Work/language-dev-20261103/compiler/build/native-cli-release/"
-    "tests/python/lang_python_emit"
+DEFAULT_PYTHON_HELPER = (
+    WORKTREE / "build/native-cli-release/tests/python/lang_python_emit"
 )
 ORACLE = {
     512: {

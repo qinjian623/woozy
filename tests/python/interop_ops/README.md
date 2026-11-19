@@ -18,7 +18,8 @@ The runner needs the generated-program helper and the dedicated CPython 3.12.15
 NumPy/PyTorch environment:
 
 ```sh
-T10=/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+T10="${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python"
 "$T10" tests/python/interop_ops/run_interop.py \
   --woozyc build-ffi02/woozyc \
   --helper build-ffi02/tests/python/lang_python_emit \
@@ -40,10 +41,11 @@ The local verification build was configured with the exact 3.12.15 interpreter
 and the T10 venv, so `ctest` does not report environment-only failures:
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
 cmake -S . -B build-ffi02 -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=ON \
-  -DLANG_PYTHON312=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12 \
-  -DLANG_T10_PYTHON=/home/qin/Work/language-dev-20261103/toolchains/t10-python-cpu/venv/bin/python \
-  -DLANG_TEST_PYTHON=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+  -DLANG_PYTHON312="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12" \
+  -DLANG_T10_PYTHON="${WOOZY_TOOLCHAIN_ROOT}/t10-python-cpu/venv/bin/python" \
+  -DLANG_TEST_PYTHON="${WOOZY_TOOLCHAIN_ROOT}/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"
 cmake --build build-ffi02 -j8
 cd build-ffi02 && ctest --output-on-failure -j4
 ```

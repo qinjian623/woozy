@@ -48,11 +48,12 @@ chat-client [IP] [PORT] [NICKNAME]
 
 IP 参数接受数字 IPv4 或 IPv6，例如 `127.0.0.1`、`::1`，不接受域名。服务端端口为 0 时由系统选择空闲端口，并打印实际端口；客户端端口必须为 1～65535。`--help` 显示用法。
 
-局域网使用时，服务端可以监听 `0.0.0.0`，客户端填写服务端的实际局域网 IP：
+局域网使用时，服务端可以监听 `0.0.0.0`，客户端填写服务端的实际局域网 IP（下例通过 `SERVER_LAN_IP` 环境变量传入）：
 
 ```sh
 build/chat/server/program 0.0.0.0 9000
-build/chat/client/program 192.168.1.20 9000 Alice
+SERVER_LAN_IP="${SERVER_LAN_IP:?set SERVER_LAN_IP to the server LAN address}"
+build/chat/client/program "$SERVER_LAN_IP" 9000 Alice
 ```
 
 ## 消息和错误

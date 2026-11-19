@@ -19,9 +19,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-DEFAULT_EVIDENCE = Path(
-    "/home/qin/Work/language-dev-20261103/checks/"
-    "selfhost-float-supplemental-20261114-r4/results.json")
+DEFAULT_EVIDENCE = (REPO.parent / "checks" /
+                    "selfhost-float-supplemental-20261114-r4/results.json")
 CASES = ("f32-typed-defer", "f64-panic-skip")
 
 
@@ -44,6 +43,8 @@ def main(argv=None) -> int:
     parser.add_argument("--evidence", type=Path, default=DEFAULT_EVIDENCE)
     parser.add_argument("--out", type=Path, default=Path("signature-controls.json"))
     args = parser.parse_args(argv)
+    if not args.evidence.is_file():
+        parser.error(f"evidence is absent: {args.evidence}")
     supplemental = load_module("supplemental_under_test", HERE / "supplemental.py")
     cases_module = load_module(
         "original_supplemental_cases",

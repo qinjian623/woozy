@@ -8,10 +8,9 @@ unit twice and compares the generated module bytes.  The generated module's
 embedded full license notice is compared byte-for-byte with the vendored
 LICENSE.md.
 
-Run with the project Python, for example:
+Run with the project Python 3.12, for example:
 
-    /home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12 \
-        tests/python/unicode18_test.py
+    python3 tests/python/unicode18_test.py
 """
 
 import argparse

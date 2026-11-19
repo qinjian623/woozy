@@ -41,13 +41,16 @@ run.py            syntax / oracle / Wz module / branch stages
 ## Checks
 
 ```sh
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+: "${B_SOURCE:?set B_SOURCE to the accepted B checkout or nativeemit directory}"
+: "${WORK_DIR:?set WORK_DIR to a new directory outside this checkout}"
 python3 selfhost/tests/nativeemit_c/run.py \
-  --woozyc <build>/woozy-stdlib-native/woozyc \
-  --helper <build>/woozy-stdlib-native/native/lang_native_helper \
-  --toolchain-root <toolchains> \
-  --source-root <real-root>/selfhost/src/wzcc \
-  --b-source <accepted-B-worktree> \
-  --work-dir <unique-dir-outside-the-repo>
+  --woozyc build/woozy-stdlib-native/woozyc \
+  --helper build/woozy-stdlib-native/native/lang_native_helper \
+  --toolchain-root "$WOOZY_TOOLCHAIN_ROOT" \
+  --source-root selfhost/src/wzcc \
+  --b-source "$B_SOURCE" \
+  --work-dir "$WORK_DIR"
 ```
 
 The default request is `syntax,oracle,wz,branches`.  A missing real dependency
@@ -110,8 +113,8 @@ The `fn` module's dynamic capture/bound construction uses
 Real packages:
 
 ```text
-Root: /home/qin/Work/language-dev-20261103/compiler/selfhost/src/wzcc
-B:    /home/qin/.local/state/cli-agent-bridge/worktrees/7eb82b7efb6eb2e477f28b9a
+Root: selfhost/src/wzcc
+B:    <accepted-B-worktree>
 ```
 
 Frozen hashes:

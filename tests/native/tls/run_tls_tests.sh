@@ -3,13 +3,14 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
+TOOLCHAINS=${LANG_TOOLCHAINS:-$ROOT/../toolchains}
 BUILD="$HERE/.build"
 CERTS="$BUILD/certs"
 LOGS="$BUILD/logs"
 RUN="$BUILD/run"
 SUMMARY="$BUILD/summary.txt"
 
-CXX=${CXX:-/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++}
+CXX=${CXX:-$TOOLCHAINS/llvm-22.1.8/bin/clang++}
 CC=${CC:-$(dirname "$CXX")/clang}
 PYTHON=${PYTHON:-python3}
 OPENSSL=${OPENSSL:-openssl}

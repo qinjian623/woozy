@@ -12,7 +12,7 @@ does not bypass the source checker.
 
 The four planned positive cases from the Root
 `tests/reference_values/cases.json` Weak subset are copied verbatim from
-`/home/qin/Work/language-dev-20261103/integration/reference-source-20261112/tests/reference_values/fixtures`
+`<dev-work-dir>/integration/reference-source-20261112/tests/reference_values/fixtures`
 and run as actual Source O0/O2:
 
 | fixture | source sha256 | expected |
@@ -72,7 +72,8 @@ compile failure is not accepted as the negative result.
 ## Running
 
 ```sh
-LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+: "${WOOZY_TOOLCHAIN_ROOT:?set WOOZY_TOOLCHAIN_ROOT to the external toolchains directory}"
+LD_LIBRARY_PATH="${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib" \
 python3 tests/native/weak_source/run_weak_source.py \
   --cli build/woozyc --helper build/native/lang_native_helper \
   --root . --out build/weak-source-results

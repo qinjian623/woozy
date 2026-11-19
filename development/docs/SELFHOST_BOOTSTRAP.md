@@ -6,21 +6,25 @@
 
 ```sh
 make -C selfhost bootstrap \
-  OUT=/absolute/path/to/empty-bootstrap-directory \
-  STAGE0=/absolute/path/to/seed/woozyc \
-  RUNTIME_DIR=/absolute/path/to/seed/native \
-  STRACE=/absolute/path/to/strace JOBS=6
+  OUT="$PWD/build/selfhost-bootstrap" \
+  STAGE0="$PWD/build/woozy-stdlib-native/woozyc" \
+  RUNTIME_DIR="$PWD/build/woozy-stdlib-native/native" \
+  JOBS=6
 ```
+
+从仓库根目录运行这条命令。自举默认在仓库旁的 `toolchains/` 查找 LLVM 和兼容库，也可用 `WOOZY_TOOLCHAIN_ROOT` 指向目标机器上的同一目录布局。第二代起需要 Linux 的 `strace`，默认从 `PATH` 查找，可通过 `STRACE` 指定。
 
 也可从其他目录用 `make -f '/absolute/path to/repo/selfhost/Makefile' bootstrap` 独立调用；两种调用都允许通过 `MAKEFILES` 预载其他 Makefile，但不支持通过 `include` 或多份 `-f` 混用该入口。`OUT`、`STAGE0`、`RUNTIME_DIR` 和 `STRACE` 按字面值传给脚本；例如在 shell 中写 `OUT='/path with spaces/$name'`，不要为了 Make 额外转义 `$`。`PYTHON` 仍可指定命令及参数，例如 `PYTHON='python3 -I'`。
 
 Make 入口默认构建三代，使用 `OPT=0`，每个包仍执行 LLVM 验证。可指定 `OPT=2`，或用 `STAGES=2` 只构建到第二代。下游 GNU Make 使用 `-jJOBS`，不继承外层 Make 的选项、jobserver、额外 Makefile 或命令行变量覆盖。该入口省略对象缓存。
 
+`OPT=0` 构建第二代及后续版本时，脚本会把本次构建进程的栈上限提高到至少 16 MiB。系统硬上限低于 16 MiB 时，脚本会报错。
+
 多代 `OPT=2` 自举会一并冻结 LLVM 22.1.8 的 `llvm-split` 和 `llvm-objcopy`。第二、三代的源码 Make 先验证大包的完整 LLVM IR，再把至少 512 个函数的包拆成 16 份。每份使用相同的 O2 流程、默认内联和逐遍验证，最后按固定顺序合并成该包的对象文件。不同分区之间的调用留给链接器，内联在各自分区内进行。
 
 ## 冻结输入与 stage0 实际来源
 
-stage0 的 C++ 可执行文件不会读取目标目录里的 `resources`。脚本读取 stage0 同级的 `build.ninja` 和 `CMakeCache.txt`，要求 `LANG_ENABLE_LLVM=ON`，并解析 seed 编译规则及 native helper 编译规则中的 `LANG_STD_SOURCE_ROOT`、`LANG_NATIVE_HELPER`、`LANG_NATIVE_RUNTIME`、`LANG_HOSTED_RUNTIME`、`LANG_NATIVE_CLANG`、`LANG_NATIVE_LLD`。报告中的 `stage0` 同时保留宏的原始 pathname 和首次解析目标、字节哈希及 CMake 配置哈希，并明确 `uses_copied_resources=false`。每一代前后都重新跟随宏原始 pathname，检查其指向目标、stdlib 目录集合和文件字节；只改向 symlink 而保留旧目标也会记录为 `input_changes` 失败。seed 命令行入口、helper 和 resources 链接按同样方式核对。seed 和 helper 另存到 `resources/stage0` 只作为核对副本，不参与执行，不能据此声称 stage0 使用了复制资源。
+脚本读取 stage0 同级的 `build.ninja` 和 `CMakeCache.txt`，要求 `LANG_ENABLE_LLVM=ON`。新版 C++ 编译器报告实际使用的标准库、helper、运行库和 LLVM 工具路径。旧版仍从 CMake 编译宏确定资源。报告记录路径、解析后的目标和文件哈希，每一代前后重新核对。链接改向其他文件也会记为 `input_changes`。另存在 `resources/stage0` 的 seed 和 helper 只用于核对文件字节，实际构建仍从原路径启动。
 
 脚本把 stage0 实际 stdlib `.wz`、两个运行库归档与冻结副本逐字比较；无法解析宏、宏值冲突、路径缺失或字节不同都在 stage0 明确失败。每一代运行前后还会重新核对完整冻结输入：compiler `.wz`、compiler manifest、stdlib `.wz` 集合、native/hosted 归档、两个 Python runtime 文件、`resources/runtime` 的完整文件集合、实际解析后的工具路径和字节、seed/helper 及其 build 配置。新增、丢失或字节变化都会失败；缺失文件也作为可报告的输入变化记录（例如 before 为原哈希、after 为 missing），并在 `result.json` 的 `failed_stage` 和该代 `input_changes` 中保留阶段、路径和哈希。当前阶段发生任何异常都会把该 stage 标为 failed，不让未完成记录停留在 running。
 
