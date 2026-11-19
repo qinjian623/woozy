@@ -1,0 +1,18 @@
+package interface;
+
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Use UTF-8 byte lengths, matching the seed compiler rather than rune counts.
+func component(value string) string {
+    return strconv.format_u64(u64(vec.len(text.bytes(value)))) + ":" + value;
+}
+
+// owner_key is required for methods and synthetic declarations; callers must
+// recover that owner explicitly rather than derive it from a source position.
+pub func declaration_key(package_identity string, declaration_kind string,
+                         owner_key string, name string) string {
+    return "wz-decl/1:" + component(package_identity) + component(declaration_kind)
+        + component(owner_key) + component(name);
+}

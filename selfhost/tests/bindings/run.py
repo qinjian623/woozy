@@ -1390,6 +1390,9 @@ def build_oracle(work: Path, clang: Path, accepted: Path, lib_dir: Path) -> Path
                   f"-I{accepted / 'include'}",
                   str(lib_dir / "liblang_modules.a"),
                   str(lib_dir / "liblang_frontend.a"),
+                  # liblang_modules.a resolves ParseCache::store's
+                  # StagingDir/publish symbols from this library.
+                  str(lib_dir / "liblang_driver_process.a"),
                   "-ljson-c", "-ltomlplusplus", "-lm", "-o", str(binary)])
     if result.returncode != 0:
         fail("oracle build failed:\n" +
@@ -1443,7 +1446,9 @@ def main(argv: list[str] | None = None) -> int:
     for path, label in ((stage0, "stage0 compiler"), (clang, "clang++"),
                         (lib_dir / "liblang_modules.a", "liblang_modules.a"),
                         (lib_dir / "liblang_frontend.a",
-                         "liblang_frontend.a")):
+                         "liblang_frontend.a"),
+                        (lib_dir / "liblang_driver_process.a",
+                         "liblang_driver_process.a")):
         if not path.is_file():
             fail(f"{label} missing: {path}")
     if not (accepted / "selfhost" / "src" / "wzcc" / "jsondoc").is_dir():

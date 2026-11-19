@@ -23,15 +23,15 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 CASES = HERE / "cases"
 ORACLE = HERE / "oracle.cpp"
-CXX_SOURCES = [
-    "src/modules/resolve.cpp",
-    "src/modules/project.cpp",
-    "src/syntax/parser.cpp",
-    "src/syntax/lexer.cpp",
-    "src/support/source.cpp",
-    "src/support/input.cpp",
-    "src/support/diagnostic.cpp",
-]
+# The oracle is linked against the already-built Root libraries; rebuilding a
+# hand-picked source subset silently misses new dependencies such as digest and
+# parse-cache symbols.  liblang_driver_process.a owns StagingDir/publish, which
+# liblang_modules.a now references through ParseCache::store.
+ORACLE_LIBS = (
+    "liblang_modules.a",
+    "liblang_frontend.a",
+    "liblang_driver_process.a",
+)
 
 
 def load_run_module():
@@ -58,12 +58,23 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--opt", action="append", type=int, choices=(0, 2))
     parser.add_argument("--cxx", default="g++")
+    parser.add_argument("--lib-dir", default="",
+                        help="directory with the current C++ static libraries "
+                             "(default: the directory containing --woozyc)")
     args = parser.parse_args()
 
     run = load_run_module()
     woozyc = Path(args.woozyc).resolve()
     if not woozyc.is_file():
         print(f"stage-0 compiler not found: {woozyc}", file=sys.stderr)
+        return 2
+    lib_dir = (Path(args.lib_dir).expanduser().resolve()
+               if args.lib_dir else woozyc.parent)
+    missing_libs = [name for name in ORACLE_LIBS
+                    if not (lib_dir / name).is_file()]
+    if missing_libs:
+        print(f"C++ oracle libraries not found in {lib_dir}: "
+              f"{', '.join(missing_libs)}", file=sys.stderr)
         return 2
     if args.work_dir:
         work = Path(args.work_dir).resolve()
@@ -78,7 +89,7 @@ def main() -> int:
     compile_command = [
         args.cxx, "-std=c++20", "-O0", f"-I{ROOT / 'include'}",
         str(ORACLE),
-        *[str(ROOT / source) for source in CXX_SOURCES],
+        *[str(lib_dir / name) for name in ORACLE_LIBS],
         "-ltomlplusplus", "-ljson-c", "-lm", "-o", str(oracle),
     ]
     built = command(compile_command, args.timeout, ROOT, env)

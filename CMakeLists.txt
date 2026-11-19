@@ -3,6 +3,8 @@ project(lang VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(LANG_ENABLE_LLVM "Build the isolated LLVM native helper and integration probe" OFF)
 add_library(lang_frontend STATIC
+  src/support/digest.cpp
+  src/support/file_digest.cpp
   src/support/version.cpp
   src/support/source.cpp
   src/support/diagnostic.cpp
@@ -11,23 +13,23 @@ add_library(lang_frontend STATIC
   src/syntax/parser.cpp)
 target_include_directories(lang_frontend PUBLIC include)
 target_compile_features(lang_frontend PUBLIC cxx_std_20)
-add_library(lang_driver_process STATIC src/support/process.cpp)
+add_library(lang_driver_process STATIC src/support/process.cpp src/support/publish.cpp)
 target_include_directories(lang_driver_process PUBLIC include)
 target_compile_features(lang_driver_process PUBLIC cxx_std_20)
 find_package(tomlplusplus CONFIG REQUIRED)
 find_package(json-c CONFIG REQUIRED)
-add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp)
+add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp src/modules/parse_cache.cpp)
 target_link_libraries(lang_modules PUBLIC lang_frontend
-  PRIVATE tomlplusplus::tomlplusplus json-c::json-c)
+  PRIVATE tomlplusplus::tomlplusplus json-c::json-c lang_driver_process)
 target_compile_definitions(lang_modules PRIVATE
   LANG_STD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
 add_library(lang_hir STATIC src/hir/hir.cpp src/hir/system_operation.cpp src/hir/ownership.cpp
-  src/hir/pattern_analysis.cpp src/hir/literal_value.cpp src/hir/constant_value.cpp)
+  src/hir/pattern_analysis.cpp src/hir/literal_value.cpp src/hir/constant_value.cpp src/hir/identity.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GMPXX REQUIRED IMPORTED_TARGET gmpxx>=6.3.0)
 target_link_libraries(lang_hir PUBLIC PkgConfig::GMPXX)
-add_library(lang_sema STATIC src/sema/check.cpp)
+add_library(lang_sema STATIC src/sema/check.cpp src/sema/front_cache.cpp)
 target_link_libraries(lang_sema PUBLIC lang_hir PRIVATE PkgConfig::GMPXX)
 add_subdirectory(src/backend/python)
 add_executable(woozyc src/driver/main.cpp)
@@ -41,10 +43,43 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   find_program(LANG_TEST_PYTHON NAMES python3.12 python3)
+  add_executable(lang_file_digest_probe tests/incremental/file_digest_probe.cpp)
+  target_link_libraries(lang_file_digest_probe PRIVATE lang_frontend lang_driver_process)
+  if(LANG_TEST_PYTHON)
+    add_test(NAME support.file_digest COMMAND ${LANG_TEST_PYTHON} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_isolated.py
+      ${CMAKE_BINARY_DIR}/file-digest-results -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental/file_digest_test.py
+      --cpp $<TARGET_FILE:lang_file_digest_probe>)
+  endif()
+  add_executable(lang_identity_test tests/incremental/identity_test.cpp)
+  target_link_libraries(lang_identity_test PRIVATE lang_hir)
+  add_test(NAME modules.identity COMMAND lang_identity_test)
+  add_executable(lang_declaration_key_test tests/modules/declaration_key_test.cpp)
+  target_link_libraries(lang_declaration_key_test PRIVATE lang_frontend)
+  target_compile_options(lang_declaration_key_test PRIVATE -UNDEBUG)
+  add_test(NAME modules.declaration_key COMMAND lang_declaration_key_test)
+  add_executable(lang_publish_test tests/incremental/publish_test.cpp)
+  target_link_libraries(lang_publish_test PRIVATE lang_driver_process)
+  add_test(NAME support.publish COMMAND lang_publish_test ${CMAKE_BINARY_DIR}/publish-test-results)
   add_executable(lang_process_test tests/support/process_test.cpp)
   target_link_libraries(lang_process_test PRIVATE lang_driver_process)
   add_test(NAME support.process COMMAND lang_process_test)
   if(LANG_ENABLE_LLVM)
+    if(LANG_TEST_PYTHON)
+    get_filename_component(LANG_DEFAULT_XML "${LLVM_TOOLS_BINARY_DIR}/../../libxml2-legacy-2.13.9/usr/lib" ABSOLUTE)
+    set(LANG_TEST_LIBXML_DIR "${LANG_DEFAULT_XML}" CACHE PATH "Legacy libxml directory for fixed LLVM tests")
+    add_test(NAME native.package_incremental_scalar
+      COMMAND ${LANG_TEST_PYTHON} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_isolated.py
+        ${CMAKE_BINARY_DIR}/package-incremental-results
+        -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental/package_objects_test.py
+        --cli $<TARGET_FILE:woozyc>
+        --libxml ${LANG_TEST_LIBXML_DIR})
+    add_test(NAME native.package_incremental_fixtures
+      COMMAND ${LANG_TEST_PYTHON} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_isolated.py
+        ${CMAKE_BINARY_DIR}/package-fixture-results
+        -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental/fixture_cache_test.py
+        --cli $<TARGET_FILE:woozyc> --libxml ${LANG_TEST_LIBXML_DIR}
+        --fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental/fixtures)
+    endif()
     add_subdirectory(tests/native)
     add_subdirectory(tests/selfhost)
   endif()

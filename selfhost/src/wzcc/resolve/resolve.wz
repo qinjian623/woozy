@@ -97,6 +97,9 @@ struct Resolver {
     active_const_has bool;
     active_const usize;
 
+    requested_bodies Vec[model.NodeRef];
+    all_bodies bool;
+    body_module option.Option[usize];
     module usize;
     file usize;
     parse_index usize;
@@ -536,11 +539,24 @@ func function_body(state inout Resolver, id usize, outer usize,
         add(inout state, scope, t.spelling, model.SymbolKind.Value, true,
             definition, true, t.span, false, false, 0);
     }
-    for child in n.children {
-        let c = node(state, child);
-        if kind_id(c.kind) != AST_BLOCK { continue; }
-        for statement in c.children {
-            visit(inout state, statement, scope);
+    var include_body = state.all_bodies;
+    switch state.body_module {
+        case option.Option.Some(selected): {
+            if selected == state.module { include_body = true; }
+        }
+        case option.Option.None: {}
+    }
+    for requested in state.requested_bodies {
+        if requested.module == state.module && requested.file == state.file &&
+           requested.node == id { include_body = true; }
+    }
+    if include_body {
+        for child in n.children {
+            let c = node(state, child);
+            if kind_id(c.kind) != AST_BLOCK { continue; }
+            for statement in c.children {
+                visit(inout state, statement, scope);
+            }
         }
     }
     state.active_const_has = previous_const_has;
@@ -1015,7 +1031,12 @@ func check_constants(state inout Resolver) {
     }
 }
 
-pub func resolve_project(project model.Project) model.ResolveResult {
+// The project and its parsed source files are immutable during resolution.
+pub struct PreparedProject {
+    value Resolver;
+}
+
+pub func prepare_project(project model.Project) PreparedProject {
     var state = Resolver(project: project,
         symbols: vec.empty[model.Symbol](),
         occurrences: vec.empty[model.Occurrence](),
@@ -1027,9 +1048,111 @@ pub func resolve_project(project model.Project) model.ResolveResult {
         declarations: vec.empty[Declaration](),
         const_edges: vec.empty[Vec[ConstEdge]](),
         active_const_has: false, active_const: 0,
+        requested_bodies: [],
+        all_bodies: false, body_module: option.Option[usize].None,
         module: 0, file: 0, parse_index: 0);
     setup_prelude(inout state);
     collect(inout state);
+    return PreparedProject(value: state);
+}
+
+func copy_prepared(state Resolver) Resolver {
+    var copy = state;
+    // Appended file and body scopes own their new name tables. The original
+    // prelude and package name tables are read-only after collection.
+    copy.scopes = state.scopes[:];
+    copy.symbols = state.symbols[:];
+    copy.diagnostics = vec.empty[model.Diagnostic]();
+    for original in state.diagnostics {
+        var diagnostic = original;
+        diagnostic.related = original.related[:];
+        diagnostic.fixits = original.fixits[:];
+        diagnostic.notes = original.notes[:];
+        vec.push(copy.diagnostics, diagnostic);
+    }
+    copy.occurrences = vec.empty[model.Occurrence]();
+    copy.deferred_members = vec.empty[model.NodeRef]();
+    copy.self_parameters = vec.empty[model.SelfParameter]();
+    copy.const_edges = vec.empty[Vec[ConstEdge]]();
+    return copy;
+}
+
+func selection_error(project model.Project, body_module option.Option[usize],
+                     requested_bodies Vec[model.NodeRef]) option.Option[model.ResolveResult] {
+    switch body_module {
+        case option.Option.Some(selected): {
+            if selected >= vec.len(project.modules) {
+                var diagnostic = model.diagnostic("E_MODULE_INVALID", "resolve",
+                    "selected module id is out of range",
+                    model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+                diagnostic.has_primary = false;
+                return option.Option[model.ResolveResult].Some(model.ResolveResult(state: model.PhaseState.Failed,
+                    failure: model.FailureKind.Source, diagnostics: [diagnostic],
+                    has_value: false, value: model.ResolvedProject(project: project,
+                        symbols: [], occurrences: [], deferred_members: [],
+                        self_parameters: [])));
+            }
+        }
+        case option.Option.None: {}
+    }
+    for requested in requested_bodies {
+        var valid = false;
+        switch body_module {
+            case option.Option.Some(selected): {
+                if selected < vec.len(project.modules) &&
+                   requested.module < vec.len(project.modules) &&
+                   requested.module != selected {
+                    let module = project.modules[requested.module];
+                    if requested.file < vec.len(module.files) &&
+                       module.files[requested.file] < vec.len(project.files) {
+                        let file = project.files[module.files[requested.file]];
+                        if file.root < vec.len(file.nodes) && requested.node < vec.len(file.nodes) {
+                            let declaration = file.nodes[requested.node];
+                            var top_level = false;
+                            for child in file.nodes[file.root].children {
+                                if child == requested.node { top_level = true; }
+                            }
+                            var generic = false; var body = false;
+                            for child in declaration.children {
+                                if child < vec.len(file.nodes) {
+                                    if kind_id(file.nodes[child].kind) == AST_GENERIC_PARAMETER { generic = true; }
+                                    if kind_id(file.nodes[child].kind) == AST_BLOCK { body = true; }
+                                }
+                            }
+                            valid = top_level && kind_id(declaration.kind) == AST_FUNCTION &&
+                                generic && body;
+                        }
+                    }
+                }
+            }
+            case option.Option.None: {}
+        }
+        if !valid {
+            var diagnostic = model.diagnostic("E_TEMPLATE_SELECTION_INVALID", "resolve",
+                "requested body must be a top-level generic function in another module",
+                model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+            diagnostic.has_primary = false;
+            return option.Option[model.ResolveResult].Some(model.ResolveResult(state: model.PhaseState.Failed,
+                failure: model.FailureKind.Source, diagnostics: [diagnostic],
+                has_value: false, value: model.ResolvedProject(project: project,
+                    symbols: [], occurrences: [], deferred_members: [], self_parameters: [])));
+        }
+    }
+    return option.Option[model.ResolveResult].None;
+}
+
+func resolve_collected(initial Resolver, all_bodies bool,
+                       body_module option.Option[usize],
+                       requested_bodies Vec[model.NodeRef]) model.ResolveResult {
+    var state = initial;
+    let project = state.project;
+    state.all_bodies = all_bodies;
+    state.body_module = body_module;
+    state.requested_bodies = requested_bodies;
+    switch selection_error(project, body_module, requested_bodies) {
+        case option.Option.Some(failure): return failure;
+        case option.Option.None: {}
+    }
     let module_count = vec.len(state.project.modules);
     for var module_index usize = 0; module_index < module_count;
         module_index += 1 {
@@ -1072,4 +1195,114 @@ pub func resolve_project(project model.Project) model.ResolveResult {
         result.state = model.PhaseState.Recovered;
     }
     return result;
+}
+
+pub func resolve_project(project model.Project) model.ResolveResult {
+    return resolve_collected(prepare_project(project).value, true, option.Option[usize].None, []);
+}
+
+pub func resolve_project_declarations(project model.Project) model.ResolveResult {
+    return resolve_collected(prepare_project(project).value, false, option.Option[usize].None, []);
+}
+
+pub func resolve_prepared_project(prepared PreparedProject) model.ResolveResult {
+    return resolve_collected(copy_prepared(prepared.value), true, option.Option[usize].None, []);
+}
+
+pub func resolve_prepared_declarations(prepared PreparedProject) model.ResolveResult {
+    return resolve_collected(copy_prepared(prepared.value), false, option.Option[usize].None, []);
+}
+
+func same_node(left model.NodeRef, right model.NodeRef) bool {
+    return left.module == right.module && left.file == right.file && left.node == right.node;
+}
+
+func add_required(project model.Project, selected usize, result model.ResolvedProject,
+                  requested Vec[model.NodeRef]) {
+    for occurrence in result.occurrences {
+        let reference = occurrence.source;
+        let module = project.modules[reference.module];
+        let file = project.files[module.files[reference.file]];
+        let source = file.nodes[reference.node].span;
+        var active = false;
+        if reference.module == selected {
+            for node in file.nodes {
+                if kind_id(node.kind) == AST_BLOCK &&
+                   node.span.begin_byte <= source.begin_byte && node.span.end_byte >= source.end_byte {
+                    active = true;
+                }
+            }
+        }
+        for item in requested {
+            if item.module == reference.module && item.file == reference.file {
+                let parent = file.nodes[item.node].span;
+                if parent.begin_byte <= source.begin_byte && parent.end_byte >= source.end_byte { active = true; }
+            }
+        }
+        if !active || occurrence.symbol >= vec.len(result.symbols) { continue; }
+        let symbol = result.symbols[occurrence.symbol];
+        if symbol.module == selected || model.symbol_kind_id(symbol.kind) != model.symbol_kind_id(model.SymbolKind.Function) { continue; }
+        switch symbol.definition {
+            case option.Option.Some(definition): {
+                let owner = project.modules[definition.module];
+                let parsed = project.files[owner.files[definition.file]];
+                let function = parsed.nodes[definition.node];
+                var top = false; var generic = false; var body = false;
+                for child in parsed.nodes[parsed.root].children { if child == definition.node { top = true; } }
+                for child in function.children {
+                    if kind_id(parsed.nodes[child].kind) == AST_GENERIC_PARAMETER { generic = true; }
+                    if kind_id(parsed.nodes[child].kind) == AST_BLOCK { body = true; }
+                }
+                if !top || !generic || !body { continue; }
+                var seen = false;
+                for item in requested { if same_node(item, definition) { seen = true; } }
+                if !seen { vec.push(requested, definition); }
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+pub func required_templates(input model.ResolveResult, module_id usize) Vec[model.NodeRef] {
+    let requested = vec.empty[model.NodeRef]();
+    if !input.has_value { return requested; }
+    var previous usize = 0;
+    for true {
+        add_required(input.value.project, module_id, input.value, requested);
+        if vec.len(requested) == previous { break; }
+        previous = vec.len(requested);
+    }
+    return requested;
+}
+
+pub func resolve_project_module(project model.Project, module_id usize) model.ResolveResult {
+    switch selection_error(project, option.Option[usize].Some(module_id), []) {
+        case option.Option.Some(failure): return failure;
+        case option.Option.None: {}
+    }
+    return resolve_prepared_module(prepare_project(project), module_id);
+}
+
+pub func resolve_prepared_module(prepared PreparedProject, module_id usize) model.ResolveResult {
+    let requested = vec.empty[model.NodeRef]();
+    for true {
+        let result = resolve_collected(copy_prepared(prepared.value),
+            false, option.Option[usize].Some(module_id), requested);
+        if !result.has_value || vec.len(result.diagnostics) != 0 { return result; }
+        let count = vec.len(requested);
+        add_required(prepared.value.project, module_id, result.value, requested);
+        if count == vec.len(requested) { return result; }
+    }
+}
+
+// Requested templates use the same file scopes and declaration identities as
+// ordinary resolution; their bodies are visited once with the selected module.
+pub func resolve_project_module_templates(project model.Project, module_id usize,
+                                          requested Vec[model.NodeRef]) model.ResolveResult {
+    switch selection_error(project, option.Option[usize].Some(module_id), requested) {
+        case option.Option.Some(failure): return failure;
+        case option.Option.None: {}
+    }
+    return resolve_collected(prepare_project(project).value, false,
+        option.Option[usize].Some(module_id), requested);
 }

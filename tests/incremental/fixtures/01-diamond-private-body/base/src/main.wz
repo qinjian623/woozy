@@ -1,0 +1,8 @@
+package app;
+
+import "left" as left;
+import "right" as right;
+
+func main() i32 {
+    return left.value() + right.value();
+}

@@ -610,8 +610,8 @@ class Analysis {
   }
   void gather(HirNodeId id, std::optional<HirNodeId> p = {}) {
     check_cancelled(stop);
-    parents[id.value] = p;
     const auto &x = n(id);
+    parents.at(id.value) = p;
     if (x.kind() == NodeKind::block || x.kind() == NodeKind::for_ ||
         x.kind() == NodeKind::for_in)
       scope_nodes[x.scope.value] = id;

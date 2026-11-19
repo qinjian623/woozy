@@ -1,0 +1,14 @@
+package app;
+import "app/wzcc/frontcache" as frontcache;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+func main() i32 throws os.Error {
+    let args = process.args(); if vec.len(args) != 3 { return 2; }
+    let cache = frontcache.context(args[1], ""); let digest = frontcache.file_digest(cache, args[2]);
+    io.println("{\"sha256\":\"" + digest + "\",\"hits\":" + strconv.format_u64(u64(cache.counters[9])) +
+        ",\"misses\":" + strconv.format_u64(u64(cache.counters[10])) + ",\"bytes_read\":" + strconv.format_u64(u64(cache.counters[11])) + "}");
+    return 0;
+}

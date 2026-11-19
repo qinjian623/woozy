@@ -57,10 +57,13 @@
       const auto name = "lang_"+std::string(spec->name.substr(8))+"_v1";
       if (operation == SystemOperation::math_frexp) {
         auto *exponent = storage(builder.getInt32Ty());
+        start_lifetime(exponent);
         auto *fraction = runtime(name.c_str(),builder.getDoubleTy(),{args[0],exponent});
         llvm::Value *result = llvm::UndefValue::get(lower_type(i.type));
         result = builder.CreateInsertValue(result,fraction,{0});
-        return builder.CreateInsertValue(result,builder.CreateLoad(builder.getInt32Ty(),exponent),{1});
+        auto *loaded = builder.CreateLoad(builder.getInt32Ty(),exponent);
+        end_lifetime(exponent);
+        return builder.CreateInsertValue(result,loaded,{1});
       }
       return runtime(name.c_str(),lower_type(i.type),args);
     }
@@ -71,17 +74,22 @@
       const bool parse = operation <= SystemOperation::num_parse_f64;
       const auto result = parse ? type(i.type).type_args.at(0) : i.type;
       auto *out = storage(lower_type(result));
+      start_lifetime(out);
       const auto name = "lang_" + std::string(spec->name.substr(8)) + "_v1";
       if (parse) {
         const auto parameter = type(i.signature).parameters[0].type;
         auto *status = runtime(name.c_str(), builder.getInt64Ty(),
                               {element_storage(parameter, args[0]), out});
-        return stdlib_result(i.type, status, [&]() -> llvm::Value * {
+        auto *parsed = stdlib_result(i.type, status, [&]() -> llvm::Value * {
           return builder.CreateLoad(lower_type(result), out);
         });
+        end_lifetime(out);
+        return parsed;
       }
       runtime(name.c_str(), builder.getVoidTy(), {out, args[0]});
-      return builder.CreateLoad(lower_type(result), out);
+      auto *formatted = builder.CreateLoad(lower_type(result), out);
+      end_lifetime(out);
+      return formatted;
     }
     if (operation == SystemOperation::fs_stat_bytes) {
       // The runtime stat ABI takes a borrowed path pointer plus an explicit
@@ -92,11 +100,14 @@
       auto *length = vec_field(args[0], 1, builder.getInt64Ty());
       const auto result_type = type(i.type).type_args.at(0);
       auto *out = storage(lower_type(result_type));
+      start_lifetime(out);
       auto *status = runtime("lang_sys_stat_v1", builder.getInt64Ty(),
                              {path, length, out});
-      return stdlib_result(i.type, status, [&]() -> llvm::Value * {
+      auto *stat_res = stdlib_result(i.type, status, [&]() -> llvm::Value * {
         return builder.CreateLoad(lower_type(result_type), out);
       });
+      end_lifetime(out);
+      return stat_res;
     }
     const char *name = nullptr;
     bool output = false, output_first = false, raw = false;
@@ -115,6 +126,7 @@
     case SystemOperation::fs_link: name = "lang_sys_link_v1"; break;
     case SystemOperation::fs_truncate: name = "lang_sys_truncate_v1"; break;
     case SystemOperation::fs_ftruncate: name = "lang_sys_ftruncate_v1"; break;
+    case SystemOperation::fs_flock: name = "lang_sys_flock_v1"; break;
     case SystemOperation::fs_fsync: name = "lang_sys_fsync_v1"; break;
     case SystemOperation::fs_fdatasync: name = "lang_sys_fdatasync_v1"; break;
     case SystemOperation::fs_dup: name = "lang_sys_dup_v1"; break;
@@ -153,15 +165,21 @@
     if (output) {
       result_type = type(i.type).type_args.at(0);
       out = storage(lower_type(result_type));
+      start_lifetime(out);
       if (output_first) actual.insert(actual.begin(), out);
       else actual.push_back(out);
     }
     auto *status = runtime(name, builder.getInt64Ty(), actual);
-    if (raw) return status;
-    return stdlib_result(i.type, status, [&]() -> llvm::Value * {
+    if (raw) {
+      end_lifetime(out);
+      return status;
+    }
+    auto *sys_res = stdlib_result(i.type, status, [&]() -> llvm::Value * {
       if (out) return builder.CreateLoad(lower_type(result_type), out);
       const auto success = type(i.type).type_args.at(0);
       if (type(success).kind == hir::TypeKind::Unit) return builder.getInt8(0);
       return builder.CreateIntCast(status, lower_type(success), signed_(type(success)));
     });
+    end_lifetime(out);
+    return sys_res;
   }

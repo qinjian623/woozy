@@ -537,10 +537,20 @@ func b_domain_for(state inout Checker, type_id usize)
     if b_type_kind_is(value.kind, model.TypeKind.NominalEnum) {
         var declaration_index usize = 0;
         var found = false;
-        for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
-            if state.m.nominals[index].symbol == value.declaration {
-                declaration_index = index;
-                found = true;
+        switch a_nominal_id_get(state.nominal_ids, value.declaration) {
+            case option.Option.Some(index): {
+                if index < vec.len(state.m.nominals) {
+                    declaration_index = index;
+                    found = true;
+                }
+            }
+            case option.Option.None: {
+                for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
+                    if state.m.nominals[index].symbol == value.declaration {
+                        declaration_index = index;
+                        found = true;
+                    }
+                }
             }
         }
         if !found || vec.len(state.m.nominals[declaration_index].params) !=

@@ -1,0 +1,14 @@
+package dep;
+
+pub enum Failure {
+    Bad;
+}
+
+pub func make() Vec[i32] {
+    return [3, 4, 5];
+}
+
+pub func fail_after() Vec[i32] throws Failure {
+    let pending Vec[i32] = [8, 9];
+    throw Failure.Bad;
+}

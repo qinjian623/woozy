@@ -1,0 +1,38 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "04-generic-body-dedup",
+  "kind": "source-package-set",
+  "purpose": "Two packages use the same dep.choose[i32] instance. The generic body calls a package-private bool helper. Changing the helper or the generic body must change both callers; changing one caller literal must not require a new instantiation.",
+  "language_references": [
+    "docs/SEMANTICS.md §6 泛型和 trait",
+    "development/docs/FRONTEND.md §10 模块接口摘要覆盖泛型声明及需要跨模块实例化的函数体",
+    "development/docs/GENERICS.md 跨包实例化与类型键"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "efecc011e083cfdd9a0b9d6101c88356c89644eb96b1a4c8063019d1499c54bd",
+      "src/main.wz": "df69da95d1a65ea8274ca6e43e47cfca6f350c3dbd642bd181b8edc1ba3a30e1",
+      "vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+      "vendor/dep/src/lib.wz": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141",
+      "vendor/left/lang.toml": "e15d8b925180d9fef950d252c54dbb4669a091ddace16240af370468daa8ad28",
+      "vendor/left/src/lib.wz": "7ac0324dcff902c4be86b2fd3c1208e8b99513a00030fda71ff17f7c5de7eb36",
+      "vendor/right/lang.toml": "57e619a9987b715656127101931463ee1fb7f569c8f19ee5e7916078e82dc8f1",
+      "vendor/right/src/lib.wz": "30cb2ed68f0f3082d2fc71be1e134596f1e9eefb968eb6e3b9266aec5d7aa8cf"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 44,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "private-helper",
+    "generic-body",
+    "caller-literal"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

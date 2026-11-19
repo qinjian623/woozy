@@ -1,0 +1,5 @@
+package other;
+
+pub func bonus() i32 {
+    return 5;
+}

@@ -1,0 +1,50 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "add-file",
+  "description": "Add src/more.wz to app and call more() from main. Existing dep package is unchanged.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "may_reuse_packages": [
+      "dep"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "12 -> 14",
+    "note": "A new file changes the app package file set. The package-level declaration table must include it; dep can be reused."
+  },
+  "actions": [
+    {
+      "op": "add",
+      "path": "src/more.wz",
+      "old": null,
+      "new": {
+        "file": "new/src/more.wz",
+        "sha256": "a5f9a462fc9a7b5cb887cc562572d89aebb70ff29b9bea9fb5fa47283f51643d"
+      }
+    },
+    {
+      "op": "replace",
+      "path": "src/main.wz",
+      "old": {
+        "file": "old/src/main.wz",
+        "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+      },
+      "new": {
+        "file": "new/src/main.wz",
+        "sha256": "0bbe00a7b9c40cae4d5ba90ef8795bdb0883036e98e7da4c59713652865f1bbd"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 14,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

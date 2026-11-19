@@ -391,7 +391,8 @@ if(LANG_TEST_PYTHON AND LANG_PYTHON312)
     ${CMAKE_CURRENT_LIST_DIR}/run_stdlib.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --runtime $<TARGET_FILE:lang_native_runtime>
-    --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/stdlib-results)
+    --python ${LANG_PYTHON312} --role reference --helper $<TARGET_FILE:lang_native_helper>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/stdlib-results)
   set_tests_properties(native.stdlib PROPERTIES TIMEOUT 300)
 endif()
 

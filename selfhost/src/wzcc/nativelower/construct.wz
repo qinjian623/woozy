@@ -45,25 +45,16 @@ func lower_diagnostic(code string, message string) model.Diagnostic {
         expected_type: "", has_actual_type: false, actual_type: "");
 }
 
-func new_lower(module hir.HirModule,
-               function hir.HirFunction) Lower throws model.SupportError {
-    var unit usize = 0;
-    var boolean usize = 0;
-    for var id usize = 1; id <= types.size(module.types); id += 1 {
-        let value = module_type(module, id);
-        switch value.kind {
-            case model.TypeKind.Unit: unit = id;
-            case model.TypeKind.Bool: boolean = id;
-            default: {}
-        }
-    }
+func new_lower_shared(module hir.HirModule, shared inout LowerShared,
+                      function hir.HirFunction) Lower throws model.SupportError {
     var state = Lower(h: module,
-        aggregates: nativelayout.aggregate_types(module),
+        aggregates: nativelayout.AggregateTypes(module: module,
+            context: types.context()),
         f: nativeir.Function(symbol: function.symbol,
             signature: function.signature, is_async: function.is_async,
             slots: [], blocks: [], source: function.source.span, handlers: []),
-        current: 0, next_value: 0, slots: [], loops: [], unit: unit,
-        boolean: boolean, temporaries: [], iterations: [], handlers: []);
+        current: 0, next_value: 0, slots: [], loops: [], unit: shared.unit,
+        boolean: shared.boolean, temporaries: [], iterations: [], handlers: []);
     let signature = module_type(module, function.signature);
     for var index usize = 0; index < vec.len(function.parameters);
         index += 1 {
@@ -92,7 +83,7 @@ func new_lower(module hir.HirModule,
         slot_emplace(inout state, capture.local, local);
     }
     state.current = block(inout state);
-    stmt(inout state, function.body);
+    stmt(inout state, inout shared, function.body);
     if live(state) {
         // The implicit final return produces the Task payload for an async
         // function, not the Task handle itself.
@@ -124,4 +115,10 @@ func new_lower(module hir.HirModule,
         }
     }
     return state;
+}
+
+func new_lower(module hir.HirModule,
+               function hir.HirFunction) Lower throws model.SupportError {
+    var shared = build_lower_shared(module);
+    return new_lower_shared(module, inout shared, function);
 }

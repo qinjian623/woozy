@@ -1,0 +1,930 @@
+// Source-level per-package Make build.
+//
+// The public entry writes a fixed Makefile and a private length-prefixed state
+// record.  Make target names contain only fixed-width package ids; real paths
+// live in the state record and are passed as argv, never interpolated into a
+// shell command or a Make rule. A worker starts from the prepared project and,
+// on an object miss, resolves and checks its own module body, then lowers its
+// definitions, and turns the result into its own object.  Imported functions
+// are checked external declarations.
+package cli;
+
+import "app/wzcc/frontcache" as frontcache;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/render" as render;
+import "app/wzcc/resources" as resources;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/path" as path;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAKE_STATE string = ".wz-source-make/state";
+const OBJECT_DIR string = "obj";
+
+struct MakePackage {
+    id usize;
+    fixed string;
+    logical_path string;
+    identity string;
+}
+
+struct MakeState {
+    manifest string;
+    cache_dir string;
+    fingerprint string;
+    opt string;
+    target string;
+    hosted bool;
+    packages Vec[MakePackage];
+    c_libraries Vec[string];
+    c_library_dirs Vec[string];
+}
+
+struct WorkerStatus {
+    package_id string;
+    logical_path string;
+    identity string;
+    action string;
+    object_key string;
+    target string;
+    declaration_scope string;
+    project_functions usize;
+    checked_bodies usize;
+    lowered_functions usize;
+    opt_jobs usize;
+    llc_jobs usize;
+    object_hit usize;
+    parse_hits usize;
+    parse_misses usize;
+    string_tokens_checked usize;
+}
+
+func invalid_state() os.Error { return os.Error.System(22, 0); }
+
+func put_number(out Vec[u8], value u64) {
+    for byte in text.bytes(strconv.format_u64(value) + ":") { vec.push(out, byte); }
+}
+
+func put_string(out Vec[u8], value string) {
+    put_number(out, u64(vec.len(text.bytes(value))));
+    for byte in text.bytes(value) { vec.push(out, byte); }
+}
+
+func take_number(bytes Vec[u8], cursor inout usize) u64 throws os.Error {
+    var result u64 = 0; var digits usize = 0;
+    for cursor < vec.len(bytes) {
+        let byte = bytes[cursor]; cursor += 1;
+        if byte == 58 {
+            if digits == 0 { throw invalid_state(); }
+            return result;
+        }
+        if byte < 48 || byte > 57 || digits >= 20 { throw invalid_state(); }
+        let digit = u64(byte - 48);
+        if result > (18446744073709551615 - digit) / 10 { throw invalid_state(); }
+        result = result * 10 + digit; digits += 1;
+    }
+    throw invalid_state();
+}
+
+func take_string(bytes Vec[u8], cursor inout usize) string throws os.Error {
+    let length = take_number(bytes, inout cursor);
+    if length > u64(vec.len(bytes) - cursor) { throw invalid_state(); }
+    let start = cursor; cursor += usize(length);
+    try { return text.from_bytes(bytes[start:cursor]); }
+    catch problem text.Error { throw invalid_state(); }
+}
+
+func take_bool(bytes Vec[u8], cursor inout usize) bool throws os.Error {
+    let value = take_number(bytes, inout cursor);
+    if value > 1 { throw invalid_state(); }
+    return value == 1;
+}
+
+func fixed_id(value usize) string {
+    let digits = "0123456789abcdef"; var result = "";
+    for var index usize = 0; index < 16; index += 1 {
+        let shift = u64((15 - index) * 4);
+        let at = usize((u64(value) >> shift) & 15);
+        result += digits[at:at + 1];
+    }
+    return result;
+}
+
+func encode_state(state MakeState) Vec[u8] {
+    let out = vec.empty[u8]();
+    put_string(out, "wz-source-make-state/1");
+    put_string(out, state.manifest); put_string(out, state.cache_dir);
+    put_string(out, state.fingerprint); put_string(out, state.opt);
+    put_string(out, state.target);
+    if state.hosted { put_number(out, 1); } else { put_number(out, 0); }
+    put_number(out, u64(vec.len(state.packages)));
+    for package_value in state.packages {
+        put_number(out, u64(package_value.id)); put_string(out, package_value.fixed);
+        put_string(out, package_value.logical_path); put_string(out, package_value.identity);
+    }
+    put_number(out, u64(vec.len(state.c_libraries)));
+    for library in state.c_libraries { put_string(out, library); }
+    put_number(out, u64(vec.len(state.c_library_dirs)));
+    for directory in state.c_library_dirs { put_string(out, directory); }
+    return out;
+}
+
+func decode_state(bytes Vec[u8]) MakeState throws os.Error {
+    var cursor usize = 0;
+    if take_string(bytes, inout cursor) != "wz-source-make-state/1" { throw invalid_state(); }
+    var state = MakeState(manifest: take_string(bytes, inout cursor),
+        cache_dir: take_string(bytes, inout cursor),
+        fingerprint: take_string(bytes, inout cursor),
+        opt: take_string(bytes, inout cursor),
+        target: take_string(bytes, inout cursor),
+        hosted: take_bool(bytes, inout cursor), packages: [],
+        c_libraries: [], c_library_dirs: []);
+    let package_count = take_number(bytes, inout cursor);
+    if package_count > 100000 { throw invalid_state(); }
+    for var index usize = 0; index < usize(package_count); index += 1 {
+        let id = take_number(bytes, inout cursor);
+        var package_value = MakePackage(id: usize(id),
+            fixed: take_string(bytes, inout cursor),
+            logical_path: take_string(bytes, inout cursor),
+            identity: take_string(bytes, inout cursor));
+        vec.push(state.packages, package_value);
+    }
+    let library_count = take_number(bytes, inout cursor);
+    if library_count > 1000000 { throw invalid_state(); }
+    for var index usize = 0; index < usize(library_count); index += 1 {
+        vec.push(state.c_libraries, take_string(bytes, inout cursor));
+    }
+    let directory_count = take_number(bytes, inout cursor);
+    if directory_count > 1000000 { throw invalid_state(); }
+    for var index usize = 0; index < usize(directory_count); index += 1 {
+        vec.push(state.c_library_dirs, take_string(bytes, inout cursor));
+    }
+    if cursor != vec.len(bytes) { throw invalid_state(); }
+    return state;
+}
+
+func read_state(name string) MakeState throws os.Error {
+    return decode_state(fs.read_file(name));
+}
+
+func package_by_fixed(state MakeState, fixed string) option.Option[MakePackage] {
+    for package_value in state.packages {
+        if package_value.fixed == fixed { return option.Option[MakePackage].Some(package_value); }
+    }
+    return option.Option[MakePackage].None;
+}
+
+func package_index(state MakeState, id usize) option.Option[usize] {
+    for var index usize = 0; index < vec.len(state.packages); index += 1 {
+        if state.packages[index].id == id { return option.Option[usize].Some(index); }
+    }
+    return option.Option[usize].None;
+}
+
+func object_name(package_value MakePackage) string {
+    return OBJECT_DIR + "/pkg-" + package_value.fixed + ".o";
+}
+
+func makefile_text(state MakeState) string {
+    var result = ".POSIX:\n.DEFAULT_GOAL := all\n\nall: program\n\nobj:\n\tmkdir -p " + OBJECT_DIR + "\n\n";
+    for package_value in state.packages {
+        result += object_name(package_value) + ": | obj\n";
+        result += "\t\"$$WOOZYC\" __source_make_worker --state " + MAKE_STATE +
+            " --package " + package_value.fixed + "\n\n";
+    }
+    result += "program.o:";
+    for package_value in state.packages { result += " " + object_name(package_value); }
+    result += "\n\t\"$$WOOZYC\" __source_make_combine --state " + MAKE_STATE + "\n\n";
+    result += "program: program.o\n\t\"$$WOOZYC\" __source_make_link --state " + MAKE_STATE + "\n";
+    return result;
+}
+
+func json_string(value string) string {
+    try { return json.serialize(json.Value.String(value)); }
+    catch problem json.Error { return "\"\""; }
+}
+
+func json_number(value usize) string { return strconv.format_u64(u64(value)); }
+
+func status_json(status WorkerStatus) string {
+    return "{\"schema_version\":1,\"package\":" + json_string(status.package_id) +
+        ",\"logical_path\":" + json_string(status.logical_path) +
+        ",\"identity\":" + json_string(status.identity) +
+        ",\"action\":" + json_string(status.action) +
+        ",\"object_key\":" + json_string(status.object_key) +
+        ",\"target\":" + json_string(status.target) +
+        ",\"declaration_scope\":" + json_string(status.declaration_scope) +
+        ",\"project_functions\":" + json_number(status.project_functions) +
+        ",\"checked_bodies\":" + json_number(status.checked_bodies) +
+        ",\"lowered_functions\":" + json_number(status.lowered_functions) +
+        ",\"opt_jobs\":" + json_number(status.opt_jobs) +
+        ",\"llc_jobs\":" + json_number(status.llc_jobs) +
+        ",\"object_hit\":" + json_number(status.object_hit) +
+        ",\"parse_hits\":" + json_number(status.parse_hits) +
+        ",\"parse_misses\":" + json_number(status.parse_misses) +
+        ",\"string_tokens_checked\":" + json_number(status.string_tokens_checked) +
+        "}\n";
+}
+
+func write_status(package_value MakePackage, status WorkerStatus) throws os.Error {
+    fs.write_text("module-" + package_value.fixed + ".json", status_json(status), 0o666);
+    let counts = strconv.format_u64(u64(status.checked_bodies)) + " " +
+        strconv.format_u64(u64(status.lowered_functions)) + " " +
+        strconv.format_u64(u64(status.opt_jobs)) + " " +
+        strconv.format_u64(u64(status.llc_jobs)) + " " +
+        strconv.format_u64(u64(status.object_hit)) + " " +
+        strconv.format_u64(u64(status.parse_hits)) + " " +
+        strconv.format_u64(u64(status.parse_misses)) + " " +
+        strconv.format_u64(u64(status.string_tokens_checked)) + "\n";
+    fs.write_text("module-" + package_value.fixed + ".counts", counts, 0o666);
+}
+
+func append_log(log inout string, value string) { log += value + "\n"; }
+
+func bool_text(value bool) string {
+    if value { return "true"; }
+    return "false";
+}
+
+func output_text(bytes Vec[u8]) string {
+    try { return text.from_bytes(bytes); }
+    catch problem text.Error { return "tool output was not valid UTF-8"; }
+}
+
+func command_text(argv Vec[string]) string {
+    var result = "";
+    for argument in argv { result += json_string(argument) + " "; }
+    return result;
+}
+
+func run_logged(argv Vec[string], capture string, log inout string,
+                echo bool) toolio.ProcessResult throws os.Error {
+    let workdir = os.getcwd();
+    append_log(inout log, "command: " + command_text(argv));
+    append_log(inout log, "workdir: " + workdir);
+    if echo {
+        io.println("command: " + command_text(argv));
+        io.println("workdir: " + workdir);
+    }
+    var result = toolio.ProcessResult(exit_code: 127, signalled: false, output: vec.empty[u8]());
+    try { result = toolio.run(argv, capture); }
+    catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error): throw error;
+            case toolio.Error.Rollback(backup, error): throw error;
+        }
+    }
+    let exit_line = "exit: " + strconv.format_i64(i64(result.exit_code)) +
+        " signalled: " + bool_text(result.signalled);
+    append_log(inout log, exit_line);
+    let note = output_text(result.output);
+    if note != "" { append_log(inout log, note); }
+    if echo {
+        io.println(exit_line);
+        if note != "" { io.println(note); }
+    }
+    return result;
+}
+
+func write_log(name string, value string) throws os.Error {
+    fs.write_text(name, value, 0o666);
+}
+
+func write_diagnostic(name string, diagnostics Vec[model.Diagnostic],
+                      sources Vec[model.Source]) throws os.Error {
+    if vec.len(diagnostics) == 0 { return; }
+    let diagnostic = diagnostics[0];
+    var source_path = ""; var begin = diagnostic.primary.begin_byte;
+    var end = diagnostic.primary.end_byte; var has_primary = diagnostic.has_primary;
+    for value in sources {
+        if value.id == diagnostic.primary.snapshot { source_path = value.path; }
+    }
+    if source_path == "" { has_primary = false; begin = 0; end = 0; }
+    let document = "{\"schema_version\":1,\"code\":" + json_string(diagnostic.code) +
+        ",\"phase\":" + json_string(diagnostic.phase) +
+        ",\"message\":" + json_string(diagnostic.message) +
+        ",\"path\":" + json_string(source_path) +
+        ",\"begin\":" + strconv.format_u64(begin) +
+        ",\"end\":" + strconv.format_u64(end) +
+        ",\"has_primary\":" + bool_text(has_primary) + "}\n";
+    var target = "diag-";
+    if name != "" { target += name; } else { target += "link"; }
+    fs.write_text(target + ".json", document, 0o666);
+}
+
+func worker_finish(options Options, sources Vec[model.Source],
+                   result model.UnitResult,
+                   name string) i32 throws os.Error {
+    io.println("source-make module end: " + name + " failed");
+    write_diagnostic(name, result.diagnostics, sources);
+    return finish(options, sources, result.state, result.failure,
+        result.has_value, result.diagnostics);
+}
+
+func make_config(project_value model.Project) model.CheckConfig {
+    var backend = model.Backend.Native;
+    if project_value.backend == "python" { backend = model.Backend.Python; }
+    return model.CheckConfig(backend: backend, word_bits: project_value.word_bits);
+}
+
+func project_function_count(resolved model.ResolvedProject) usize {
+    var count usize = 0;
+    for symbol in resolved.symbols {
+        switch symbol.kind { case model.SymbolKind.Function: count += 1; default: {} }
+    }
+    return count;
+}
+
+func find_main(resolved model.ResolvedProject) option.Option[usize] {
+    for symbol in resolved.symbols {
+        var function = false;
+        switch symbol.kind { case model.SymbolKind.Function: function = true; default: {} }
+        if function && symbol.module == resolved.project.entry && symbol.name == "main" {
+            return option.Option[usize].Some(symbol.id);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func unsupported_ast(project_value model.Project, package_value MakePackage) option.Option[string] {
+    if package_value.id >= vec.len(project_value.modules) { return option.Option[string].None; }
+    for file_id in project_value.modules[package_value.id].files {
+        let file = project_value.files[file_id];
+        for node in file.nodes {
+            if model.ast_kind_id(node.kind) == model.ast_kind_id(model.AstKind.Async) {
+                return option.Option[string].Some("source make does not support async functions");
+            }
+        }
+    }
+    return option.Option[string].None;
+}
+
+func check_toolchain(root string, stage_path string, optimization string, log inout string) bool throws os.Error {
+    let tools = vec.empty[string]();
+    for name in ["opt", "llc", "clang", "ld.lld"] { vec.push(tools, root + "/toolchain/" + name); }
+    if optimization == "2" {
+        for tool in resources.source_partition_tools(root) { vec.push(tools, tool); }
+    }
+    for tool in tools {
+        let result = run_logged([tool, "--version"], stage_path + "/preflight-capture",
+            inout log, false);
+        if result.exit_code != 0 || result.signalled { return false; }
+        let note = output_text(result.output);
+        var previous = "";
+        var fixed = false;
+        for word in text.split(text.replace(text.replace(text.replace(note, "\r", " "), "\n", " "), "\t", " "), " ") {
+            if word == "22.1.8" && (previous == "version" || previous == "LLD") { fixed = true; }
+            if word != "" { previous = word; }
+        }
+        if !fixed { return false; }
+    }
+    return true;
+}
+
+pub func source_make_build(input Options, original model.Project,
+                           manager inout source.Manager,
+                           cache frontcache.Context) i32 throws os.Error {
+    var target = "x86_64-unknown-linux-gnu";
+    if input.target != "" { target = input.target; }
+    if target != "x86_64-unknown-linux-gnu" {
+        return fail(input, manager.snapshots, "E_TARGET_UNSUPPORTED", "codegen",
+            "source make supports Linux x86_64 only: " + target, model.FailureKind.Unsupported);
+    }
+    var optimization = "0";
+    if input.opt == "2" { optimization = "2"; }
+    if input.opt == "0" || input.opt == "" { optimization = input.opt; }
+    if optimization == "" { optimization = "0"; }
+    if original.backend != "native" || original.word_bits != 64 {
+        return fail(input, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+            "source make requires native/64", model.FailureKind.Unsupported);
+    }
+    if input.std_binding != "" {
+        return fail(input, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+            "source make does not support --std-binding", model.FailureKind.Unsupported);
+    }
+    var packages = vec.empty[MakePackage]();
+    for module_value in original.modules {
+        if option.is_some(module_value.binding) || option.is_some(module_value.c_binding) ||
+           vec.len(module_value.foreign_exports) != 0 || vec.len(module_value.files) == 0 {
+            return fail(input, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+                "source make does not support binding-backed modules", model.FailureKind.Unsupported);
+        }
+        let package_value = MakePackage(id: module_value.id,
+            fixed: fixed_id(module_value.id), logical_path: module_value.logical_path,
+            identity: module_value.identity);
+        switch unsupported_ast(original, package_value) {
+            case option.Option.Some(message): {
+                return fail(input, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+                    message + ": " + module_value.logical_path, model.FailureKind.Unsupported);
+            }
+            case option.Option.None: {}
+        }
+        vec.push(packages, package_value);
+    }
+    if vec.len(packages) == 0 {
+        return fail(input, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+            "source make has no canonical source package", model.FailureKind.Unsupported);
+    }
+    let prepared = resolve.prepare_project(original);
+    let resolved = resolve.resolve_prepared_declarations(prepared);
+    if !render.succeeded(resolved.state, resolved.has_value, resolved.diagnostics) {
+        return finish(input, manager.snapshots, resolved.state, resolved.failure,
+            resolved.has_value, resolved.diagnostics);
+    }
+    switch find_main(resolved.value) {
+        case option.Option.None: return missing_main(input, manager.snapshots);
+        case option.Option.Some(main_symbol): {}
+    }
+    var stage = toolio.Stage(directory: "", path: "", preserve: false);
+    try { stage = toolio.stage(input.output, "source-make"); }
+    catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error): return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain", source_os_text(error), model.FailureKind.Environment);
+            case toolio.Error.Rollback(backup, error): return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain", "output recovery failed; retained at " + backup + ": " + source_os_text(error), model.FailureKind.Environment);
+        }
+    }
+    defer { toolio.cleanup(stage); }
+    fs.create_dir_all(stage.path + "/" + ".wz-source-make", 0o777);
+    var preflight = "source-make preflight\nproject: " + input.project + "\ntarget: " + target + "\nopt: " + optimization + "\n";
+    let root = resources.directory();
+    if !check_toolchain(root, stage.path, optimization, inout preflight) {
+        write_log(stage.path + "/preflight.log", preflight);
+        publish_failure_logs(inout stage);
+        return fail(input, manager.snapshots, "E_TOOLCHAIN_MISSING", "codegen",
+            "LLVM 22.1.8 tools required for source make", model.FailureKind.Environment);
+    }
+    write_log(stage.path + "/preflight.log", preflight);
+    var cache_dir = input.cache_directory;
+    if cache_dir != "" && !path.is_absolute(cache_dir) { cache_dir = path.join(os.getcwd(), cache_dir); }
+    var manifest = input.project;
+    if !path.is_absolute(manifest) { manifest = path.join(os.getcwd(), manifest); }
+    let state = MakeState(manifest: manifest, cache_dir: cache_dir,
+        fingerprint: cache.fingerprint, opt: optimization, target: target,
+        hosted: original.hosted, packages: packages,
+        c_libraries: original.c_libraries, c_library_dirs: original.c_library_dirs);
+    fs.write_file(stage.path + "/" + MAKE_STATE, encode_state(state), 0o600);
+    write_log(stage.path + "/Makefile", makefile_text(state));
+    let executable = os.readlink("/proc/self/exe");
+    process.setenv("WOOZYC", executable, true);
+    let make = resources.make();
+    var execution = toolio.ProcessResult(exit_code: 127, signalled: false, output: vec.empty[u8]());
+    try {
+        let broker = start_make_broker(stage.path, input, original, state, prepared, manager);
+        defer { finish_make_broker(broker); }
+        execution = toolio.run([make, "-C", stage.path, "-f", "Makefile"],
+            stage.path + "/make-capture");
+    }
+    catch problem toolio.Error {
+        switch problem { case toolio.Error.System(error): throw error; case toolio.Error.Rollback(backup, error): throw error; }
+    }
+    let make_output = "make executable: " + make + "\nmake workdir: " + stage.path +
+        "\nmake exit: " + strconv.format_i64(i64(execution.exit_code)) + "\n" + output_text(execution.output);
+    write_log(stage.path + "/make.log", make_output);
+    if execution.exit_code != 0 || execution.signalled {
+        let diagnostics = read_worker_diagnostics(stage.path, packages, make_output, inout manager);
+        publish_failure_logs(inout stage);
+        return finish(input, manager.snapshots, model.PhaseState.Failed,
+            model.FailureKind.Source, false, diagnostics);
+    }
+    write_reports(stage.path, packages, state, make_output, cache);
+    var names = ["Makefile", "make.log", "preflight.log", "combine.log", "link.log",
+        "make-report.json", "cache-statistics.json", "program.o", "program"];
+    for package_value in packages {
+        vec.push(names, "module-" + package_value.fixed + ".log");
+        vec.push(names, "module-" + package_value.fixed + ".json");
+        vec.push(names, "module-" + package_value.fixed + ".counts");
+    }
+    try { toolio.publish_files(inout stage, names); }
+    catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error): return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain", source_os_text(error), model.FailureKind.Environment);
+            case toolio.Error.Rollback(backup, error): return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain", "output recovery failed; retained at " + backup + ": " + source_os_text(error), model.FailureKind.Environment);
+        }
+    }
+    return finish(input, manager.snapshots, model.PhaseState.Complete,
+        model.FailureKind.Source, true, []);
+}
+
+func publish_failure_logs(stage inout toolio.Stage) {
+    var candidates = ["Makefile", "make.log", "preflight.log", "combine.log", "link.log", "make-report.json"];
+    var entries = vec.empty[fs.DirEntry]();
+    try { entries = fs.read_dir(stage.path); } catch problem os.Error {}
+    for entry in entries {
+        try {
+            let name = fs.name_text(entry);
+            if (text.starts_with(name, "module-") ||
+                text.starts_with(name, "diag-")) &&
+               (text.ends_with(name, ".log") || text.ends_with(name, ".json")) {
+                vec.push(candidates, name);
+            }
+        } catch problem os.Error {}
+    }
+    var names = vec.empty[string]();
+    for name in candidates {
+        var present = false;
+        try { present = fs.exists(stage.path + "/" + name); } catch problem os.Error {}
+        if present { vec.push(names, name); }
+    }
+    if vec.len(names) == 0 { return; }
+    try { toolio.publish_files(inout stage, names); } catch problem toolio.Error {}
+}
+
+func source_os_text(problem os.Error) string {
+    switch problem {
+        case os.Error.Interrupted(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.System(code, completed): return "os error " + strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed): return "no progress";
+    }
+}
+
+func read_worker_diagnostics(stage_path string, packages Vec[MakePackage],
+                             make_output string, manager inout source.Manager) Vec[model.Diagnostic] {
+    let result = vec.empty[model.Diagnostic]();
+    for package_value in packages {
+        let name = stage_path + "/diag-" + package_value.fixed + ".json";
+        let parsed = read_diagnostic_file(name, inout manager);
+        switch parsed {
+            case option.Option.Some(diagnostic): return [diagnostic];
+            case option.Option.None: {}
+        }
+    }
+    let link = read_diagnostic_file(stage_path + "/diag-link.json", inout manager);
+    switch link {
+        case option.Option.Some(diagnostic): return [diagnostic];
+        case option.Option.None: {}
+    }
+    var diagnostic = model.diagnostic("E_SOURCE_MAKE_FAILED", "codegen",
+        "source make failed", model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    vec.push(diagnostic.notes, make_output);
+    vec.push(result, diagnostic);
+    return result;
+}
+
+func read_diagnostic_file(name string, manager inout source.Manager) option.Option[model.Diagnostic] {
+    var document = json.Value.Null;
+    try { document = json.parse(fs.read_text(name)); }
+    catch problem os.Error { return option.Option[model.Diagnostic].None; }
+    catch problem json.Error { return option.Option[model.Diagnostic].None; }
+    let code = json_member_string(document, "code");
+    let phase = json_member_string(document, "phase");
+    let message = json_member_string(document, "message");
+    let path_value = json_member_string(document, "path");
+    let begin = json_member_number(document, "begin");
+    let end = json_member_number(document, "end");
+    var has_primary = json_member_bool(document, "has_primary");
+    var span = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    if has_primary && path_value != "" {
+        var found = false;
+        for value in manager.snapshots {
+            if value.path == path_value && begin <= u64(vec.len(value.original)) &&
+               end <= u64(vec.len(value.original)) {
+                span = model.Span(snapshot: value.id, begin_byte: begin, end_byte: end);
+                found = true;
+            }
+        }
+        has_primary = found;
+    }
+    var diagnostic = model.diagnostic(code, phase, message, span);
+    diagnostic.has_primary = has_primary;
+    return option.Option[model.Diagnostic].Some(diagnostic);
+}
+
+func json_member(value json.Value, name string) option.Option[json.Value] {
+    switch value {
+        case json.Value.Object(members): {
+            for member in members { if member.name == name { return option.Option[json.Value].Some(member.value); } }
+        }
+        default: {}
+    }
+    return option.Option[json.Value].None;
+}
+
+func json_member_string(value json.Value, name string) string {
+    switch json_member(value, name) {
+        case option.Option.Some(json.Value.String(item)): return item;
+        default: return "";
+    }
+}
+
+func json_member_number(value json.Value, name string) u64 {
+    switch json_member(value, name) {
+        case option.Option.Some(json.Value.Number(item)): {
+            try { return strconv.parse_u64(item); } catch problem strconv.Error { return 0; }
+        }
+        default: return 0;
+    }
+}
+
+func json_member_bool(value json.Value, name string) bool {
+    switch json_member(value, name) {
+        case option.Option.Some(json.Value.Bool(item)): return item;
+        default: return false;
+    }
+}
+
+func read_counts(name string) Vec[usize] {
+    let result = vec.empty[usize]();
+    var value = "";
+    try { value = fs.read_text(name); } catch problem os.Error { return result; }
+    for word in text.split(text.replace(value, "\n", " "), " ") {
+        if word == "" { continue; }
+        try { vec.push(result, usize(strconv.parse_u64(word))); }
+        catch problem strconv.Error { return vec.empty[usize](); }
+    }
+    return result;
+}
+
+func write_reports(stage_path string, packages Vec[MakePackage], state MakeState,
+                   make_output string, cache frontcache.Context) throws os.Error {
+    var modules = "["; var first = true;
+    var checked usize = 0; var lowered usize = 0; var opt_jobs usize = 0;
+    var llc_jobs usize = 0; var object_hits usize = 0;
+    let parse_hits = cache.counters[0]; let parse_misses = cache.counters[1];
+    let strings = cache.counters[8];
+    for package_value in packages {
+        let counts = read_counts(stage_path + "/module-" + package_value.fixed + ".counts");
+        if vec.len(counts) >= 8 {
+            checked += counts[0]; lowered += counts[1]; opt_jobs += counts[2];
+            llc_jobs += counts[3]; object_hits += counts[4];
+        }
+        var status = "";
+        try { status = fs.read_text(stage_path + "/module-" + package_value.fixed + ".json"); }
+        catch problem os.Error {}
+        if status != "" {
+            if !first { modules += ","; } first = false; modules += status;
+        }
+    }
+    modules += "]";
+    let report = "{\"schema_version\":1,\"phase\":\"source-make\",\"prepared_projects\":1,\"manifest\":" +
+        json_string(state.manifest) + ",\"target\":" + json_string(state.target) +
+        ",\"opt\":" + json_string(state.opt) + ",\"cache_dir\":" +
+        json_string(state.cache_dir) + ",\"packages\":" + modules +
+        ",\"make\":\n" + json_string(make_output) + "}\n";
+    fs.write_text(stage_path + "/make-report.json", report, 0o666);
+    let statistics = "{\"schema_version\":1,\"build_fingerprint\":" +
+        json_string(state.fingerprint) + ",\"package_jobs\":" +
+        strconv.format_u64(u64(vec.len(packages))) + ",\"checked_bodies\":" +
+        strconv.format_u64(u64(checked)) + ",\"lowered_functions\":" +
+        strconv.format_u64(u64(lowered)) + ",\"opt_jobs\":" +
+        strconv.format_u64(u64(opt_jobs)) + ",\"llc_jobs\":" +
+        strconv.format_u64(u64(llc_jobs)) + ",\"object_hits\":" +
+        strconv.format_u64(u64(object_hits)) + ",\"parse_hits\":" +
+        strconv.format_u64(u64(parse_hits)) + ",\"parse_misses\":" +
+        strconv.format_u64(u64(parse_misses)) + ",\"string_tokens_checked\":" +
+        strconv.format_u64(u64(strings)) + ",\"link_jobs\":1}\n";
+    fs.write_text(stage_path + "/cache-statistics.json", statistics, 0o666);
+}
+
+// Forked worker sees the same immutable source and top-level symbols as the parent.
+func source_make_compile(options Options, manager source.Manager, state MakeState,
+                         original model.Project, prepared resolve.PreparedProject,
+                         declarations option.Option[sema.PreparedPackages],
+                         package_value MakePackage) i32 throws os.Error {
+    var log = "source-make module worker\nworkdir: " + os.getcwd() + "\n";
+    append_log(inout log, "module start: " + package_value.fixed + " id=" +
+        strconv.format_u64(u64(package_value.id)) + " logical=" + package_value.logical_path +
+        " identity=" + package_value.identity);
+    append_log(inout log, "target: " + object_name(package_value));
+    io.println("source-make module start: " + package_value.fixed + " target=" +
+        object_name(package_value));
+    var cache = frontcache.context(state.cache_dir, state.fingerprint);
+    var object_key = "";
+    if frontcache.active(cache) {
+        let package_key = frontcache.project_package_key(cache, original, package_value.id);
+        object_key = frontcache.source_object_key(cache, package_key);
+    }
+    var status = WorkerStatus(package_id: package_value.fixed,
+        logical_path: package_value.logical_path, identity: package_value.identity,
+        action: "compiled", object_key: object_key, target: object_name(package_value),
+        declaration_scope: "none",
+        project_functions: 0,
+        checked_bodies: 0, lowered_functions: 0, opt_jobs: 0, llc_jobs: 0,
+        object_hit: 0, parse_hits: cache.counters[0], parse_misses: cache.counters[1],
+        string_tokens_checked: cache.counters[8]);
+    switch frontcache.load_object(cache, object_key) {
+        case option.Option.Some(bytes): {
+            fs.write_file(OBJECT_DIR + "/pkg-" + package_value.fixed + ".o", bytes, 0o644);
+            status.action = "object-hit"; status.object_hit = 1;
+            append_log(inout log, "object cache hit: " + object_key);
+            write_status(package_value, status);
+            append_log(inout log, "module end: object-hit");
+            write_log("module-" + package_value.fixed + ".log", log);
+            io.println("source-make module end: " + package_value.fixed + " object-hit");
+            return 0;
+        }
+        case option.Option.None: {}
+    }
+    var checked = hirverify.VerifyResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, diagnostics: [],
+        value: option.Option[hirverify.VerifiedHirModule].None);
+    var main_symbol = option.Option[usize].None;
+    switch declarations {
+        case option.Option.Some(typed_declarations): {
+            checked = sema.check_prepared_package(typed_declarations,
+                hirverify.VerifyMode.Backend, cache, package_value.id);
+            if render.succeeded(checked.state, option.is_some(checked.value), checked.diagnostics) {
+                status.declaration_scope = "shared-semantic-declarations";
+                status.project_functions = sema.prepared_function_count(typed_declarations);
+                main_symbol = sema.prepared_entry(typed_declarations);
+            } else { cache.counters[5] = 0; }
+        }
+        case option.Option.None: {}
+    }
+    if status.declaration_scope == "none" {
+        let resolved = resolve.resolve_prepared_module(prepared, package_value.id);
+        if !render.succeeded(resolved.state, resolved.has_value, resolved.diagnostics) {
+            write_log("module-" + package_value.fixed + ".log", log);
+            return worker_finish(options, manager.snapshots,
+                model.UnitResult(state: resolved.state, failure: resolved.failure,
+                    diagnostics: resolved.diagnostics, has_value: resolved.has_value),
+                package_value.fixed);
+        }
+        status.declaration_scope = "prepared-project-declarations";
+        status.project_functions = project_function_count(resolved.value);
+        checked = sema.check_project_package_cached(resolved,
+            option.Option[model.CheckConfig].None, hirverify.VerifyMode.Backend, cache,
+            package_value.id);
+        main_symbol = find_main(resolved.value);
+    }
+    if !render.succeeded(checked.state, option.is_some(checked.value), checked.diagnostics) {
+        write_status(package_value, status);
+        write_log("module-" + package_value.fixed + ".log", log);
+        return worker_finish(options, manager.snapshots,
+            model.UnitResult(state: checked.state, failure: checked.failure,
+                diagnostics: checked.diagnostics,
+                has_value: option.is_some(checked.value)), package_value.fixed);
+    }
+    switch checked.value {
+        case option.Option.None: {
+            write_status(package_value, status);
+            write_log("module-" + package_value.fixed + ".log", log);
+            return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
+                "package check returned no verified HIR", model.FailureKind.Internal);
+        }
+        case option.Option.Some(verified): {
+            let native = nativelower.lower(verified);
+            if !render.succeeded(native.state, option.is_some(native.value), native.diagnostics) {
+                write_status(package_value, status);
+                write_log("module-" + package_value.fixed + ".log", log);
+                return worker_finish(options, manager.snapshots,
+                    model.UnitResult(state: native.state, failure: native.failure,
+                        diagnostics: native.diagnostics,
+                        has_value: option.is_some(native.value)), package_value.fixed);
+            }
+            switch native.value {
+                case option.Option.None: {
+                    write_status(package_value, status);
+                    write_log("module-" + package_value.fixed + ".log", log);
+                    return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
+                        "package lowering returned no verified NativeIR", model.FailureKind.Internal);
+                }
+                case option.Option.Some(native_value): {
+                    status.lowered_functions = nativeverify.function_count(native_value);
+                    var settings = nativeemit.default_options();
+                    if state.opt == "2" { settings.optimization = 2; }
+                    settings.triple = state.target;
+                    var entry usize = 0;
+                    switch main_symbol { case option.Option.Some(value): entry = value; case option.Option.None: {} }
+                    let root = resources.directory();
+                    let partition_tools = source_object_partition_tools(root, state.opt, status.lowered_functions, inout log);
+                    let emitted = nativeemit.emit_package(native_value, entry, settings, package_value.id,
+                        vec.len(partition_tools) != 0);
+                    if !render.succeeded(emitted.state, option.is_some(emitted.value), emitted.diagnostics) {
+                        write_status(package_value, status);
+                        write_log("module-" + package_value.fixed + ".log", log);
+                        return worker_finish(options, manager.snapshots,
+                            model.UnitResult(state: emitted.state, failure: emitted.failure,
+                                diagnostics: emitted.diagnostics,
+                                has_value: option.is_some(emitted.value)), package_value.fixed);
+                    }
+                    switch emitted.value {
+                        case option.Option.None: {
+                            write_status(package_value, status);
+                            write_log("module-" + package_value.fixed + ".log", log);
+                            return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
+                                "package emission returned no LLVM output", model.FailureKind.Internal);
+                        }
+                        case option.Option.Some(output): {
+                            if output.c_adapter_source != "" {
+                                write_status(package_value, status);
+                                write_log("module-" + package_value.fixed + ".log", log);
+                                return fail(options, manager.snapshots, "E_CAPABILITY_UNAVAILABLE", "codegen",
+                                    "source make does not support C adapters", model.FailureKind.Unsupported);
+                            }
+                            let object = object_name(package_value);
+                            fs.create_dir_all(OBJECT_DIR, 0o777);
+                            let stem = OBJECT_DIR + "/pkg-" + package_value.fixed;
+                            write_sections(stem + ".ll", output.llvm_sections);
+                            let compiled = compile_source_object(root, stem, state.opt,
+                                output.triple, output.has_async, partition_tools, inout log);
+                            status.opt_jobs = compiled.opt_jobs;
+                            status.llc_jobs = compiled.llc_jobs;
+                            if compiled.code != "" {
+                                write_status(package_value, status);
+                                write_log("module-" + package_value.fixed + ".log", log);
+                                return fail(options, manager.snapshots, compiled.code, "codegen",
+                                    compiled.message, model.FailureKind.Internal);
+                            }
+                            status.checked_bodies = cache.counters[5];
+                            status.parse_hits = cache.counters[0]; status.parse_misses = cache.counters[1];
+                            status.string_tokens_checked = cache.counters[8];
+                            let bytes = fs.read_file(object);
+                            frontcache.store_object(cache, object_key, bytes);
+                            write_status(package_value, status);
+                            append_log(inout log, "object: " + object + " bytes=" +
+                                strconv.format_u64(u64(vec.len(bytes))) + " key=" + object_key);
+                            append_log(inout log, "module end: compiled");
+                            write_log("module-" + package_value.fixed + ".log", log);
+                            io.println("source-make module end: " + package_value.fixed + " compiled");
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+func write_sections(name string, sections Vec[string]) throws os.Error {
+    let out = vec.empty[u8]();
+    for section in sections { for byte in text.bytes(section) { vec.push(out, byte); } }
+    fs.write_file(name, out, 0o600);
+}
+
+func link_arguments(state MakeState, compile_program_object bool) Vec[string] throws os.Error {
+    let root = resources.directory();
+    let tools = root + "/toolchain";
+    let result = vec.empty[string]();
+    if compile_program_object {
+        vec.push(result, tools + "/ld.lld"); vec.push(result, "-r");
+        for package_value in state.packages { vec.push(result, object_name(package_value)); }
+        vec.push(result, "-o"); vec.push(result, "program.o");
+        return result;
+    }
+    vec.push(result, tools + "/clang"); vec.push(result, "--target=" + state.target);
+    if state.hosted {
+        vec.push(result, "-Wl,-u,lang_hosted_startup_v1"); vec.push(result, "-pthread");
+    } else {
+        vec.push(result, "-nostdlib"); vec.push(result, "-static");
+    }
+    vec.push(result, "--ld-path=" + tools + "/ld.lld"); vec.push(result, "program.o");
+    if state.hosted { vec.push(result, root + "/runtime/liblang_hosted_runtime.a"); }
+    else { vec.push(result, root + "/runtime/liblang_native_runtime.a"); }
+    for directory in state.c_library_dirs { vec.push(result, "-L" + directory); }
+    for library in state.c_libraries { vec.push(result, "-l" + library); }
+    vec.push(result, "-o"); vec.push(result, "program");
+    return result;
+}
+
+pub func source_make_combine(options Options) i32 throws os.Error {
+    var log = "source-make combine\nworkdir: " + os.getcwd() + "\n";
+    io.println("source-make combine start");
+    let state = read_state(MAKE_STATE);
+    let execution = run_logged(link_arguments(state, true), "combine-capture", inout log, true);
+    append_log(inout log, "combine end");
+    write_log("combine.log", log);
+    io.println("source-make combine end");
+    if execution.exit_code != 0 || execution.signalled {
+        write_diagnostic("link", [model.diagnostic("E_LINK_FAILED", "link",
+            "object combine failed", model.Span(snapshot: 0, begin_byte: 0, end_byte: 0))],
+            []);
+        return fail(options, [], "E_LINK_FAILED", "link",
+            "object combine failed with status " + strconv.format_i64(i64(execution.exit_code)),
+            model.FailureKind.Source);
+    }
+    return 0;
+}
+
+pub func source_make_link(options Options) i32 throws os.Error {
+    var log = "source-make link\nworkdir: " + os.getcwd() + "\n";
+    io.println("source-make link start");
+    let state = read_state(MAKE_STATE);
+    let execution = run_logged(link_arguments(state, false), "link-capture", inout log, true);
+    append_log(inout log, "link end");
+    write_log("link.log", log);
+    io.println("source-make link end");
+    if execution.exit_code != 0 || execution.signalled {
+        write_diagnostic("link", [model.diagnostic("E_LINK_FAILED", "link",
+            "final link failed", model.Span(snapshot: 0, begin_byte: 0, end_byte: 0))], []);
+        return fail(options, [], "E_LINK_FAILED", "link",
+            "final link failed with status " + strconv.format_i64(i64(execution.exit_code)),
+            model.FailureKind.Source);
+    }
+    return 0;
+}

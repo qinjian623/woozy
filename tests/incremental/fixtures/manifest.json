@@ -1,0 +1,1061 @@
+{
+  "schema": "woozy-incremental-fixtures-manifest/1",
+  "operation_id": "woozy-sh31-source-module-reference-fixtures-20261117",
+  "prepared_at": "2026-11-17T14:48:45+0800",
+  "kind": "source fixtures + reference expectations only",
+  "reference": {
+    "woozyc": "/home/qin/Work/language-dev-20261103/checks/SH21-stage2-performance-fix-20261116.k98_xl5k/new-matching-seed/cpp-build/woozyc",
+    "woozyc_sha256": "c48984719ccb02e1b00d9e8119d2d3f61bcc4db0507b4aa51d22365b6475012c",
+    "helper_sha256": "a1786592f70940fd814358a5fcc2df25098f07ce7a83eeb5d6e1d5146a82047b",
+    "runtime_stdlib": "checks/SH21-stage2-performance-fix-20261116.k98_xl5k/combined-stage123/resources"
+  },
+  "fixture_count": 6,
+  "run_count": 24,
+  "fixtures": [
+    {
+      "id": "01-diamond-private-body",
+      "purpose": "Four-node diamond (app -> left/right -> core): change a private non-generic helper body in core while the public signature stays identical. main returns the concrete total.",
+      "language_references": [
+        "docs/SEMANTICS.md §2 名称与模块",
+        "development/docs/FRONTEND.md §6.2 声明收集和依赖",
+        "development/docs/FRONTEND.md §10 增量检查"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 40,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "private-body",
+          "description": "core.secret returns 6 instead of 5; core.offset() signature is untouched.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 42,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "core"
+            ],
+            "may_reuse_packages": [
+              "app",
+              "left",
+              "right"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "40 -> 42",
+            "note": "Private body of core changes. core offset object must be regenerated; left/right public interfaces do not change, but the final program must link the new core object and must not reuse the old executable."
+          },
+          "mutation_sha256": "a50d176a61f92ab57bb2acac8ab258fc42548cae9f11caec4285bf558fa05e7d",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/core/src/lib.wz",
+              "old": {
+                "file": "old/vendor/core/src/lib.wz",
+                "sha256": "ccbbfbe25fb2e7116489d659d9a122435518db296411bf86beee7ac67384d929"
+              },
+              "new": {
+                "file": "new/vendor/core/src/lib.wz",
+                "sha256": "4259dcb27dde77942a2d33c0fdd6895f096975b6654554f1ca35f27d1c612a2e"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02-package-alias-shared",
+      "purpose": "One package with multiple files: a top-level helper is shared package-wide, while the same import alias name is file-local and may name different dependency packages.",
+      "language_references": [
+        "docs/SEMANTICS.md §2 名称与模块",
+        "development/docs/FRONTEND.md §6.3 名字空间"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 40,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "shared-helper-body",
+          "description": "Change app.shared_bonus body in helpers.wz from 5 to 6; main in another file must observe the package-level change.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 41,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "may_reuse_packages": [
+              "alpha",
+              "beta"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "40 -> 41",
+            "note": "A non-public same-package helper body changes in another file; app package code must be rebuilt as a unit."
+          },
+          "mutation_sha256": "8099e86c4e77375be4d095370a1f9a1d5396bf07b52e610c7661671cf1e2af47",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "src/helpers.wz",
+              "old": {
+                "file": "old/src/helpers.wz",
+                "sha256": "3ca85f9e6dfbdd1d2c3f43da5c5dd4422ab52232f591ef91cc05cb8433dcb5f6"
+              },
+              "new": {
+                "file": "new/src/helpers.wz",
+                "sha256": "416379c61862c7a6e58e770ef5d1219d0e9e2f4994fca5c8e18b534b76316c6f"
+              }
+            }
+          ]
+        },
+        {
+          "name": "alpha-value",
+          "description": "Change alpha.number body from 10 to 12; app imports alpha in main.wz.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 42,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "alpha"
+            ],
+            "may_reuse_packages": [
+              "beta"
+            ],
+            "must_recompile_or_relink": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "40 -> 42",
+            "note": "alpha public function body changes; app must be rechecked/relinked. beta and the app helper bodies are unchanged."
+          },
+          "mutation_sha256": "398f9a7c80d5b6add2e20be365080336e95136ad6213abba4796e835881f7dfb",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/alpha/src/lib.wz",
+              "old": {
+                "file": "old/vendor/alpha/src/lib.wz",
+                "sha256": "c6c5795af0a45f372e341188ebe9f3ca646f70d67cd87dbc1ae7cc08ae44fb29"
+              },
+              "new": {
+                "file": "new/vendor/alpha/src/lib.wz",
+                "sha256": "92642bef26f4b65bc941f80321215d9ff9437820c2a6f495a59ccaea1af66316"
+              }
+            }
+          ]
+        },
+        {
+          "name": "alias-swap",
+          "description": "In beta_user.wz change the file-local alias left from beta to alpha; beta stays imported by no file. The same alias name now resolves to a different module in this file only.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 25,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "may_reuse_packages": [
+              "alpha",
+              "beta"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "40 -> 25",
+            "note": "Only app source changes. The file-local alias left in beta_user.wz resolves to alpha here, while main.wz still resolves left to alpha and would not see imports from beta_user.wz."
+          },
+          "mutation_sha256": "ee7f655741c18c0a48bc56cdefdfe9302d28e2e55aaff9483e93744c25fd9e7c",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "src/beta_user.wz",
+              "old": {
+                "file": "old/src/beta_user.wz",
+                "sha256": "509fded53467c5101b6977a89aeaff640df994cb4f71311399e7ce5f91bb5d1d"
+              },
+              "new": {
+                "file": "new/src/beta_user.wz",
+                "sha256": "4fc5736a22b6ee2710cb0226cf9e187159d907ebde211a5f72fca9bcf0883969"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03-public-const-signature",
+      "purpose": "Public const value change with the same type, and public function signature change. The first must produce a new result; the second must produce an exact type diagnostic.",
+      "language_references": [
+        "development/docs/FRONTEND.md §6.3 pub const 最终公开类型检查",
+        "development/docs/FRONTEND.md §10 模块接口摘要覆盖影响外部常量求值的常量值",
+        "docs/SEMANTICS.md §3 基础类型与推断"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 16,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "const-value",
+          "description": "dep.STEP changes from 4 to 5 with type i32 unchanged; dep.scale and app source are unchanged.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 20,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_revalidate_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "16 -> 20",
+            "note": "Constant value is part of the module interface digest. The type is unchanged, so no new type error; the dependent app result changes.",
+            "must_recompile_or_relink": [
+              "app"
+            ]
+          },
+          "mutation_sha256": "eac5948a3d21bfd6fe07ff1966c504a562179494caaf6d7e81e5545e5b5079c5",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "3f2d10ddb5627f9bfc9fbf48bf3f74d2ce2bcca387c4ac4d1fa13002524417c5"
+              }
+            }
+          ]
+        },
+        {
+          "name": "signature-params",
+          "description": "dep.scale parameter changes from i32 to i64 while app passes a typed i32 binding; expect E_TYPE_MISMATCH and no executable.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_TYPE_MISMATCH"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "Public signature changes. dep itself remains valid, but app call with i32 must fail type checking; an old successful executable must not be served."
+          },
+          "mutation_sha256": "3cb974e5220024e324100f37a44b32b87a458e571ca0d59d3d33adf9f0d85385",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "f66325f6f07740789dcabd83c02b1e057f648400b7bcdf6f8849d45c407985a2"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "04-generic-body-dedup",
+      "purpose": "Two packages use the same dep.choose[i32] instance. The generic body calls a package-private bool helper. Changing the helper or the generic body must change both callers; changing one caller literal must not require a new instantiation.",
+      "language_references": [
+        "docs/SEMANTICS.md §6 泛型和 trait",
+        "development/docs/FRONTEND.md §10 模块接口摘要覆盖泛型声明及需要跨模块实例化的函数体",
+        "development/docs/GENERICS.md 跨包实例化与类型键"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 44,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "private-helper",
+          "description": "dep.prefer_left returns false instead of true. dep.choose[i32] is used by both left and right packages.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 66,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_reinstantiate": [
+              "dep.choose[i32]"
+            ],
+            "must_recompile_or_relink": [
+              "left",
+              "right",
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "44 -> 66",
+            "note": "The private helper body is reachable from the generic body. The single shared dep.choose[i32] instance must be invalidated; both left and right callers observe 22 and 44."
+          },
+          "mutation_sha256": "33bd66838420e062e4109afe8de0ec292c472e5ed5127e0bb2895d63d531abe5",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "149d9430c372712cc5a43f9969e9c845bf16042de9fa08e934a334b0b5c7690d"
+              }
+            }
+          ]
+        },
+        {
+          "name": "generic-body",
+          "description": "Swap the two returns in dep.choose while keeping the private helper and public signature unchanged.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 66,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_reinstantiate": [
+              "dep.choose[i32]"
+            ],
+            "must_recompile_or_relink": [
+              "left",
+              "right",
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "44 -> 66",
+            "note": "Generic body changes without a signature change. Both cross-package users share the same i32 instance, so one invalidation must update both callers."
+          },
+          "mutation_sha256": "9e0aded66f887eb6f0f0dfe14b5957fe809ceeecd4ddb3a8c3edde869b4575f8",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "51efb97cc341c111de7061e5455d4578b30794cd697ff458246b93f28c21b178"
+              }
+            }
+          ]
+        },
+        {
+          "name": "caller-literal",
+          "description": "Only right.pick_right changes its first i32 literal from 33 to 35. The dep generic body and type are unchanged.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 46,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "right"
+            ],
+            "may_reuse_packages": [
+              "dep",
+              "left"
+            ],
+            "may_reuse_instances": [
+              "dep.choose[i32]"
+            ],
+            "must_recompile_or_relink": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "44 -> 46",
+            "note": "Only a caller package changes. The i32 instance identity is unchanged; a future implementation may reuse the dep instance and must still relink the new right object."
+          },
+          "mutation_sha256": "8aa79293247fd5a6444c4a2ff15f262fd3fc70bbac9e6ed2841063c9c53c0a0c",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/right/src/lib.wz",
+              "old": {
+                "file": "old/vendor/right/src/lib.wz",
+                "sha256": "30cb2ed68f0f3082d2fc71be1e134596f1e9eefb968eb6e3b9266aec5d7aa8cf"
+              },
+              "new": {
+                "file": "new/vendor/right/src/lib.wz",
+                "sha256": "c1c942b571e27d75c125a6d1c80e38634c4431fa41682eb23b57d1f8e64b89df"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "05-owning-vec-throws",
+      "purpose": "Cross-package owning Vec return with alias sharing and Arc cleanup (observed with Weak), plus a typed throw from a function returning Vec. The fixture result is the returned element value and exact main exit.",
+      "language_references": [
+        "docs/SEMANTICS.md §7.1 复制与对象身份",
+        "docs/SEMANTICS.md §7.3 运行库边界",
+        "docs/SEMANTICS.md §8 typed throws",
+        "tests/trait_objects/fixtures/owning-return-error",
+        "tests/native/cleanup/cross-module"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 4,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "vec-values",
+          "description": "dep.make returns [3, 7, 5] instead of [3, 4, 5]; main returns the observed second element (4 -> 7) after alias and Weak checks.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 7,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_recompile_or_relink": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "4 -> 7",
+            "note": "Only the owning Vec payload changes. Alias sharing, Weak release and typed throw cleanup must remain correct; app observes the new element value."
+          },
+          "mutation_sha256": "06af5e23b3af5e84443dcbfedd34d8646bb1b37500bf41e018dc1ef360056214",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "991beffe65c6daa0e36fd0a63b01363b2874df6b4d3956926730c7ef2f053387"
+              }
+            }
+          ]
+        },
+        {
+          "name": "no-throw",
+          "description": "dep.fail_after returns [8, 9] instead of throwing Failure.Bad. main must take the unexpected-success path and exit 6.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 6,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "dep"
+            ],
+            "must_recompile_or_relink": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "4 -> 6",
+            "note": "The throwing body changes to normal return while the declared effect type stays Failure. The app error path must not be cached as always-throws."
+          },
+          "mutation_sha256": "90947068d15d18a9ff535b422d0873c36da14a730e2524c70c3e51ca6caf932c",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "f7dd7ba12dd10b5d9436c40687947da67568d376b6548559ceb9cf2e8e587b66"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "06-package-set-errors",
+      "purpose": "Add/remove source files and source packages, and introduce an import cycle. Includes syntax and type failure variants that must not inherit a previous successful result.",
+      "language_references": [
+        "development/docs/FRONTEND.md §6.1 模块解析",
+        "development/docs/FRONTEND.md §6.2 声明收集和依赖",
+        "docs/SEMANTICS.md §2 包依赖 DAG 与完整循环路径",
+        "development/docs/FRONTEND.md §10 增量检查"
+      ],
+      "base_expect": {
+        "mode": "build-and-run",
+        "build_exit": 0,
+        "status": "ok",
+        "run_exit": 12,
+        "stdout": "",
+        "stderr": ""
+      },
+      "variants": [
+        {
+          "name": "add-file",
+          "description": "Add src/more.wz to app and call more() from main. Existing dep package is unchanged.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 14,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "may_reuse_packages": [
+              "dep"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "12 -> 14",
+            "note": "A new file changes the app package file set. The package-level declaration table must include it; dep can be reused."
+          },
+          "mutation_sha256": "5eae13388b5cfa309870bce6e65e476136b5ac864c3bd299b09ace1d0bfb7ef4",
+          "actions": [
+            {
+              "op": "add",
+              "path": "src/more.wz",
+              "old": null,
+              "new": {
+                "file": "new/src/more.wz",
+                "sha256": "a5f9a462fc9a7b5cb887cc562572d89aebb70ff29b9bea9fb5fa47283f51643d"
+              }
+            },
+            {
+              "op": "replace",
+              "path": "src/main.wz",
+              "old": {
+                "file": "old/src/main.wz",
+                "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+              },
+              "new": {
+                "file": "new/src/main.wz",
+                "sha256": "0bbe00a7b9c40cae4d5ba90ef8795bdb0883036e98e7da4c59713652865f1bbd"
+              }
+            }
+          ]
+        },
+        {
+          "name": "remove-file-stale",
+          "description": "Remove src/extra.wz while main still calls extra(). Expect E_NAME_NOT_FOUND; the previous successful app must not be reused.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_NAME_NOT_FOUND"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "File deletion changes the package declaration table. A cached success from the base must not survive."
+          },
+          "mutation_sha256": "1267dbfde5b20c12dbac07b46d0c8551f32a1743703a08749cd83edd2253c8cf",
+          "actions": [
+            {
+              "op": "remove",
+              "path": "src/extra.wz",
+              "old": {
+                "file": "old/src/extra.wz",
+                "sha256": "ef64735b138e68e7ab402deaa2b99824ed22b2d734f7b86ca3e340047ed8d935"
+              },
+              "new": null
+            }
+          ]
+        },
+        {
+          "name": "add-package",
+          "description": "Add vendor/other, declare it in app/lang.toml, and call other.bonus() from main. dep stays unchanged.",
+          "expect": {
+            "mode": "build-and-run",
+            "build_exit": 0,
+            "status": "ok",
+            "run_exit": 17,
+            "stdout": "",
+            "stderr": ""
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app",
+              "other"
+            ],
+            "may_reuse_packages": [
+              "dep"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": true,
+            "expected_runtime": "12 -> 17",
+            "note": "The manifest and package set change. A new logical package must be loaded and linked; dep can be reused."
+          },
+          "mutation_sha256": "373a2ab09c75edcf21354b19d47d9fc3e3029c10c2273bc52a94b1c8f0777fd9",
+          "actions": [
+            {
+              "op": "add",
+              "path": "vendor/other/lang.toml",
+              "old": null,
+              "new": {
+                "file": "new/vendor/other/lang.toml",
+                "sha256": "7ccfa097ec66491da310cb3aaf33bbab04488f231e8c4e78efbb1a2f89f1e010"
+              }
+            },
+            {
+              "op": "add",
+              "path": "vendor/other/src/lib.wz",
+              "old": null,
+              "new": {
+                "file": "new/vendor/other/src/lib.wz",
+                "sha256": "3acc2d21bd26305de3ee5283b9ce219e728aa4d853753e754553c60a88d0788d"
+              }
+            },
+            {
+              "op": "replace",
+              "path": "lang.toml",
+              "old": {
+                "file": "old/lang.toml",
+                "sha256": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5"
+              },
+              "new": {
+                "file": "new/lang.toml",
+                "sha256": "62b76437118ce5a7dd86ea9cf8645d947323a9583c09278b4395aa1d513f8bc6"
+              }
+            },
+            {
+              "op": "replace",
+              "path": "src/main.wz",
+              "old": {
+                "file": "old/src/main.wz",
+                "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+              },
+              "new": {
+                "file": "new/src/main.wz",
+                "sha256": "aa3c5192611f5d60732cbd681e99702a33d1b1e61a314302ff9bb251e6acc288"
+              }
+            }
+          ]
+        },
+        {
+          "name": "remove-package-stale",
+          "description": "Remove the dep dependency entry and dep source files while main still imports dep. Expect E_IMPORT_NOT_FOUND; stale success must not survive.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_IMPORT_NOT_FOUND"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "Removing a declared package/file set must fail the still-present import. A previous successful app or object must not be reused."
+          },
+          "mutation_sha256": "45ca205bd5b0e3183baa962f736fa3c5a877ee4ee6ef0b66e7ed1b75c2978625",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "lang.toml",
+              "old": {
+                "file": "old/lang.toml",
+                "sha256": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5"
+              },
+              "new": {
+                "file": "new/lang.toml",
+                "sha256": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb"
+              }
+            },
+            {
+              "op": "remove",
+              "path": "vendor/dep/lang.toml",
+              "old": {
+                "file": "old/vendor/dep/lang.toml",
+                "sha256": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4"
+              },
+              "new": null
+            },
+            {
+              "op": "remove",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b"
+              },
+              "new": null
+            }
+          ]
+        },
+        {
+          "name": "import-cycle",
+          "description": "Add cycleb and make dep import cycleb while cycleb imports dep. Expect E_IMPORT_CYCLE with the dep -> cycleb -> dep path.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_IMPORT_CYCLE"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app",
+              "dep",
+              "cycleb"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "Package graph gains a cycle. Module resolution must report the full cycle and must not reuse cached successful dep objects."
+          },
+          "mutation_sha256": "9709aea6f9673a2506ad6f3a6b5f1422f1720908863347c01db84e7ee13784fe",
+          "actions": [
+            {
+              "op": "add",
+              "path": "vendor/cycleb/lang.toml",
+              "old": null,
+              "new": {
+                "file": "new/vendor/cycleb/lang.toml",
+                "sha256": "5a70320ac054a8d54bf6d2c00bb66f48e52fef88f62023fd19a7e14e39c11cb2"
+              }
+            },
+            {
+              "op": "add",
+              "path": "vendor/cycleb/src/lib.wz",
+              "old": null,
+              "new": {
+                "file": "new/vendor/cycleb/src/lib.wz",
+                "sha256": "b3d26ee349dc2a0f809f6edd39c5cd441b75cc06ae973f6b54c98aa32a8f491d"
+              }
+            },
+            {
+              "op": "replace",
+              "path": "vendor/dep/lang.toml",
+              "old": {
+                "file": "old/vendor/dep/lang.toml",
+                "sha256": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4"
+              },
+              "new": {
+                "file": "new/vendor/dep/lang.toml",
+                "sha256": "b139aff489a367634796a963b3f7dd32c9dfadb4ffcca6465f8490fd1d656ad8"
+              }
+            },
+            {
+              "op": "replace",
+              "path": "vendor/dep/src/lib.wz",
+              "old": {
+                "file": "old/vendor/dep/src/lib.wz",
+                "sha256": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b"
+              },
+              "new": {
+                "file": "new/vendor/dep/src/lib.wz",
+                "sha256": "95f2559d04870bc994506e812b7de4008a3d15bb6b0335fc117a432c15f4e016"
+              }
+            }
+          ]
+        },
+        {
+          "name": "syntax-failure",
+          "description": "Remove a semicolon from app main after a successful base. Expect E_PARSE_EXPECTED_TOKEN; no stale executable.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_PARSE_EXPECTED_TOKEN"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "Syntax failure after a known-good base. The old successful app/executable must not be published as valid."
+          },
+          "mutation_sha256": "442c9d59012ee0f04fe83773acea693609c0bbfd1c86e488a1cc486b9130a9fa",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "src/main.wz",
+              "old": {
+                "file": "old/src/main.wz",
+                "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+              },
+              "new": {
+                "file": "new/src/main.wz",
+                "sha256": "6016dc9157f0b22ed277e96af193b9585a56cc1c031509c4bd6f8bfd898fced4"
+              }
+            }
+          ]
+        },
+        {
+          "name": "type-failure",
+          "description": "Make app main bind a bool to i32 after a successful base. Expect E_TYPE_MISMATCH; no stale executable.",
+          "expect": {
+            "mode": "check",
+            "check_exit": 1,
+            "status": "error",
+            "error_codes_any": [
+              "E_TYPE_MISMATCH"
+            ]
+          },
+          "expected_invalidation": {
+            "must_rebuild_packages": [
+              "app"
+            ],
+            "must_fail_packages": [
+              "app"
+            ],
+            "must_not_serve_stale_success": true,
+            "must_update_final_link": false,
+            "expected_runtime": "compile-time reject",
+            "note": "Type failure after a known-good base. The old successful app/executable must not be published as valid."
+          },
+          "mutation_sha256": "e3b9ff2d20b1ae40d81b36a63ed0688ab2eaceff173ee49ce60f8d1de619dc0f",
+          "actions": [
+            {
+              "op": "replace",
+              "path": "src/main.wz",
+              "old": {
+                "file": "old/src/main.wz",
+                "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+              },
+              "new": {
+                "file": "new/src/main.wz",
+                "sha256": "42b427a8c9e17179a2257f16b8cbaafbf89b1cba41629419c65489aeb0208e3a"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "files_sha256_excluding_this_manifest": {
+    "01-diamond-private-body/base/lang.toml": "efecc011e083cfdd9a0b9d6101c88356c89644eb96b1a4c8063019d1499c54bd",
+    "01-diamond-private-body/base/src/main.wz": "b9455879adcc9cce8d8a6cf3b087fbff0b224c4d60228ab5a7d0eadcb15abf1a",
+    "01-diamond-private-body/base/vendor/core/lang.toml": "22a8af3a37da888a2090e01e11384d952637eb1363619607fd18fbe5448339e1",
+    "01-diamond-private-body/base/vendor/core/src/lib.wz": "ccbbfbe25fb2e7116489d659d9a122435518db296411bf86beee7ac67384d929",
+    "01-diamond-private-body/base/vendor/left/lang.toml": "3b5ad08ebd62c2b0abd72c14e6539ba5189a751f19a3448988bd02e4f5282c93",
+    "01-diamond-private-body/base/vendor/left/src/lib.wz": "b5731344beb8e940e1d4a88089cff5099a9cf75fdb934dd265623544cd5be4e9",
+    "01-diamond-private-body/base/vendor/right/lang.toml": "2963bfa8150df25c3aecfff29cbd66e688c58635b8a11d9750a680c6d6be2981",
+    "01-diamond-private-body/base/vendor/right/src/lib.wz": "99a827d974ad4c85f85c88140500b876941fe098a6706417395ebf3c17779bb7",
+    "01-diamond-private-body/fixture.json": "caab2e7066c03a93f662e0a7f79f89f223ba70c40d8c4ce5951f07c28d18ed55",
+    "01-diamond-private-body/variants/private-body/mutation.json": "a50d176a61f92ab57bb2acac8ab258fc42548cae9f11caec4285bf558fa05e7d",
+    "01-diamond-private-body/variants/private-body/new/vendor/core/src/lib.wz": "4259dcb27dde77942a2d33c0fdd6895f096975b6654554f1ca35f27d1c612a2e",
+    "01-diamond-private-body/variants/private-body/old/vendor/core/src/lib.wz": "ccbbfbe25fb2e7116489d659d9a122435518db296411bf86beee7ac67384d929",
+    "02-package-alias-shared/base/lang.toml": "87b9d7ed892275530c57a8c55a743571d2feb1a72fed7bd062673d6073c6d101",
+    "02-package-alias-shared/base/src/beta_user.wz": "509fded53467c5101b6977a89aeaff640df994cb4f71311399e7ce5f91bb5d1d",
+    "02-package-alias-shared/base/src/helpers.wz": "3ca85f9e6dfbdd1d2c3f43da5c5dd4422ab52232f591ef91cc05cb8433dcb5f6",
+    "02-package-alias-shared/base/src/main.wz": "66e47329b939c8a3ee73fe7038d41585c7f788c0cd31619c643217e389b0e46a",
+    "02-package-alias-shared/base/vendor/alpha/lang.toml": "330582552d0a097c88315305b88c5e7966902b3d81a06bf4f31e132905b752d3",
+    "02-package-alias-shared/base/vendor/alpha/src/lib.wz": "c6c5795af0a45f372e341188ebe9f3ca646f70d67cd87dbc1ae7cc08ae44fb29",
+    "02-package-alias-shared/base/vendor/beta/lang.toml": "7d10cf2dd06b5c64369569a4130a8c5c50bab3c24d90f0af757d842d4e207bd7",
+    "02-package-alias-shared/base/vendor/beta/src/lib.wz": "7e54ea1250b9b524c12faa4dfdb381c7a8ab900881afaae83f6c0694ce2da379",
+    "02-package-alias-shared/fixture.json": "7685fc04941a0b284139a99e28217a609b3f1566c2e6b4a35e9bebf4e08071f6",
+    "02-package-alias-shared/variants/alias-swap/mutation.json": "ee7f655741c18c0a48bc56cdefdfe9302d28e2e55aaff9483e93744c25fd9e7c",
+    "02-package-alias-shared/variants/alias-swap/new/src/beta_user.wz": "4fc5736a22b6ee2710cb0226cf9e187159d907ebde211a5f72fca9bcf0883969",
+    "02-package-alias-shared/variants/alias-swap/old/src/beta_user.wz": "509fded53467c5101b6977a89aeaff640df994cb4f71311399e7ce5f91bb5d1d",
+    "02-package-alias-shared/variants/alpha-value/mutation.json": "398f9a7c80d5b6add2e20be365080336e95136ad6213abba4796e835881f7dfb",
+    "02-package-alias-shared/variants/alpha-value/new/vendor/alpha/src/lib.wz": "92642bef26f4b65bc941f80321215d9ff9437820c2a6f495a59ccaea1af66316",
+    "02-package-alias-shared/variants/alpha-value/old/vendor/alpha/src/lib.wz": "c6c5795af0a45f372e341188ebe9f3ca646f70d67cd87dbc1ae7cc08ae44fb29",
+    "02-package-alias-shared/variants/shared-helper-body/mutation.json": "8099e86c4e77375be4d095370a1f9a1d5396bf07b52e610c7661671cf1e2af47",
+    "02-package-alias-shared/variants/shared-helper-body/new/src/helpers.wz": "416379c61862c7a6e58e770ef5d1219d0e9e2f4994fca5c8e18b534b76316c6f",
+    "02-package-alias-shared/variants/shared-helper-body/old/src/helpers.wz": "3ca85f9e6dfbdd1d2c3f43da5c5dd4422ab52232f591ef91cc05cb8433dcb5f6",
+    "03-public-const-signature/base/lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+    "03-public-const-signature/base/src/main.wz": "02780d4d1bc71b866e6439b6834242e47edb0f64d03ccd58b482755454bd92f5",
+    "03-public-const-signature/base/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "03-public-const-signature/base/vendor/dep/src/lib.wz": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b",
+    "03-public-const-signature/fixture.json": "0c479f9114450c13e57bd5e81dbae6984a49e3bc183ffc96e1f4b42c1fc74028",
+    "03-public-const-signature/variants/const-value/mutation.json": "eac5948a3d21bfd6fe07ff1966c504a562179494caaf6d7e81e5545e5b5079c5",
+    "03-public-const-signature/variants/const-value/new/vendor/dep/src/lib.wz": "3f2d10ddb5627f9bfc9fbf48bf3f74d2ce2bcca387c4ac4d1fa13002524417c5",
+    "03-public-const-signature/variants/const-value/old/vendor/dep/src/lib.wz": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b",
+    "03-public-const-signature/variants/signature-params/mutation.json": "3cb974e5220024e324100f37a44b32b87a458e571ca0d59d3d33adf9f0d85385",
+    "03-public-const-signature/variants/signature-params/new/vendor/dep/src/lib.wz": "f66325f6f07740789dcabd83c02b1e057f648400b7bcdf6f8849d45c407985a2",
+    "03-public-const-signature/variants/signature-params/old/vendor/dep/src/lib.wz": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b",
+    "04-generic-body-dedup/base/lang.toml": "efecc011e083cfdd9a0b9d6101c88356c89644eb96b1a4c8063019d1499c54bd",
+    "04-generic-body-dedup/base/src/main.wz": "df69da95d1a65ea8274ca6e43e47cfca6f350c3dbd642bd181b8edc1ba3a30e1",
+    "04-generic-body-dedup/base/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "04-generic-body-dedup/base/vendor/dep/src/lib.wz": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141",
+    "04-generic-body-dedup/base/vendor/left/lang.toml": "e15d8b925180d9fef950d252c54dbb4669a091ddace16240af370468daa8ad28",
+    "04-generic-body-dedup/base/vendor/left/src/lib.wz": "7ac0324dcff902c4be86b2fd3c1208e8b99513a00030fda71ff17f7c5de7eb36",
+    "04-generic-body-dedup/base/vendor/right/lang.toml": "57e619a9987b715656127101931463ee1fb7f569c8f19ee5e7916078e82dc8f1",
+    "04-generic-body-dedup/base/vendor/right/src/lib.wz": "30cb2ed68f0f3082d2fc71be1e134596f1e9eefb968eb6e3b9266aec5d7aa8cf",
+    "04-generic-body-dedup/fixture.json": "325d96ff18e090e0327569200e3179490e51fbfe54c52ccf9931b88d4fa9c6be",
+    "04-generic-body-dedup/variants/caller-literal/mutation.json": "8aa79293247fd5a6444c4a2ff15f262fd3fc70bbac9e6ed2841063c9c53c0a0c",
+    "04-generic-body-dedup/variants/caller-literal/new/vendor/right/src/lib.wz": "c1c942b571e27d75c125a6d1c80e38634c4431fa41682eb23b57d1f8e64b89df",
+    "04-generic-body-dedup/variants/caller-literal/old/vendor/right/src/lib.wz": "30cb2ed68f0f3082d2fc71be1e134596f1e9eefb968eb6e3b9266aec5d7aa8cf",
+    "04-generic-body-dedup/variants/generic-body/mutation.json": "9e0aded66f887eb6f0f0dfe14b5957fe809ceeecd4ddb3a8c3edde869b4575f8",
+    "04-generic-body-dedup/variants/generic-body/new/vendor/dep/src/lib.wz": "51efb97cc341c111de7061e5455d4578b30794cd697ff458246b93f28c21b178",
+    "04-generic-body-dedup/variants/generic-body/old/vendor/dep/src/lib.wz": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141",
+    "04-generic-body-dedup/variants/private-helper/mutation.json": "33bd66838420e062e4109afe8de0ec292c472e5ed5127e0bb2895d63d531abe5",
+    "04-generic-body-dedup/variants/private-helper/new/vendor/dep/src/lib.wz": "149d9430c372712cc5a43f9969e9c845bf16042de9fa08e934a334b0b5c7690d",
+    "04-generic-body-dedup/variants/private-helper/old/vendor/dep/src/lib.wz": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141",
+    "05-owning-vec-throws/base/lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+    "05-owning-vec-throws/base/src/main.wz": "9c25a98be31cb5b24509055a53b92db66942c2f5c0580456378668c0f2479c9b",
+    "05-owning-vec-throws/base/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "05-owning-vec-throws/base/vendor/dep/src/lib.wz": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80",
+    "05-owning-vec-throws/fixture.json": "071c4b8cfb72778d192eab3fe4a84899ae542afb21690e21d50256f9e5eb4951",
+    "05-owning-vec-throws/variants/no-throw/mutation.json": "90947068d15d18a9ff535b422d0873c36da14a730e2524c70c3e51ca6caf932c",
+    "05-owning-vec-throws/variants/no-throw/new/vendor/dep/src/lib.wz": "f7dd7ba12dd10b5d9436c40687947da67568d376b6548559ceb9cf2e8e587b66",
+    "05-owning-vec-throws/variants/no-throw/old/vendor/dep/src/lib.wz": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80",
+    "05-owning-vec-throws/variants/vec-values/mutation.json": "06af5e23b3af5e84443dcbfedd34d8646bb1b37500bf41e018dc1ef360056214",
+    "05-owning-vec-throws/variants/vec-values/new/vendor/dep/src/lib.wz": "991beffe65c6daa0e36fd0a63b01363b2874df6b4d3956926730c7ef2f053387",
+    "05-owning-vec-throws/variants/vec-values/old/vendor/dep/src/lib.wz": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80",
+    "06-package-set-errors/base/lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+    "06-package-set-errors/base/src/extra.wz": "ef64735b138e68e7ab402deaa2b99824ed22b2d734f7b86ca3e340047ed8d935",
+    "06-package-set-errors/base/src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+    "06-package-set-errors/base/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "06-package-set-errors/base/vendor/dep/src/lib.wz": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b",
+    "06-package-set-errors/fixture.json": "c4b09c9ff5d944a06b1435b1233d6ac26d23be3a80d17de3d4b8e810b27714b7",
+    "06-package-set-errors/variants/add-file/mutation.json": "5eae13388b5cfa309870bce6e65e476136b5ac864c3bd299b09ace1d0bfb7ef4",
+    "06-package-set-errors/variants/add-file/new/src/main.wz": "0bbe00a7b9c40cae4d5ba90ef8795bdb0883036e98e7da4c59713652865f1bbd",
+    "06-package-set-errors/variants/add-file/new/src/more.wz": "a5f9a462fc9a7b5cb887cc562572d89aebb70ff29b9bea9fb5fa47283f51643d",
+    "06-package-set-errors/variants/add-file/old/src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+    "06-package-set-errors/variants/add-package/mutation.json": "373a2ab09c75edcf21354b19d47d9fc3e3029c10c2273bc52a94b1c8f0777fd9",
+    "06-package-set-errors/variants/add-package/new/lang.toml": "62b76437118ce5a7dd86ea9cf8645d947323a9583c09278b4395aa1d513f8bc6",
+    "06-package-set-errors/variants/add-package/new/src/main.wz": "aa3c5192611f5d60732cbd681e99702a33d1b1e61a314302ff9bb251e6acc288",
+    "06-package-set-errors/variants/add-package/new/vendor/other/lang.toml": "7ccfa097ec66491da310cb3aaf33bbab04488f231e8c4e78efbb1a2f89f1e010",
+    "06-package-set-errors/variants/add-package/new/vendor/other/src/lib.wz": "3acc2d21bd26305de3ee5283b9ce219e728aa4d853753e754553c60a88d0788d",
+    "06-package-set-errors/variants/add-package/old/lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+    "06-package-set-errors/variants/add-package/old/src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+    "06-package-set-errors/variants/import-cycle/mutation.json": "9709aea6f9673a2506ad6f3a6b5f1422f1720908863347c01db84e7ee13784fe",
+    "06-package-set-errors/variants/import-cycle/new/vendor/cycleb/lang.toml": "5a70320ac054a8d54bf6d2c00bb66f48e52fef88f62023fd19a7e14e39c11cb2",
+    "06-package-set-errors/variants/import-cycle/new/vendor/cycleb/src/lib.wz": "b3d26ee349dc2a0f809f6edd39c5cd441b75cc06ae973f6b54c98aa32a8f491d",
+    "06-package-set-errors/variants/import-cycle/new/vendor/dep/lang.toml": "b139aff489a367634796a963b3f7dd32c9dfadb4ffcca6465f8490fd1d656ad8",
+    "06-package-set-errors/variants/import-cycle/new/vendor/dep/src/lib.wz": "95f2559d04870bc994506e812b7de4008a3d15bb6b0335fc117a432c15f4e016",
+    "06-package-set-errors/variants/import-cycle/old/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "06-package-set-errors/variants/import-cycle/old/vendor/dep/src/lib.wz": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b",
+    "06-package-set-errors/variants/remove-file-stale/mutation.json": "1267dbfde5b20c12dbac07b46d0c8551f32a1743703a08749cd83edd2253c8cf",
+    "06-package-set-errors/variants/remove-file-stale/old/src/extra.wz": "ef64735b138e68e7ab402deaa2b99824ed22b2d734f7b86ca3e340047ed8d935",
+    "06-package-set-errors/variants/remove-package-stale/mutation.json": "45ca205bd5b0e3183baa962f736fa3c5a877ee4ee6ef0b66e7ed1b75c2978625",
+    "06-package-set-errors/variants/remove-package-stale/new/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+    "06-package-set-errors/variants/remove-package-stale/old/lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+    "06-package-set-errors/variants/remove-package-stale/old/vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+    "06-package-set-errors/variants/remove-package-stale/old/vendor/dep/src/lib.wz": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b",
+    "06-package-set-errors/variants/syntax-failure/mutation.json": "442c9d59012ee0f04fe83773acea693609c0bbfd1c86e488a1cc486b9130a9fa",
+    "06-package-set-errors/variants/syntax-failure/new/src/main.wz": "6016dc9157f0b22ed277e96af193b9585a56cc1c031509c4bd6f8bfd898fced4",
+    "06-package-set-errors/variants/syntax-failure/old/src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+    "06-package-set-errors/variants/type-failure/mutation.json": "e3b9ff2d20b1ae40d81b36a63ed0688ab2eaceff173ee49ce60f8d1de619dc0f",
+    "06-package-set-errors/variants/type-failure/new/src/main.wz": "42b427a8c9e17179a2257f16b8cbaafbf89b1cba41629419c65489aeb0208e3a",
+    "06-package-set-errors/variants/type-failure/old/src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+    "README.md": "eade5dfb4f42edf87f94e2d46169093f0fb24f7fabaf47b51557044286df0f16",
+    "run_reference.py": "8838e4b55b8c9fb73fdb041d85496a790dc3b20b16470de1a0d8af5d079e8c3a"
+  },
+  "self_sha256_note": "manifest.json cannot contain its own hash; D/reference/fixture-manifest.sha256 records it.",
+  "incremental_feature_status": "NOT RUN; expectations are design notes, not cache-hit measurements."
+}

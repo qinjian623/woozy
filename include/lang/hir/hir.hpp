@@ -84,6 +84,9 @@ struct Type {
 // binding.
 class TypeContext {
   std::vector<Type> entries_;
+  std::vector<uint64_t> hash_table_;
+
+  void rehash_table(size_t capacity);
 
 public:
   TypeId intern(Type); // invalid type shape/reference throws invalid_argument
@@ -769,22 +772,26 @@ PhaseResult<std::monostate> verify_types(const HirModule &,
                                          std::stop_token = {});
 // Checks only executable functions, reachable nodes and recursively used types.
 // Target-width restrictions of code generation remain at backend entry points.
-PhaseResult<std::monostate> check_backend_capabilities(const HirModule &,
-                                                       std::stop_token = {});
 class VerifiedHirModule;
 enum class VerifyMode { backend, static_only };
+PhaseResult<std::monostate> check_backend_capabilities(const HirModule &,
+                                                       std::stop_token = {});
+PhaseResult<std::monostate> check_backend_capabilities(const VerifiedHirModule &,
+                                                       std::stop_token = {});
 PhaseResult<VerifiedHirModule> verify(const HirModule &, std::stop_token = {},
                                      VerifyMode = VerifyMode::backend);
 class VerifiedHirModule {
   std::shared_ptr<const HirModule> module_;
-  explicit VerifiedHirModule(std::shared_ptr<const HirModule> m)
-      : module_(std::move(m)) {}
+  VerifyMode mode_;
+  VerifiedHirModule(std::shared_ptr<const HirModule> m, VerifyMode mode)
+      : module_(std::move(m)), mode_(mode) {}
   friend PhaseResult<VerifiedHirModule> verify(const HirModule &,
                                                std::stop_token, VerifyMode);
 
 public:
   const HirModule &module() const { return *module_; }
   const Config &config() const { return module_->config; }
+  VerifyMode mode() const { return mode_; }
   std::string_view version() const { return contract_version; }
 };
 // verify deep-copies mutable builder data, resolved/project and AST arenas

@@ -1,0 +1,35 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "05-owning-vec-throws",
+  "kind": "source-package-set",
+  "purpose": "Cross-package owning Vec return with alias sharing and Arc cleanup (observed with Weak), plus a typed throw from a function returning Vec. The fixture result is the returned element value and exact main exit.",
+  "language_references": [
+    "docs/SEMANTICS.md §7.1 复制与对象身份",
+    "docs/SEMANTICS.md §7.3 运行库边界",
+    "docs/SEMANTICS.md §8 typed throws",
+    "tests/trait_objects/fixtures/owning-return-error",
+    "tests/native/cleanup/cross-module"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+      "src/main.wz": "9c25a98be31cb5b24509055a53b92db66942c2f5c0580456378668c0f2479c9b",
+      "vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+      "vendor/dep/src/lib.wz": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 4,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "vec-values",
+    "no-throw"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

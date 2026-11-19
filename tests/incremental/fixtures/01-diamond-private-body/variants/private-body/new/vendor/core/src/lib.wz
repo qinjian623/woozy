@@ -1,0 +1,9 @@
+package core;
+
+func secret() i32 {
+    return 6;
+}
+
+pub func offset() i32 {
+    return secret();
+}

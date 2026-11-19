@@ -1,22 +1,28 @@
 #pragma once
 #include "lang/hir/hir.hpp"
 #include <stdexcept>
+#include <unordered_map>
 
 namespace lang::ir::detail {
 // Substitution may intern storage-only types in this private copy. Such IDs
 // never enter Native IR. A function field is a leaf, irrespective of its result.
 class AggregateTypes {
-  const hir::HirModule &module;
+  std::unordered_map<uint64_t, const hir::NominalDecl *> nominals_by_symbol_;
 
 public:
   hir::TypeContext types;
-  explicit AggregateTypes(const hir::HirModule &m) : module(m), types(m.types) {}
+  explicit AggregateTypes(const hir::HirModule &m) : types(m.types) {
+    nominals_by_symbol_.reserve(m.nominals.size());
+    for (const auto &d : m.nominals)
+      nominals_by_symbol_.emplace(d.symbol.value, &d);
+  }
   const hir::NominalDecl &declaration(TypeId id) const {
     const auto *t = types.find(id);
-    if (t)
-      for (const auto &d : module.nominals)
-        if (d.symbol == t->declaration)
-          return d;
+    if (t) {
+      if (auto it = nominals_by_symbol_.find(t->declaration.value);
+          it != nominals_by_symbol_.end())
+        return *it->second;
+    }
     throw std::logic_error("unknown aggregate declaration");
   }
   std::vector<hir::FieldDecl> fields(TypeId id,

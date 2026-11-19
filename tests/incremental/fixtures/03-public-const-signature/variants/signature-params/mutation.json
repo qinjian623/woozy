@@ -1,0 +1,41 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "03-public-const-signature",
+  "variant": "signature-params",
+  "description": "dep.scale parameter changes from i32 to i64 while app passes a typed i32 binding; expect E_TYPE_MISMATCH and no executable.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_fail_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": false,
+    "expected_runtime": "compile-time reject",
+    "note": "Public signature changes. dep itself remains valid, but app call with i32 must fail type checking; an old successful executable must not be served."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "f66325f6f07740789dcabd83c02b1e057f648400b7bcdf6f8849d45c407985a2"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "check",
+    "check_exit": 1,
+    "status": "error",
+    "error_codes_any": [
+      "E_TYPE_MISMATCH"
+    ]
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

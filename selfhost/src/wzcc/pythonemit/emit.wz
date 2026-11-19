@@ -405,7 +405,7 @@ pub func emit(input hirverify.VerifiedHirModule, entry usize, options Options,
     // Output and is reported like any other internal emission failure.
     try {
         let module = hirverify.snapshot(input);
-        let checked = hirverify.check_backend_capabilities(module);
+        let checked = hirverify.check_verified_capabilities(input);
         let supported = unit_success(checked);
         result.state = checked.state;
         result.failure = checked.failure;

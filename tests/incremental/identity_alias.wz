@@ -1,0 +1,75 @@
+package app;
+import "app/wzcc/source" as source;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/model" as model;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/interface" as interface;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/io" as io;
+import "std/os" as os;
+
+func module_value(id usize, name string, files Vec[usize]) model.Module {
+    return model.Module(id: id, logical_path: "app/" + name, identity: "source:/alias/" + name,
+        package_name: name, files: files, imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None, c_binding: option.Option[usize].None);
+}
+func key_pair(reverse bool) Vec[string] throws model.SupportError {
+    let inputs = ["package model; pub struct S { pub value i32; }",
+        "package ta; pub trait Convert { func convert(self Self) i32; }",
+        "package tb; pub trait Convert { func convert(self Self) i32; }",
+        "package adapters; import \"app/ta\" as Q; import \"app/model\" as model; impl Q.Convert for model.S { func convert(self Self) i32 { return 17; } }",
+        "package adapters; import \"app/tb\" as Q; import \"app/model\" as model; impl Q.Convert for model.S { func convert(self Self) i32 { return 29; } }"];
+    var project = model.empty_project();
+    for var id usize = 0; id < vec.len(inputs); id += 1 {
+        let parsed = parser.parse(lexer.lex(source.snapshot(u64(id), 0, u64(id), "/alias/" + inputs[id][:10] + ".wz", text.bytes(inputs[id]))));
+        if !parsed.has_value { throw model.SupportError.Invalid("alias fixture parse failed"); }
+        vec.push(project.files, parsed);
+    }
+    let file_ids Vec[usize] = [3, 4]; if reverse { file_ids[0] = 4; file_ids[1] = 3; }
+    project.modules = [module_value(0, "model", [0]), module_value(1, "ta", [1]),
+        module_value(2, "tb", [2]), module_value(3, "adapters", file_ids)];
+    for var file_index usize = 0; file_index < 2; file_index += 1 {
+        let file_id = file_ids[file_index]; let file = project.files[file_id];
+        for node_id in file.nodes[file.root].children {
+            let node = file.nodes[node_id];
+            if model.ast_kind_id(node.kind) == 2 {
+                let spelling = file.lexed.tokens[node.token_begin + 1].string_value;
+                var target usize = 0; var alias = "model";
+                if spelling == "app/ta" { target = 1; alias = "Q"; }
+                if spelling == "app/tb" { target = 2; alias = "Q"; }
+                vec.push(project.modules[3].imports, model.Import(file: file_index, node: node_id,
+                    target: target, alias: alias, span: node.span));
+            }
+        }
+    }
+    let resolved = resolve.resolve_project(project);
+    if !resolved.has_value || vec.len(resolved.diagnostics) != 0 { throw model.SupportError.Invalid("alias fixture resolve failed"); }
+    let module = hir.empty_module(resolved.value, 3, model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    let keys = interface.index(module); let result = vec.make[string](2, "");
+    for symbol in resolved.value.symbols {
+        if symbol.module != 3 || symbol.name != "convert" { continue; }
+        switch symbol.definition {
+            case option.Option.Some(ref): {
+                let original_file_id = project.modules[3].files[ref.file];
+                result[original_file_id - 3] = interface.indexed_function_name(keys, symbol.id);
+            }
+            case option.Option.None: {}
+        }
+    }
+    return result;
+}
+func main() i32 throws os.Error {
+    try {
+        let original = key_pair(false); let reordered = key_pair(true);
+        if original[0] == "" || original[1] == "" || original[0] == original[1] { return 1; }
+        if original[0] != reordered[0] || original[1] != reordered[1] { return 2; }
+        io.println(original[0]); io.println(original[1]); return 0;
+    } catch problem model.SupportError {
+        switch problem { case model.SupportError.Invalid(message): io.eprintln(message); case model.SupportError.Limit(message): io.eprintln(message); }
+        return 3;
+    }
+}

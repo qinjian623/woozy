@@ -28,7 +28,15 @@ DEFAULT_WORK = ROOT / "build" / "foreign-signature-tests"
 DEFAULT_TIMEOUT = 1800.0
 MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
-EXPECTED_OPERATIONS = 213
+# 0..212 were covered by the old 426-case (213 x 2) run.  SH30/SH31 appended
+# fs_stat_bytes (213) and fs_flock (214); both are in the C++ table and the
+# generated Wz system.operations() table.
+EXPECTED_OPERATIONS = 215
+NEW_OPERATIONS = {
+    213: ("__woozy_os_stat_bytes", "Result[std/os.FileInfo,i32]",
+          '["Vec[u8]"]'),
+    214: ("__woozy_os_flock", "Result[Unit,i32]", '["i32", "i32"]'),
+}
 
 
 def fail(message: str) -> None:
@@ -165,6 +173,33 @@ def build_oracle(args: argparse.Namespace, work: pathlib.Path,
     return binary
 
 
+def validate_registry_entries() -> None:
+    """Check the two real registries carry the same new signatures/identities."""
+    header = (ROOT / "include/lang/hir/system_operation.hpp").read_text(
+        encoding="utf-8")
+    system = (ROOT / "selfhost/src/wzcc/system/system.wz").read_text(
+        encoding="utf-8")
+    expected_header = {
+        213: ('{SystemOperation::fs_stat_bytes, "__woozy_os_stat_bytes", '
+              '"Result[std/os.FileInfo,i32]", {"Vec[u8]"}, 1},'),
+        214: ('{SystemOperation::fs_flock, "__woozy_os_flock", '
+              '"Result[Unit,i32]", {"i32", "i32"}, 2},'),
+    }
+    expected_system = {
+        213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
+              'result: "Result[std/os.FileInfo,i32]", parameters: ["Vec[u8]"], '
+              'owner: "std/os", type_arity: 0)'),
+        214: ('OperationSpec(operation: 214, name: "__woozy_os_flock", '
+              'result: "Result[Unit,i32]", parameters: ["i32", "i32"], '
+              'owner: "std/os", type_arity: 0)'),
+    }
+    for operation in NEW_OPERATIONS:
+        if expected_header[operation] not in header:
+            fail(f"oracle: C++ registry entry for op.{operation} changed")
+        if expected_system[operation] not in system:
+            fail(f"oracle: Wz registry entry for op.{operation} changed")
+
+
 def validate_oracle(output: str) -> None:
     lines = output.splitlines()
     if "operation_id woozy-SH06f-foreign-signature-20261113" not in lines:
@@ -178,8 +213,26 @@ def validate_oracle(output: str) -> None:
     if len(operation_cases) != EXPECTED_OPERATIONS * 2:
         fail(f"oracle: {len(operation_cases)} operation cases, "
              f"want {EXPECTED_OPERATIONS * 2}")
+    operation_ids = sorted({int(line.split()[1].split(".")[1])
+                            for line in operation_cases})
+    if operation_ids != list(range(EXPECTED_OPERATIONS)):
+        fail(f"oracle: operation ids are not 0..{EXPECTED_OPERATIONS - 1}: "
+             f"{operation_ids}")
     if f"operations {EXPECTED_OPERATIONS}" not in lines:
         fail(f"oracle: missing 'operations {EXPECTED_OPERATIONS}' line")
+    for operation in NEW_OPERATIONS:
+        module_line = next((line for line in operation_cases
+                            if line.split()[1] == f"op.{operation}.module"),
+                           "")
+        none_line = next((line for line in operation_cases
+                          if line.split()[1] == f"op.{operation}.none"), "")
+        if not module_line.startswith(f"case op.{operation}.module ok "):
+            fail(f"oracle: missing successful module case for op.{operation}")
+        if not none_line.startswith(f"case op.{operation}.none invalid "):
+            fail(f"oracle: missing module-boundary rejection for op.{operation}")
+        if "invalid system operation requires its standard type module" not in none_line:
+            fail(f"oracle: wrong module-boundary rejection for op.{operation}")
+    validate_registry_entries()
     for label in ("python", "c", "private", "system"):
         if not any(line.startswith(f"table {label} ") for line in lines):
             fail(f"oracle: missing table {label}")

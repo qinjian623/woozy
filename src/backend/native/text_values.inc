@@ -10,8 +10,11 @@
     using B = hir::BinaryOp;
     if (i.binary == B::add) {
       auto *out = storage(lower_type(i.type));
+      start_lifetime(out);
       runtime("lang_text_concat_v1", builder.getVoidTy(), {out, left, right});
-      return builder.CreateLoad(lower_type(i.type), out);
+      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
+      end_lifetime(out);
+      return loaded;
     }
     auto *order = runtime("lang_text_compare_v1", builder.getInt32Ty(), {left, right});
     auto *zero = builder.getInt32(0);
@@ -35,6 +38,7 @@
     case SystemOperation::unicode_normalize:
     case SystemOperation::unicode_casefold: {
       auto *out = storage(lower_type(i.type));
+      start_lifetime(out);
       llvm::Value *status = nullptr;
       if (*i.system == SystemOperation::unicode_normalize)
         status = runtime("lang_unicode_normalize_v1", builder.getInt64Ty(),
@@ -43,7 +47,9 @@
         status = runtime("lang_unicode_casefold_v1", builder.getInt64Ty(),
                          {out, pointer(0)});
       guard(builder.CreateICmpSLT(status, builder.getInt64(0)), 10, i.source);
-      return builder.CreateLoad(lower_type(i.type), out);
+      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
+      end_lifetime(out);
+      return loaded;
     }
     case SystemOperation::unicode_boundaries:
       return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
@@ -55,11 +61,14 @@
     case SystemOperation::text_from_rune: {
       const auto text = type(i.type).type_args.at(0);
       auto *out = storage(lower_type(text));
+      start_lifetime(out);
       auto *status = runtime(*i.system == SystemOperation::text_from_bytes
                                   ? "lang_text_from_bytes_v1" : "lang_text_from_rune_v1",
                              builder.getInt64Ty(), {out, args[0]});
-      return stdlib_result(i.type, status,
+      auto *result = stdlib_result(i.type, status,
           [&] { return builder.CreateLoad(lower_type(text), out); });
+      end_lifetime(out);
+      return result;
     }
     default: break;
     }
@@ -96,9 +105,12 @@
       auto *layout = lower_type(t);
       const bool empty = module.getDataLayout().getTypeAllocSize(layout).getFixedValue() == 0;
       auto *out = storage(empty ? builder.getInt8Ty() : layout);
+      start_lifetime(out);
       auto *present = runtime("lang_vec_pop_v1", builder.getInt1Ty(), {args[0], out});
-      return stdlib_option(i.type, present,
+      auto *result = stdlib_option(i.type, present,
           [&] { return builder.CreateLoad(layout, out); });
+      end_lifetime(out);
+      return result;
     }
     case SystemOperation::vec_resize:
       runtime("lang_vec_resize_v1", builder.getVoidTy(), {args[0], args[1], element_storage(element(), args[2])}); break;

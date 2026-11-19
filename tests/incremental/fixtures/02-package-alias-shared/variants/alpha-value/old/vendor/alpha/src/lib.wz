@@ -1,0 +1,5 @@
+package alpha;
+
+pub func number() i32 {
+    return 10;
+}

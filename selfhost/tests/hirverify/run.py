@@ -50,7 +50,7 @@ STD_PACKAGES = (
 )
 ORACLE_LIBS = (
     "liblang_sema.a", "liblang_hir.a", "liblang_modules.a",
-    "liblang_frontend.a",
+    "liblang_frontend.a", "liblang_driver_process.a",
 )
 FIXTURES = {
     "unit": ("fixture.wz", "unit"),

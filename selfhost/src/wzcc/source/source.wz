@@ -85,13 +85,13 @@ func invalid_source(file_id u64, revision_id u64, id u64, path string,
         error_byte: byte, error_length: length, error_message: message);
 }
 
-func has_boundary(source model.Source, byte u64) bool {
-    for boundary in source.boundaries {
-        if boundary.byte == byte {
-            return true;
-        }
+pub func has_boundary(source model.Source, byte u64) bool {
+    var low usize = 0; var high = vec.len(source.boundaries);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if source.boundaries[middle].byte < byte { low = middle + 1; } else { high = middle; }
     }
-    return false;
+    return low < vec.len(source.boundaries) && source.boundaries[low].byte == byte;
 }
 
 // Vec handles are shared, but a snapshot owns its original bytes. Copy the

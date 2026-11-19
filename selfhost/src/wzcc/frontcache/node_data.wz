@@ -1,0 +1,104 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func encode_data(state Encoder, node hir.HirNode) throws Error {
+    if vec.len(node.errors) != 0 { throw Error.Unsupported; }
+    put_number(state.bytes, u64(hir.node_kind_id(hir.node_kind(node.data))));
+    switch node.data {
+        case hir.NodeData.UnitLiteral(value): {}
+        case hir.NodeData.BoolLiteral(value): { if value.value { put_number(state.bytes, 1); } else { put_number(state.bytes, 0); } }
+        case hir.NodeData.IntegerLiteral(value): { put_string(state.bytes, value.decimal); put_number(state.bytes, value.bits); }
+        case hir.NodeData.FloatLiteral(value): put_number(state.bytes, value.bits);
+        case hir.NodeData.StringLiteral(value): put_string(state.bytes, value.utf8);
+        case hir.NodeData.Read(value): encode_symbol(state, value.symbol);
+        case hir.NodeData.Place(value): encode_symbol(state, value.symbol);
+        case hir.NodeData.FunctionValue(value): {
+            if vec.len(value.type_args) != 0 || vec.len(value.captures) != 0 || value.move_capture || option.is_some(value.bound) { throw Error.Unsupported; }
+            encode_symbol(state, value.symbol);
+        }
+        case hir.NodeData.Binding(value): {
+            encode_symbol(state, value.symbol); if value.writable { put_number(state.bytes, 1); } else { put_number(state.bytes, 0); }
+        }
+        case hir.NodeData.Assign(value): {
+            switch value.compound { case option.Option.Some(op): put_number(state.bytes, 1); put_number(state.bytes, binary_number(op)); case option.Option.None: put_number(state.bytes, 0); }
+        }
+        case hir.NodeData.Unary(value): put_number(state.bytes, unary_number(value.op));
+        case hir.NodeData.Binary(value): put_number(state.bytes, binary_number(value.op));
+        case hir.NodeData.ShortCircuit(value): put_number(state.bytes, logical_number(value.op));
+        case hir.NodeData.IntegerConvert(value): {}
+        case hir.NodeData.Call(value): {
+            var kind u64 = 0;
+            switch value.kind { case hir.CalleeKind.Direct: {} case hir.CalleeKind.FunctionValue: kind = 1; default: throw Error.Unsupported; }
+            if option.is_some(value.binding) || option.is_some(value.c_callable) || option.is_some(value.system) || vec.len(value.type_args) != 0 || vec.len(value.omitted) != 0 { throw Error.Unsupported; }
+            put_number(state.bytes, kind); encode_type(state, value.signature, 0);
+            switch value.direct_symbol { case option.Option.Some(symbol): put_number(state.bytes, 1); encode_symbol(state, symbol); case option.Option.None: put_number(state.bytes, 0); }
+            switch value.callee { case option.Option.Some(callee): put_number(state.bytes, 1); encode_node(state, callee); case option.Option.None: put_number(state.bytes, 0); }
+            put_number(state.bytes, u64(vec.len(value.args))); for argument in value.args { encode_argument(state, argument); }
+        }
+        case hir.NodeData.Block(value): {}
+        case hir.NodeData.ExpressionStatement(value): {}
+        case hir.NodeData.If(value): {}
+        case hir.NodeData.For(value): {}
+        case hir.NodeData.Noop(value): {}
+        case hir.NodeData.Return(value): encode_symbol(state, value.function);
+        case hir.NodeData.Break(value): encode_node(state, value.loop);
+        case hir.NodeData.Continue(value): encode_node(state, value.loop);
+        default: throw Error.Unsupported;
+    }
+}
+func decode_data(state inout Decoder) hir.NodeData throws Error {
+    let tag = number(inout state.reader);
+    switch tag {
+        case 0: return hir.NodeData.UnitLiteral(hir.UnitLiteral());
+        case 1: { let value = flag(inout state.reader); return hir.NodeData.BoolLiteral(hir.BoolLiteral(value: value)); }
+        case 2: {
+            let decimal = string_value(inout state.reader); let bits = number(inout state.reader);
+            return hir.NodeData.IntegerLiteral(hir.IntegerLiteral(decimal: decimal, bits: bits));
+        }
+        case 3: { let bits = number(inout state.reader); return hir.NodeData.FloatLiteral(hir.FloatLiteral(bits: bits)); }
+        case 4: { let value = string_value(inout state.reader); return hir.NodeData.StringLiteral(hir.StringLiteral(utf8: value)); }
+        case 5: { let id = decode_symbol(inout state); return hir.NodeData.Read(hir.Read(symbol: id)); }
+        case 6: { let id = decode_symbol(inout state); return hir.NodeData.Place(hir.Place(symbol: id)); }
+        case 7: {
+            let id = decode_symbol(inout state);
+            return hir.NodeData.FunctionValue(hir.FunctionValue(symbol: id, type_args: [], captures: [], move_capture: false, bound: option.Option[hir.BoundReceiver].None));
+        }
+        case 8: {
+            let id = decode_symbol(inout state); let writable = flag(inout state.reader);
+            return hir.NodeData.Binding(hir.Binding(symbol: id, writable: writable));
+        }
+        case 9: {
+            var compound = option.Option[hir.BinaryOp].None;
+            if flag(inout state.reader) { let op = decode_binary(inout state.reader); compound = option.Option[hir.BinaryOp].Some(op); }
+            return hir.NodeData.Assign(hir.Assign(compound: compound));
+        }
+        case 10: { let op = decode_unary(inout state.reader); return hir.NodeData.Unary(hir.Unary(op: op)); }
+        case 11: { let op = decode_binary(inout state.reader); return hir.NodeData.Binary(hir.Binary(op: op)); }
+        case 12: { let op = decode_logical(inout state.reader); return hir.NodeData.ShortCircuit(hir.ShortCircuit(op: op)); }
+        case 13: return hir.NodeData.IntegerConvert(hir.IntegerConvert());
+        case 14: {
+            let kind_id = number(inout state.reader); need(kind_id <= 1); var kind = hir.CalleeKind.Direct;
+            if kind_id == 1 { kind = hir.CalleeKind.FunctionValue; }
+            let signature = read_type(inout state);
+            var direct_symbol = option.Option[usize].None; var callee = option.Option[usize].None;
+            if flag(inout state.reader) { let id = decode_symbol(inout state); direct_symbol = option.Option[usize].Some(id); }
+            if flag(inout state.reader) { let id = decode_node(inout state); callee = option.Option[usize].Some(id); }
+            let size = count(inout state.reader); let args = vec.empty[hir.CallArg]();
+            for var index usize = 0; index < size; index += 1 { let argument = decode_argument(inout state); vec.push(args, argument); }
+            return hir.NodeData.Call(hir.Call(kind: kind, signature: signature, direct_symbol: direct_symbol, callee: callee,
+                args: args, type_args: [], binding: option.Option[usize].None, c_callable: option.Option[u32].None, omitted: [], system: option.Option[u32].None));
+        }
+        case 15: return hir.NodeData.Block(hir.Block());
+        case 16: return hir.NodeData.ExpressionStatement(hir.ExpressionStatement());
+        case 17: return hir.NodeData.If(hir.If());
+        case 18: return hir.NodeData.For(hir.For());
+        case 19: return hir.NodeData.Noop(hir.Noop());
+        case 20: { let id = decode_symbol(inout state); return hir.NodeData.Return(hir.Return(function: id)); }
+        case 21: { let id = decode_node(inout state); return hir.NodeData.Break(hir.Break(loop: id)); }
+        case 22: { let id = decode_node(inout state); return hir.NodeData.Continue(hir.Continue(loop: id)); }
+        default: throw Error.Unsupported;
+    }
+}

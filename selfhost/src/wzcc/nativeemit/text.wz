@@ -1,6 +1,7 @@
 package nativeemit;
 
 import "app/wzcc/model" as model;
+import "std/map" as map;
 import "std/option" as option;
 import "std/strconv" as strconv;
 import "std/text" as text;
@@ -268,10 +269,10 @@ pub func sections(state Emitter) Vec[string] throws Error {
     vec.push(out, "target datalayout = \"" + state.data_layout + "\"\ntarget triple = \"" + state.options.triple + "\"\n\n");
     for item in state.type_definitions { vec.push(out, type_reference(item.name) + " = type " + item.text + "\n"); }
     for item in state.globals { vec.push(out, global_reference(item.name) + " = " + item.text + "\n"); }
+    let definitions = map.new[string, bool]();
+    for function in state.functions { let ignored = map.insert(definitions, function.name, true); }
     for item in state.declarations {
-        var defined = false;
-        for function in state.functions { if function.name == item.name { defined = true; } }
-        if !defined { vec.push(out, "declare " + item.signature.result + " " + global_reference(item.name) +
+        if !map.contains(definitions, item.name) { vec.push(out, "declare " + item.signature.result + " " + global_reference(item.name) +
             "(" + text.join(item.signature.parameters, ", ") + ")\n"); }
     }
     for function in state.functions {

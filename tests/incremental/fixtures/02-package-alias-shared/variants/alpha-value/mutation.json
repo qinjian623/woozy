@@ -1,0 +1,44 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "02-package-alias-shared",
+  "variant": "alpha-value",
+  "description": "Change alpha.number body from 10 to 12; app imports alpha in main.wz.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "alpha"
+    ],
+    "may_reuse_packages": [
+      "beta"
+    ],
+    "must_recompile_or_relink": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "40 -> 42",
+    "note": "alpha public function body changes; app must be rechecked/relinked. beta and the app helper bodies are unchanged."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/alpha/src/lib.wz",
+      "old": {
+        "file": "old/vendor/alpha/src/lib.wz",
+        "sha256": "c6c5795af0a45f372e341188ebe9f3ca646f70d67cd87dbc1ae7cc08ae44fb29"
+      },
+      "new": {
+        "file": "new/vendor/alpha/src/lib.wz",
+        "sha256": "92642bef26f4b65bc941f80321215d9ff9437820c2a6f495a59ccaea1af66316"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 42,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

@@ -191,18 +191,28 @@ func b_may_hold_shared_visit(state inout Checker, scratch inout types.Context,
         source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
             span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
     var found = false;
-    for candidate in state.m.nominals {
-        if candidate.symbol == value_type.declaration {
-            declaration = candidate;
-            found = true;
-            break;
+    switch a_nominal_id_get(state.nominal_ids, value_type.declaration) {
+        case option.Option.Some(index): {
+            if index < vec.len(state.m.nominals) {
+                declaration = state.m.nominals[index];
+                found = true;
+            }
+        }
+        case option.Option.None: {
+            for candidate in state.m.nominals {
+                if candidate.symbol == value_type.declaration {
+                    declaration = candidate;
+                    found = true;
+                    break;
+                }
+            }
         }
     }
     if !found || vec.len(value_type.type_args) != vec.len(declaration.params) {
         return true;
     }
     if b_vec_contains(active, id) { return false; }
-    vec.push(active, id);
+    b_insert_sorted(active, id);
     let substitutions = vec.empty[model.Substitution]();
     for var index usize = 0; index < vec.len(declaration.params); index += 1 {
         vec.push(substitutions, model.Substitution(

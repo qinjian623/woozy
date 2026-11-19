@@ -4,6 +4,7 @@
 #include "lang/sema/check.hpp"
 #include "lang/backend/python.hpp"
 #include "lang/support/process.hpp"
+#include "lang/support/publish.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <iostream>
 #include <string_view>
+#include <unistd.h>
 
 namespace {
 namespace fs = std::filesystem;
@@ -43,63 +45,21 @@ bool diagnostic_document(const std::string& text, int exit) {
 }
 #endif
 void write_python(const fs::path& out, const lang::backend::python::Output& output) {
-    fs::create_directories(out);
-    auto pattern = (out / ".woozyc-XXXXXX").string();
-    if (!mkdtemp(pattern.data()))
-        throw fs::filesystem_error("create build staging directory", out,
-                                   std::error_code(errno, std::generic_category()));
-    const fs::path stage(pattern);
-    bool preserve = false;
-    try {
-        auto write = [&](const char* name, const std::string& text) {
-            std::ofstream file;
-            file.exceptions(std::ios::failbit | std::ios::badbit);
-            file.open(stage / name, std::ios::binary);
-            file << text;
-            file.close();
-        };
-        write("program.py", output.code);
-        write("langrt.py", output.runtime);
-        for (const char* name : {"langrt.py", "program.py"}) {
-            const auto status = fs::symlink_status(out / name);
-            if (status.type() != fs::file_type::not_found && !fs::is_regular_file(status))
-                throw fs::filesystem_error("output must be a regular file", out / name,
-                                          std::make_error_code(std::errc::invalid_argument));
-        }
-        // shortcut: rollback covers reported errors; process interruption needs separate recovery.
-        const auto backup = stage / "previous-first";
-        const bool had_first = fs::exists(out / "langrt.py");
-        if (had_first) fs::copy_file(out / "langrt.py", backup);
-        bool published = false;
-        try {
-            fs::rename(stage / "langrt.py", out / "langrt.py");
-            published = true;
-            fs::rename(stage / "program.py", out / "program.py");
-        } catch (...) {
-            if (published) {
-                std::error_code error;
-                if (had_first) fs::rename(backup, out / "langrt.py", error);
-                else fs::remove(out / "langrt.py", error);
-                if (error) {
-                    preserve = true;
-                    throw fs::filesystem_error((had_first ? "restore first output failed; previous output retained at " + backup.string()
-                                              : "remove new output failed; retained at " + (out / "langrt.py").string()),
-                                              out / "langrt.py", error);
-                }
-            }
-            throw;
-        }
-        fs::remove(backup);
-        fs::remove(stage);
-    } catch (...) {
-        std::error_code ignored;
-        if (!preserve) fs::remove_all(stage, ignored);
-        throw;
-    }
+    lang::StagingDir stage(out, ".woozyc-XXXXXX");
+    auto write = [&](const char* name, const std::string& text) {
+        std::ofstream file;
+        file.exceptions(std::ios::failbit | std::ios::badbit);
+        file.open(stage.path() / name, std::ios::binary);
+        file << text;
+        file.close();
+    };
+    write("program.py", output.code);
+    write("langrt.py", output.runtime);
+    lang::publish_staged_files(stage, out, {"langrt.py", "program.py"});
 }
 int compile(const char* path, bool syntax, bool json, std::string_view backend,
             const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr,
-            const char* std_binding = nullptr) {
+            const char* std_binding = nullptr, bool package_objects = false, const char* cache_directory = nullptr) {
     lang::SourceManager sources;
     auto finish = [&](const auto& result) {
         if (json) {
@@ -130,17 +90,17 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
     };
     try {
         if (!syntax) {
-            auto project = lang::modules::load_project(
-                {path, {},
-                 std_binding ? std::optional<fs::path>(std_binding)
-                             : std::optional<fs::path>{}},
-                sources);
-            if (!project.success()) return finish(project);
-            if (!backend.empty()) project.value->backend = backend;
-            if (out && project.value->backend == "native") {
+            auto native_build = [&]() {
 #ifdef LANG_NATIVE_HELPER
                 std::vector<std::string> args{LANG_NATIVE_HELPER, "--project", path,
                                               "--out-dir", out, "--opt", opt ? opt : "0"};
+                if (package_objects) args.push_back("--package-objects");
+                if (cache_directory) {
+                    // The helper fingerprints the actual still-running driver
+                    // through procfs and accounts for its digest-cache work.
+                    args.insert(args.end(), {"--cache-dir", cache_directory, "--driver-binary",
+                        "/proc/" + std::to_string(::getpid()) + "/exe"});
+                }
                 if (std_binding) args.insert(args.end(), {"--std-binding", std_binding});
                 if (target) args.insert(args.end(), {"--target", target});
                 if (json) args.insert(args.end(), {"--format", "json"});
@@ -165,7 +125,15 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
                 return fail("E_CAPABILITY_UNAVAILABLE", "native build requires LANG_ENABLE_LLVM=ON",
                             lang::FailureKind::unsupported, "codegen");
 #endif
-            }
+            };
+            if (package_objects && out && backend != "python") return native_build();
+            auto project = lang::modules::load_project(
+                {path, {}, std_binding ? std::optional<fs::path>(std_binding) : std::optional<fs::path>{}}, sources);
+            if (!project.success()) return finish(project);
+            if (!backend.empty()) project.value->backend = backend;
+            if (out && project.value->backend == "native") return native_build();
+            if (package_objects)
+                return fail("E_DRIVER_ARGUMENT", "--package-objects requires native build", lang::FailureKind::environment);
             if (out && (opt || target))
                 return fail("E_DRIVER_ARGUMENT", "--opt and --target require native build",
                             lang::FailureKind::environment);
@@ -215,6 +183,7 @@ int main(int argc, char** argv) {
                      "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
                      "       woozyc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
                      "       woozyc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [--opt 0|2] [--target TRIPLE] [--format json]\n"
+                     "Native package objects: --package-objects [--cache-dir DIR] (scalar frontend cache)\n"
                      "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
         return 0;
     }
@@ -225,16 +194,18 @@ int main(int argc, char** argv) {
     if (argc >= 2) {
         const std::string_view command(argv[1]);
         if (command == "check" || command == "build") {
-            bool syntax = false, json = false;
+            bool syntax = false, json = false, package_objects = false;
             const char* path = nullptr;
             const char* project = nullptr;
             const char* out = nullptr;
             const char* opt = nullptr;
             const char* target = nullptr;
             const char* std_binding = nullptr;
+            const char* cache_directory = nullptr;
             std::string_view backend;
             for (int i = 2; i < argc; ++i) {
                 const std::string_view argument(argv[i]);
+                if (argument == "--package-objects" && command == "build" && !package_objects) { package_objects = true; continue; }
                 if (argument == "--syntax-only") { syntax = true; continue; }
                 if (argument == "--format" && i + 1 < argc &&
                     std::string_view(argv[i + 1]) == "json") {
@@ -248,6 +219,9 @@ int main(int argc, char** argv) {
                            i + 1 < argc && !out && !std::string_view(argv[i + 1]).empty() &&
                            !std::string_view(argv[i + 1]).starts_with('-')) {
                     out = argv[++i];
+                } else if (argument == "--cache-dir" && command == "build" && i + 1 < argc && !cache_directory &&
+                           !std::string_view(argv[i + 1]).empty() && !std::string_view(argv[i + 1]).starts_with('-')) {
+                    cache_directory = argv[++i];
                 } else if (argument == "--std-binding" && i + 1 < argc && !std_binding &&
                            !std::string_view(argv[i + 1]).empty() &&
                            !std::string_view(argv[i + 1]).starts_with('-')) {
@@ -270,12 +244,12 @@ int main(int argc, char** argv) {
                 }
             }
             if ((syntax && (!path || project || !backend.empty() || std_binding || command == "build")) ||
-                (!syntax && (!project || path)) || (command == "build" && !out)) {
+                (!syntax && (!project || path)) || (command == "build" && !out) || (cache_directory && !package_objects)) {
                 std::cerr << "E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR\n";
                 return 2;
             }
             return compile(syntax ? path : project, syntax, json, backend, out, opt, target,
-                           std_binding);
+                           std_binding, package_objects, cache_directory);
         }
         if (command == "lsp" ||
             command == "capabilities") {

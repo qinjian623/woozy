@@ -1,0 +1,14 @@
+schema_version = 1
+
+[package]
+name = "right"
+source_root = "src"
+entry = "right"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[dependencies.core]
+kind = "source"
+path = "../core"

@@ -1,0 +1,72 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+
+func binary_number(value hir.BinaryOp) u64 {
+    switch value {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+func decode_binary(reader inout Reader) hir.BinaryOp throws Error {
+    switch number(inout reader) {
+        case 0: return hir.BinaryOp.Add;
+        case 1: return hir.BinaryOp.Subtract;
+        case 2: return hir.BinaryOp.Multiply;
+        case 3: return hir.BinaryOp.Divide;
+        case 4: return hir.BinaryOp.Remainder;
+        case 5: return hir.BinaryOp.ShiftLeft;
+        case 6: return hir.BinaryOp.ShiftRight;
+        case 7: return hir.BinaryOp.BitAnd;
+        case 8: return hir.BinaryOp.BitOr;
+        case 9: return hir.BinaryOp.BitXor;
+        case 10: return hir.BinaryOp.Equal;
+        case 11: return hir.BinaryOp.NotEqual;
+        case 12: return hir.BinaryOp.Less;
+        case 13: return hir.BinaryOp.LessEqual;
+        case 14: return hir.BinaryOp.Greater;
+        case 15: return hir.BinaryOp.GreaterEqual;
+        default: throw Error.Invalid;
+    }
+}
+func unary_number(value hir.UnaryOp) u64 {
+    switch value {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+func decode_unary(reader inout Reader) hir.UnaryOp throws Error {
+    switch number(inout reader) {
+        case 0: return hir.UnaryOp.Negate;
+        case 1: return hir.UnaryOp.LogicalNot;
+        case 2: return hir.UnaryOp.BitNot;
+        default: throw Error.Invalid;
+    }
+}
+func logical_number(value hir.LogicalOp) u64 {
+    switch value {
+        case hir.LogicalOp.And: return 0;
+        case hir.LogicalOp.Or: return 1;
+    }
+}
+func decode_logical(reader inout Reader) hir.LogicalOp throws Error {
+    switch number(inout reader) {
+        case 0: return hir.LogicalOp.And;
+        case 1: return hir.LogicalOp.Or;
+        default: throw Error.Invalid;
+    }
+}

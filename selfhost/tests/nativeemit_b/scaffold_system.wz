@@ -1,0 +1,96 @@
+// TEST-ONLY SCAFFOLD: the E share (system.wz / c_ffi.wz) is still absent from
+// the tree.  Only used by the tree-mode check, where the real C and D files are
+// present; every body rejects so no system route can silently pass.
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+// ---- E: system.wz stand-ins -------------------------------------------------
+
+func c_ref_type(reference model.CTypeRef, state inout Emitter) string throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_ref_type");
+}
+
+func c_lower_type(type_id usize, state inout Emitter) string throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_lower_type");
+}
+
+func to_c_storage(type_id usize, value Value, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: to_c_storage");
+}
+
+func from_c_storage(type_id usize, value Value, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: from_c_storage");
+}
+
+func resource_operation(c_type u32, copy bool, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: resource_operation");
+}
+
+func callback_bridge(symbol usize, c_type u32, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: callback_bridge");
+}
+
+func callback_trampoline(symbol usize, c_type u32, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: callback_trampoline");
+}
+
+func registration_dispatcher(c_type u32, userdata usize,
+                             state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: registration_dispatcher");
+}
+
+func borrow_registration(owner Value, state inout Emitter) RegistrationBorrow throws Error {
+    throw invalid("nativeemit_b harness scaffold: borrow_registration");
+}
+
+func end_registration_borrow(borrow RegistrationBorrow,
+                             state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: end_registration_borrow");
+}
+
+func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
+                    state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_foreign_call");
+}
+
+func emit_c_instruction(instruction nativeir.Instruction, args Vec[Value],
+                        state inout Emitter) option.Option[Value] throws Error {
+    return option.Option[Value].None;
+}
+
+func system_call(instruction nativeir.Instruction, args Vec[Value],
+                 state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: system_call");
+}
+
+func value_address(type_id usize, value Value, state inout Emitter) Value throws Error {
+    let type_name = lower_type(type_id, inout state);
+    let address = storage(type_name, inout state);
+    append("store " + typed(value) + ", ptr " + address.reference, inout state);
+    return address;
+}
+
+func text_binary(instruction nativeir.Instruction, left Value, right Value,
+                 state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: text_binary");
+}
+
+func stdlib_variant(type_id usize, tag u32, payload option.Option[Value],
+                    state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: stdlib_variant");
+}
+
+func finalize_c_adapter(state inout Emitter) throws Error {}
+
+func registration_callback(project model.Project,
+                           callable model.CCallableDecl) option.Option[RegistrationCallback] {
+    return option.Option[RegistrationCallback].None;
+}
+
+func registration_close(project model.Project, callable model.CCallableDecl) bool {
+    return false;
+}

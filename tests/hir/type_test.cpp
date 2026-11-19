@@ -80,7 +80,53 @@ int main() {
   Type bad;
   bad.kind = static_cast<TypeKind>(99);
   rejects(bad);
+
+  // Scale / rehash / copy / unchanged substitution tests.
+  TypeContext scaled;
+  std::vector<TypeId> nominals;
+  nominals.reserve(2500);
+  for (uint64_t s = 1; s <= 2500; ++s) {
+    Type n;
+    n.kind = TypeKind::NominalStruct;
+    n.declaration = SymbolId{s};
+    nominals.push_back(scaled.intern(n));
+  }
+  require(scaled.size() == 2500);
+  for (uint64_t s = 1; s <= 2500; ++s) {
+    Type n;
+    n.kind = TypeKind::NominalStruct;
+    n.declaration = SymbolId{s};
+    require(scaled.intern(n) == nominals[s - 1]);
+  }
+  TypeContext copied = scaled;
+  for (uint64_t s = 1; s <= 2500; ++s) {
+    Type n;
+    n.kind = TypeKind::NominalStruct;
+    n.declaration = SymbolId{s};
+    require(copied.intern(n) == nominals[s - 1]);
+  }
+  Type copied_unit;
+  copied_unit.kind = TypeKind::Unit;
+  Type extra_fn;
+  extra_fn.kind = TypeKind::Function;
+  extra_fn.result = copied.intern(copied_unit);
+  extra_fn.parameters.push_back({ParamMode::ordinary, nominals[0]});
+  const TypeId extra_id = copied.intern(extra_fn);
+  require(scaled.size() == 2500);
+  require(copied.size() == 2502);
+  const size_t before_sub = copied.size();
+  require(substitute(extra_id, {{SymbolId{99999}, nominals[1]}}, copied) == extra_id);
+  require(copied.size() == before_sub);
+  Type param;
+  param.kind = TypeKind::TypeParameter;
+  param.declaration = SymbolId{70000};
+  const TypeId pid = copied.intern(param);
+  extra_fn.parameters.push_back({ParamMode::move, pid});
+  const TypeId poly_fn = copied.intern(extra_fn);
+  const TypeId sub_fn = substitute(poly_fn, {{SymbolId{70000}, nominals[42]}}, copied);
+  require(sub_fn != poly_fn);
+  require(copied.find(sub_fn)->parameters[1].type == nominals[42]);
   std::cout
       << "type tests passed: canonical scalars/signatures/modes/throws/nominal "
-         "identity, invalid type shapes\n";
+         "identity, hash rehash/copy, substitution identity, invalid type shapes\n";
 }

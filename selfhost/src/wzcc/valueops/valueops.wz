@@ -20,19 +20,9 @@ const CLASSIFICATION_DEPTH usize = 512;
 const CLASSIFICATION_TYPES usize = 65536;
 const MAX_WEIGHT usize = 18446744073709551615;
 
-struct UsedEntry {
-    declaration usize;
-    indices Vec[usize];
-}
-
-struct DependencyEntry {
-    declaration usize;
-    targets Vec[usize];
-}
-
-struct DependentsEntry {
-    target usize;
-    parents Vec[usize];
+struct NominalSlot {
+    symbol usize;
+    index usize;
 }
 
 struct ActiveNominal {
@@ -85,14 +75,22 @@ func type_of(module hir.HirModule, id usize) model.Type throws model.SupportErro
     }
 }
 
-func declaration_of(module hir.HirModule, id usize) hir.NominalDecl
-    throws model.SupportError {
+func find_nominal(module hir.HirModule, id usize) option.Option[hir.NominalDecl] {
     for nominal in module.nominals {
         if nominal.symbol == id {
-            return nominal;
+            return option.Option[hir.NominalDecl].Some(nominal);
         }
     }
-    throw model.SupportError.Invalid("ownership nominal declaration missing");
+    return option.Option[hir.NominalDecl].None;
+}
+
+func declaration_of(module hir.HirModule, id usize) hir.NominalDecl
+    throws model.SupportError {
+    switch find_nominal(module, id) {
+        case option.Option.Some(nominal): return nominal;
+        case option.Option.None:
+            throw model.SupportError.Invalid("ownership nominal declaration missing");
+    }
 }
 
 func option_usize(value option.Option[usize]) usize {
@@ -102,7 +100,7 @@ func option_usize(value option.Option[usize]) usize {
     }
 }
 
-func ids_contains(values Vec[usize], value usize) bool {
+func unsorted_contains(values Vec[usize], value usize) bool {
     for item in values {
         if item == value {
             return true;
@@ -111,11 +109,53 @@ func ids_contains(values Vec[usize], value usize) bool {
     return false;
 }
 
+func ids_lower_bound(values Vec[usize], value usize) usize {
+    var lo usize = 0;
+    var hi = vec.len(values);
+    for lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if values[mid] < value {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    let pos = ids_lower_bound(values, value);
+    return pos < vec.len(values) && values[pos] == value;
+}
+
 func ids_insert(values Vec[usize], value usize) bool {
-    if ids_contains(values, value) {
+    let pos = ids_lower_bound(values, value);
+    let n = vec.len(values);
+    if pos < n && values[pos] == value {
         return false;
     }
-    vec.push(values, value);
+    vec.push(values, 0);
+    var cur = n;
+    for cur > pos {
+        values[cur] = values[cur - 1];
+        cur -= 1;
+    }
+    values[pos] = value;
+    return true;
+}
+
+func ids_remove(values Vec[usize], value usize) bool {
+    let pos = ids_lower_bound(values, value);
+    let n = vec.len(values);
+    if pos >= n || values[pos] != value {
+        return false;
+    }
+    var cur = pos;
+    for cur + 1 < n {
+        values[cur] = values[cur + 1];
+        cur += 1;
+    }
+    let discarded = vec.pop(values);
     return true;
 }
 
@@ -128,55 +168,57 @@ func copy_ids(values Vec[usize]) Vec[usize] {
     return out;
 }
 
-func used_index(entries Vec[UsedEntry], declaration usize) i64 {
-    for var index usize = 0; index < vec.len(entries); index += 1 {
-        if entries[index].declaration == declaration {
-            return i64(index);
+func nominal_slot_insert(overflow Vec[NominalSlot], symbol usize, index usize) {
+    var lo usize = 0;
+    var hi = vec.len(overflow);
+    for lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if overflow[mid].symbol < symbol {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
-    return -1;
+    let n = vec.len(overflow);
+    if lo < n && overflow[lo].symbol == symbol {
+        return;
+    }
+    vec.push(overflow, NominalSlot(symbol: 0, index: 0));
+    var cur = n;
+    for cur > lo {
+        overflow[cur] = overflow[cur - 1];
+        cur -= 1;
+    }
+    overflow[lo] = NominalSlot(symbol: symbol, index: index);
 }
 
-func dependency_index(entries Vec[DependencyEntry], declaration usize) i64 {
-    for var index usize = 0; index < vec.len(entries); index += 1 {
-        if entries[index].declaration == declaration {
-            return i64(index);
+func nominal_slot_find(direct Vec[i64], overflow Vec[NominalSlot],
+                       symbol usize) i64 {
+    if symbol < vec.len(direct) {
+        return direct[symbol];
+    }
+    var lo usize = 0;
+    var hi = vec.len(overflow);
+    for lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if overflow[mid].symbol < symbol {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
-    return -1;
-}
-
-func dependents_index(entries Vec[DependentsEntry], target usize) i64 {
-    for var index usize = 0; index < vec.len(entries); index += 1 {
-        if entries[index].target == target {
-            return i64(index);
-        }
+    if lo < vec.len(overflow) && overflow[lo].symbol == symbol {
+        return i64(overflow[lo].index);
     }
     return -1;
-}
-
-func add_used(entries Vec[UsedEntry], declaration usize, index usize) bool {
-    let found = used_index(entries, declaration);
-    if found < 0 {
-        return false;
-    }
-    return ids_insert(entries[usize(found)].indices, index);
-}
-
-func used_at(entries Vec[UsedEntry], declaration usize) Vec[usize]
-    throws model.SupportError {
-    let found = used_index(entries, declaration);
-    if found < 0 {
-        throw model.SupportError.Invalid("layout has invalid type");
-    }
-    return entries[usize(found)].indices;
 }
 
 // Walks one declared field type.  In layout mode the declaration's parameter
 // positions demanded by the type graph are collected.  In dependency mode the
-// nominal declarations reached through those demanded arguments are collected.
-func walk_layout(module hir.HirModule, used Vec[UsedEntry], root usize,
-                 used_mode bool, declaration usize,
+// nominal slots reached through those demanded arguments are collected.
+func walk_layout(module hir.HirModule, used Vec[Vec[usize]],
+                 direct Vec[i64], overflow Vec[NominalSlot], root usize,
+                 used_mode bool, owner_slot usize,
                  parameters Vec[hir.GenericParam], dependencies Vec[usize])
     throws model.SupportError {
     let pending = vec.empty[usize]();
@@ -193,21 +235,30 @@ func walk_layout(module hir.HirModule, used Vec[UsedEntry], root usize,
             if kind_is(value.kind, model.TypeKind.TypeParameter) {
                 for var index usize = 0; index < vec.len(parameters); index += 1 {
                     if value.declaration == parameters[index].symbol {
-                        add_used(used, declaration, index);
+                        ids_insert(used[owner_slot], index);
                     }
                 }
             }
         } else {
             if kind_is(value.kind, model.TypeKind.NominalStruct) ||
                kind_is(value.kind, model.TypeKind.NominalEnum) {
-                ids_insert(dependencies, value.declaration);
+                let target = nominal_slot_find(direct, overflow,
+                    value.declaration);
+                if target < 0 {
+                    throw model.SupportError.Invalid("layout has invalid type");
+                }
+                ids_insert(dependencies, usize(target));
             }
         }
         if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
            !kind_is(value.kind, model.TypeKind.NominalEnum) {
             continue;
         }
-        let demanded = used_at(used, value.declaration);
+        let target = nominal_slot_find(direct, overflow, value.declaration);
+        if target < 0 {
+            throw model.SupportError.Invalid("layout has invalid type");
+        }
+        let demanded = used[usize(target)];
         for index in demanded {
             if index >= vec.len(value.type_args) {
                 throw model.SupportError.Invalid("layout has invalid type");
@@ -221,30 +272,53 @@ pub func infinite_value_layout(module hir.HirModule) option.Option[usize]
     throws model.SupportError {
     // A value layout depends on a subset of its type arguments.  Find that
     // subset from declarations without substituting or interning new types.
-    let used = vec.empty[UsedEntry]();
-    for nominal in module.nominals {
-        vec.push(used, UsedEntry(declaration: nominal.symbol, indices: []));
+    let n = vec.len(module.nominals);
+    if n == 0 {
+        return option.Option[usize].None;
+    }
+    let direct = vec.make[i64](vec.len(module.resolved.symbols), -1);
+    let overflow = vec.empty[NominalSlot]();
+    let used = vec.empty[Vec[usize]]();
+    let dependencies = vec.empty[Vec[usize]]();
+    let dependents = vec.empty[Vec[usize]]();
+    vec.reserve(used, n);
+    vec.reserve(dependencies, n);
+    vec.reserve(dependents, n);
+    for var index usize = 0; index < n; index += 1 {
+        let sym = module.nominals[index].symbol;
+        if sym < vec.len(direct) {
+            if direct[sym] < 0 {
+                direct[sym] = i64(index);
+            }
+        } else {
+            nominal_slot_insert(overflow, sym, index);
+        }
+        vec.push(used, vec.empty[usize]());
+        vec.push(dependencies, vec.empty[usize]());
+        vec.push(dependents, vec.empty[usize]());
     }
     var changed = true;
     for changed {
         changed = false;
-        for nominal in module.nominals {
-            let found = used_index(used, nominal.symbol);
-            if found < 0 {
+        for var index usize = 0; index < n; index += 1 {
+            let nominal = module.nominals[index];
+            let owner = nominal_slot_find(direct, overflow, nominal.symbol);
+            if owner < 0 {
                 continue;
             }
-            let before = vec.len(used[usize(found)].indices);
+            let owner_slot = usize(owner);
+            let before = vec.len(used[owner_slot]);
             for field in nominal.fields {
-                walk_layout(module, used, field.type_id, true, nominal.symbol,
-                    nominal.params, vec.empty[usize]());
+                walk_layout(module, used, direct, overflow, field.type_id,
+                    true, owner_slot, nominal.params, vec.empty[usize]());
             }
             for variant in nominal.variants {
                 for field in variant.payload {
-                    walk_layout(module, used, field.type_id, true,
-                        nominal.symbol, nominal.params, vec.empty[usize]());
+                    walk_layout(module, used, direct, overflow, field.type_id,
+                        true, owner_slot, nominal.params, vec.empty[usize]());
                 }
             }
-            if vec.len(used[usize(found)].indices) != before {
+            if vec.len(used[owner_slot]) != before {
                 changed = true;
             }
         }
@@ -252,80 +326,46 @@ pub func infinite_value_layout(module hir.HirModule) option.Option[usize]
 
     // Only demanded argument types contribute declaration dependencies.
     // Removing all finite leaves leaves exactly cycles and their dependents.
-    let dependencies = vec.empty[DependencyEntry]();
-    for nominal in module.nominals {
-        let targets = vec.empty[usize]();
+    for var index usize = 0; index < n; index += 1 {
+        let nominal = module.nominals[index];
+        let targets = dependencies[index];
         for field in nominal.fields {
-            walk_layout(module, used, field.type_id, false, nominal.symbol,
-                nominal.params, targets);
+            walk_layout(module, used, direct, overflow, field.type_id, false,
+                index, nominal.params, targets);
         }
         for variant in nominal.variants {
             for field in variant.payload {
-                walk_layout(module, used, field.type_id, false,
-                    nominal.symbol, nominal.params, targets);
+                walk_layout(module, used, direct, overflow, field.type_id, false,
+                    index, nominal.params, targets);
             }
         }
-        vec.push(dependencies,
-            DependencyEntry(declaration: nominal.symbol, targets: targets));
     }
-    let dependents = vec.empty[DependentsEntry]();
     let leaves = vec.empty[usize]();
-    for entry in dependencies {
-        for target in entry.targets {
-            let found = dependents_index(dependents, target);
-            if found < 0 {
-                let parents = vec.empty[usize]();
-                vec.push(parents, entry.declaration);
-                vec.push(dependents,
-                    DependentsEntry(target: target, parents: parents));
-            } else if !ids_contains(
-                           dependents[usize(found)].parents,
-                           entry.declaration) {
-                vec.push(dependents[usize(found)].parents, entry.declaration);
-            }
+    for var entry_idx usize = 0; entry_idx < n; entry_idx += 1 {
+        for target in dependencies[entry_idx] {
+            let ignored = ids_insert(dependents[target], entry_idx);
         }
-        if vec.len(entry.targets) == 0 {
-            vec.push(leaves, entry.declaration);
+        if vec.len(dependencies[entry_idx]) == 0 {
+            vec.push(leaves, entry_idx);
         }
     }
     for vec.len(leaves) > 0 {
         let popped = vec.pop(leaves);
         let finite = option_usize(popped);
-        let found = dependents_index(dependents, finite);
-        if found < 0 {
-            continue;
-        }
-        let parents = copy_ids(dependents[usize(found)].parents);
+        let parents = copy_ids(dependents[finite]);
         for parent in parents {
-            let position = dependency_index(dependencies, parent);
-            if position < 0 {
+            let targets = dependencies[parent];
+            if !ids_remove(targets, finite) {
                 continue;
             }
-            let targets = dependencies[usize(position)].targets;
-            var remove = -1;
-            for var index usize = 0; index < vec.len(targets); index += 1 {
-                if targets[index] == finite {
-                    remove = i64(index);
-                    break;
-                }
-            }
-            if remove < 0 {
-                continue;
-            }
-            let last = vec.len(targets) - 1;
-            if usize(remove) != last {
-                targets[usize(remove)] = targets[last];
-            }
-            let discarded = vec.pop(targets);
             if vec.len(targets) == 0 {
                 vec.push(leaves, parent);
             }
         }
     }
-    for nominal in module.nominals {
-        let position = dependency_index(dependencies, nominal.symbol);
-        if position >= 0 && vec.len(dependencies[usize(position)].targets) > 0 {
-            return option.Option[usize].Some(nominal.symbol);
+    for var index usize = 0; index < n; index += 1 {
+        if vec.len(dependencies[index]) > 0 {
+            return option.Option[usize].Some(module.nominals[index].symbol);
         }
     }
     return option.Option[usize].None;
@@ -422,7 +462,7 @@ func inout_data_visit(module hir.HirModule, scratch inout PrivateContext,
         return true;
     }
     if kind_is(value.kind, model.TypeKind.TypeParameter) {
-        return ids_contains(parameters, value.declaration);
+        return unsorted_contains(parameters, value.declaration);
     }
     if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
        !kind_is(value.kind, model.TypeKind.NominalEnum) {
@@ -433,12 +473,12 @@ func inout_data_visit(module hir.HirModule, scratch inout PrivateContext,
         source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
             span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
     var found_nominal = false;
-    for candidate in module.nominals {
-        if candidate.symbol == value.declaration {
+    switch find_nominal(module, value.declaration) {
+        case option.Option.Some(candidate): {
             nominal = candidate;
             found_nominal = true;
-            break;
         }
+        case option.Option.None: {}
     }
     if !found_nominal ||
        vec.len(value.type_args) != vec.len(nominal.params) {
@@ -511,31 +551,56 @@ pub func inout_slot_reason(slot hir.InoutSlot) string {
     return "inout requires a whole Woozy value place: numeric/bool, POD aggregate, Vec, Slice, string, function value, Weak, dyn trait object, runtime handle, or an owning struct/enum";
 }
 
-func memo_find(memo Vec[MemoEntry], id usize) i64 {
-    for var index usize = 0; index < vec.len(memo); index += 1 {
-        if memo[index].type_id == id {
-            return i64(index);
+func memo_lower_bound(memo Vec[MemoEntry], id usize) usize {
+    var lo usize = 0;
+    var hi = vec.len(memo);
+    for lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if memo[mid].type_id < id {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
+    }
+    return lo;
+}
+
+func memo_find(memo Vec[MemoEntry], id usize) i64 {
+    let pos = memo_lower_bound(memo, id);
+    if pos < vec.len(memo) && memo[pos].type_id == id {
+        return i64(pos);
     }
     return -1;
 }
 
 func memo_remove(memo Vec[MemoEntry], id usize) {
-    let found = memo_find(memo, id);
-    if found < 0 {
+    let pos = memo_lower_bound(memo, id);
+    let n = vec.len(memo);
+    if pos >= n || memo[pos].type_id != id {
         return;
     }
-    let position = usize(found);
-    let last = vec.len(memo) - 1;
-    if position != last {
-        memo[position] = memo[last];
+    var cur = pos;
+    for cur + 1 < n {
+        memo[cur] = memo[cur + 1];
+        cur += 1;
     }
     let discarded = vec.pop(memo);
 }
 
 func memo_put(memo Vec[MemoEntry], id usize, slot hir.InoutSlot) {
-    memo_remove(memo, id);
-    vec.push(memo, MemoEntry(type_id: id, slot: slot));
+    let pos = memo_lower_bound(memo, id);
+    let n = vec.len(memo);
+    if pos < n && memo[pos].type_id == id {
+        memo[pos].slot = slot;
+        return;
+    }
+    vec.push(memo, MemoEntry(type_id: 0, slot: slot));
+    var cur = n;
+    for cur > pos {
+        memo[cur] = memo[cur - 1];
+        cur -= 1;
+    }
+    memo[pos] = MemoEntry(type_id: id, slot: slot);
 }
 
 func inout_slot_visit(module hir.HirModule, scratch inout PrivateContext,
@@ -589,7 +654,7 @@ func inout_slot_visit(module hir.HirModule, scratch inout PrivateContext,
             }
         }
     } else if kind_is(value.kind, model.TypeKind.TypeParameter) {
-        if ids_contains(parameters, value.declaration) {
+        if unsorted_contains(parameters, value.declaration) {
             result = hir.InoutSlot.Allowed;
         } else {
             result = hir.InoutSlot.TypeParameter;
@@ -615,12 +680,12 @@ func inout_slot_visit(module hir.HirModule, scratch inout PrivateContext,
             source: hir.HirSource(node: model.NodeRef(module: 0, file: 0,
                 node: 0), span: model.Span(snapshot: 0, begin_byte: 0,
                 end_byte: 0)));
-        for candidate in module.nominals {
-            if candidate.symbol == value.declaration {
+        switch find_nominal(module, value.declaration) {
+            case option.Option.Some(candidate): {
                 nominal = candidate;
                 found_nominal = true;
-                break;
             }
+            case option.Option.None: {}
         }
         if !found_nominal ||
            vec.len(value.type_args) != vec.len(nominal.params) {
@@ -843,12 +908,12 @@ pub func weak_target(module hir.HirModule, type_id usize) bool {
         source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
             span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
     var found_nominal = false;
-    for candidate in module.nominals {
-        if candidate.symbol == value.declaration {
+    switch find_nominal(module, value.declaration) {
+        case option.Option.Some(candidate): {
             nominal = candidate;
             found_nominal = true;
-            break;
         }
+        case option.Option.None: {}
     }
     if !found_nominal ||
        !kind_is(nominal.kind, model.TypeKind.NominalStruct) ||
@@ -899,7 +964,7 @@ func kind_is_symbol(kind model.SymbolKind, expected model.SymbolKind) bool {
 }
 
 struct CopyState {
-    scratch types.Context;
+    scratch PrivateContext;
     active Vec[usize];
     visited usize;
 }
@@ -914,7 +979,7 @@ func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
         return false;
     }
     var value = model.empty_type(model.TypeKind.Error);
-    switch types.find(state.scratch, id) {
+    switch private_find(module, state.scratch, id) {
         case option.Option.Some(found): value = found;
         case option.Option.None: return false;
     }
@@ -970,12 +1035,12 @@ func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
         source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
             span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
     var found_declaration = false;
-    for candidate in module.nominals {
-        if candidate.symbol == value.declaration {
+    switch find_nominal(module, value.declaration) {
+        case option.Option.Some(candidate): {
             nominal = candidate;
             found_declaration = true;
-            break;
         }
+        case option.Option.None: {}
     }
     if !found_declaration ||
        vec.len(nominal.params) != vec.len(value.type_args) {
@@ -990,9 +1055,9 @@ func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
     }
     var ok = true;
     for field in nominal.fields {
-        let concrete = substitute_support(inout state.scratch, field.type_id,
-            substitutions);
-        if type_missing(state.scratch, concrete) ||
+        let concrete = private_substitute(module, inout state.scratch,
+            field.type_id, substitutions);
+        if !option.is_some(private_find(module, state.scratch, concrete)) ||
            !copyable_visit(module, inout state, concrete, depth + 1) {
             ok = false;
             break;
@@ -1001,9 +1066,9 @@ func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
     if ok {
         for variant in nominal.variants {
             for field in variant.payload {
-                let concrete = substitute_support(inout state.scratch,
+                let concrete = private_substitute(module, inout state.scratch,
                     field.type_id, substitutions);
-                if type_missing(state.scratch, concrete) ||
+                if !option.is_some(private_find(module, state.scratch, concrete)) ||
                    !copyable_visit(module, inout state, concrete, depth + 1) {
                     ok = false;
                     break;
@@ -1019,22 +1084,7 @@ func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
 }
 
 func remove_active(active Vec[usize], id usize) {
-    var found = -1;
-    for var index usize = 0; index < vec.len(active); index += 1 {
-        if active[index] == id {
-            found = i64(index);
-            break;
-        }
-    }
-    if found < 0 {
-        return;
-    }
-    let position = usize(found);
-    let last = vec.len(active) - 1;
-    if position != last {
-        active[position] = active[last];
-    }
-    let discarded = vec.pop(active);
+    let ignored = ids_remove(active, id);
 }
 
 pub func ordinary_copyable(module hir.HirModule, type_id usize) bool
@@ -1042,8 +1092,8 @@ pub func ordinary_copyable(module hir.HirModule, type_id usize) bool
     // Logical copyability for closure captures and bound receivers.  Fn itself
     // shares its environment and is copyable even when the environment contains
     // a non-copyable resource.
-    var state = CopyState(scratch: types.clone_context(module.types),
-        active: vec.empty[usize](), visited: 0);
+    var state = CopyState(scratch: PrivateContext(value: types.context(),
+        ready: false), active: vec.empty[usize](), visited: 0);
     if type_missing(module.types, type_id) {
         return false;
     }
@@ -1051,7 +1101,7 @@ pub func ordinary_copyable(module hir.HirModule, type_id usize) bool
 }
 
 struct DropState {
-    scratch types.Context;
+    scratch PrivateContext;
     active Vec[usize];
     visited usize;
 }
@@ -1066,7 +1116,7 @@ func owning_visit(module hir.HirModule, state inout DropState, id usize,
         return true;
     }
     var value = model.empty_type(model.TypeKind.Error);
-    switch types.find(state.scratch, id) {
+    switch private_find(module, state.scratch, id) {
         case option.Option.Some(found): value = found;
         case option.Option.None: return true;
     }
@@ -1098,12 +1148,12 @@ func owning_visit(module hir.HirModule, state inout DropState, id usize,
         source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
             span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
     var found_declaration = false;
-    for candidate in module.nominals {
-        if candidate.symbol == value.declaration {
+    switch find_nominal(module, value.declaration) {
+        case option.Option.Some(candidate): {
             nominal = candidate;
             found_declaration = true;
-            break;
         }
+        case option.Option.None: {}
     }
     if !found_declaration ||
        vec.len(nominal.params) != vec.len(value.type_args) {
@@ -1118,15 +1168,15 @@ func owning_visit(module hir.HirModule, state inout DropState, id usize,
     }
     var result = false;
     for field in nominal.fields {
-        let concrete = substitute_support(inout state.scratch, field.type_id,
-            substitutions);
+        let concrete = private_substitute(module, inout state.scratch,
+            field.type_id, substitutions);
         if owning_visit(module, inout state, concrete, depth + 1) {
             result = true;
         }
     }
     for variant in nominal.variants {
         for field in variant.payload {
-            let concrete = substitute_support(inout state.scratch,
+            let concrete = private_substitute(module, inout state.scratch,
                 field.type_id, substitutions);
             if owning_visit(module, inout state, concrete, depth + 1) {
                 result = true;
@@ -1140,8 +1190,8 @@ func owning_visit(module hir.HirModule, state inout DropState, id usize,
 pub func owning_value(module hir.HirModule, type_id usize) bool
     throws model.SupportError {
     // Move-intent classification used while checking a closure creation site.
-    var state = DropState(scratch: types.clone_context(module.types),
-        active: vec.empty[usize](), visited: 0);
+    var state = DropState(scratch: PrivateContext(value: types.context(),
+        ready: false), active: vec.empty[usize](), visited: 0);
     if type_missing(module.types, type_id) {
         return false;
     }
@@ -1302,7 +1352,7 @@ func support(module hir.HirModule, state inout Classifier, id usize,
         throw model.SupportError.Invalid(
             "concrete ownership type expansion budget exceeded");
     }
-    vec.push(state.support_seen, id);
+    let ignored = ids_insert(state.support_seen, id);
     if kind_is(value.kind, model.TypeKind.Vec) ||
        kind_is(value.kind, model.TypeKind.Slice) {
         var container = hir.ValueKind.Slice;

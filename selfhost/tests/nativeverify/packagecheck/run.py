@@ -25,6 +25,9 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
+sys.path.insert(0, str(HERE.parents[1]))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 DEFAULT_STAGE0 = ROOT / "build/woozy-stdlib-native/woozyc"
 DEFAULT_TIMEOUT = 300.0
 
@@ -131,6 +134,9 @@ def main(argv: list[str] | None = None) -> int:
                  '{ return nativeverify.selftest(); }')
     (project / "src").mkdir(parents=True, exist_ok=True)
     (project / "src/main.wz").write_text("\n".join(lines) + "\n")
+    # hirverify/nativeverify pull in constant/system/ownership/literal/bigint/
+    # signature.  Complete the real import closure after main.wz is staged.
+    complete_import_closure(project / "src", ROOT / "selfhost/src/wzcc")
     (project / "lang.toml").write_text(
         'schema_version = 1\n\n[package]\nname = "nativeverify_check"\n'
         'source_root = "src"\nentry = "app"\n\n[build]\n'

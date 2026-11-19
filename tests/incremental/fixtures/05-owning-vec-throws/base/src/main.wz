@@ -1,0 +1,38 @@
+package app;
+
+import "dep" as dep;
+import "std/weak" as weak;
+import "std/option" as option;
+
+func main() i32 {
+    var observed i32 = 0;
+    var watched Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    {
+        let values = dep.make();
+        watched = weak.downgrade(values);
+        let alias = values;
+        alias[0] = 9;
+        if values[0] != 9 {
+            return 1;
+        }
+        observed = values[1];
+    }
+    switch weak.upgrade(watched) {
+    case option.Option.Some(value):
+        return 2;
+    case option.Option.None:
+    }
+    var caught = 0;
+    try {
+        let leaked = dep.fail_after();
+        if leaked[0] == 8 {
+            return 6;
+        }
+    } catch error dep.Failure {
+        caught = 1;
+    }
+    if caught != 1 {
+        return 3;
+    }
+    return observed;
+}

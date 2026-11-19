@@ -1,6 +1,9 @@
 package nativebuild;
 
 import "app/wzcc/model" as model;
+import "app/wzcc/frontcache" as frontcache;
+import "std/option" as option;
+import "std/json" as json;
 import "app/wzcc/nativeemit" as nativeemit;
 import "app/wzcc/resources" as resources;
 import "app/wzcc/toolio" as toolio;
@@ -9,6 +12,11 @@ import "std/os" as os;
 import "std/strconv" as strconv;
 import "std/text" as text;
 import "std/vec" as vec;
+
+pub struct PackageInput {
+    pub package_id usize; pub logical_path string; pub identity string; pub object_key string; pub frontend_key string; pub llvm_digest string;
+    pub object option.Option[Vec[u8]]; pub output option.Option[nativeemit.Output];
+}
 
 enum Failure { Abort(kind model.FailureKind, diagnostic model.Diagnostic); }
 
@@ -186,11 +194,121 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     link_tool(arguments, capture, false);
 }
 
+func shell_quote(value string) string { return "'" + text.replace(value, "'", "'\\''") + "'"; }
+func ninja_escape(value string) string throws Failure {
+    if text.contains(value, "\n") || text.contains(value, "\r") {
+        throw abort("E_INPUT_IO", "codegen", model.FailureKind.Environment, "newline in Ninja path", []);
+    }
+    return text.replace(text.replace(text.replace(value, "$", "$$"), " ", "$ "), ":", "$:");
+}
+func compile_packages(inputs Vec[PackageInput], project model.Project, stage toolio.Stage,
+                      optimization u32, root string, cache frontcache.Context, emit_nanoseconds u64) throws Failure {
+    try {
+    let tools = root + "/toolchain";
+    let capture = stage.path + "/tool-output";
+    check_versions(tools, capture);
+    var archive = root + "/runtime/liblang_native_runtime.a";
+    if project.hosted { archive = root + "/runtime/liblang_hosted_runtime.a"; }
+    require_runtime(archive);
+    var plan = "rule opt\n  command = " + ninja_escape(shell_quote(tools + "/opt")) +
+        " -S -passes='verify,default<O" + strconv.format_u64(u64(optimization)) +
+        ">,verify' -verify-each -mtriple=x86_64-unknown-linux-gnu -mcpu=generic $in -o $out\n";
+    plan += "rule object\n  command = " + ninja_escape(shell_quote(tools + "/llc")) +
+        " -filetype=obj -O=" + strconv.format_u64(u64(optimization)) +
+        " -mtriple=x86_64-unknown-linux-gnu -mcpu=generic -relocation-model=pic -code-model=small $in -o $out\n";
+    var objects = "";
+    var misses usize = 0; var records = "["; var first = true;
+    for input in inputs {
+        let name = "package-" + strconv.format_u64(u64(input.package_id)); var hit = false;
+        switch input.object {
+            case option.Option.Some(bytes): { fs.write_file(stage.path + "/" + name + ".o", bytes, 0o600); hit = true; }
+            case option.Option.None: {
+                switch input.output {
+                    case option.Option.Some(output): write_sections(stage.path + "/" + name + ".ll", output.llvm_sections);
+                    case option.Option.None: throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal, "missing package emission", []);
+                }
+                misses += 1;
+                plan += "build " + name + ".verified.ll: opt " + name + ".ll\nbuild " + name + ".o: object " + name + ".verified.ll\n";
+            }
+        }
+        objects += " " + name + ".o";
+        if !first { records += ","; } first = false;
+        var hit_text = "false"; if hit { hit_text = "true"; }
+        records += "{\"logical_path\":" + quote_json(input.logical_path) + ",\"identity\":" + quote_json(input.identity) +
+            ",\"object_key\":" + quote_json(input.object_key) + ",\"frontend_key\":" + quote_json(input.frontend_key) +
+            ",\"llvm_ir_sha256\":" + quote_json(input.llvm_digest) + ",\"object\":" + quote_json(name + ".o") + ",\"object_cache_hit\":" + hit_text + "}";
+    }
+    records += "]\n";
+    plan += "rule combine\n  command = " + ninja_escape(shell_quote(tools + "/ld.lld")) +
+        " -r $in -o $out\nbuild program.o: combine" + objects + "\n";
+    var link = shell_quote(tools + "/clang") + " --target=x86_64-unknown-linux-gnu --ld-path=" + shell_quote(tools + "/ld.lld");
+    if project.hosted { link += " -Wl,-u,lang_hosted_startup_v1 -pthread"; }
+    else { link += " -nostdlib -static"; }
+    var libraries = "";
+    for directory in project.c_library_dirs { libraries += " -L" + shell_quote(directory); }
+    for library in project.c_libraries { libraries += " -l" + shell_quote(library); }
+    plan += "rule link\n  command = " + ninja_escape(link) + " $in" + ninja_escape(libraries) +
+        " -o $out\nbuild program: link" + objects + " " + ninja_escape(archive) + "\ndefault program program.o\n";
+    write_sections(stage.path + "/build.ninja", [plan]);
+    var ninja = "";
+    try { ninja = resources.ninja(); }
+    catch problem os.Error {
+        throw abort("E_TOOLCHAIN_MISSING", "codegen", model.FailureKind.Environment,
+            "cannot find Ninja; set WOOZY_NINJA or PATH: " + os_text(problem), []);
+    }
+    let execution = run([ninja, "-C", stage.path, "-v"], capture, "codegen");
+    write_sections(stage.path + "/package-build.log", [output_text(execution.output)]);
+    if execution.exit_code != 0 || execution.signalled {
+        throw abort("E_NATIVE_BUILD_FAILED", "codegen", model.FailureKind.Internal,
+            "Ninja package build failed with status " + strconv.format_i64(i64(execution.exit_code)),
+            [output_text(execution.output)]);
+    }
+    for input in inputs {
+        if input.object_key != "" && !option.is_some(input.object) {
+            let bytes = fs.read_file(stage.path + "/package-" + strconv.format_u64(u64(input.package_id)) + ".o");
+            frontcache.store_object(cache, input.object_key, bytes);
+        }
+    }
+    write_sections(stage.path + "/package-records.json", [records]);
+    write_sections(stage.path + "/cache-statistics.json", [statistics(cache, misses, vec.len(inputs), emit_nanoseconds)]);
+    } catch problem os.Error { throw abort("E_INPUT_IO", "codegen", model.FailureKind.Environment, "package file IO: " + os_text(problem), []); }
+}
+
+func quote_json(value string) string throws Failure {
+    try { return json.serialize(json.Value.String(value)); }
+    catch problem json.Error { throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal, "cannot encode package metadata", []); }
+}
+func statistics(cache frontcache.Context, misses usize, emitted usize, emit_nanoseconds u64) string {
+    let names = ["parse_hits", "parse_misses", "frontend_package_hits", "frontend_package_misses", "rejected_frontend_cache", "checked_bodies", "object_hits", "object_misses", "string_tokens_checked", "tool_digest_hits", "tool_digest_misses", "tool_digest_bytes_read"];
+    var result = "{\"schema_version\":1,\"build_fingerprint\":\"" + cache.fingerprint + "\"";
+    for var index usize = 0; index < vec.len(names); index += 1 { result += ",\"" + names[index] + "\":" + strconv.format_u64(u64(cache.counters[index])); }
+    return result + ",\"llvm_emit_jobs\":" + strconv.format_u64(u64(emitted)) + ",\"llvm_emit_nanoseconds\":" + strconv.format_u64(emit_nanoseconds) + ",\"link_jobs\":1,\"opt_jobs\":" + strconv.format_u64(u64(misses)) + ",\"llc_jobs\":" + strconv.format_u64(u64(misses)) + "}\n";
+}
+
+pub func build_cached_packages(inputs Vec[PackageInput], project model.Project, out_directory string,
+    optimization u32, cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
+    return build_all([], project, out_directory, optimization, true, inputs, cache, emit_nanoseconds);
+}
+pub func build_packages(outputs Vec[nativeemit.Output], project model.Project, out_directory string,
+                        optimization u32) model.UnitResult {
+    let inputs = vec.empty[PackageInput]();
+    for var index usize = 0; index < vec.len(outputs); index += 1 {
+        vec.push(inputs, PackageInput(package_id: index, logical_path: "", identity: "", object_key: "", frontend_key: "", llvm_digest: "",
+            object: option.Option[Vec[u8]].None, output: option.Option[nativeemit.Output].Some(outputs[index])));
+    }
+    return build_all([], project, out_directory, optimization, true, inputs, frontcache.context("", ""), 0);
+}
 pub func build(output nativeemit.Output, project model.Project, out_directory string,
                optimization u32) model.UnitResult {
+    return build_all([output], project, out_directory, optimization, false, [], frontcache.context("", ""), 0);
+}
+func build_all(outputs Vec[nativeemit.Output], project model.Project, out_directory string,
+               optimization u32, packages bool, inputs Vec[PackageInput], cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
+    for output in outputs {
     if output.triple != "x86_64-unknown-linux-gnu" {
         return failed(model.FailureKind.Unsupported, diagnostic("E_TARGET_UNSUPPORTED", "codegen",
             "native executable target only supports Linux x86_64: " + output.triple, []));
+    }
     }
     if optimization != 0 && optimization != 2 {
         return failed(model.FailureKind.Unsupported, diagnostic("E_CAPABILITY_UNAVAILABLE", "codegen",
@@ -201,8 +319,10 @@ pub func build(output nativeemit.Output, project model.Project, out_directory st
         defer { toolio.cleanup(stage); }
         try {
             let root = resources.directory();
-            compile(output, project, stage, optimization, root);
-            toolio.publish_pair(inout stage, "program.o", "program");
+            if packages { compile_packages(inputs, project, stage, optimization, root, cache, emit_nanoseconds); }
+            else { compile(outputs[0], project, stage, optimization, root); }
+            if packages { toolio.publish_files(inout stage, ["package-build.log", "package-records.json", "cache-statistics.json", "program.o", "program"]); }
+            else { toolio.publish_pair(inout stage, "program.o", "program"); }
         } catch problem Failure {
             switch problem { case Failure.Abort(kind, value): return failed(kind, value); }
         } catch problem os.Error {

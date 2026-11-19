@@ -1,0 +1,5 @@
+package beta;
+
+pub func number() i32 {
+    return 25;
+}

@@ -1,0 +1,70 @@
+package frontcache;
+import "app/wzcc/paths" as paths;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func file_metadata(canonical string, info os.FileInfo) Vec[u8] {
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-file-metadata/1"); put_string(bytes, canonical);
+    put_number(bytes, info.device); put_number(bytes, info.inode); put_number(bytes, info.links);
+    put_number(bytes, u64(info.mode)); put_number(bytes, u64(info.uid)); put_number(bytes, u64(info.gid)); put_number(bytes, info.rdev);
+    put_number(bytes, u64(info.size)); put_string(bytes, strconv.format_i64(info.block_size)); put_string(bytes, strconv.format_i64(info.blocks));
+    put_string(bytes, strconv.format_i64(info.modified.seconds)); put_number(bytes, u64(info.modified.nanoseconds));
+    put_string(bytes, strconv.format_i64(info.changed.seconds)); put_number(bytes, u64(info.changed.nanoseconds));
+    return bytes;
+}
+func same_file_info(left os.FileInfo, right os.FileInfo) bool {
+    return left.device == right.device && left.inode == right.inode && left.links == right.links &&
+        left.mode == right.mode && left.uid == right.uid && left.gid == right.gid && left.rdev == right.rdev &&
+        left.size == right.size && left.block_size == right.block_size && left.blocks == right.blocks &&
+        left.modified.seconds == right.modified.seconds && left.modified.nanoseconds == right.modified.nanoseconds &&
+        left.changed.seconds == right.changed.seconds && left.changed.nanoseconds == right.changed.nanoseconds;
+}
+func file_current(path string, canonical string, expected os.FileInfo, file os.File) bool throws os.Error {
+    return paths.canonical(path) == canonical && same_file_info(os.stat(path), expected) && same_file_info(os.fstat(file), expected);
+}
+func digest_shape(value string) bool {
+    let bytes = text.bytes(value); if vec.len(bytes) != 64 { return false; }
+    for byte in bytes { if !(byte >= 48 && byte <= 57) && !(byte >= 97 && byte <= 102) { return false; } }
+    return true;
+}
+// Counters9..11 are true file-content memo hits/misses/bytes actually read.
+// A metadata mismatch never becomes a compiler identity on its own.
+pub func file_digest(cache Context, path string) string throws os.Error {
+    for var attempt usize = 0; attempt < 3; attempt += 1 {
+        let canonical = paths.canonical(path); let file = os.open(path, os.O_RDONLY | os.O_CLOEXEC, 0);
+        defer { try { os.close(file); } catch problem os.Error {} }
+        let before = os.fstat(file);
+        if !fs.is_file(before) || before.size < 0 { throw os.Error.System(22, 0); }
+        if !file_current(path, canonical, before, file) { continue; }
+        let key = hash_bytes(file_metadata(canonical, before)) + ".sha";
+        if active(cache) {
+            switch get(cache.directory + "/file-digests", key) {
+                case option.Option.None: {}
+                case option.Option.Some(bytes): {
+                    try {
+                        var reader = Reader(bytes: bytes, cursor: 0);
+                        need(string_value(inout reader) == "wz-file-digest/1" && string_value(inout reader) == key);
+                        let digest = string_value(inout reader); done(reader);
+                        if digest_shape(digest) && file_current(path, canonical, before, file) { cache.counters[9] += 1; return digest; }
+                    } catch problem Error {}
+                }
+            }
+        }
+        cache.counters[10] += 1;
+        let bytes = io.read_all(file); cache.counters[11] += vec.len(bytes);
+        if u64(vec.len(bytes)) != u64(before.size) || !file_current(path, canonical, before, file) { continue; }
+        let digest = hash_bytes(bytes);
+        if !file_current(path, canonical, before, file) { continue; }
+        if active(cache) {
+            let record = vec.empty[u8](); put_string(record, "wz-file-digest/1"); put_string(record, key); put_string(record, digest);
+            put(cache.directory + "/file-digests", key, record);
+        }
+        return digest;
+    }
+    throw os.Error.System(11, 0);
+}

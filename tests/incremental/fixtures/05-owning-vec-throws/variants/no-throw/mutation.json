@@ -1,0 +1,41 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "05-owning-vec-throws",
+  "variant": "no-throw",
+  "description": "dep.fail_after returns [8, 9] instead of throwing Failure.Bad. main must take the unexpected-success path and exit 6.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_recompile_or_relink": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "4 -> 6",
+    "note": "The throwing body changes to normal return while the declared effect type stays Failure. The app error path must not be cached as always-throws."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "f7dd7ba12dd10b5d9436c40687947da67568d376b6548559ceb9cf2e8e587b66"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 6,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

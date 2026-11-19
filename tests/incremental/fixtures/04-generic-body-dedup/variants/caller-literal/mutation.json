@@ -1,0 +1,48 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "04-generic-body-dedup",
+  "variant": "caller-literal",
+  "description": "Only right.pick_right changes its first i32 literal from 33 to 35. The dep generic body and type are unchanged.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "right"
+    ],
+    "may_reuse_packages": [
+      "dep",
+      "left"
+    ],
+    "may_reuse_instances": [
+      "dep.choose[i32]"
+    ],
+    "must_recompile_or_relink": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "44 -> 46",
+    "note": "Only a caller package changes. The i32 instance identity is unchanged; a future implementation may reuse the dep instance and must still relink the new right object."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/right/src/lib.wz",
+      "old": {
+        "file": "old/vendor/right/src/lib.wz",
+        "sha256": "30cb2ed68f0f3082d2fc71be1e134596f1e9eefb968eb6e3b9266aec5d7aa8cf"
+      },
+      "new": {
+        "file": "new/vendor/right/src/lib.wz",
+        "sha256": "c1c942b571e27d75c125a6d1c80e38634c4431fa41682eb23b57d1f8e64b89df"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 46,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

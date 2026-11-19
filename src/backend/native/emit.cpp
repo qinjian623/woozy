@@ -2,6 +2,7 @@
 #include "../../hir/ownership.hpp"
 #include "../../ir/layout.hpp"
 #include "lang/backend/native.hpp"
+#include "lang/hir/identity.hpp"
 #include "c_ffi.hpp"
 #include <cmath>
 #include <cstdlib>
@@ -61,6 +62,15 @@ void verify_llvm(const llvm::Module &m) {
 }
 class Emitter {
   const ir::Module &input;
+  std::optional<ModuleId> package;
+  std::shared_ptr<hir::IdentityKeys> identities;
+  bool owns(SymbolId symbol) const {
+    return !package || identities->function_owner(symbol) == *package;
+  }
+  std::string source_name(SymbolId symbol) const {
+    return package ? identities->function_name(symbol)
+                   : "lang.fn." + std::to_string(symbol.value);
+  }
   ir::detail::AggregateTypes aggregates;
   std::map<TypeId, llvm::Type *> layouts;
   llvm::LLVMContext context;
@@ -1650,8 +1660,10 @@ class Emitter {
       source_of[source_indices[s]] = s;
     llvm::AllocaInst *out = nullptr;
     if (type(sig.result).kind != hir::TypeKind::Unit)
-      out = builder.CreateAlloca(c_lower_type(sig.result), nullptr, "c.out");
+      out = storage(c_lower_type(sig.result), "c.out");
     std::vector<llvm::Value *> actual;
+    std::vector<llvm::AllocaInst *> arg_slots;
+    arg_slots.reserve(decl.parameters.size());
     std::vector<RegistrationBorrow> borrows;
     llvm::Value *registration_code = nullptr, *registration_env = nullptr;
     llvm::AllocaInst *registration_userdata = nullptr;
@@ -1665,8 +1677,9 @@ class Emitter {
       registration_trampoline = llvm::cast<llvm::Function>(callee.getCallee());
     }
     for (size_t r = 0; r < decl.parameters.size(); ++r) {
-      auto *slot = builder.CreateAlloca(c_ref_llvm_type(decl.parameters[r].type),
-                                        nullptr, "c.arg");
+      auto *slot = storage(c_ref_llvm_type(decl.parameters[r].type), "c.arg");
+      arg_slots.push_back(slot);
+      start_lifetime(slot);
       if (registration && r == registration->callback_parameter) {
         const auto parameter_type = sig.parameters[source_of[r]].type;
         if (type(parameter_type).kind != hir::TypeKind::Function)
@@ -1743,9 +1756,12 @@ class Emitter {
     call_args.insert(call_args.end(), actual.begin(), actual.end());
     // An external call can block or synchronously re-enter Woozy. All graph
     // writes (argument stores above) are complete and no runtime lock is held.
+    start_lifetime(out);
     auto *safe = gc_enter_safe();
     builder.CreateCall(adapter, call_args);
     gc_leave_safe(safe);
+    for (auto *slot : arg_slots)
+      end_lifetime(slot);
     // Runtime leases are a TLS stack: release them in reverse order so a
     // later lease always ends before the earlier lease it may have nested on.
     for (auto borrow = borrows.rbegin(); borrow != borrows.rend(); ++borrow)
@@ -1754,6 +1770,7 @@ class Emitter {
       // The adapter returned the raw foreign token. finish runs ACTIVE and
       // returns the Source wrapper; a null token consumes the context.
       auto *raw = builder.CreateLoad(builder.getPtrTy(), out);
+      end_lifetime(out);
       auto finish = module.getOrInsertFunction(
           "lang_c_registration_finish_v1",
           llvm::FunctionType::get(builder.getPtrTy(),
@@ -1762,8 +1779,9 @@ class Emitter {
       return builder.CreateCall(finish, {registration_context, raw});
     }
     if (!out) return builder.getInt8(0);
-    return from_c_storage(sig.result,
-                          builder.CreateLoad(c_lower_type(sig.result), out));
+    auto *loaded_out = builder.CreateLoad(c_lower_type(sig.result), out);
+    end_lifetime(out);
+    return from_c_storage(sig.result, loaded_out);
   }
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
@@ -2465,24 +2483,41 @@ class Emitter {
         iteration_indices.emplace(i.slot.value, builder.CreateAlloca(builder.getInt64Ty()));
       }
     struct TryStorage {
-      llvm::Value *value = nullptr, *error = nullptr;
+      llvm::AllocaInst *value = nullptr, *error = nullptr;
     };
     std::map<size_t, TryStorage> outputs;
-    std::map<size_t, llvm::Value *> incoming;
+    std::map<size_t, llvm::AllocaInst *> incoming;
+    std::vector<size_t> pred_count(f.blocks.size(), 0);
+    if (is_async && !f.blocks.empty())
+      ++pred_count[0];
+    for (const auto &blk : f.blocks)
+      for (auto tgt : blk.terminator.targets)
+        ++pred_count[tgt.value];
+    std::map<size_t, std::vector<llvm::AllocaInst *>> incoming_lifetime_ends;
+    std::set<size_t> scoped_try_blocks;
     for (size_t b = 0; b < f.blocks.size(); ++b) {
       const auto &t = f.blocks[b].terminator;
       if (t.kind != ir::Exit::try_call)
         continue;
       const auto cs = type(t.signature);
-      TryStorage storage;
+      TryStorage try_storage;
       if (type(cs.result).kind != hir::TypeKind::Unit)
-        storage.value =
-            builder.CreateAlloca(lower_type(cs.result), nullptr, "try.value");
-      storage.error = builder.CreateAlloca(lower_type(*cs.throws_type), nullptr,
-                                           "try.error");
-      outputs.emplace(b, storage);
-      incoming.emplace(t.targets[0].value, storage.value);
-      incoming.emplace(t.targets[1].value, storage.error);
+        try_storage.value = storage(lower_type(cs.result), "try.value");
+      try_storage.error = storage(lower_type(*cs.throws_type), "try.error");
+      outputs.emplace(b, try_storage);
+      incoming.emplace(t.targets[0].value, try_storage.value);
+      incoming.emplace(t.targets[1].value, try_storage.error);
+      if (t.targets[0].value != t.targets[1].value &&
+          pred_count[t.targets[0].value] == 1 &&
+          pred_count[t.targets[1].value] == 1) {
+        scoped_try_blocks.insert(b);
+        for (size_t side = 0; side < 2; ++side) {
+          auto &ends = incoming_lifetime_ends[t.targets[side].value];
+          if (try_storage.value)
+            ends.push_back(try_storage.value);
+          ends.push_back(try_storage.error);
+        }
+      }
     }
     for (size_t b = 0; b < f.blocks.size(); ++b) {
       const auto &t = f.blocks[b].terminator;
@@ -2493,10 +2528,11 @@ class Emitter {
         const auto payload = task.type_args[side];
         if (type(payload).kind == hir::TypeKind::Unit)
           continue;
-        auto *address =
-            builder.CreateAlloca(lower_type(payload), nullptr, "await.side");
+        auto *address = storage(lower_type(payload), "await.side");
         if (!incoming.emplace(t.targets[side].value, address).second)
           fail("await side target already has an incoming value");
+        if (pred_count[t.targets[side].value] == 1)
+          incoming_lifetime_ends[t.targets[side].value].push_back(address);
       }
     }
     if (is_async) {
@@ -2628,6 +2664,10 @@ class Emitter {
                                : llvm::ConstantInt::get(lower_type(p.type), 0));
         value_types.emplace(p.value, p.type);
       }
+      if (auto ends = incoming_lifetime_ends.find(b);
+          ends != incoming_lifetime_ends.end())
+        for (llvm::AllocaInst *alloca_inst : ends->second)
+          end_lifetime(alloca_inst);
       // Stable safepoint: function entry, loop headers and loop exits. The runtime
       // controller checks a pending world request and then graph pressure;
       // with neither pending it performs only atomic loads/branches.
@@ -2652,6 +2692,10 @@ class Emitter {
         if (storage.value)
           actual.push_back(storage.value);
         actual.push_back(storage.error);
+        if (scoped_try_blocks.contains(b)) {
+          start_lifetime(storage.value);
+          start_lifetime(storage.error);
+        }
         const auto &call = call_origin(t.origin, t.source);
         if (call.kind == hir::CalleeKind::direct && call.direct_symbol) {
           auto target = functions.at(*call.direct_symbol);
@@ -2737,6 +2781,8 @@ class Emitter {
           // slot's normal cleanup; the promise keeps its own reference.
           if (owning(payload))
             builder.CreateCall(value_op(payload, true), {origin});
+          if (pred_count[t.targets[0].value] == 1)
+            start_lifetime(incoming.at(t.targets[0].value));
           builder.CreateStore(builder.CreateLoad(lower_type(payload), origin),
                               incoming.at(t.targets[0].value));
         }
@@ -2748,6 +2794,8 @@ class Emitter {
               layout, promise, static_cast<unsigned>(error_slot));
           if (owning(error_type))
             builder.CreateCall(value_op(error_type, true), {origin});
+          if (pred_count[t.targets[1].value] == 1)
+            start_lifetime(incoming.at(t.targets[1].value));
           builder.CreateStore(builder.CreateLoad(lower_type(error_type), origin),
                               incoming.at(t.targets[1].value));
         }
@@ -2868,7 +2916,10 @@ class Emitter {
 
 public:
   Emitter(const ir::Module &m, const Options &options)
-      : input(m), aggregates(m.hir.module()) {
+      : input(m), package(options.package), aggregates(m.hir.module()) {
+    if (package)
+      identities = options.identities && options.identities->matches(m.hir.module())
+          ? options.identities : std::make_shared<hir::IdentityKeys>(m.hir);
     static std::once_flag initialized;
     std::call_once(initialized, [] {
       llvm::InitializeNativeTarget();
@@ -2939,7 +2990,27 @@ public:
         &module, llvm::Intrinsic::coro_resume);
     coro_destroy_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
         &module, llvm::Intrinsic::coro_destroy);
-    for (const auto &f : input.functions) {
+    // A cache hit can append HIR functions before freshly checked functions.
+    // Iterate a read-only view by stable declaration name in package mode;
+    // NativeIR/HIR indices and all verifier inputs remain untouched.
+    std::vector<const ir::Function *> source_order;
+    if (package && options.source_order && options.identities && options.identities->matches(input.hir.module())) {
+      if (options.source_order->size() != input.functions.size()) fail("invalid package function order size");
+      std::vector<bool> seen(input.functions.size());
+      for (auto index : *options.source_order) {
+        if (index >= input.functions.size() || seen[index]) fail("invalid package function order index");
+        seen[index] = true; source_order.push_back(&input.functions[index]);
+      }
+    } else if (package) {
+      std::vector<std::pair<std::string, const ir::Function *>> named;
+      for (const auto &function : input.functions) named.emplace_back(source_name(function.symbol), &function);
+      std::sort(named.begin(), named.end(), [](const auto &left, const auto &right) { return left.first < right.first; });
+      for (const auto &[name, function] : named) source_order.push_back(function);
+    } else {
+      for (const auto &function : input.functions) source_order.push_back(&function);
+    }
+    for (const auto *source : source_order) {
+      const auto &f = *source;
       function_signatures.emplace(f.symbol, f.signature);
       const auto hf = hir_functions.find(f.symbol);
       const bool capturing =
@@ -2949,11 +3020,20 @@ public:
             f.symbol,
             llvm::Function::Create(
                 signature(f.signature, capturing),
-                llvm::GlobalValue::InternalLinkage,
-                "lang.fn." + std::to_string(f.symbol.value), module));
+                package ? llvm::GlobalValue::ExternalLinkage
+                        : llvm::GlobalValue::InternalLinkage,
+                source_name(f.symbol), module));
         continue;
       }
-      has_async = true;
+      has_async = has_async || owns(f.symbol);
+      if (!owns(f.symbol)) {
+        auto *start = llvm::Function::Create(
+            signature(f.signature), llvm::GlobalValue::ExternalLinkage,
+            source_name(f.symbol), module);
+        functions.emplace(f.symbol, start);
+        async_starts.emplace(f.symbol, start);
+        continue;
+      }
       if (capturing)
         fail("async capture entry is not supported");
       const auto id = std::to_string(f.symbol.value);
@@ -2963,8 +3043,10 @@ public:
       coro->addFnAttr(llvm::Attribute::PresplitCoroutine);
       functions.emplace(f.symbol, coro);
       auto *start = llvm::Function::Create(
-          signature(f.signature), llvm::GlobalValue::InternalLinkage,
-          "lang.start." + id, module);
+          signature(f.signature),
+          package ? llvm::GlobalValue::ExternalLinkage
+                  : llvm::GlobalValue::InternalLinkage,
+          package ? source_name(f.symbol) : "lang.start." + id, module);
       async_starts.emplace(f.symbol, start);
       auto *resume = llvm::Function::Create(
           llvm::FunctionType::get(builder.getVoidTy(),
@@ -3039,8 +3121,9 @@ public:
           "executable entry requires no parameters and i32 or Unit result");
     }
     gc_entry_symbol = entry;
-    for (auto &f : input.functions)
-      function(f);
+    for (const auto *f : source_order)
+      if (owns(f->symbol)) function(*f);
+    if (owns(entry)) {
     auto *main = llvm::Function::Create(
         llvm::FunctionType::get(builder.getInt32Ty(), {}, false),
         llvm::GlobalValue::ExternalLinkage, "main", module);
@@ -3060,7 +3143,7 @@ public:
     // finish path is a no-op. Graph-capable modules still use the full
     // lifecycle below and keep all safepoints/critical regions unchanged.
     llvm::Value *init_status = builder.getInt64(0);
-    if (gc_program_required)
+    if (gc_program_required || package)
       init_status = builder.CreateCall(init, {});
     auto *init_failed =
         llvm::BasicBlock::Create(context, "main.gc.init_failed", main);
@@ -3207,6 +3290,7 @@ public:
       builder.CreateCall(finish, {});
       builder.CreateRet(builder.getInt32(1));
     }
+    } // only the entry package defines the executable wrapper
     if (!used_c_callables.empty()) {
       // Every used managed constructor needs its typed dispatcher because the
       // one generic C trampoline only carries the runtime context.
@@ -3230,6 +3314,9 @@ public:
     out.native_ir = ir::dump(input);
     out.c_adapter_source = std::move(out_c_adapter_source);
     out.llvm_before_optimization = text_ir(module);
+    out.triple = module.getTargetTriple().str();
+    out.data_layout = module.getDataLayoutStr();
+    if (options.llvm_only) return out;
     if (has_async || options.optimization == 2) {
       llvm::LoopAnalysisManager loops;
       llvm::FunctionAnalysisManager functions;
@@ -3268,8 +3355,7 @@ public:
 PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
                          const Options &options) {
   PhaseResult<Output> r;
-  auto capabilities =
-      hir::check_backend_capabilities(input.module().hir.module());
+  auto capabilities = hir::check_backend_capabilities(input.module().hir);
   if (!capabilities.success()) {
     r.state = capabilities.state;
     r.failure = capabilities.failure;
@@ -3285,6 +3371,13 @@ PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
         (options.optimization != 0 && options.optimization != 2))
       unsupported("native scalars supports Linux x86_64, generic CPU, no extra "
                   "features, O0/O2 only");
+    if (options.package) {
+      const auto &project = *input.module().hir.module().resolved->project;
+      if (options.package->value >= project.modules.size())
+        fail("package selection is not a project module");
+      if (!project.c_bindings.empty())
+        unsupported("package objects do not yet support C binding adapters");
+    }
     Emitter emitter(input.module(), options);
     r.value = emitter.run(entry, options);
     r.state = PhaseState::complete;
@@ -3301,7 +3394,7 @@ PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
 }
 PhaseResult<Output> emit(const hir::VerifiedHirModule &input, SymbolId entry,
                          const Options &options) {
-  auto capabilities = hir::check_backend_capabilities(input.module());
+  auto capabilities = hir::check_backend_capabilities(input);
   if (!capabilities.success()) {
     PhaseResult<Output> r;
     r.state = capabilities.state;

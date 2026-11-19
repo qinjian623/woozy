@@ -10,8 +10,19 @@ import "std/vec" as vec;
 
 pub enum VerifyMode { Backend; StaticOnly; }
 
+// A public function from another canonical package.  It is a declaration
+// boundary, not a body: package verification may resolve its real source
+// signature but never traverses a definition.
+pub struct ExternalFunction {
+    pub symbol usize;
+    pub owner usize;
+    pub signature usize;
+}
+
 pub struct VerifiedHirModule {
     module hir.HirModule;
+    mode VerifyMode;
+    externals Vec[ExternalFunction];
 }
 
 pub struct VerifyResult {
@@ -36,9 +47,14 @@ func internal_failure(message string) Invalid {
 }
 
 pub func verify_types(input hir.HirModule) model.UnitResult {
+    return verify_types_external(input, []);
+}
+
+func verify_types_external(input hir.HirModule,
+                           externals Vec[ExternalFunction]) model.UnitResult {
     var state = make_verifier(input);
     try {
-        run_verification(inout state);
+        run_verification(inout state, externals);
     } catch error Invalid {
         let diagnostics = vec.empty[model.Diagnostic]();
         vec.push(diagnostics, invalid_diagnostic(error));
@@ -50,7 +66,149 @@ pub func verify_types(input hir.HirModule) model.UnitResult {
         failure: model.FailureKind.Internal, diagnostics: [], has_value: true);
 }
 
+func verify_binding_backends(module hir.HirModule) option.Option[VerifyResult] {
+    let project = module.resolved.project;
+    var backend_name = "native";
+    if backend_is(module.config.backend, model.Backend.Python) {
+        backend_name = "python";
+    }
+    for module_value in project.modules {
+        switch module_value.binding {
+            case option.Option.Some(reference): {
+                if reference.bundle >= vec.len(project.bindings) {
+                    let diagnostics = vec.empty[model.Diagnostic]();
+                    vec.push(diagnostics, invalid_diagnostic(
+                        internal_failure("binding bundle index")));
+                    return option.Option[VerifyResult].Some(VerifyResult(
+                        state: model.PhaseState.Failed,
+                        failure: model.FailureKind.Internal,
+                        diagnostics: diagnostics,
+                        value: option.Option[VerifiedHirModule].None));
+                }
+                let bundle = project.bindings[reference.bundle];
+                if !string_list_contains(bundle.allowed_backends,
+                                         backend_name) {
+                    var diagnostics = vec.empty[model.Diagnostic]();
+                    var diagnostic = model.diagnostic(
+                        "E_CAPABILITY_UNAVAILABLE", "type",
+                        "foreign source module is unavailable for this backend",
+                        empty_span());
+                    diagnostic.has_primary = false;
+                    vec.push(diagnostics, diagnostic);
+                    return option.Option[VerifyResult].Some(VerifyResult(
+                        state: model.PhaseState.Failed,
+                        failure: model.FailureKind.Unsupported,
+                        diagnostics: diagnostics,
+                        value: option.Option[VerifiedHirModule].None));
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return option.Option[VerifyResult].None;
+}
+
 pub func verify(input hir.HirModule, mode VerifyMode) VerifyResult {
+    return verify_impl(input, mode, [], option.Option[usize].None);
+}
+
+// Package verification keeps the real project declarations but admits only
+// checked external function declarations for direct callees owned by another
+// Module.  The external list is collected from the package HIR itself.
+pub func verify_package(input hir.HirModule, mode VerifyMode,
+                        package_id usize) VerifyResult {
+    var externals = vec.empty[ExternalFunction]();
+    try { externals = collect_externals(input, package_id); }
+    catch error Invalid {
+        let diagnostics = vec.empty[model.Diagnostic]();
+        vec.push(diagnostics, invalid_diagnostic(error));
+        return VerifyResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal, diagnostics: diagnostics,
+            value: option.Option[VerifiedHirModule].None);
+    }
+    return verify_impl(input, mode, externals, option.Option[usize].Some(package_id));
+}
+
+func collect_externals(input hir.HirModule, package_id usize)
+    Vec[ExternalFunction] throws Invalid {
+    let result = vec.empty[ExternalFunction]();
+    let seen = vec.empty[usize]();
+    for node in input.nodes {
+        var symbol usize = 0; var signature usize = 0; var found = false;
+        switch node.data {
+            case hir.NodeData.Call(value): {
+                if callee_id(value.kind) == callee_id(hir.CalleeKind.Direct) {
+                    switch value.direct_symbol {
+                        case option.Option.Some(id): {
+                            symbol = id; signature = value.signature; found = true;
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            case hir.NodeData.FunctionValue(value): {
+                symbol = value.symbol; signature = node.type_id; found = true;
+            }
+            case hir.NodeData.ConstantLiteral(value): {
+                switch value.value.data {
+                    case hir.ConstantData.FunctionValue(function): {
+                        symbol = function.symbol; signature = value.value.type_id; found = true;
+                    }
+                    default: {}
+                }
+            }
+            default: {}
+        }
+        if !found { continue; }
+        need(symbol < vec.len(input.resolved.symbols),
+            "external call has an invalid function symbol");
+        let value = input.resolved.symbols[symbol];
+        if value.module == package_id { continue; }
+        var defined = false;
+        for function in input.functions {
+            if function.symbol == symbol { defined = true; }
+        }
+        for template in input.templates {
+            if template.function.symbol == symbol { defined = true; }
+        }
+        if defined { continue; }
+        need(symbol_is(value.kind, model.SymbolKind.Function) &&
+             option.is_some(value.definition),
+            "external call target is not a real exported source declaration");
+        if !ids_insert(seen, symbol) { continue; }
+        vec.push(result, ExternalFunction(symbol: symbol, owner: value.module,
+            signature: signature));
+    }
+    for implementation in input.impls {
+        if !option.is_some(implementation.trait_ref) || vec.len(implementation.params) != 0 { continue; }
+        for method in implementation.methods {
+            if method >= vec.len(input.resolved.symbols) || ids_contains(seen, method) { continue; }
+            let symbol = input.resolved.symbols[method];
+            if symbol.module == package_id || !option.is_some(symbol.definition) ||
+               !external_trait_method(input, method) { continue; }
+            var defined = false;
+            for function in input.functions { if function.symbol == method { defined = true; } }
+            for template in input.templates { if template.function.symbol == method { defined = true; } }
+            if defined { continue; }
+            let reference = option_ref(symbol.definition);
+            let module = input.resolved.project.modules[reference.module];
+            let file = input.resolved.project.files[module.files[reference.file]];
+            let syntax = file.nodes[reference.node];
+            var generic = false;
+            for child in syntax.children {
+                if model.ast_kind_id(file.nodes[child].kind) == model.ast_kind_id(model.AstKind.GenericParameter) { generic = true; }
+            }
+            if generic { continue; }
+            if !ids_insert(seen, method) { continue; }
+            vec.push(result, ExternalFunction(symbol: method, owner: symbol.module, signature: 0));
+        }
+    }
+    return result;
+}
+
+func verify_impl(input hir.HirModule, mode VerifyMode,
+                 externals Vec[ExternalFunction],
+                 package_id option.Option[usize]) VerifyResult {
     var module = input;
     try {
         module = hirclone.clone_module(input);
@@ -74,46 +232,17 @@ pub func verify(input hir.HirModule, mode VerifyMode) VerifyResult {
         case VerifyMode.StaticOnly: use_backend = false;
     }
     if use_backend {
-        checked = check_backend_capabilities(module);
+        let typed = verify_types_external(module, externals);
+        if phase_is(typed.state, model.PhaseState.Complete) && typed.has_value {
+            checked = check_backend_capabilities_verified(module);
+        } else { checked = typed; }
     } else {
-        checked = verify_types(module);
+        checked = verify_types_external(module, externals);
     }
     if phase_is(checked.state, model.PhaseState.Complete) && checked.has_value {
-        let project = module.resolved.project;
-        var backend_name = "native";
-        if backend_is(module.config.backend, model.Backend.Python) {
-            backend_name = "python";
-        }
-        for module_value in project.modules {
-            switch module_value.binding {
-                case option.Option.Some(reference): {
-                    if reference.bundle >= vec.len(project.bindings) {
-                        let diagnostics = vec.empty[model.Diagnostic]();
-                        vec.push(diagnostics, invalid_diagnostic(
-                            internal_failure("binding bundle index")));
-                        return VerifyResult(state: model.PhaseState.Failed,
-                            failure: model.FailureKind.Internal,
-                            diagnostics: diagnostics,
-                            value: option.Option[VerifiedHirModule].None);
-                    }
-                    let bundle = project.bindings[reference.bundle];
-                    if !string_list_contains(bundle.allowed_backends,
-                                             backend_name) {
-                        var diagnostics = vec.empty[model.Diagnostic]();
-                        var diagnostic = model.diagnostic(
-                            "E_CAPABILITY_UNAVAILABLE", "type",
-                            "foreign source module is unavailable for this backend",
-                            empty_span());
-                        diagnostic.has_primary = false;
-                        vec.push(diagnostics, diagnostic);
-                        return VerifyResult(state: model.PhaseState.Failed,
-                            failure: model.FailureKind.Unsupported,
-                            diagnostics: diagnostics,
-                            value: option.Option[VerifiedHirModule].None);
-                    }
-                }
-                case option.Option.None: {}
-            }
+        switch verify_binding_backends(module) {
+            case option.Option.Some(rejected): return rejected;
+            case option.Option.None: {}
         }
     }
     if !phase_is(checked.state, model.PhaseState.Complete) ||
@@ -125,7 +254,67 @@ pub func verify(input hir.HirModule, mode VerifyMode) VerifyResult {
     return VerifyResult(state: model.PhaseState.Complete,
         failure: model.FailureKind.Internal, diagnostics: [],
         value: option.Option[VerifiedHirModule].Some(
-            VerifiedHirModule(module: module)));
+            VerifiedHirModule(module: module, mode: mode,
+                externals: externals)));
+}
+
+pub func check_verified_capabilities(input VerifiedHirModule) model.UnitResult {
+    switch input.mode {
+        case VerifyMode.Backend:
+            return model.UnitResult(state: model.PhaseState.Complete,
+                failure: model.FailureKind.Internal, diagnostics: [],
+                has_value: true);
+        case VerifyMode.StaticOnly:
+            return check_backend_capabilities(input.module);
+    }
+}
+
+pub func ensure_backend(input VerifiedHirModule) VerifyResult {
+    switch input.mode {
+        case VerifyMode.Backend:
+            return VerifyResult(state: model.PhaseState.Complete,
+                failure: model.FailureKind.Internal, diagnostics: [],
+                value: option.Option[VerifiedHirModule].Some(input));
+        case VerifyMode.StaticOnly: {
+            var module = input.module;
+            try {
+                module = hirclone.clone_module(input.module);
+            } catch error model.SupportError {
+                var message = "";
+                switch error {
+                    case model.SupportError.Invalid(value): message = value;
+                    case model.SupportError.Limit(value): message = value;
+                }
+                let diagnostics = vec.empty[model.Diagnostic]();
+                vec.push(diagnostics, invalid_diagnostic(
+                    internal_failure(message)));
+                return VerifyResult(state: model.PhaseState.Failed,
+                    failure: model.FailureKind.Internal,
+                    diagnostics: diagnostics,
+                    value: option.Option[VerifiedHirModule].None);
+            }
+            let checked = check_backend_capabilities(module);
+            if phase_is(checked.state, model.PhaseState.Complete) &&
+               checked.has_value {
+                switch verify_binding_backends(module) {
+                    case option.Option.Some(rejected): return rejected;
+                    case option.Option.None: {}
+                }
+            }
+            if !phase_is(checked.state, model.PhaseState.Complete) ||
+               !checked.has_value {
+                return VerifyResult(state: checked.state,
+                    failure: checked.failure, diagnostics: checked.diagnostics,
+                    value: option.Option[VerifiedHirModule].None);
+            }
+            return VerifyResult(state: model.PhaseState.Complete,
+                failure: model.FailureKind.Internal, diagnostics: [],
+                value: option.Option[VerifiedHirModule].Some(
+                    VerifiedHirModule(module: module,
+                        mode: VerifyMode.Backend,
+                        externals: input.externals)));
+        }
+    }
 }
 
 func string_list_contains(values Vec[string], value string) bool {
@@ -144,4 +333,10 @@ pub func snapshot(value VerifiedHirModule) hir.HirModule
 
 pub func config(value VerifiedHirModule) model.CheckConfig {
     return value.module.config;
+}
+
+pub func externals(value VerifiedHirModule) Vec[ExternalFunction] {
+    let result = vec.empty[ExternalFunction]();
+    for external in value.externals { if external.signature != 0 { vec.push(result, external); } }
+    return result;
 }

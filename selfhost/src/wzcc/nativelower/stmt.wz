@@ -48,14 +48,14 @@ func indexed_place(state Lower, id usize) option.Option[usize] throws model.Supp
 }
 
 // End-borrow steps recorded for a field-place assignment full expression.
-func end_borrow_owners(state Lower, id usize) Vec[hir.OwnerRef] {
+func end_borrow_owners(state Lower, shared LowerShared,
+                       id usize) Vec[hir.OwnerRef] {
     var owners = vec.empty[hir.OwnerRef]();
-    for full_expression in state.h.ownership.full_expressions {
-        if full_expression.node == id {
-            for step in full_expression.actions {
-                if cleanup_kind_id(step.kind) == 1 {
-                    vec.push(owners, step.owner);
-                }
+    if id < vec.len(shared.full_by_node) && shared.full_by_node[id] >= 0 {
+        let index = usize(shared.full_by_node[id]);
+        for step in state.h.ownership.full_expressions[index].actions {
+            if cleanup_kind_id(step.kind) == 1 {
+                vec.push(owners, step.owner);
             }
         }
     }
@@ -72,7 +72,8 @@ func cleanup_kind_id(kind hir.CleanupKind) u32 {
     }
 }
 
-func stmt(state inout Lower, id usize) throws model.SupportError {
+func stmt(state inout Lower, shared inout LowerShared,
+          id usize) throws model.SupportError {
     if !live(state) {
         return;
     }
@@ -80,64 +81,64 @@ func stmt(state inout Lower, id usize) throws model.SupportError {
     let source = current.source.span;
     switch current.data {
         case hir.NodeData.Block(data): {
-            stmt_block(inout state, id, current.children, source);
+            stmt_block(inout state, inout shared, id, current.children, source);
         }
         case hir.NodeData.Defer(data): {
             // Registration is represented by the VerifiedHIR plan at each
             // exit.
         }
         case hir.NodeData.Throw(data): {
-            stmt_throw(inout state, id, current.children);
+            stmt_throw(inout state, inout shared, id, current.children);
         }
         case hir.NodeData.Try(data): {
-            stmt_try(inout state, id, current.children, source, data);
+            stmt_try(inout state, inout shared, id, current.children, source, data);
         }
         case hir.NodeData.Noop(data): {}
         case hir.NodeData.ExpressionStatement(data): {
-            stmt_expression(inout state, id, current.children);
+            stmt_expression(inout state, inout shared, id, current.children);
         }
         case hir.NodeData.Binding(data): {
-            stmt_binding(inout state, id, current.children, source, data);
+            stmt_binding(inout state, inout shared, id, current.children, source, data);
         }
         case hir.NodeData.Assign(data): {
-            stmt_assign(inout state, id, current.children, source, data);
+            stmt_assign(inout state, inout shared, id, current.children, source, data);
         }
         case hir.NodeData.Switch(data): {
-            stmt_switch(inout state, id, current.children, source, data);
+            stmt_switch(inout state, inout shared, id, current.children, source, data);
         }
         case hir.NodeData.If(data): {
-            stmt_if(inout state, current.children, source);
+            stmt_if(inout state, inout shared, current.children, source);
         }
         case hir.NodeData.For(data): {
-            stmt_for(inout state, id, current.children, source);
+            stmt_for(inout state, inout shared, id, current.children, source);
         }
         case hir.NodeData.ForIn(data): {
-            stmt_for_in(inout state, id, current.children, source, data);
+            stmt_for_in(inout state, inout shared, id, current.children, source, data);
         }
         case hir.NodeData.Return(data): {
-            stmt_return(inout state, id, current.children, source);
+            stmt_return(inout state, inout shared, id, current.children, source);
         }
         case hir.NodeData.Break(data): {
-            stmt_break(inout state, id, source, data);
+            stmt_break(inout state, inout shared, id, source, data);
         }
         case hir.NodeData.Continue(data): {
-            stmt_continue(inout state, id, source, data);
+            stmt_continue(inout state, inout shared, id, source, data);
         }
         default: {
-            expr(inout state, id);
+            expr(inout state, inout shared, id);
         }
     }
 }
 
-func stmt_block(state inout Lower, id usize, children Vec[usize],
-                source model.Span) throws model.SupportError {
+func stmt_block(state inout Lower, shared inout LowerShared, id usize,
+                children Vec[usize], source model.Span) throws model.SupportError {
     for child in children {
-        stmt(inout state, child);
+        stmt(inout state, inout shared, child);
     }
     let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Normal,
         error_type: option.Option[usize].None);
     if live(state) && option_some(plan(state, site)) {
-        clean(inout state, site, option.Option[usize].None);
+        clean(inout state, inout shared, site, option.Option[usize].None);
         let next = block(inout state);
         jump(inout state, next, source);
         finish(inout state, site);
@@ -145,16 +146,17 @@ func stmt_block(state inout Lower, id usize, children Vec[usize],
     }
 }
 
-func stmt_throw(state inout Lower, id usize,
+func stmt_throw(state inout Lower, shared inout LowerShared, id usize,
                 children Vec[usize]) throws model.SupportError {
-    let value = expr(inout state, children[0]);
+    let value = expr(inout state, inout shared, children[0]);
     take_temporary(inout state, children[0]);
     let thrown_type = node(state, children[0]).type_id;
-    error_exit(inout state, id, thrown_type, value);
+    error_exit(inout state, inout shared, id, thrown_type, value);
 }
 
-func stmt_try(state inout Lower, id usize, children Vec[usize],
-              source model.Span, data hir.Try) throws model.SupportError {
+func stmt_try(state inout Lower, shared inout LowerShared, id usize,
+              children Vec[usize], source model.Span, data hir.Try)
+    throws model.SupportError {
     let protected_entry = block(inout state);
     let after = block(inout state);
     jump(inout state, protected_entry, source);
@@ -181,14 +183,14 @@ func stmt_try(state inout Lower, id usize, children Vec[usize],
                         identity: u64(catch_clause.binding)));
         }
     }
-    stmt(inout state, children[0]);
+    stmt(inout state, inout shared, children[0]);
     if live(state) {
         jump(inout state, after, source);
     }
     for var index usize = 0; index < vec.len(catches); index += 1 {
         let handler = handler_require(state, id, u32(index));
         state.current = handler.block;
-        stmt(inout state, catches[index].body);
+        stmt(inout state, inout shared, catches[index].body);
         if live(state) {
             jump(inout state, after, source);
         }
@@ -196,15 +198,16 @@ func stmt_try(state inout Lower, id usize, children Vec[usize],
     state.current = after;
 }
 
-func stmt_expression(state inout Lower, id usize,
+func stmt_expression(state inout Lower, shared inout LowerShared, id usize,
                      children Vec[usize]) throws model.SupportError {
-    expr(inout state, children[0]);
-    full(inout state, id);
+    expr(inout state, inout shared, children[0]);
+    full(inout state, inout shared, id);
 }
 
-func stmt_binding(state inout Lower, id usize, children Vec[usize],
-                  source model.Span, data hir.Binding) throws model.SupportError {
-    let initial = expr(inout state, children[0]);
+func stmt_binding(state inout Lower, shared inout LowerShared, id usize,
+                  children Vec[usize], source model.Span, data hir.Binding)
+    throws model.SupportError {
+    let initial = expr(inout state, inout shared, children[0]);
     let initial_type = node(state, children[0]).type_id;
     let target = slot_new(inout state, initial_type);
     slot_emplace(inout state, data.symbol, target);
@@ -216,11 +219,12 @@ func stmt_binding(state inout Lower, id usize, children Vec[usize],
     }
     take_temporary(inout state, children[0]);
     store(inout state, target, initial, source);
-    full(inout state, id);
+    full(inout state, inout shared, id);
 }
 
-func stmt_assign(state inout Lower, id usize, children Vec[usize],
-                 source model.Span, data hir.Assign) throws model.SupportError {
+func stmt_assign(state inout Lower, shared inout LowerShared, id usize,
+                 children Vec[usize], source model.Span, data hir.Assign)
+    throws model.SupportError {
     let place = node(state, children[0]);
     let indexed_root = indexed_place(state, id);
     var has_indexed_root = false;
@@ -247,8 +251,8 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
         // bounds check belongs to the assignment target and precedes
         // the RHS.
         let indexed = node(state, index_root);
-        let receiver = expr(inout state, indexed.children[0]);
-        let index = expr(inout state, indexed.children[1]);
+        let receiver = expr(inout state, inout shared, indexed.children[0]);
+        let index = expr(inout state, inout shared, indexed.children[1]);
         var check_inputs = vec.empty[usize]();
         vec.push(check_inputs, receiver);
         vec.push(check_inputs, index);
@@ -306,7 +310,7 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
             }
             case option.Option.None: {}
         }
-        var right = expr(inout state, children[1]);
+        var right = expr(inout state, inout shared, children[1]);
         switch data.compound {
             case option.Option.Some(operation): {
                 var combined = nativeir.empty_instruction();
@@ -332,10 +336,10 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
         vec.push(write.inputs, right);
         write.source = source;
         push_instruction(inout state, write);
-        full(inout state, id);
+        full(inout state, inout shared, id);
     } else if is_index_place {
-        let receiver = expr(inout state, place.children[0]);
-        let index = expr(inout state, place.children[1]);
+        let receiver = expr(inout state, inout shared, place.children[0]);
+        let index = expr(inout state, inout shared, place.children[1]);
         let receiver_kind = type_of(state,
             node(state, place.children[0]).type_id).kind;
         var is_pointer = false;
@@ -367,7 +371,7 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
                 }
                 case option.Option.None: {}
             }
-            var right = expr(inout state, children[1]);
+            var right = expr(inout state, inout shared, children[1]);
             switch data.compound {
                 case option.Option.Some(operation): {
                     var combined = nativeir.empty_instruction();
@@ -396,7 +400,7 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
             vec.push(write.inputs, right);
             write.source = source;
             push_instruction(inout state, write);
-            full(inout state, id);
+            full(inout state, inout shared, id);
         } else {
             var check_inputs = vec.empty[usize]();
             vec.push(check_inputs, receiver);
@@ -421,7 +425,7 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
                 }
                 case option.Option.None: {}
             }
-            var right = expr(inout state, children[1]);
+            var right = expr(inout state, inout shared, children[1]);
             switch data.compound {
                 case option.Option.Some(operation): {
                     var combined = nativeir.empty_instruction();
@@ -443,12 +447,12 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
             effect(inout state, nativeir.Op.VecSet, 0, source, set_inputs,
                 option.Option[hir.OwnerRef].None,
                 option.Option[usize].Some(children[0]));
-            full(inout state, id);
+            full(inout state, inout shared, id);
         }
     } else {
-        var target = expr(inout state, children[0]);
+        var target = expr(inout state, inout shared, children[0]);
         if is_field_place {
-            for owner in end_borrow_owners(state, id) {
+            for owner in end_borrow_owners(state, shared, id) {
                 begin_borrow(inout state, owner, target, source);
             }
         }
@@ -461,7 +465,7 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
             }
             case option.Option.None: {}
         }
-        var right = expr(inout state, children[1]);
+        var right = expr(inout state, inout shared, children[1]);
         switch data.compound {
             case option.Option.Some(operation): {
                 var combined = nativeir.empty_instruction();
@@ -535,12 +539,13 @@ func stmt_assign(state inout Lower, id usize, children Vec[usize],
         } else {
             push_instruction(inout state, write);
         }
-        full(inout state, id);
+        full(inout state, inout shared, id);
     }
 }
 
-func stmt_switch(state inout Lower, id usize, children Vec[usize],
-                 source model.Span, data hir.Switch) throws model.SupportError {
+func stmt_switch(state inout Lower, shared inout LowerShared, id usize,
+                 children Vec[usize], source model.Span, data hir.Switch)
+    throws model.SupportError {
     let subject = children[0];
     let subject_node = node(state, subject);
     let subject_owning = owning(state, subject_node.type_id);
@@ -555,8 +560,8 @@ func stmt_switch(state inout Lower, id usize, children Vec[usize],
         // Evaluate the subject once. expr() installs the real temporary
         // slot; the switch full expression cleans only the other live
         // temporaries of the subject expression, never the result.
-        value = expr(inout state, subject);
-        full(inout state, id);
+        value = expr(inout state, inout shared, subject);
+        full(inout state, inout shared, id);
     } else if subject_owning {
         var symbol usize = 0;
         switch subject_node.data {
@@ -574,8 +579,8 @@ func stmt_switch(state inout Lower, id usize, children Vec[usize],
             hir.OwnerRef(kind: hir.OwnerKind.Binding,
                 identity: u64(symbol)), value, source);
     } else {
-        value = expr(inout state, subject);
-        full(inout state, subject);
+        value = expr(inout state, inout shared, subject);
+        full(inout state, inout shared, subject);
     }
     let after = block(inout state);
     loop_emplace(inout state, id, after, after);
@@ -584,12 +589,12 @@ func stmt_switch(state inout Lower, id usize, children Vec[usize],
         let next = block(inout state);
         var extracted = vec.empty[ExtractedValue]();
         var path = vec.empty[usize]();
-        match_pattern(inout state, arm.pattern, value, next, path, extracted);
+        match_pattern(inout state, inout shared, arm.pattern, value, next, path, extracted);
         bind_pattern(inout state, arm.pattern, value, path, extracted);
         if !computed_owning {
-            full(inout state, id);
+            full(inout state, inout shared, id);
         }
-        stmt(inout state, arm.body);
+        stmt(inout state, inout shared, arm.body);
         if live(state) {
             jump(inout state, after, source);
         }
@@ -600,10 +605,10 @@ func stmt_switch(state inout Lower, id usize, children Vec[usize],
     state.current = after;
 }
 
-func stmt_if(state inout Lower, children Vec[usize],
-             source model.Span) throws model.SupportError {
-    let condition = expr(inout state, children[0]);
-    full(inout state, children[0]);
+func stmt_if(state inout Lower, shared inout LowerShared,
+             children Vec[usize], source model.Span) throws model.SupportError {
+    let condition = expr(inout state, inout shared, children[0]);
+    full(inout state, inout shared, children[0]);
     let yes = block(inout state);
     let no = block(inout state);
     let join = block(inout state);
@@ -612,13 +617,13 @@ func stmt_if(state inout Lower, children Vec[usize],
     vec.push(targets, no);
     end(inout state, nativeir.Exit.Conditional, [condition], targets, source);
     state.current = yes;
-    stmt(inout state, children[1]);
+    stmt(inout state, inout shared, children[1]);
     if live(state) {
         jump(inout state, join, source);
     }
     state.current = no;
     if vec.len(children) == 3 {
-        stmt(inout state, children[2]);
+        stmt(inout state, inout shared, children[2]);
     }
     if live(state) {
         jump(inout state, join, source);
@@ -626,9 +631,9 @@ func stmt_if(state inout Lower, children Vec[usize],
     state.current = join;
 }
 
-func stmt_for(state inout Lower, id usize, children Vec[usize],
-              source model.Span) throws model.SupportError {
-    stmt(inout state, children[0]);
+func stmt_for(state inout Lower, shared inout LowerShared, id usize,
+              children Vec[usize], source model.Span) throws model.SupportError {
+    stmt(inout state, inout shared, children[0]);
     let condition = block(inout state);
     let body = block(inout state);
     let step = block(inout state);
@@ -636,19 +641,19 @@ func stmt_for(state inout Lower, id usize, children Vec[usize],
     jump(inout state, condition, source);
     loop_emplace(inout state, id, after, step);
     state.current = condition;
-    let test = expr(inout state, children[1]);
-    full(inout state, children[1]);
+    let test = expr(inout state, inout shared, children[1]);
+    full(inout state, inout shared, children[1]);
     var targets = vec.empty[usize]();
     vec.push(targets, body);
     vec.push(targets, after);
     end(inout state, nativeir.Exit.Conditional, [test], targets, source);
     state.current = body;
-    stmt(inout state, children[3]);
+    stmt(inout state, inout shared, children[3]);
     if live(state) {
         jump(inout state, step, source);
     }
     state.current = step;
-    stmt(inout state, children[2]);
+    stmt(inout state, inout shared, children[2]);
     if live(state) {
         jump(inout state, condition, source);
     }
@@ -657,7 +662,7 @@ func stmt_for(state inout Lower, id usize, children Vec[usize],
     let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Normal,
         error_type: option.Option[usize].None);
     if option_some(plan(state, site)) {
-        clean(inout state, site, option.Option[usize].None);
+        clean(inout state, inout shared, site, option.Option[usize].None);
         let next = block(inout state);
         jump(inout state, next, source);
         finish(inout state, site);
@@ -665,14 +670,15 @@ func stmt_for(state inout Lower, id usize, children Vec[usize],
     }
 }
 
-func stmt_for_in(state inout Lower, id usize, children Vec[usize],
-                 source model.Span, data hir.ForIn) throws model.SupportError {
+func stmt_for_in(state inout Lower, shared inout LowerShared, id usize,
+                 children Vec[usize], source model.Span, data hir.ForIn)
+    throws model.SupportError {
     switch data.iterator {
         case option.Option.Some(iterator): {
             // Evaluate the source iterator exactly once and transfer a
             // logical copy into the private cursor. The source binding
             // is never advanced.
-            let collection = expr(inout state, children[0]);
+            let collection = expr(inout state, inout shared, children[0]);
             take_temporary(inout state, children[0]);
             let cursor = slot_new(inout state, iterator.iterator);
             slot_set(inout state, iterator.cursor, cursor);
@@ -685,7 +691,7 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
                             identity: u64(iterator.cursor)));
             }
             store(inout state, cursor, collection, source);
-            full(inout state, id);
+            full(inout state, inout shared, id);
 
             let option_type = node(state, iterator.next).type_id;
             let option_slot = slot_new(inout state, option_type);
@@ -718,10 +724,10 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
             jump(inout state, condition, source);
             loop_emplace(inout state, id, after, step);
             state.current = condition;
-            let next_value = expr(inout state, iterator.next);
+            let next_value = expr(inout state, inout shared, iterator.next);
             take_temporary(inout state, iterator.next);
             store(inout state, option_slot, next_value, source);
-            full(inout state, iterator.next);
+            full(inout state, inout shared, iterator.next);
             let option_value = access(inout state, nativeir.Op.Load,
                 option_slot, source);
             var test = nativeir.empty_instruction();
@@ -755,7 +761,7 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
                 element = emit(inout state, copy);
             }
             store(inout state, element_slot, element, source);
-            stmt(inout state, data.body);
+            stmt(inout state, inout shared, data.body);
             if live(state) {
                 jump(inout state, step, source);
             }
@@ -773,14 +779,14 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
             let site = nativeir.ExitSite(origin: id,
                 kind: hir.ExitKind.Normal,
                 error_type: option.Option[usize].None);
-            clean(inout state, site, option.Option[usize].None);
+            clean(inout state, inout shared, site, option.Option[usize].None);
             jump(inout state, after, source);
             finish(inout state, site);
             loop_erase(inout state, id);
             state.current = after;
         }
         case option.Option.None: {
-            let collection = expr(inout state, children[0]);
+            let collection = expr(inout state, inout shared, children[0]);
             take_temporary(inout state, children[0]);
             let collection_type = node(state, children[0]).type_id;
             let hidden = slot_new(inout state, collection_type);
@@ -790,7 +796,7 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
                     hir.OwnerRef(kind: hir.OwnerKind.Iteration,
                         identity: u64(id)));
             store(inout state, hidden, collection, source);
-            full(inout state, id);
+            full(inout state, inout shared, id);
             effect(inout state, nativeir.Op.IterationBegin, hidden, source,
                 [], option.Option[hir.OwnerRef].None,
                 option.Option[usize].None);
@@ -826,10 +832,9 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
                 default: {}
             }
             if is_string {
-                for local in state.h.ownership.locals {
-                    if local.symbol == data.element {
-                        element_type = local.type_id;
-                    }
+                switch local_type_find(shared.locals_by_symbol, data.element) {
+                    case option.Option.Some(found): element_type = found;
+                    case option.Option.None: {}
                 }
             }
             var read = nativeir.empty_instruction();
@@ -849,7 +854,7 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
                             identity: u64(data.element)));
             }
             store(inout state, local, element, source);
-            stmt(inout state, data.body);
+            stmt(inout state, inout shared, data.body);
             if live(state) {
                 jump(inout state, step, source);
             }
@@ -862,7 +867,7 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
             let site = nativeir.ExitSite(origin: id,
                 kind: hir.ExitKind.Normal,
                 error_type: option.Option[usize].None);
-            clean(inout state, site, option.Option[usize].None);
+            clean(inout state, inout shared, site, option.Option[usize].None);
             jump(inout state, after, source);
             finish(inout state, site);
             loop_erase(inout state, id);
@@ -871,14 +876,14 @@ func stmt_for_in(state inout Lower, id usize, children Vec[usize],
     }
 }
 
-func stmt_return(state inout Lower, id usize, children Vec[usize],
-                 source model.Span) throws model.SupportError {
+func stmt_return(state inout Lower, shared inout LowerShared, id usize,
+                 children Vec[usize], source model.Span) throws model.SupportError {
     var result usize = 0;
     if vec.len(children) == 0 {
         let unit_type = state.unit;
         result = constant(inout state, unit_type, 0, source);
     } else {
-        result = expr(inout state, children[0]);
+        result = expr(inout state, inout shared, children[0]);
     }
     let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Return,
         error_type: option.Option[usize].None);
@@ -887,27 +892,27 @@ func stmt_return(state inout Lower, id usize, children Vec[usize],
         take_temporary(inout state, children[0]);
         saved = option.Option[usize].Some(result);
     }
-    clean(inout state, site, saved);
+    clean(inout state, inout shared, site, saved);
     end(inout state, nativeir.Exit.Return, [result], [], source);
     finish(inout state, site);
 }
 
-func stmt_break(state inout Lower, id usize, source model.Span,
-                data hir.Break) throws model.SupportError {
+func stmt_break(state inout Lower, shared inout LowerShared, id usize,
+                source model.Span, data hir.Break) throws model.SupportError {
     let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Break,
         error_type: option.Option[usize].None);
-    clean(inout state, site, option.Option[usize].None);
+    clean(inout state, inout shared, site, option.Option[usize].None);
     let loop_target = loop_require(state, data.loop);
     jump(inout state, loop_target.breaks, source);
     finish(inout state, site);
 }
 
-func stmt_continue(state inout Lower, id usize, source model.Span,
-                   data hir.Continue) throws model.SupportError {
+func stmt_continue(state inout Lower, shared inout LowerShared, id usize,
+                   source model.Span, data hir.Continue) throws model.SupportError {
     let site = nativeir.ExitSite(origin: id,
         kind: hir.ExitKind.Continue,
         error_type: option.Option[usize].None);
-    clean(inout state, site, option.Option[usize].None);
+    clean(inout state, inout shared, site, option.Option[usize].None);
     let loop_target = loop_require(state, data.loop);
     jump(inout state, loop_target.continues, source);
     finish(inout state, site);

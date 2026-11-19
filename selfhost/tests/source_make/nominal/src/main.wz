@@ -1,0 +1,13 @@
+package app;
+import "app/model" as model;
+func main() i32 {
+    let p = model.shift(model.pair());
+    let c = model.change(model.Choice.Value(9));
+    switch c {
+        case model.Choice.Value(n): {
+            if p.left == 7 && p.right == 13 && n == 13 { return 37; }
+            return 1;
+        }
+        case model.Choice.Empty: return 2;
+    }
+}

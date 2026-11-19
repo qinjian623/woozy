@@ -6,6 +6,7 @@
 #include <functional>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 namespace lang::ir {
 namespace {
@@ -32,7 +33,17 @@ struct Bad {
 class Verifier {
   const Module &m;
   const hir::TypeContext &types;
+  mutable detail::AggregateTypes aggregates;
   std::map<SymbolId, TypeId> functions;
+  std::unordered_map<uint64_t, const hir::HirFunction *> hir_functions;
+  std::unordered_map<uint64_t, std::vector<const hir::ValueUse *>>
+      uses_by_consumer;
+  std::unordered_map<uint64_t, std::vector<const hir::LocalLifetime *>>
+      locals_by_symbol;
+  std::unordered_map<uint64_t, std::vector<const hir::Temporary *>>
+      temporaries_by_producer;
+  std::unordered_map<uint64_t, const hir::FullExpression *> full_expressions;
+  std::unordered_map<uint64_t, const hir::CallLifetime *> calls;
   void need(bool ok, std::string message, SourceSpan s) const {
     if (!ok)
       throw Bad{std::move(message), s};
@@ -43,13 +54,10 @@ class Verifier {
     return *t;
   }
   const hir::HirFunction *hir_function_for(SymbolId symbol) const {
-    for (const auto &f : m.hir.module().functions)
-      if (f.symbol == symbol)
-        return &f;
-    return nullptr;
+    auto it = hir_functions.find(symbol.value);
+    return it != hir_functions.end() ? it->second : nullptr;
   }
   void function(const Function &f) const {
-    detail::AggregateTypes aggregates(m.hir.module());
     const auto s = f.source;
     const auto &sig = type(f.signature, s);
     need(functions.contains(f.symbol) && functions.at(f.symbol) == f.signature,
@@ -411,11 +419,8 @@ class Verifier {
     // so nested arguments precede their enclosing operation.
     std::map<HirNodeId, size_t> system_order;
     std::vector<SourceSpan> system_loop_sources;
-    auto hir_function = std::find_if(
-        m.hir.module().functions.begin(), m.hir.module().functions.end(),
-        [&](const auto &candidate) { return candidate.symbol == f.symbol; });
-    need(hir_function != m.hir.module().functions.end(),
-         "native function has no HIR body", s);
+    const auto *hir_function = hir_function_for(f.symbol);
+    need(hir_function != nullptr, "native function has no HIR body", s);
     std::vector<std::pair<HirNodeId, bool>> pending{{hir_function->body, false}};
     size_t sequence = 0;
     while (!pending.empty()) {
@@ -650,9 +655,14 @@ class Verifier {
             const auto &source = m.hir.module().nodes.at(i.origin->value);
             if (source.kind() == hir::NodeKind::read) {
               bool matches = false;
-              for (const auto &u : m.hir.module().ownership.uses)
-                if (u.consumer == *i.origin && !u.destination && u.operand == 0)
-                  matches = (i.op == Op::copy ? hir::UseKind::copy : hir::UseKind::borrow) == u.kind;
+              if (auto found_uses = uses_by_consumer.find(i.origin->value);
+                  found_uses != uses_by_consumer.end()) {
+                for (const auto *u : found_uses->second)
+                  if (!u->destination && u->operand == 0)
+                    matches = (i.op == Op::copy ? hir::UseKind::copy
+                                                : hir::UseKind::borrow) ==
+                              u->kind;
+              }
               need(matches, "copy/borrow differs from HIR use", i.source);
               auto definition = instructions.find(i.inputs[0]);
               need(definition != instructions.end() && definition->second->op == Op::load,
@@ -1788,10 +1798,7 @@ class Verifier {
   }
 
   void obligations(const Function &f, const detail::Obligations &actual) const {
-    const hir::HirFunction *source = nullptr;
-    for (const auto &candidate : m.hir.module().functions)
-      if (candidate.symbol == f.symbol)
-        source = &candidate;
+    const hir::HirFunction *source = hir_function_for(f.symbol);
     need(source != nullptr, "missing HIR function for exit obligations",
          f.source);
     const auto expected = detail::RequiredExits(m.hir.module()).run(*source);
@@ -1804,16 +1811,36 @@ class Verifier {
 
 public:
   explicit Verifier(const Module &input)
-      : m(input), types(input.hir.module().types) {}
+      : m(input), types(input.hir.module().types),
+        aggregates(input.hir.module()) {}
   void run() {
-    auto s = m.hir.module().functions.empty()
+    const auto &h = m.hir.module();
+    auto s = h.functions.empty()
                  ? SourceSpan{SourceSnapshotId{0}, 0, 0}
-                 : m.hir.module().functions[0].source.span;
+                 : h.functions[0].source.span;
     need(m.hir.config().backend == hir::Backend::native &&
              m.hir.config().word_bits == 64,
          "native IR requires native64", s);
-    for (auto &f : m.hir.module().functions)
+    hir_functions.reserve(h.functions.size());
+    for (auto &f : h.functions) {
       functions.emplace(f.symbol, f.signature);
+      hir_functions.emplace(f.symbol.value, &f);
+    }
+    uses_by_consumer.reserve(h.ownership.uses.size());
+    for (const auto &u : h.ownership.uses)
+      uses_by_consumer[u.consumer.value].push_back(&u);
+    locals_by_symbol.reserve(h.ownership.locals.size());
+    for (const auto &l : h.ownership.locals)
+      locals_by_symbol[l.symbol.value].push_back(&l);
+    temporaries_by_producer.reserve(h.ownership.temporaries.size());
+    for (const auto &t : h.ownership.temporaries)
+      temporaries_by_producer[t.producer.value].push_back(&t);
+    full_expressions.reserve(h.ownership.full_expressions.size());
+    for (const auto &fe : h.ownership.full_expressions)
+      full_expressions[fe.node.value] = &fe;
+    calls.reserve(h.ownership.calls.size());
+    for (const auto &c : h.ownership.calls)
+      calls[c.node.value] = &c;
     need(functions.size() == m.functions.size(),
          "native function set differs from HIR", s);
     std::set<SymbolId> seen;

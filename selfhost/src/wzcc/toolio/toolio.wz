@@ -178,15 +178,16 @@ func regular_or_missing(name string) bool throws os.Error {
     }
 }
 
-func backup_first(source string, directory string, first string,
-                  second string) string throws os.Error {
+func backup_first(source string, directory string, forbidden Vec[string]) string throws os.Error {
     let input = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, 0);
     defer { close_quietly(input); }
     let info = os.fstat(input);
     if !fs.is_file(info) { throw invalid(); }
     for true {
         let name = ".woozyc-previous-" + strconv.format_u64(random.secure_u64());
-        if name == first || name == second { continue; }
+        var collision = false;
+        for item in forbidden { if item == name { collision = true; } }
+        if collision { continue; }
         let destination = child(directory, name);
         var output = os.from_fd(-1);
         try {
@@ -215,42 +216,74 @@ func backup_first(source string, directory string, first string,
     }
 }
 
-pub func publish_pair(value inout Stage, first string, second string) throws Error {
-    if !stage_shape(value) || value.preserve || !safe_name(first) ||
-       !safe_name(second) || first == second { throw Error.System(invalid()); }
-    let directory = value.directory;
-    let staging = value.path;
-    let target_first = child(directory, first);
-    let target_second = child(directory, second);
-    let source_first = child(staging, first);
-    let source_second = child(staging, second);
-    var backup = "";
-    var had_first = false;
+func publication_lock(value Stage) os.File throws Error {
+    try {
+        let file = os.open(value.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, 0);
+        try {
+            for true {
+                try { os.flock(file, os.LOCK_EX); return file; }
+                catch problem os.Error {
+                    switch problem { case os.Error.Interrupted(code, completed): continue; default: throw problem; }
+                }
+            }
+        } catch problem os.Error { close_quietly(file); throw problem; }
+    } catch problem os.Error { throw Error.System(problem); }
+}
+
+struct PublicationBackup { path string; existed bool; }
+pub func publish_files(value inout Stage, names Vec[string]) throws Error {
+    if !stage_shape(value) || value.preserve { throw Error.System(invalid()); }
+    for var index usize = 0; index < vec.len(names); index += 1 {
+        if !safe_name(names[index]) { throw Error.System(invalid()); }
+        for var previous usize = 0; previous < index; previous += 1 {
+            if names[previous] == names[index] { throw Error.System(invalid()); }
+        }
+    }
+    let lock = publication_lock(value);
+    defer { close_quietly(lock); }
+    let directory = value.directory; let staging = value.path;
+    let backups = vec.empty[PublicationBackup]();
     try {
         if !fs.is_dir(os.lstat(staging)) { throw invalid(); }
-        had_first = regular_or_missing(target_first);
-        regular_or_missing(target_second);
-        regular_or_missing(source_first);
-        regular_or_missing(source_second);
-        if had_first { backup = backup_first(target_first, staging, first, second); }
+        for var index usize = 0; index < vec.len(names); index += 1 {
+            let existed = regular_or_missing(child(directory, names[index]));
+            regular_or_missing(child(staging, names[index]));
+            if index + 1 < vec.len(names) {
+                var backup = "";
+                if existed { backup = backup_first(child(directory, names[index]), staging, names); }
+                vec.push(backups, PublicationBackup(path: backup, existed: existed));
+            }
+        }
     } catch problem os.Error { throw Error.System(problem); }
-    var published = false;
+    var published usize = 0;
     try {
-        os.rename(source_first, target_first);
-        published = true;
-        os.rename(source_second, target_second);
+        for published < vec.len(names) {
+            os.rename(child(staging, names[published]), child(directory, names[published]));
+            published += 1;
+        }
     } catch problem os.Error {
-        if published {
+        var index = published;
+        for index > 0 {
+            index -= 1;
+            let target = child(directory, names[index]);
             try {
-                if had_first { os.rename(backup, target_first); }
-                else { os.unlink(target_first); }
+                if backups[index].existed { os.rename(backups[index].path, target); }
+                else { os.unlink(target); }
             } catch restore os.Error {
                 value.preserve = true;
-                if !had_first { backup = target_first; }
+                var backup = backups[index].path;
+                if !backups[index].existed { backup = target; }
                 throw Error.Rollback(backup: backup, problem: restore);
             }
         }
         throw Error.System(problem);
     }
-    // shortcut: reported rename errors roll back; process interruption is not transactional.
+    // shortcut: reported errors roll back; process interruption is not transactional.
+}
+pub func publish_file(value Stage, name string) throws Error {
+    var local = value;
+    publish_files(inout local, [name]);
+}
+pub func publish_pair(value inout Stage, first string, second string) throws Error {
+    publish_files(inout value, [first, second]);
 }

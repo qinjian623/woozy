@@ -8,6 +8,7 @@
 package nativeverify;
 
 import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativelayout" as nativelayout;
 import "app/wzcc/nativeir" as nativeir;
@@ -24,6 +25,7 @@ struct ModuleState {
     config model.CheckConfig;
     functions Vec[nativeir.Function];
     symbols Vec[FunctionEntry];
+    externals Vec[hirverify.ExternalFunction];
 }
 
 struct RequiredCheck {
@@ -141,8 +143,27 @@ func run_module(state inout ModuleState) throws VerifyError {
     for function in state.h.functions {
         symbol_add(inout state.symbols, function.symbol, function.signature);
     }
-    need(vec.len(state.symbols) == vec.len(state.functions),
-         "native function set differs from HIR", source);
+    for external in state.externals {
+        need(external.symbol < vec.len(state.h.resolved.symbols),
+             "external function identity", source);
+        let symbol = state.h.resolved.symbols[external.symbol];
+        need(model.symbol_kind_id(symbol.kind) == model.symbol_kind_id(model.SymbolKind.Function) &&
+                 external.owner < vec.len(state.h.resolved.project.modules) &&
+                 symbol.module == external.owner &&
+                 option.is_some(symbol.definition),
+             "external function is not a visible source declaration",
+             source);
+        let signature = require_type(state.h, external.signature, source);
+        need(type_is(signature.kind, model.TypeKind.Function),
+             "external function signature is not a function type", source);
+        symbol_add(inout state.symbols, external.symbol, external.signature);
+    }
+    need(vec.len(state.h.functions) == vec.len(state.functions),
+         "native function count differs from verified HIR", source);
+    need(vec.len(state.symbols) == vec.len(state.h.functions) +
+             vec.len(state.externals),
+         "duplicate HIR definitions or external declarations",
+         source);
     var seen = node_set();
     for function in state.functions {
         need(node_set_insert(inout seen, function.symbol),

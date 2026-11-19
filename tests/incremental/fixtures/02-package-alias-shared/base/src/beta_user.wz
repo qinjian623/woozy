@@ -1,0 +1,7 @@
+package app;
+
+import "beta" as left;
+
+func beta_use() i32 {
+    return left.number();
+}

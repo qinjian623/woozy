@@ -123,6 +123,9 @@ void suite() {
     const auto &llvm = generated.value->llvm_ir;
     need(llvm.find("lang_sys_stat_v1") != std::string::npos,
          "stat_bytes runtime symbol missing");
+    need(generated.value->llvm_before_optimization.find("@llvm.lifetime.start") != std::string::npos &&
+             generated.value->llvm_before_optimization.find("@llvm.lifetime.end") != std::string::npos,
+         "stat_bytes lifetime intrinsics missing");
     const auto &before = generated.value->llvm_before_optimization;
     need(before.find(", i32 0, i32 5") != std::string::npos &&
          before.find(", i32 0, i32 1") != std::string::npos,

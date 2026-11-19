@@ -1,0 +1,37 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "02-package-alias-shared",
+  "kind": "source-package-set",
+  "purpose": "One package with multiple files: a top-level helper is shared package-wide, while the same import alias name is file-local and may name different dependency packages.",
+  "language_references": [
+    "docs/SEMANTICS.md §2 名称与模块",
+    "development/docs/FRONTEND.md §6.3 名字空间"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "87b9d7ed892275530c57a8c55a743571d2feb1a72fed7bd062673d6073c6d101",
+      "src/beta_user.wz": "509fded53467c5101b6977a89aeaff640df994cb4f71311399e7ce5f91bb5d1d",
+      "src/helpers.wz": "3ca85f9e6dfbdd1d2c3f43da5c5dd4422ab52232f591ef91cc05cb8433dcb5f6",
+      "src/main.wz": "66e47329b939c8a3ee73fe7038d41585c7f788c0cd31619c643217e389b0e46a",
+      "vendor/alpha/lang.toml": "330582552d0a097c88315305b88c5e7966902b3d81a06bf4f31e132905b752d3",
+      "vendor/alpha/src/lib.wz": "c6c5795af0a45f372e341188ebe9f3ca646f70d67cd87dbc1ae7cc08ae44fb29",
+      "vendor/beta/lang.toml": "7d10cf2dd06b5c64369569a4130a8c5c50bab3c24d90f0af757d842d4e207bd7",
+      "vendor/beta/src/lib.wz": "7e54ea1250b9b524c12faa4dfdb381c7a8ab900881afaae83f6c0694ce2da379"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 40,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "shared-helper-body",
+    "alpha-value",
+    "alias-swap"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

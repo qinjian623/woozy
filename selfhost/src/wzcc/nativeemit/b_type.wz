@@ -520,6 +520,22 @@ func storage(type_name string, state inout Emitter) Value throws Error {
     return entry_result("ptr", "alloca " + type_name, inout state);
 }
 
+func start_lifetime(address Value, state inout Emitter) throws Error {
+    let sig = Signature(result: "void", parameters: ["ptr"]);
+    let declaration = declare_function("llvm.lifetime.start.p0", sig,
+        inout state);
+    append("call void " + declaration.reference + "(ptr " + address.reference + ")",
+        inout state);
+}
+
+func end_lifetime(address Value, state inout Emitter) throws Error {
+    let sig = Signature(result: "void", parameters: ["ptr"]);
+    let declaration = declare_function("llvm.lifetime.end.p0", sig,
+        inout state);
+    append("call void " + declaration.reference + "(ptr " + address.reference + ")",
+        inout state);
+}
+
 // An empty LLVM aggregate has allocation size zero; every stride and scratch
 // slot for it uses one byte, exactly as the C++ backend does.
 func b_empty_size_id(type_id usize, state inout Emitter) bool throws Error {

@@ -1,6 +1,7 @@
 package nativeemit;
 
 import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/interface" as interface;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
 import "app/wzcc/nativeverify" as nativeverify;
@@ -17,17 +18,29 @@ func emit_failure(code string, kind model.FailureKind, message string) EmitResul
 
 func emit_assembly(input nativeir.Module, entry usize, options Options)
     Output throws Error {
+    return emit_package_assembly(input, entry, options, option.Option[usize].None,
+        option.Option[interface.Keys].None, [], [], "");
+}
+func emit_package_assembly(input nativeir.Module, entry usize, options Options,
+    package_id option.Option[usize], keys option.Option[interface.Keys],
+    order Vec[usize], externals Vec[ExternalSource], worker_instance_linkage string) Output throws Error {
     var state = new_emitter(input, options);
+    state.package_selection = package_id; state.identities = keys;
+    state.worker_instance_linkage = worker_instance_linkage;
+    if option.is_some(package_id) { state.source_order = order; }
     declare_runtime_types(inout state);
     scan_c_resource_flags(inout state);
     declare_source_functions(inout state);
+    declare_external_functions(externals, inout state);
     state.gc_entry_symbol = option.Option[usize].Some(entry);
     var has_async = false;
-    for var index usize = 0; index < vec.len(input.functions); index += 1 {
-        if input.functions[index].is_async { has_async = true; }
-        emit_function(index, inout state);
+    for index in state.source_order {
+        if owns_function(state, input.functions[index].symbol) {
+            if input.functions[index].is_async { has_async = true; }
+            emit_function(index, inout state);
+        }
     }
-    emit_main(entry, inout state);
+    if owns_function(state, entry) { emit_main(entry, inout state); }
     finalize_c_adapter(inout state);
     let output = sections(state);
     return Output(llvm_sections: output, c_adapter_source: state.e.adapter_source,
@@ -36,9 +49,20 @@ func emit_assembly(input nativeir.Module, entry usize, options Options)
 
 pub func emit(input nativeverify.VerifiedModule, entry usize,
               options Options) EmitResult {
+    return emit_selected(input, entry, options, option.Option[usize].None, "");
+}
+pub func emit_package(input nativeverify.VerifiedModule, entry usize, options Options, package_id usize,
+                      partitioned bool) EmitResult {
+    var linkage = "linkonce_odr";
+    // O2 must retain definitions that are only used from other partitions.
+    if partitioned { linkage = "weak_odr"; }
+    return emit_selected(input, entry, options, option.Option[usize].Some(package_id), linkage);
+}
+func emit_selected(input nativeverify.VerifiedModule, entry usize, options Options, package_id option.Option[usize],
+                   worker_instance_linkage string) EmitResult {
     try {
         let module = nativeverify.snapshot(input);
-        let capabilities = hirverify.check_backend_capabilities(module.hir);
+        let capabilities = nativeverify.check_hir_capabilities(input);
         if !capabilities.has_value {
             return EmitResult(state: capabilities.state, failure: capabilities.failure,
                 diagnostics: capabilities.diagnostics, value: option.Option[Output].None);
@@ -53,7 +77,28 @@ pub func emit(input nativeverify.VerifiedModule, entry usize,
             return emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
                 "native scalars require native/64 HIR");
         }
-        let output = emit_assembly(module, entry, options);
+        switch package_id {
+            case option.Option.Some(selected): {
+                if selected >= vec.len(module.hir.resolved.project.modules) { throw invalid("package selection is not a project module"); }
+                if vec.len(module.hir.resolved.project.c_bindings) != 0 {
+                    throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+                        "package objects do not yet support C binding adapters");
+                }
+            }
+            case option.Option.None: {}
+        }
+        var keys = option.Option[interface.Keys].None;
+        if option.is_some(package_id) { keys = option.Option[interface.Keys].Some(interface.index(module.hir)); }
+        var order = vec.empty[usize]();
+        switch keys { case option.Option.Some(index): order = package_function_order(module, index); case option.Option.None: {} }
+        var externals = vec.empty[ExternalSource]();
+        if option.is_some(package_id) {
+            for external in nativeverify.externals(input) {
+                vec.push(externals, ExternalSource(symbol: external.symbol,
+                    signature: external.signature));
+            }
+        }
+        let output = emit_package_assembly(module, entry, options, package_id, keys, order, externals, worker_instance_linkage);
         return EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source,
             diagnostics: [], value: option.Option[Output].Some(output));
     } catch error Error {
@@ -68,4 +113,61 @@ pub func emit(input nativeverify.VerifiedModule, entry usize,
                 return emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message);
         }
     }
+}
+
+// One snapshot and identity index for every selected package. The verified input
+// remains the only public entry; no mutable HIR is accepted by this API.
+pub func emit_packages(input nativeverify.VerifiedModule, entry usize, options Options, packages Vec[usize]) Vec[EmitResult] {
+    let result = vec.empty[EmitResult]();
+    try {
+        let module = nativeverify.snapshot(input); let capabilities = nativeverify.check_hir_capabilities(input);
+        if !capabilities.has_value {
+            vec.push(result, EmitResult(state: capabilities.state, failure: capabilities.failure, diagnostics: capabilities.diagnostics, value: option.Option[Output].None)); return result;
+        }
+        if module.hir.config.word_bits != 64 || vec.len(module.hir.resolved.project.c_bindings) != 0 {
+            vec.push(result, emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported, "package objects require native/64 without C adapters")); return result;
+        }
+        switch module.hir.config.backend { case model.Backend.Native: {} case model.Backend.Python: throw invalid("package objects require Native HIR"); }
+        let keys = interface.index(module.hir);
+        let order = package_function_order(module, keys);
+        for selected in packages {
+            if selected >= vec.len(module.hir.resolved.project.modules) { throw invalid("package selection is not a project module"); }
+            let output = emit_package_assembly(module, entry, options, option.Option[usize].Some(selected), option.Option[interface.Keys].Some(keys), order,
+                vec.empty[ExternalSource](), "");
+            vec.push(result, EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source, diagnostics: [], value: option.Option[Output].Some(output)));
+        }
+    } catch problem Error { switch problem { case Error.Failure(code, kind, message): vec.push(result, emit_failure(code, kind, message)); } }
+    catch problem model.SupportError { switch problem {
+        case model.SupportError.Invalid(message): vec.push(result, emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message));
+        case model.SupportError.Limit(message): vec.push(result, emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message));
+    } }
+    return result;
+}
+
+// Sort only a view; native_index and HIR/CFG references retain their original
+// meaning. Compute it once for the immutable snapshot used by every package.
+func package_function_order(module nativeir.Module, keys interface.Keys) Vec[usize] throws model.SupportError {
+    let names = vec.empty[string](); var current = vec.empty[usize](); var scratch = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(module.functions); index += 1 {
+        vec.push(names, interface.indexed_function_name(keys, module.functions[index].symbol));
+        vec.push(current, index); vec.push(scratch, index);
+    }
+    let size = vec.len(current); var width usize = 1;
+    for width < size {
+        var begin usize = 0;
+        for begin < size {
+            var middle = begin + width; if middle > size { middle = size; }
+            var end = middle + width; if end > size { end = size; }
+            var left = begin; var right = middle; var output = begin;
+            for output < end {
+                if left < middle && (right == end || names[current[left]] <= names[current[right]]) {
+                    scratch[output] = current[left]; left += 1;
+                } else { scratch[output] = current[right]; right += 1; }
+                output += 1;
+            }
+            begin = end;
+        }
+        let old = current; current = scratch; scratch = old; width *= 2;
+    }
+    return current;
 }

@@ -138,7 +138,7 @@ func foreign_read(state inout Verifier, id usize) throws Invalid {
         let owner_type = verifier_type(state, option_usize(binding.owner));
         let owner = foreign_declaration(state, owner_type.binding);
         let owner_detail = option_binding_type(owner.detail);
-        need(ids_contains(owner_detail.members, binding_id),
+        need(ids_contains_unsorted(owner_detail.members, binding_id),
             "foreign owner member identity");
     } else {
         need(vec.len(node.children) == 0,
@@ -149,7 +149,7 @@ func foreign_read(state inout Verifier, id usize) throws Invalid {
         need(option.is_some(exported), "foreign read differs from resolved export");
         let export_value = option_foreign_export(exported);
         if option.is_some(binding.signature) {
-            need(ids_contains(export_value.candidates, binding_id),
+            need(ids_contains_unsorted(export_value.candidates, binding_id),
                 "foreign read differs from resolved export");
         } else {
             need(option.is_some(export_value.declaration) &&

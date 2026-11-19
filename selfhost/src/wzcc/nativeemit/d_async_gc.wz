@@ -116,6 +116,15 @@ func d_incoming_address(state Emitter, block usize) Value throws Error {
     throw invalid("await side target has no incoming record");
 }
 
+func d_incoming_unique(state Emitter, block usize) bool {
+    for entry in state.frame.incoming {
+        if entry.block == block {
+            return entry.end_after_load;
+        }
+    }
+    return false;
+}
+
 func d_gep(type_name string, base Value, index usize, state inout Emitter) Value throws Error {
     return result("ptr", "getelementptr inbounds " + type_name + ", ptr " +
         base.reference + ", i32 0, i32 " + number(index), inout state);
@@ -327,6 +336,16 @@ pub func declare_async(function_index usize, state inout Emitter) SourceFunction
     let function = d_native_function(state, function_index);
     let symbol = function.symbol;
     let signature_id = function.signature;
+    if !owns_function(state, symbol) {
+        let sig = signature(signature_id, false, false, inout state);
+        let external_name = source_name(state, symbol);
+        let code = declare_function(external_name, sig, inout state);
+        vec.push(state.d.async_symbols, AsyncSymbols(symbol: symbol,
+            coroutine: code, start: code, resume: code, destroy: code));
+        return SourceFunction(symbol: symbol, signature: signature_id,
+            native_index: function_index, text_index: 0,
+            hir_index: d_hir_index(state, symbol), code: code);
+    }
     let id = number(symbol);
     let hir_index = d_hir_index(state, symbol);
     switch hir_index {
@@ -359,7 +378,10 @@ pub func declare_async(function_index usize, state inout Emitter) SourceFunction
     let saved = save_cursor(state);
     let text_index = new_function("lang.async." + id, coroutine, "internal",
         "presplitcoroutine", inout state);
-    let start = new_function("lang.start." + id, start_signature, "internal", "", inout state);
+    var start_name = "lang.start." + id;
+    var start_linkage = "internal";
+    if option.is_some(state.package_selection) { start_name = source_name(state, symbol); start_linkage = ""; }
+    let start = new_function(start_name, start_signature, start_linkage, "", inout state);
     let resume_signature = Signature(result: "void", parameters: ["ptr"]);
     let resume = new_function("lang.resume." + id, resume_signature, "internal", "", inout state);
     let destroy = new_function("lang.destroy." + id, resume_signature, "internal", "", inout state);
@@ -1266,6 +1288,9 @@ pub func emit_async_terminator(terminator nativeir.Terminator, block_id usize,
                 }
                 let ready_lowered = lower_type(await_payload, inout state);
                 let ready_loaded = d_load(ready_lowered, ready_address, inout state);
+                if d_incoming_unique(state, terminator.targets[0]) {
+                    start_lifetime(await_success_address, inout state);
+                }
                 d_store(ready_lowered, ready_loaded, await_success_address, inout state);
             }
             terminate("br label " + await_success_target.reference, inout state);
@@ -1285,6 +1310,9 @@ pub func emit_async_terminator(terminator nativeir.Terminator, block_id usize,
                 }
                 let failed_lowered = lower_type(await_error_type, inout state);
                 let failed_loaded = d_load(failed_lowered, failed_address, inout state);
+                if d_incoming_unique(state, terminator.targets[1]) {
+                    start_lifetime(await_error_address, inout state);
+                }
                 d_store(failed_lowered, failed_loaded, await_error_address, inout state);
             }
             terminate("br label " + await_error_target.reference, inout state);

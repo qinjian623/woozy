@@ -174,6 +174,7 @@ int64_t lang_sys_ftruncate_v1(int32_t fd, int64_t size) noexcept;
 
 // fsync(2)/fdatasync(2). EINTR is returned unchanged.
 int64_t lang_sys_fsync_v1(int32_t fd) noexcept;
+int64_t lang_sys_flock_v1(int32_t fd, int32_t operation) noexcept;
 int64_t lang_sys_fdatasync_v1(int32_t fd) noexcept;
 
 // dup(2)/dup2(2). dup returns the new descriptor; dup2 returns `new_fd`.

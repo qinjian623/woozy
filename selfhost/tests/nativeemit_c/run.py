@@ -45,6 +45,9 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE.parent))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 C_FILES = ("c_values.wz", "c_weak.wz", "c_instructions.wz")
 APP_PACKAGES = ("model", "types", "hir", "nativeir", "valueops", "nativelayout")
 C_STAGES = ("syntax", "oracle", "wz", "branches")
@@ -338,6 +341,12 @@ def scratch_project():
     copied.append({"package": "test", "source": str(HERE / "main.wz"),
                    "target": str(project / "src/main.wz"),
                    "sha256": sha(HERE / "main.wz")})
+    # SH31 added interface/hirverify/nativeverify dependencies to the real
+    # nativeemit package.  Copy the import closure rather than a stale list.
+    try:
+        copied.extend(complete_import_closure(project / "src", SOURCE_ROOT))
+    except FileNotFoundError as error:
+        missing.append(str(error))
     if missing:
         raise Blocked("missing real app dependencies: " + ", ".join(missing),
                       [f"missing {SOURCE_ROOT / name}" for name in missing])

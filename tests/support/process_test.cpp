@@ -1,10 +1,24 @@
 #include "lang/support/process.hpp"
+#include "lang/support/publish.hpp"
 #include <cerrno>
 #include <csignal>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <system_error>
 #include <unistd.h>
 static void require(bool ok) { if (!ok) throw std::runtime_error("require failed"); }
+static std::string read_text(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    require(bool(in));
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+static void write_text(const std::filesystem::path& p, std::string_view content) {
+    std::ofstream out(p, std::ios::binary);
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    out.close();
+    require(bool(out));
+}
 static void emit(int fd, const std::string& s) {
     size_t offset = 0;
     while (offset < s.size()) {
@@ -28,4 +42,57 @@ int main(int argc, char** argv) {
     bool caught=false; try { lang::run_process({}); } catch(const std::invalid_argument&) { caught=true; } require(caught);
     caught=false; try { lang::run_process({std::string("x\0y",3)}); } catch(const std::invalid_argument&) { caught=true; } require(caught);
     caught=false; try { lang::run_process({"/nonexistent/lang-process-test-missing"}); } catch(const std::system_error& e) { caught=e.code().value()==ENOENT; } require(caught);
+
+    namespace fs = std::filesystem;
+    std::string tmp_pattern = (fs::temp_directory_path() / "lang-publish-test-XXXXXX").string();
+    require(::mkdtemp(tmp_pattern.data()) != nullptr);
+    const fs::path root(tmp_pattern);
+    struct Cleanup { fs::path p; ~Cleanup() { std::error_code ec; fs::remove_all(p, ec); } } cleanup{root};
+
+    // Fresh multi-file publish removes staging directory cleanly.
+    fs::path stage_path;
+    {
+        lang::StagingDir stage(root, ".test-stage-XXXXXX");
+        stage_path = stage.path();
+        write_text(stage.path() / "first", "v1-a");
+        write_text(stage.path() / "second", "v1-b");
+        lang::publish_staged_files(stage, root, {"first", "second"});
+    }
+    require(!fs::exists(stage_path));
+    require(read_text(root / "first") == "v1-a");
+    require(read_text(root / "second") == "v1-b");
+
+    // Missing staged second file rolls back overwrite of first file.
+    caught = false;
+    {
+        lang::StagingDir stage(root, ".test-stage-XXXXXX");
+        stage_path = stage.path();
+        write_text(stage.path() / "first", "v2-a");
+        try {
+            lang::publish_staged_files(stage, root, {"first", "second"});
+        } catch (const fs::filesystem_error&) {
+            caught = true;
+        }
+    }
+    require(caught);
+    require(!fs::exists(stage_path));
+    require(read_text(root / "first") == "v1-a");
+    require(read_text(root / "second") == "v1-b");
+
+    // Non-regular destination path rejects without touching existing sibling.
+    fs::create_directory(root / "dir_out");
+    caught = false;
+    {
+        lang::StagingDir stage(root, ".test-stage-XXXXXX");
+        write_text(stage.path() / "first", "v3-a");
+        write_text(stage.path() / "dir_out", "not-a-dir");
+        try {
+            lang::publish_staged_files(stage, root, {"first", "dir_out"});
+        } catch (const fs::filesystem_error&) {
+            caught = true;
+        }
+    }
+    require(caught);
+    require(read_text(root / "first") == "v1-a");
+    require(fs::is_directory(root / "dir_out"));
 }

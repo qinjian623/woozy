@@ -8,9 +8,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE.parent))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--woozyc', default=str(ROOT / 'build/woozy-stdlib-native/woozyc'))
 parser.add_argument('--toolchain-root', default=str(ROOT.parent / 'toolchains'))
@@ -78,6 +82,13 @@ try:
         inputs.append({'source': str(source), 'sha256': sha(source)})
     (PROJECT / 'src/main.wz').write_bytes((HERE / 'main.wz').read_bytes())
     inputs.append({'source': str(HERE / 'main.wz'), 'sha256': sha(HERE / 'main.wz')})
+    # SH31 added interface/digest imports to nativeemit/state.wz.  Copy only
+    # the real packages that the staged sources import, never a scaffold or a
+    # copy of an unrelated main-tree package.
+    skipped_existing = []
+    for record in complete_import_closure(PROJECT / 'src', SOURCE_ROOT,
+                                           skipped=skipped_existing):
+        inputs.append({'source': record['source'], 'sha256': record['sha256']})
     for source in [STAGE0, STAGE0.parent / 'native/lang_native_helper']:
         inputs.append({'source': str(source), 'sha256': sha(source)})
     (WORK / 'inputs.json').write_text(json.dumps(inputs, indent=2))
@@ -124,7 +135,8 @@ try:
     result = {'status': 'passed', 'scope': 'Wz shared text helpers only; no language emitter bodies',
               'work_dir': str(WORK),
               'llvm_ir_bytes': len(sources[0]), 'llvm_ir_sha256': hashlib.sha256(sources[0]).hexdigest(),
-              'data_layout': layout.decode(), 'records': records}
+              'data_layout': layout.decode(), 'skipped_existing_packages': skipped_existing,
+              'records': records}
 except Exception as error:
     result = {'status': 'failed', 'error': str(error), 'records': records}
     raise

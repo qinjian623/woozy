@@ -1,0 +1,72 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "add-package",
+  "description": "Add vendor/other, declare it in app/lang.toml, and call other.bonus() from main. dep stays unchanged.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app",
+      "other"
+    ],
+    "may_reuse_packages": [
+      "dep"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "12 -> 17",
+    "note": "The manifest and package set change. A new logical package must be loaded and linked; dep can be reused."
+  },
+  "actions": [
+    {
+      "op": "add",
+      "path": "vendor/other/lang.toml",
+      "old": null,
+      "new": {
+        "file": "new/vendor/other/lang.toml",
+        "sha256": "7ccfa097ec66491da310cb3aaf33bbab04488f231e8c4e78efbb1a2f89f1e010"
+      }
+    },
+    {
+      "op": "add",
+      "path": "vendor/other/src/lib.wz",
+      "old": null,
+      "new": {
+        "file": "new/vendor/other/src/lib.wz",
+        "sha256": "3acc2d21bd26305de3ee5283b9ce219e728aa4d853753e754553c60a88d0788d"
+      }
+    },
+    {
+      "op": "replace",
+      "path": "lang.toml",
+      "old": {
+        "file": "old/lang.toml",
+        "sha256": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5"
+      },
+      "new": {
+        "file": "new/lang.toml",
+        "sha256": "62b76437118ce5a7dd86ea9cf8645d947323a9583c09278b4395aa1d513f8bc6"
+      }
+    },
+    {
+      "op": "replace",
+      "path": "src/main.wz",
+      "old": {
+        "file": "old/src/main.wz",
+        "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+      },
+      "new": {
+        "file": "new/src/main.wz",
+        "sha256": "aa3c5192611f5d60732cbd681e99702a33d1b1e61a314302ff9bb251e6acc288"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 17,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

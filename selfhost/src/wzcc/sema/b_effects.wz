@@ -93,7 +93,7 @@ func b_plan_exit(state inout Checker, id usize, kind hir.ExitKind,
     let defers = vec.empty[usize]();
     for var index usize = vec.len(active); index > 0; index -= 1 {
         let candidate = active[index - 1];
-        if b_vec_contains(exited_scopes, state.m.nodes[candidate].scope) {
+        if b_vec_contains_unsorted(exited_scopes, state.m.nodes[candidate].scope) {
             vec.push(defers, candidate);
         }
     }
@@ -484,34 +484,31 @@ func b_body_find(state inout Checker, symbol_id usize)
     option.Option[model.NodeRef] throws Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    for entry in state.bodies {
-        if entry.symbol == symbol_id {
-            return option.Option[model.NodeRef].Some(entry.source);
-        }
-    }
-    return option.Option[model.NodeRef].None;
+    return a_body_get(state.bodies, symbol_id);
 }
 
 func b_template_id_set(state inout Checker, symbol_id usize, index usize) { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    var position usize = 0;
-    for position < vec.len(state.template_ids) &&
-          state.template_ids[position].symbol < symbol_id {
-        position += 1;
+    var low usize = 0;
+    var high = vec.len(state.template_ids);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if state.template_ids[mid].symbol < symbol_id { low = mid + 1; }
+        else { high = mid; }
     }
-    if position < vec.len(state.template_ids) &&
-       state.template_ids[position].symbol == symbol_id {
-        state.template_ids[position].index = index;
+    let n = vec.len(state.template_ids);
+    if low < n && state.template_ids[low].symbol == symbol_id {
+        state.template_ids[low].index = index;
         return;
     }
     vec.push(state.template_ids, TemplateIdEntry(symbol: symbol_id,
         index: index));
-    var cursor = vec.len(state.template_ids) - 1;
-    for cursor > position {
+    var cursor = n;
+    for cursor > low {
         state.template_ids[cursor] = state.template_ids[cursor - 1];
         cursor -= 1;
     }
-    state.template_ids[position] = TemplateIdEntry(symbol: symbol_id,
+    state.template_ids[low] = TemplateIdEntry(symbol: symbol_id,
         index: index);
 }
 

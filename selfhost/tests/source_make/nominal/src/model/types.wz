@@ -1,0 +1,14 @@
+package model;
+struct Hidden { key i32; }
+pub struct Pair { pub left i32; secret Hidden; pub right i64; }
+pub enum Choice { Value(value i32); Empty; }
+pub func pair() Pair { return Pair(left: 5, secret: Hidden(key: 10), right: 10); }
+pub func shift(value Pair) Pair {
+    return Pair(left: value.left + 2, secret: value.secret, right: value.right + 3);
+}
+pub func change(value Choice) Choice {
+    switch value {
+        case Choice.Value(n): return Choice.Value(n + 4);
+        case Choice.Empty: return Choice.Value(1);
+    }
+}

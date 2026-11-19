@@ -23,8 +23,7 @@ import "std/vec" as vec;
 
 pub func lower(input hirverify.VerifiedHirModule) nativeverify.VerifyResult {
     try {
-        let module = hirverify.snapshot(input);
-        let capabilities = hirverify.check_backend_capabilities(module);
+        let capabilities = hirverify.check_verified_capabilities(input);
         if !unit_success(capabilities) {
             return nativeverify.VerifyResult(state: capabilities.state,
                 failure: capabilities.failure,
@@ -46,16 +45,20 @@ pub func lower(input hirverify.VerifiedHirModule) nativeverify.VerifyResult {
                 diagnostics: diagnostics,
                 value: option.Option[nativeverify.VerifiedModule].None);
         }
+        let module = hirverify.snapshot(input);
         var output = nativeir.empty_module(module);
+        var shared = build_lower_shared(module);
+        // For a source worker, this is already its verified set of definitions.
         for function in module.functions {
-            var function_state = new_lower(module, function);
+            var function_state = new_lower_shared(module, inout shared,
+                function);
             // take_function has no return value; it rewrites state.f in place
             // (dead block/slot removal and id renumbering) exactly like the
             // C++ Lower::take() mutation of f.
             take_function(inout function_state);
             vec.push(output.functions, function_state.f);
         }
-        return nativeverify.verify(output);
+        return nativeverify.verify_lowered(input, output.functions);
     } catch error model.SupportError {
         var message = "";
         switch error {

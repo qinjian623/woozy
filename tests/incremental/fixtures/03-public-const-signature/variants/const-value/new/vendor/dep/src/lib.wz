@@ -1,0 +1,7 @@
+package dep;
+
+pub const STEP i32 = 5;
+
+pub func scale(value i32) i32 {
+    return value * STEP;
+}

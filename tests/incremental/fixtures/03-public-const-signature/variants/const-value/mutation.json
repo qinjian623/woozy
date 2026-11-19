@@ -1,0 +1,44 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "03-public-const-signature",
+  "variant": "const-value",
+  "description": "dep.STEP changes from 4 to 5 with type i32 unchanged; dep.scale and app source are unchanged.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_revalidate_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "16 -> 20",
+    "note": "Constant value is part of the module interface digest. The type is unchanged, so no new type error; the dependent app result changes.",
+    "must_recompile_or_relink": [
+      "app"
+    ]
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "3f2d10ddb5627f9bfc9fbf48bf3f74d2ce2bcca387c4ac4d1fa13002524417c5"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 20,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

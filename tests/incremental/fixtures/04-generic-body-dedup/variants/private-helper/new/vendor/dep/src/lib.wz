@@ -1,0 +1,12 @@
+package dep;
+
+func prefer_left() bool {
+    return false;
+}
+
+pub func choose[T](left T, right T) T {
+    if prefer_left() {
+        return left;
+    }
+    return right;
+}

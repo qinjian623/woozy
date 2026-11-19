@@ -1,0 +1,5 @@
+package libcore;
+
+pub func bump(value i32) i32 {
+    return value + 1;
+}

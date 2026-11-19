@@ -1,9 +1,11 @@
 package nativeemit;
 
 import "app/wzcc/model" as model;
+import "app/wzcc/interface" as interface;
 import "app/wzcc/nativeir" as nativeir;
 import "app/wzcc/types" as types;
 import "std/option" as option;
+import "std/vec" as vec;
 
 pub const RUNTIME_ABI string = "lang-native-scalars/1";
 pub const OWNERSHIP_RUNTIME_ABI string = "lang-native-values/1";
@@ -95,6 +97,12 @@ pub struct SourceFunction {
     pub hir_index option.Option[usize];
     pub code Value;
 }
+
+// An imported public function declared by the verified external boundary.
+pub struct ExternalSource {
+    pub symbol usize;
+    pub signature usize;
+}
 pub struct ValueBinding { pub value_id usize; pub type_id usize; pub value Value; }
 pub struct ValueConstant { pub value_id usize; pub value Value; }
 pub struct SlotStorage {
@@ -107,11 +115,14 @@ pub struct IncomingValue {
     pub block usize;
     pub type_id usize;
     pub address option.Option[Value];
+    pub end_after_load bool;
 }
 pub struct TryOutput {
     pub block usize;
     pub value option.Option[Value];
     pub error Value;
+    pub start_value bool;
+    pub start_error bool;
 }
 pub struct BState {
     pub layouts Vec[TypeLayout];
@@ -259,6 +270,10 @@ pub struct Emitter {
     pub d DState;
     pub e EState;
     pub gc_entry_symbol option.Option[usize];
+    pub package_selection option.Option[usize];
+    pub worker_instance_linkage string;
+    pub identities option.Option[interface.Keys];
+    pub source_order Vec[usize];
 }
 
 pub func empty_frame() FunctionFrame {
@@ -273,6 +288,8 @@ pub func new_emitter(input nativeir.Module, options Options) Emitter throws Erro
         throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
             "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only");
     }
+    let source_order = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(input.functions); index += 1 { vec.push(source_order, index); }
     return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: DATA_LAYOUT,
         type_definitions: [], declarations: [], globals: [], metadata: [], functions: [],
         cursor: Cursor(function_index: option.Option[usize].None, block_index: option.Option[usize].None),
@@ -287,5 +304,5 @@ pub func new_emitter(input nativeir.Module, options Options) Emitter throws Erro
             gc_program_required: false, closure_owns_c_resource: false, trait_box_owns_c_resource: false),
         e: EState(c_records: [], callback_bridges: [], registration_dispatchers: [],
             used_callables: [], used_resources: [], used_callbacks: [], adapter_source: ""),
-        gc_entry_symbol: option.Option[usize].None);
+        gc_entry_symbol: option.Option[usize].None, package_selection: option.Option[usize].None, worker_instance_linkage: "", identities: option.Option[interface.Keys].None, source_order: source_order);
 }

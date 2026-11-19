@@ -1,0 +1,30 @@
+package app;
+
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func check_effect_negative(parsed model.ParseResult) i32 throws os.Error {
+    let built = build_throw(parsed);
+    var bad = fallback_module();
+    switch copy_fixture(built.module) {
+        case option.Option.Some(value): bad = value;
+        case option.Option.None: return 1;
+    }
+    let valid_source_effect = hirverify.test_source_effect(bad, false);
+    bad.nodes[1].data = hir.NodeData.Block(hir.Block());
+    let rejects_erased_throw = hirverify.test_source_effect(bad, true);
+    let source_failure = check(valid_source_effect && rejects_erased_throw,
+        "source-effect-negative-throw");
+    switch copy_fixture(built.module) {
+        case option.Option.Some(value): bad = value;
+        case option.Option.None: return 1;
+    }
+    bad.nodes[1].errors = [];
+    let broken = hirverify.verify_types(bad);
+    return source_failure + check(failed_internal(broken) && vec.len(broken.diagnostics) == 1 &&
+        broken.diagnostics[0].code == "E_IR_INVALID", "effect-set-negative-throw");
+}

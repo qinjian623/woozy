@@ -1,0 +1,7 @@
+package cycleb;
+
+import "dep" as dep;
+
+pub func value() i32 {
+    return dep.answer();
+}

@@ -143,7 +143,7 @@ try:
         'schema_version=1\n[package]\nname="nativeemit_b_harness"\nsource_root="src"\n'
         'entry="app"\n[build]\nbackend="native"\nword_bits=64\n')
 
-    for package in ['model', 'types', 'hir', 'nativeir']:
+    for package in ['model', 'types', 'hir', 'nativeir', 'interface', 'digest']:
         copy_package(package)
 
     # Production Root text/state plus every B file comes from the B owner.

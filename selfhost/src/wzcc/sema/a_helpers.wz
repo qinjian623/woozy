@@ -124,116 +124,268 @@ func a_key_less(left NodeKey,right NodeKey) bool {
     return left.node<right.node;
 }
 func a_node_symbol_get(entries Vec[NodeSymbolEntry],key NodeKey) option.Option[usize] {
-    for entry in entries {if same_node_key(entry.key,key) {return option.Option[usize].Some(entry.symbol);}}
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_key_less(entries[mid].key,key) {low=mid+1;} else {high=mid;}
+    }
+    if low<vec.len(entries) && same_node_key(entries[low].key,key) {
+        return option.Option[usize].Some(entries[low].symbol);
+    }
     return option.Option[usize].None;
 }
+func a_usize_lower_bound(entries Vec[usize],value usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid]<value {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+func a_symbol_type_pos(entries Vec[SymbolTypeEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
 func a_symbol_type_get(entries Vec[SymbolTypeEntry],symbol usize) option.Option[usize] {
-    for entry in entries {if entry.symbol==symbol {return option.Option[usize].Some(entry.type_id);}}
+    let pos=a_symbol_type_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[usize].Some(entries[pos].type_id);
+    }
     return option.Option[usize].None;
 }
 func a_symbol_type_set(entries Vec[SymbolTypeEntry],symbol usize,type_id usize) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].symbol==symbol {entries[index].type_id=type_id;return;}
-    }
-    vec.push(entries,SymbolTypeEntry(symbol:symbol,type_id:type_id));
+    let pos=a_symbol_type_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].type_id=type_id;return;}
+    vec.push(entries,SymbolTypeEntry(symbol:0,type_id:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=SymbolTypeEntry(symbol:symbol,type_id:type_id);
 }
 func a_symbol_type_remove(entries Vec[SymbolTypeEntry],symbol usize) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].symbol==symbol {
-            var cursor=index;
-            for cursor+1<vec.len(entries) {entries[cursor]=entries[cursor+1];cursor+=1;}
-            var dropped=vec.pop(entries);
-            return;
-        }
+    let pos=a_symbol_type_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos>=n || entries[pos].symbol!=symbol {return;}
+    var cursor=pos;for cursor+1<n {entries[cursor]=entries[cursor+1];cursor+=1;}
+    var dropped=vec.pop(entries);
+}
+func a_trait_signature_pos(entries Vec[TraitSignatureEntry],method usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].method<method {low=mid+1;} else {high=mid;}
     }
+    return low;
 }
 func a_trait_signature_get(entries Vec[TraitSignatureEntry],method usize) option.Option[TraitSignatureEntry] {
-    for entry in entries {if entry.method==method {return option.Option[TraitSignatureEntry].Some(entry);}}
+    let pos=a_trait_signature_pos(entries,method);
+    if pos<vec.len(entries) && entries[pos].method==method {
+        return option.Option[TraitSignatureEntry].Some(entries[pos]);
+    }
     return option.Option[TraitSignatureEntry].None;
 }
 func a_trait_signature_set(entries Vec[TraitSignatureEntry],method usize,trait_self usize,callback bool) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].method==method {
-            entries[index].trait_self=trait_self;
-            entries[index].trait_self_callback=callback;
-            return;
-        }
+    let pos=a_trait_signature_pos(entries,method);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].method==method {
+        entries[pos].trait_self=trait_self;
+        entries[pos].trait_self_callback=callback;
+        return;
     }
-    vec.push(entries,TraitSignatureEntry(method:method,trait_self:trait_self,trait_self_callback:callback));
+    vec.push(entries,TraitSignatureEntry(method:0,trait_self:0,trait_self_callback:false));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=TraitSignatureEntry(method:method,trait_self:trait_self,trait_self_callback:callback);
+}
+func a_generic_params_pos(entries Vec[GenericParamsEntry],owner usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].owner<owner {low=mid+1;} else {high=mid;}
+    }
+    return low;
 }
 func a_generic_params_get(entries Vec[GenericParamsEntry],owner usize) option.Option[Vec[hir.GenericParam]] {
-    for entry in entries {if entry.owner==owner {return option.Option[Vec[hir.GenericParam]].Some(entry.params);}}
+    let pos=a_generic_params_pos(entries,owner);
+    if pos<vec.len(entries) && entries[pos].owner==owner {
+        return option.Option[Vec[hir.GenericParam]].Some(entries[pos].params);
+    }
     return option.Option[Vec[hir.GenericParam]].None;
 }
 func a_generic_params_set(entries Vec[GenericParamsEntry],owner usize,params Vec[hir.GenericParam]) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].owner==owner {entries[index].params=params;return;}
+    let pos=a_generic_params_pos(entries,owner);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].owner==owner {entries[pos].params=params;return;}
+    vec.push(entries,GenericParamsEntry(owner:0,params:[]));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=GenericParamsEntry(owner:owner,params:params);
+}
+func a_parameters_pos(entries Vec[ParametersEntry],owner usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].owner<owner {low=mid+1;} else {high=mid;}
     }
-    vec.push(entries,GenericParamsEntry(owner:owner,params:params));
+    return low;
 }
 func a_parameters_get(entries Vec[ParametersEntry],owner usize) option.Option[Vec[hir.Parameter]] {
-    for entry in entries {if entry.owner==owner {return option.Option[Vec[hir.Parameter]].Some(entry.values);}}
+    let pos=a_parameters_pos(entries,owner);
+    if pos<vec.len(entries) && entries[pos].owner==owner {
+        return option.Option[Vec[hir.Parameter]].Some(entries[pos].values);
+    }
     return option.Option[Vec[hir.Parameter]].None;
 }
+func a_parameters_ensure_slot(entries Vec[ParametersEntry],owner usize) usize {
+    let pos=a_parameters_pos(entries,owner);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].owner==owner {return pos;}
+    vec.push(entries,ParametersEntry(owner:0,values:[]));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=ParametersEntry(owner:owner,values:vec.empty[hir.Parameter]());
+    return pos;
+}
 func a_parameters_ensure(entries Vec[ParametersEntry],owner usize) {
-    for entry in entries {if entry.owner==owner {return;}}
-    vec.push(entries,ParametersEntry(owner:owner,values:vec.empty[hir.Parameter]()));
+    let ignored=a_parameters_ensure_slot(entries,owner);
 }
 func a_parameters_push(entries Vec[ParametersEntry],owner usize,value hir.Parameter) {
-    a_parameters_ensure(entries,owner);
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].owner==owner {vec.push(entries[index].values,value);return;}
+    let pos=a_parameters_ensure_slot(entries,owner);
+    vec.push(entries[pos].values,value);
+}
+func a_bound_pos(entries Vec[BoundEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
     }
+    return low;
 }
 func a_bound_get(entries Vec[BoundEntry],symbol usize) option.Option[option.Option[hir.TraitRef]] {
-    for entry in entries {if entry.symbol==symbol {return option.Option[option.Option[hir.TraitRef]].Some(entry.trait_ref);}}
+    let pos=a_bound_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[option.Option[hir.TraitRef]].Some(entries[pos].trait_ref);
+    }
     return option.Option[option.Option[hir.TraitRef]].None;
 }
 func a_bound_set(entries Vec[BoundEntry],symbol usize,trait_ref option.Option[hir.TraitRef]) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].symbol==symbol {entries[index].trait_ref=trait_ref;return;}
+    let pos=a_bound_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].trait_ref=trait_ref;return;}
+    vec.push(entries,BoundEntry(symbol:0,trait_ref:option.Option[hir.TraitRef].None));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=BoundEntry(symbol:symbol,trait_ref:trait_ref);
+}
+func a_body_pos(entries Vec[BodyEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
     }
-    vec.push(entries,BoundEntry(symbol:symbol,trait_ref:trait_ref));
+    return low;
 }
 func a_body_get(entries Vec[BodyEntry],symbol usize) option.Option[model.NodeRef] {
-    for entry in entries {if entry.symbol==symbol {return option.Option[model.NodeRef].Some(entry.source);}}
+    let pos=a_body_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[model.NodeRef].Some(entries[pos].source);
+    }
     return option.Option[model.NodeRef].None;
 }
 func a_body_set(entries Vec[BodyEntry],symbol usize,source model.NodeRef) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].symbol==symbol {entries[index].source=source;return;}
-    }
-    vec.push(entries,BodyEntry(symbol:symbol,source:source));
+    let pos=a_body_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].source=source;return;}
+    vec.push(entries,BodyEntry(symbol:0,source:source));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=BodyEntry(symbol:symbol,source:source);
 }
 func a_template_get(entries Vec[TemplateIdEntry],symbol usize) option.Option[usize] {
-    for entry in entries {if entry.symbol==symbol {return option.Option[usize].Some(entry.index);}}
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    if low<vec.len(entries) && entries[low].symbol==symbol {
+        return option.Option[usize].Some(entries[low].index);
+    }
     return option.Option[usize].None;
 }
-func a_instance_get(entries Vec[InstanceEntry],key InstanceKey) option.Option[usize] {
-    for entry in entries {
-        if entry.key.origin==key.origin && a_ids_equal(entry.key.args,key.args) {
-            return option.Option[usize].Some(entry.symbol);
+func a_ids_cmp(left Vec[usize],right Vec[usize]) i32 {
+    if vec.len(left)!=vec.len(right) {
+        if vec.len(left)<vec.len(right) {return -1;}
+        return 1;
+    }
+    for var index usize=0;index<vec.len(left);index+=1 {
+        if left[index]!=right[index] {
+            if left[index]<right[index] {return -1;}
+            return 1;
         }
+    }
+    return 0;
+}
+func a_instance_key_cmp(left InstanceKey,right InstanceKey) i32 {
+    if left.origin!=right.origin {
+        if left.origin<right.origin {return -1;}
+        return 1;
+    }
+    return a_ids_cmp(left.args,right.args);
+}
+func a_instance_pos(entries Vec[InstanceEntry],key InstanceKey) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_instance_key_cmp(entries[mid].key,key)<0 {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+func a_instance_get(entries Vec[InstanceEntry],key InstanceKey) option.Option[usize] {
+    let pos=a_instance_pos(entries,key);
+    if pos<vec.len(entries) && a_instance_key_cmp(entries[pos].key,key)==0 {
+        return option.Option[usize].Some(entries[pos].symbol);
     }
     return option.Option[usize].None;
 }
 func a_instance_set(entries Vec[InstanceEntry],key InstanceKey,symbol usize) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].key.origin==key.origin && a_ids_equal(entries[index].key.args,key.args) {
-            entries[index].symbol=symbol;return;
-        }
+    let pos=a_instance_pos(entries,key);
+    let n=vec.len(entries);
+    if pos<n && a_instance_key_cmp(entries[pos].key,key)==0 {entries[pos].symbol=symbol;return;}
+    vec.push(entries,InstanceEntry(key:key,symbol:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=InstanceEntry(key:key,symbol:symbol);
+}
+func a_trait_key_cmp(left TraitKey,right TraitKey) i32 {
+    if left.actual!=right.actual {
+        if left.actual<right.actual {return -1;}
+        return 1;
     }
-    vec.push(entries,InstanceEntry(key:key,symbol:symbol));
+    if left.declaration!=right.declaration {
+        if left.declaration<right.declaration {return -1;}
+        return 1;
+    }
+    return a_ids_cmp(left.args,right.args);
+}
+func a_trait_key_pos(entries Vec[TraitResultEntry],key TraitKey) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_trait_key_cmp(entries[mid].key,key)<0 {low=mid+1;} else {high=mid;}
+    }
+    return low;
 }
 func a_trait_key_get(entries Vec[TraitResultEntry],key TraitKey) option.Option[bool] {
-    for entry in entries {if a_trait_key_equal(entry.key,key) {return option.Option[bool].Some(entry.value);}}
+    let pos=a_trait_key_pos(entries,key);
+    if pos<vec.len(entries) && a_trait_key_cmp(entries[pos].key,key)==0 {
+        return option.Option[bool].Some(entries[pos].value);
+    }
     return option.Option[bool].None;
 }
 func a_trait_results_set(entries Vec[TraitResultEntry],key TraitKey,value bool) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if a_trait_key_equal(entries[index].key,key) {entries[index].value=value;return;}
-    }
-    vec.push(entries,TraitResultEntry(key:key,value:value));
+    let pos=a_trait_key_pos(entries,key);
+    let n=vec.len(entries);
+    if pos<n && a_trait_key_cmp(entries[pos].key,key)==0 {entries[pos].value=value;return;}
+    vec.push(entries,TraitResultEntry(key:key,value:false));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=TraitResultEntry(key:key,value:value);
 }
 func a_trait_key_equal(left TraitKey,right TraitKey) bool {
     return left.actual==right.actual && left.declaration==right.declaration && a_ids_equal(left.args,right.args);
@@ -256,36 +408,67 @@ func a_trait_keys_remove(entries Vec[TraitKey],key TraitKey) {
     }
 }
 func a_contains(entries Vec[usize],value usize) bool {
-    for entry in entries {if entry==value {return true;}}
-    return false;
+    let pos=a_usize_lower_bound(entries,value);
+    return pos<vec.len(entries) && entries[pos]==value;
 }
 func a_insert(entries Vec[usize],value usize) bool {
-    if a_contains(entries,value) {return false;}
-    vec.push(entries,value);return true;
+    let pos=a_usize_lower_bound(entries,value);
+    let n=vec.len(entries);
+    if pos<n && entries[pos]==value {return false;}
+    vec.push(entries,0);
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=value;
+    return true;
 }
 func a_contains_string(entries Vec[string],value string) bool {
     for entry in entries {if entry==value {return true;}}
     return false;
 }
+func a_nominal_id_pos(entries Vec[NominalIdEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
 func a_nominal_id_get(entries Vec[NominalIdEntry],symbol usize) option.Option[usize] {
-    for entry in entries {if entry.symbol==symbol {return option.Option[usize].Some(entry.index);}}
+    let pos=a_nominal_id_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[usize].Some(entries[pos].index);
+    }
     return option.Option[usize].None;
 }
 func a_nominal_id_set(entries Vec[NominalIdEntry],symbol usize,index usize) {
-    for var cursor usize=0;cursor<vec.len(entries);cursor+=1 {
-        if entries[cursor].symbol==symbol {entries[cursor].index=index;return;}
+    let pos=a_nominal_id_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].index=index;return;}
+    vec.push(entries,NominalIdEntry(symbol:0,index:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=NominalIdEntry(symbol:symbol,index:index);
+}
+func a_c_named_pos(entries Vec[CNamedTypeEntry],c_type u32) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].c_type<c_type {low=mid+1;} else {high=mid;}
     }
-    vec.push(entries,NominalIdEntry(symbol:symbol,index:index));
+    return low;
 }
 func a_c_named_get(entries Vec[CNamedTypeEntry],c_type u32) option.Option[usize] {
-    for entry in entries {if entry.c_type==c_type {return option.Option[usize].Some(entry.type_id);}}
+    let pos=a_c_named_pos(entries,c_type);
+    if pos<vec.len(entries) && entries[pos].c_type==c_type {
+        return option.Option[usize].Some(entries[pos].type_id);
+    }
     return option.Option[usize].None;
 }
 func a_c_named_set(entries Vec[CNamedTypeEntry],c_type u32,type_id usize) {
-    for var index usize=0;index<vec.len(entries);index+=1 {
-        if entries[index].c_type==c_type {entries[index].type_id=type_id;return;}
-    }
-    vec.push(entries,CNamedTypeEntry(c_type:c_type,type_id:type_id));
+    let pos=a_c_named_pos(entries,c_type);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].c_type==c_type {entries[pos].type_id=type_id;return;}
+    vec.push(entries,CNamedTypeEntry(c_type:0,type_id:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=CNamedTypeEntry(c_type:c_type,type_id:type_id);
 }
 func a_impl_index_of(state inout Checker,target usize) option.Option[usize] throws Error {
     for var index usize=0;index<vec.len(state.m.impls);index+=1 {

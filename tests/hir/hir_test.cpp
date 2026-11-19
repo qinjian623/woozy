@@ -1118,6 +1118,26 @@ int main() {
     f.project->modules.clear();
     require(dump(*r.value) == old_dump && verify(r.value->module()).success(),
             "retained mutable aliases changed verified snapshot");
+    require(r.value->mode() == VerifyMode::backend,
+            "default verify mode must be backend");
+    require(check_backend_capabilities(*r.value).success(),
+            "backend-verified module fast capability check failed");
+    {
+      std::stop_source stop;
+      stop.request_stop();
+      require(check_backend_capabilities(*r.value, stop.get_token()).state ==
+                  PhaseState::cancelled,
+              "verified capability check must respect cancellation");
+    }
+    {
+      auto static_ok =
+          verify(r.value->module(), {}, VerifyMode::static_only);
+      require(static_ok.success() &&
+                  static_ok.value->mode() == VerifyMode::static_only,
+              "static_only verify mode check");
+      require(check_backend_capabilities(*static_ok.value).success(),
+              "static_only VerifiedHirModule delegation check");
+    }
     std::cout << "HIR passed: valid function/direct+value calls/loop, " << cases
               << " corruptions, cancellation, immutable snapshot, "
                  "deterministic dump\n";

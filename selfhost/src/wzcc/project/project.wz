@@ -1,5 +1,6 @@
 package project;
 import "app/wzcc/model" as model;
+import "app/wzcc/frontcache" as frontcache;
 import "app/wzcc/source" as source;
 import "app/wzcc/input" as input;
 import "app/wzcc/paths" as paths;
@@ -43,6 +44,7 @@ func standard_library() string throws Stop {
 }
 struct Claim { name string; identity string; }
 struct Loader {
+    cache frontcache.Context;
     options model.ProjectOptions;
     project model.Project;
     store model.BindingStore;
@@ -389,13 +391,7 @@ func resolve(state inout Loader,manager inout source.Manager,name string,
         let reading=input.read(filename,inout manager);
         append_diagnostics(inout state,reading.diagnostics,reading.failure);
         if !render.succeeded(reading.state,reading.has_value,reading.diagnostics) {throw Stop.Abort;}
-        let lexed=lexer.lex(reading.value);
-        append_diagnostics(inout state,lexed.diagnostics,lexed.failure);
-        if !render.succeeded(lexed.state,lexed.has_value,lexed.diagnostics) {throw Stop.Abort;}
-        let parsed=parser.parse(lexed);
-        // parse already includes lex diagnostics; lex was clean at this point.
-        append_diagnostics(inout state,parsed.diagnostics,parsed.failure);
-        if !render.succeeded(parsed.state,parsed.has_value,parsed.diagnostics) {throw Stop.Abort;}
+        let parsed=parse_input(inout state,reading.value);
         let package_node=parsed.nodes[parsed.nodes[parsed.root].children[0]];
         let package_name=parsed.lexed.tokens[package_node.token_begin+1].spelling;
         if vec.len(state.project.modules[id].files)==0 {state.project.modules[id].package_name=package_name;}
@@ -453,8 +449,26 @@ func cycle_visit(state inout Loader,id usize,colors Vec[u8],stack Vec[usize],edg
     }
     let removed=vec.pop(stack);colors[id]=2;
 }
+func parse_input(state inout Loader, input_source model.Source) model.ParseResult throws Stop {
+    switch frontcache.load_ast(state.cache, input_source) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {}
+    }
+    let lexed = lexer.lex(input_source);
+    append_diagnostics(inout state, lexed.diagnostics, lexed.failure);
+    if !render.succeeded(lexed.state, lexed.has_value, lexed.diagnostics) { throw Stop.Abort; }
+    let parsed = parser.parse(lexed);
+    append_diagnostics(inout state, parsed.diagnostics, parsed.failure);
+    if !render.succeeded(parsed.state, parsed.has_value, parsed.diagnostics) { throw Stop.Abort; }
+    frontcache.store_ast(state.cache, parsed);
+    return parsed;
+}
 pub func load(options model.ProjectOptions,manager inout source.Manager) model.ProjectResult {
-    var state=Loader(options:options,project:model.empty_project(),store:model.binding_store(),
+    return load_cached(options, inout manager, frontcache.context("", ""));
+}
+pub func load_cached(options model.ProjectOptions,manager inout source.Manager,cache frontcache.Context) model.ProjectResult {
+
+    var state=Loader(cache:cache,options:options,project:model.empty_project(),store:model.binding_store(),
         diagnostics:[],failure:model.FailureKind.Source,configs:[],identities:[],claims:[]);
     var has_value=false;
     try {

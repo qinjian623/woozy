@@ -82,6 +82,7 @@ struct Derived {
     records hir.Ownership;
     exits Vec[Vec[hir.ExitPlan]];
     checked_nodes Vec[usize];
+    checked_node Vec[bool];
 }
 
 struct Analysis {
@@ -103,6 +104,15 @@ struct Analysis {
     full_expression_root option.Option[usize];
     full_expression_effects Vec[EffectEntry];
     values Vec[ValueEntry];
+    local_map Vec[i64];
+    declaration_map Vec[i64];
+    scope_node_map Vec[i64];
+    scope_locals_map Vec[i64];
+    prefix_map Vec[i64];
+    subject_map Vec[i64];
+    effect_map Vec[i64];
+    value_map Vec[i64];
+    current_fn_locals Vec[usize];
 }
 
 func empty_ownership() hir.Ownership {
@@ -137,11 +147,24 @@ func copy_state(state State) State {
     return State(entries: entries);
 }
 
-func state_index(state State, symbol usize) i64 {
-    for var index usize = 0; index < vec.len(state.entries); index += 1 {
-        if state.entries[index].symbol == symbol {
-            return i64(index);
+func state_lower_bound(entries Vec[StateEntry], symbol usize) usize {
+    var low usize = 0;
+    var high = vec.len(entries);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if entries[mid].symbol < symbol {
+            low = mid + 1;
+        } else {
+            high = mid;
         }
+    }
+    return low;
+}
+
+func state_index(state State, symbol usize) i64 {
+    let pos = state_lower_bound(state.entries, symbol);
+    if pos < vec.len(state.entries) && state.entries[pos].symbol == symbol {
+        return i64(pos);
     }
     return -1;
 }
@@ -155,34 +178,43 @@ func state_get(state State, symbol usize) u32 {
 }
 
 func state_set(state State, symbol usize, value u32) {
-    let found = state_index(state, symbol);
-    if found < 0 {
-        vec.push(state.entries, StateEntry(symbol: symbol, value: value));
-    } else {
-        state.entries[usize(found)].value = value;
+    let pos = state_lower_bound(state.entries, symbol);
+    let n = vec.len(state.entries);
+    if pos < n && state.entries[pos].symbol == symbol {
+        state.entries[pos].value = value;
+        return;
     }
+    vec.push(state.entries, StateEntry(symbol: 0, value: 0));
+    var cur = n;
+    for cur > pos {
+        state.entries[cur] = state.entries[cur - 1];
+        cur -= 1;
+    }
+    state.entries[pos] = StateEntry(symbol: symbol, value: value);
 }
 
 func state_erase(state State, symbol usize) {
-    let found = state_index(state, symbol);
-    if found < 0 {
+    let pos = state_lower_bound(state.entries, symbol);
+    let n = vec.len(state.entries);
+    if pos >= n || state.entries[pos].symbol != symbol {
         return;
     }
-    let position = usize(found);
-    let last = vec.len(state.entries) - 1;
-    if position != last {
-        state.entries[position] = state.entries[last];
+    var cur = pos;
+    for cur + 1 < n {
+        state.entries[cur] = state.entries[cur + 1];
+        cur += 1;
     }
     let discarded = vec.pop(state.entries);
 }
 
 func state_equal(left State, right State) bool {
-    if vec.len(left.entries) != vec.len(right.entries) {
+    let n = vec.len(left.entries);
+    if n != vec.len(right.entries) {
         return false;
     }
-    for entry in left.entries {
-        let found = state_index(right, entry.symbol);
-        if found < 0 || right.entries[usize(found)].value != entry.value {
+    for var index usize = 0; index < n; index += 1 {
+        if left.entries[index].symbol != right.entries[index].symbol ||
+           left.entries[index].value != right.entries[index].value {
             return false;
         }
     }
@@ -195,14 +227,40 @@ func flow_join(flow inout Flow, source State) {
         flow.has_normal = true;
         return;
     }
-    for entry in source.entries {
-        let found = state_index(flow.normal, entry.symbol);
-        if found < 0 {
-            vec.push(flow.normal.entries, entry);
+    let left = flow.normal.entries;
+    let right = source.entries;
+    let n_left = vec.len(left);
+    let n_right = vec.len(right);
+    if n_right == 0 {
+        return;
+    }
+    let merged = vec.empty[StateEntry]();
+    vec.reserve(merged, n_left + n_right);
+    var i usize = 0;
+    var j usize = 0;
+    for i < n_left && j < n_right {
+        if left[i].symbol < right[j].symbol {
+            vec.push(merged, left[i]);
+            i += 1;
+        } else if right[j].symbol < left[i].symbol {
+            vec.push(merged, right[j]);
+            j += 1;
         } else {
-            flow.normal.entries[usize(found)].value |= entry.value;
+            vec.push(merged, StateEntry(symbol: left[i].symbol,
+                value: left[i].value | right[j].value));
+            i += 1;
+            j += 1;
         }
     }
+    for i < n_left {
+        vec.push(merged, left[i]);
+        i += 1;
+    }
+    for j < n_right {
+        vec.push(merged, right[j]);
+        j += 1;
+    }
+    flow.normal = State(entries: merged);
 }
 
 func flow_set_normal(flow inout Flow, source State) {
@@ -232,7 +290,7 @@ func flow_edges(to Flow, from Flow) {
     }
 }
 
-func ids_contains(values Vec[usize], value usize) bool {
+func ids_contains_unsorted(values Vec[usize], value usize) bool {
     for item in values {
         if item == value {
             return true;
@@ -241,12 +299,53 @@ func ids_contains(values Vec[usize], value usize) bool {
     return false;
 }
 
+func ids_lower_bound(values Vec[usize], value usize) usize {
+    var low usize = 0;
+    var high = vec.len(values);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if values[mid] < value {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    let pos = ids_lower_bound(values, value);
+    return pos < vec.len(values) && values[pos] == value;
+}
+
 func ids_insert(values Vec[usize], value usize) bool {
-    if ids_contains(values, value) {
+    let pos = ids_lower_bound(values, value);
+    let n = vec.len(values);
+    if pos < n && values[pos] == value {
         return false;
     }
-    vec.push(values, value);
+    vec.push(values, 0);
+    var cur = n;
+    for cur > pos {
+        values[cur] = values[cur - 1];
+        cur -= 1;
+    }
+    values[pos] = value;
     return true;
+}
+
+func ids_remove(values Vec[usize], value usize) {
+    let pos = ids_lower_bound(values, value);
+    let n = vec.len(values);
+    if pos >= n || values[pos] != value {
+        return;
+    }
+    var cur = pos;
+    for cur + 1 < n {
+        values[cur] = values[cur + 1];
+        cur += 1;
+    }
+    let discarded = vec.pop(values);
 }
 
 func int_index(values Vec[usize], value usize) i64 {
@@ -256,19 +355,6 @@ func int_index(values Vec[usize], value usize) i64 {
         }
     }
     return -1;
-}
-
-func int_remove(values Vec[usize], value usize) {
-    let found = int_index(values, value);
-    if found < 0 {
-        return;
-    }
-    let position = usize(found);
-    let last = vec.len(values) - 1;
-    if position != last {
-        values[position] = values[last];
-    }
-    let discarded = vec.pop(values);
 }
 
 func node_at(analysis Analysis, id usize) hir.HirNode throws Problem {
@@ -301,9 +387,12 @@ func support_error_message(error model.SupportError) string {
     }
 }
 
-func value_entry_lookup(entries Vec[ValueEntry], type_id usize) i64 {
-    for var index usize = 0; index < vec.len(entries); index += 1 {
-        if entries[index].type_id == type_id {
+func value_entry_lookup(analysis Analysis, type_id usize) i64 {
+    if type_id < vec.len(analysis.value_map) {
+        return analysis.value_map[type_id];
+    }
+    for var index usize = 0; index < vec.len(analysis.values); index += 1 {
+        if analysis.values[index].type_id == type_id {
             return i64(index);
         }
     }
@@ -328,7 +417,7 @@ func copy_value_ops(operations hir.ValueOps) hir.ValueOps {
 }
 
 func classify(analysis inout Analysis, id usize) hir.ValueOps throws Problem {
-    let known = value_entry_lookup(analysis.values, id);
+    let known = value_entry_lookup(analysis, id);
     if known >= 0 {
         return copy_value_ops(analysis.values[usize(known)].operations);
     }
@@ -341,8 +430,12 @@ func classify(analysis inout Analysis, id usize) hir.ValueOps throws Problem {
         // traversal budgets and preserves its original code/message.
         throw internal_problem(support_error_message(error));
     }
+    let slot = vec.len(analysis.values);
     vec.push(analysis.values,
         ValueEntry(type_id: id, operations: operations));
+    if id < vec.len(analysis.value_map) {
+        analysis.value_map[id] = i64(slot);
+    }
     return copy_value_ops(operations);
 }
 
@@ -564,6 +657,9 @@ func node_continue(node hir.HirNode) option.Option[hir.Continue] {
 }
 
 func local_lookup(analysis Analysis, symbol usize) i64 {
+    if symbol < vec.len(analysis.local_map) {
+        return analysis.local_map[symbol];
+    }
     for var index usize = 0; index < vec.len(analysis.locals); index += 1 {
         if analysis.locals[index].symbol == symbol {
             return i64(index);
@@ -581,6 +677,9 @@ func local_of(analysis Analysis, symbol usize) hir.LocalLifetime throws Problem 
 }
 
 func declaration_lookup(analysis Analysis, symbol usize) i64 {
+    if symbol < vec.len(analysis.declaration_map) {
+        return analysis.declaration_map[symbol];
+    }
     for var index usize = 0; index < vec.len(analysis.declarations); index += 1 {
         if analysis.declarations[index].symbol == symbol {
             return i64(index);
@@ -590,6 +689,9 @@ func declaration_lookup(analysis Analysis, symbol usize) i64 {
 }
 
 func scope_node_lookup(analysis Analysis, scope usize) i64 {
+    if scope < vec.len(analysis.scope_node_map) {
+        return analysis.scope_node_map[scope];
+    }
     for var index usize = 0; index < vec.len(analysis.scope_nodes); index += 1 {
         if analysis.scope_nodes[index].scope == scope {
             return i64(index);
@@ -599,6 +701,9 @@ func scope_node_lookup(analysis Analysis, scope usize) i64 {
 }
 
 func scope_locals_lookup(analysis Analysis, scope usize) i64 {
+    if scope < vec.len(analysis.scope_locals_map) {
+        return analysis.scope_locals_map[scope];
+    }
     for var index usize = 0; index < vec.len(analysis.scope_locals); index += 1 {
         if analysis.scope_locals[index].scope == scope {
             return i64(index);
@@ -613,12 +718,19 @@ func scope_locals_for(analysis inout Analysis, scope usize) Vec[usize] {
         return analysis.scope_locals[usize(found)].symbols;
     }
     let symbols = vec.empty[usize]();
+    let slot = vec.len(analysis.scope_locals);
     vec.push(analysis.scope_locals,
         ScopeLocalsEntry(scope: scope, symbols: symbols));
+    if scope < vec.len(analysis.scope_locals_map) {
+        analysis.scope_locals_map[scope] = i64(slot);
+    }
     return symbols;
 }
 
 func prefix_lookup(analysis Analysis, node usize) i64 {
+    if node < vec.len(analysis.prefix_map) {
+        return analysis.prefix_map[node];
+    }
     for var index usize = 0; index < vec.len(analysis.failure_prefix); index += 1 {
         if analysis.failure_prefix[index].node == node {
             return i64(index);
@@ -628,6 +740,9 @@ func prefix_lookup(analysis Analysis, node usize) i64 {
 }
 
 func subject_lookup(analysis Analysis, scope usize) i64 {
+    if scope < vec.len(analysis.subject_map) {
+        return analysis.subject_map[scope];
+    }
     for var index usize = 0; index < vec.len(analysis.switch_subjects); index += 1 {
         if analysis.switch_subjects[index].scope == scope {
             return i64(index);
@@ -637,6 +752,9 @@ func subject_lookup(analysis Analysis, scope usize) i64 {
 }
 
 func effect_lookup(analysis Analysis, node usize) i64 {
+    if node < vec.len(analysis.effect_map) {
+        return analysis.effect_map[node];
+    }
     for var index usize = 0; index < vec.len(analysis.full_expression_effects); index += 1 {
         if analysis.full_expression_effects[index].root == node {
             return i64(index);
@@ -671,10 +789,15 @@ func local_add(analysis inout Analysis, symbol usize, scope usize,
                type_id usize, mode model.ParamMode, read_only bool) {
     let order = u32(vec.len(scope_locals_for(inout analysis, scope)));
     if local_lookup(analysis, symbol) < 0 {
+        let slot = vec.len(analysis.locals);
         vec.push(analysis.locals, LocalEntry(symbol: symbol,
             value: hir.LocalLifetime(symbol: symbol, scope: scope,
                 type_id: type_id, order: order, mode: mode,
                 read_only_capture: read_only)));
+        if symbol < vec.len(analysis.local_map) {
+            analysis.local_map[symbol] = i64(slot);
+        }
+        vec.push(analysis.current_fn_locals, slot);
     }
     vec.push(scope_locals_for(inout analysis, scope), symbol);
 }
@@ -709,17 +832,16 @@ func gather(analysis inout Analysis, id usize, parent option.Option[usize])
     if kind_is(kind, hir.NodeKind.Block) ||
        kind_is(kind, hir.NodeKind.For) ||
        kind_is(kind, hir.NodeKind.ForIn) {
-        var found = false;
-        for var index usize = 0; index < vec.len(analysis.scope_nodes); index += 1 {
-            if analysis.scope_nodes[index].scope == node.scope {
-                analysis.scope_nodes[index].node = id;
-                found = true;
-                break;
-            }
-        }
-        if !found {
+        let existing = scope_node_lookup(analysis, node.scope);
+        if existing >= 0 {
+            analysis.scope_nodes[usize(existing)].node = id;
+        } else {
+            let slot = vec.len(analysis.scope_nodes);
             vec.push(analysis.scope_nodes,
                 ScopeNodeEntry(scope: node.scope, node: id));
+            if node.scope < vec.len(analysis.scope_node_map) {
+                analysis.scope_node_map[node.scope] = i64(slot);
+            }
         }
     }
     let operations = classify(inout analysis, node.type_id);
@@ -802,8 +924,12 @@ func gather(analysis inout Analysis, id usize, parent option.Option[usize])
     switch node_binding(node) {
         case option.Option.Some(data):
             if declaration_lookup(analysis, data.symbol) < 0 {
+                let slot = vec.len(analysis.declarations);
                 vec.push(analysis.declarations,
                     DeclEntry(symbol: data.symbol, node: id));
+                if data.symbol < vec.len(analysis.declaration_map) {
+                    analysis.declaration_map[data.symbol] = i64(slot);
+                }
             }
             let initializer = node_at(analysis, child_at(node, 0));
             local_add(inout analysis, data.symbol, node.scope,
@@ -957,8 +1083,12 @@ func full_effects(analysis inout Analysis) Vec[usize] throws Problem {
     }
     let effects = vec.empty[usize]();
     collect_effects(analysis, root, effects);
+    let slot = vec.len(analysis.full_expression_effects);
     vec.push(analysis.full_expression_effects,
         EffectEntry(root: root, effects: effects));
+    if root < vec.len(analysis.effect_map) {
+        analysis.effect_map[root] = i64(slot);
+    }
     return effects;
 }
 
@@ -1274,16 +1404,24 @@ func prefix_put(analysis inout Analysis, node usize,
     if found >= 0 {
         analysis.failure_prefix[usize(found)].actions = actions;
     } else {
+        let slot = vec.len(analysis.failure_prefix);
         vec.push(analysis.failure_prefix,
             PrefixEntry(node: node, actions: actions));
+        if node < vec.len(analysis.prefix_map) {
+            analysis.prefix_map[node] = i64(slot);
+        }
     }
 }
 
 func prefix_try_put(analysis inout Analysis, node usize,
                     actions Vec[hir.CleanupStep]) {
     if prefix_lookup(analysis, node) < 0 {
+        let slot = vec.len(analysis.failure_prefix);
         vec.push(analysis.failure_prefix,
             PrefixEntry(node: node, actions: actions));
+        if node < vec.len(analysis.prefix_map) {
+            analysis.prefix_map[node] = i64(slot);
+        }
     }
 }
 
@@ -1315,7 +1453,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
             }
             expr_records(inout analysis, child_at(node, 1), fe, branch, false);
             for value in branch {
-                if !ids_contains(live, value) {
+                if !ids_contains_unsorted(live, value) {
                     vec.push(live, value);
                 }
             }
@@ -1732,8 +1870,12 @@ func records(analysis inout Analysis, id usize) throws Problem {
                     for arm in switch_data.arms {
                         let found = subject_lookup(analysis, arm.scope);
                         if found < 0 {
+                            let slot = vec.len(analysis.switch_subjects);
                             vec.push(analysis.switch_subjects,
                                 SubjectEntry(scope: arm.scope, node: subject));
+                            if arm.scope < vec.len(analysis.subject_map) {
+                                analysis.subject_map[arm.scope] = i64(slot);
+                            }
                         }
                     }
                 }
@@ -2038,6 +2180,9 @@ func exit_records(analysis inout Analysis, id usize) throws Problem {
     let node = node_at(analysis, id);
     let function_symbol = analysis.function.symbol;
     ids_insert(analysis.out.checked_nodes, id);
+    if id < vec.len(analysis.out.checked_node) {
+        analysis.out.checked_node[id] = true;
+    }
     let kind = kind_of(node);
     switch error_type_of(analysis, node) {
         case option.Option.Some(error):
@@ -2858,7 +3003,7 @@ func supported(analysis inout Analysis, type_id usize) throws Problem {
 
 func sorted_local_indices(analysis Analysis, function usize) Vec[usize] throws Problem {
     let indices = vec.empty[usize]();
-    for var index usize = 0; index < vec.len(analysis.locals); index += 1 {
+    for index in analysis.current_fn_locals {
         let local = analysis.locals[index].value;
         if scope_at(analysis, local.scope).function == function {
             vec.push(indices, index);
@@ -2882,6 +3027,7 @@ func analyze_function(analysis inout Analysis, function hir.HirFunction)
     throws Problem {
     analysis.function = function;
     analysis.has_function = true;
+    analysis.current_fn_locals = vec.empty[usize]();
     let signature = type_at(analysis.module, function.signature);
     supported(inout analysis, signature.result);
     switch signature.throws_type {
@@ -2931,10 +3077,12 @@ func analyze_function(analysis inout Analysis, function hir.HirFunction)
 }
 
 func run(analysis inout Analysis) Derived throws Problem {
+    let node_count = vec.len(analysis.module.nodes);
     analysis.out = Derived(records: empty_ownership(),
         exits: vec.empty[Vec[hir.ExitPlan]](),
-        checked_nodes: vec.empty[usize]());
-    for var index usize = 0; index < vec.len(analysis.module.nodes); index += 1 {
+        checked_nodes: vec.empty[usize](),
+        checked_node: vec.make[bool](node_count, false));
+    for var index usize = 0; index < node_count; index += 1 {
         vec.push(analysis.out.exits, vec.empty[hir.ExitPlan]());
     }
     for function in analysis.module.functions {
@@ -2947,20 +3095,32 @@ func run(analysis inout Analysis) Derived throws Problem {
 }
 
 func new_analysis(module hir.HirModule) Analysis {
-    let parents = vec.empty[option.Option[usize]]();
-    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
-        vec.push(parents, option.Option[usize].None);
-    }
+    let node_count = vec.len(module.nodes);
+    let scope_count = vec.len(module.scopes);
+    let sym_count = vec.len(module.resolved.symbols);
+    let type_count = types.size(module.types);
+    let parents = vec.make[option.Option[usize]](node_count,
+        option.Option[usize].None);
     return Analysis(module: module,
         out: Derived(records: empty_ownership(),
             exits: vec.empty[Vec[hir.ExitPlan]](),
-            checked_nodes: vec.empty[usize]()),
+            checked_nodes: vec.empty[usize](),
+            checked_node: vec.make[bool](node_count, false)),
         parents: parents, locals: [], declarations: [], scope_nodes: [],
         scope_locals: [], failure_prefix: [], enabled: [],
         active_borrows: [], switch_subjects: [], function: empty_hir_function(),
         has_function: false, parameter_symbols: [], safe_borrow_receivers: [],
         full_expression_root: option.Option[usize].None,
-        full_expression_effects: [], values: []);
+        full_expression_effects: [], values: [],
+        local_map: vec.make[i64](sym_count, -1),
+        declaration_map: vec.make[i64](sym_count, -1),
+        scope_node_map: vec.make[i64](scope_count, -1),
+        scope_locals_map: vec.make[i64](scope_count, -1),
+        prefix_map: vec.make[i64](node_count, -1),
+        subject_map: vec.make[i64](scope_count, -1),
+        effect_map: vec.make[i64](node_count, -1),
+        value_map: vec.make[i64](type_count + 1, -1),
+        current_fn_locals: []);
 }
 
 func derive(module hir.HirModule) Derived throws Problem {

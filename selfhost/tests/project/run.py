@@ -253,7 +253,7 @@ def main() -> int:
     env=dict(os.environ);env['LC_ALL']='C';toolchains=ROOT.parent/'toolchains'
     env['LD_LIBRARY_PATH']=':'.join([str(toolchains/'llvm-22.1.8/lib'),str(toolchains/'libxml2-legacy-2.13.9/usr/lib'),env.get('LD_LIBRARY_PATH','')])
     oracle=work/'oracle'
-    build=[args.cxx,'-std=c++20','-O2','-DNDEBUG','-I'+str(ROOT/'include'),str(HERE/'oracle.cpp'),str(args.oracle_build_dir/'liblang_modules.a'),str(args.oracle_build_dir/'liblang_frontend.a'),'-ljson-c','-ltomlplusplus','-o',str(oracle)]
+    build=[args.cxx,'-std=c++20','-O2','-DNDEBUG','-I'+str(ROOT/'include'),str(HERE/'oracle.cpp'),str(args.oracle_build_dir/'liblang_modules.a'),str(args.oracle_build_dir/'liblang_frontend.a'),str(args.oracle_build_dir/'liblang_driver_process.a'),'-ljson-c','-ltomlplusplus','-o',str(oracle)]
     result=run(build,timeout=args.timeout,env=env);write(work/'oracle-build.stdout',result.stdout);write(work/'oracle-build.stderr',result.stderr)
     expected={}
     for case in suite:

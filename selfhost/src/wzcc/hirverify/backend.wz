@@ -22,6 +22,8 @@ struct CapabilityState {
     storage types.Context;
     checked Vec[usize];
     budget bool;
+    nominal_map Vec[i64];
+    nominal_overflow Vec[NominalEntry];
 }
 
 func capability_flags(config model.CheckConfig) CapabilityFlags {
@@ -106,7 +108,7 @@ func capability_supported(state inout CapabilityState, module hir.HirModule,
     }
     if kind_is(t.kind, model.TypeKind.NominalStruct) ||
        kind_is(t.kind, model.TypeKind.NominalEnum) {
-        let declared = nominal_index(module_verifier(module), t.declaration);
+        let declared = capability_nominal_index(state, t.declaration);
         if declared < 0 ||
            vec.len(t.type_args) != vec.len(module.nominals[usize(declared)].params) {
             return false;
@@ -193,7 +195,7 @@ func capability_supported(state inout CapabilityState, module hir.HirModule,
             }
             if kind_is(value.kind, model.TypeKind.NominalStruct) ||
                kind_is(value.kind, model.TypeKind.NominalEnum) {
-                let declared = nominal_index(module_verifier(module),
+                let declared = capability_nominal_index(state,
                     value.declaration);
                 if declared >= 0 {
                     let declaration = module.nominals[usize(declared)];
@@ -246,15 +248,68 @@ func capability_supported(state inout CapabilityState, module hir.HirModule,
            !c_pointer_kind(t.kind) && !c_named_kind(t.kind);
 }
 
-func module_verifier(module hir.HirModule) Verifier {
-    // A read-only helper for nominal lookup.  No verification state is
-    // mutated; only the nominals map is needed by this helper.
-    var state = make_verifier(module);
-    for var index usize = 0; index < vec.len(module.nominals); index += 1 {
-        vec.push(state.nominals, NominalEntry(symbol:
-            module.nominals[index].symbol, index: index));
+func capability_nominal_insert(entries Vec[NominalEntry], symbol usize,
+                               index usize) {
+    var low usize = 0;
+    var high = vec.len(entries);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if entries[mid].symbol < symbol {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
     }
-    return state;
+    if low < vec.len(entries) && entries[low].symbol == symbol {
+        return;
+    }
+    vec.push(entries, NominalEntry(symbol: 0, index: 0));
+    var cur = vec.len(entries) - 1;
+    for cur > low {
+        entries[cur] = entries[cur - 1];
+        cur -= 1;
+    }
+    entries[low] = NominalEntry(symbol: symbol, index: index);
+}
+
+func capability_nominal_index(state CapabilityState, symbol usize) i64 {
+    if symbol < vec.len(state.nominal_map) {
+        return state.nominal_map[symbol];
+    }
+    var low usize = 0;
+    var high = vec.len(state.nominal_overflow);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if state.nominal_overflow[mid].symbol < symbol {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    if low < vec.len(state.nominal_overflow) &&
+       state.nominal_overflow[low].symbol == symbol {
+        return i64(state.nominal_overflow[low].index);
+    }
+    return -1;
+}
+
+func make_capability_state(input hir.HirModule) CapabilityState {
+    let sym_count = vec.len(input.resolved.symbols);
+    let nominal_map = vec.make[i64](sym_count, -1);
+    let overflow = vec.empty[NominalEntry]();
+    for var index usize = 0; index < vec.len(input.nominals); index += 1 {
+        let sym = input.nominals[index].symbol;
+        if sym < sym_count {
+            if nominal_map[sym] < 0 {
+                nominal_map[sym] = i64(index);
+            }
+        } else {
+            capability_nominal_insert(overflow, sym, index);
+        }
+    }
+    return CapabilityState(storage: types.clone_context(input.types),
+        checked: vec.empty[usize](), budget: false, nominal_map: nominal_map,
+        nominal_overflow: overflow);
 }
 
 func substitute_backend(state inout CapabilityState, id usize,
@@ -335,9 +390,14 @@ pub func check_backend_capabilities(input hir.HirModule) model.UnitResult {
        !verified.has_value {
         return verified;
     }
+    return check_backend_capabilities_verified(input);
+}
+
+// Capability scan over an already verified module.  Package verification calls
+// this after its external-aware verify_types pass.
+pub func check_backend_capabilities_verified(input hir.HirModule) model.UnitResult {
     let flags = capability_flags(input.config);
-    var capability = CapabilityState(storage: types.clone_context(input.types),
-        checked: vec.empty[usize](), budget: false);
+    var capability = make_capability_state(input);
     let native64 = backend_is(input.config.backend, model.Backend.Native) &&
         input.config.word_bits == 64;
     for function_value in input.functions {

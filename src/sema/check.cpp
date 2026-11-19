@@ -1,4 +1,5 @@
 #include "lang/sema/check.hpp"
+#include "lang/sema/front_cache.hpp"
 #include "../hir/constant_value.hpp"
 #include "../hir/foreign.hpp"
 #include "../hir/literal_value.hpp"
@@ -56,6 +57,7 @@ struct Selection {
 };
 class Checker {
   HirModule m;
+  FrontCache *front_cache = nullptr;
   std::stop_token stop;
   std::map<Key, SymbolId> occurrences, definitions;
   std::map<uint64_t, TypeId> signatures;
@@ -6685,8 +6687,8 @@ class Checker {
 
 public:
   Checker(std::shared_ptr<const modules::ResolvedProject> r, Config config,
-          std::stop_token s)
-      : stop(s) {
+          std::stop_token s, FrontCache *cache = nullptr)
+      : front_cache(cache), stop(s) {
     owned = std::make_shared<modules::ResolvedProject>(*r);
     m.resolved = owned;
     m.config = config;
@@ -6761,7 +6763,10 @@ public:
       if (s.kind == modules::SymbolKind::constant && s.exported &&
           s.definition)
         check_public_constant(s.id);
+    const auto restored = front_cache ? front_cache->restore(m) : std::set<uint64_t>{};
     for (auto [id, r] : bodies) {
+      if (restored.contains(id)) continue;
+      if (front_cache) ++front_cache->checked_bodies;
       check_cancelled(stop);
       check_body(SymbolId{id});
     }
@@ -6808,7 +6813,7 @@ template <class T> PhaseResult<T> internal(std::string message) {
 } // namespace
 PhaseResult<HirModule>
 check_types(std::shared_ptr<const modules::ResolvedProject> resolved,
-            std::optional<CheckConfig> config, std::stop_token stop) {
+            std::optional<CheckConfig> config, std::stop_token stop, FrontCache *cache) {
   try {
     check_cancelled(stop);
     if (!resolved || !resolved->project)
@@ -6823,7 +6828,7 @@ check_types(std::shared_ptr<const modules::ResolvedProject> resolved,
       return internal<HirModule>("CheckConfig does not match Project target");
     if (c.word_bits != 32 && c.word_bits != 64)
       return internal<HirModule>("target word_bits must be 32 or 64");
-    Checker checker(std::move(resolved), c, stop);
+    Checker checker(std::move(resolved), c, stop, cache);
     auto m = checker.run();
     auto verified = hir::verify_types(m, stop);
     PhaseResult<HirModule> result;
@@ -6848,7 +6853,7 @@ check_types(std::shared_ptr<const modules::ResolvedProject> resolved,
 }
 PhaseResult<HirModule>
 check_types(const PhaseResult<modules::ResolvedProject> &resolved,
-            std::optional<CheckConfig> config, std::stop_token stop) {
+            std::optional<CheckConfig> config, std::stop_token stop, FrontCache *cache) {
   if (stop.stop_requested()) {
     PhaseResult<HirModule> r;
     r.state = PhaseState::cancelled;
@@ -6867,7 +6872,7 @@ check_types(const PhaseResult<modules::ResolvedProject> &resolved,
   }
   return check_types(
       std::make_shared<const modules::ResolvedProject>(*resolved.value), config,
-      stop);
+      stop, cache);
 }
 PhaseResult<VerifiedHirModule>
 check_project(std::shared_ptr<const modules::ResolvedProject> r,
@@ -6891,6 +6896,25 @@ check_project(const PhaseResult<modules::ResolvedProject> &r,
   result.state = typed.state;
   result.failure = typed.failure;
   result.diagnostics = std::move(typed.diagnostics);
+  return result;
+}
+PhaseResult<VerifiedHirModule> check_project_cached(
+    const PhaseResult<modules::ResolvedProject> &resolved, FrontCache &cache) {
+  auto typed = check_types(resolved, {}, {}, &cache);
+  auto finish = [&]() {
+    if (typed.success()) return hir::verify(*typed.value);
+    PhaseResult<VerifiedHirModule> result;
+    result.state = typed.state; result.failure = typed.failure;
+    result.diagnostics = std::move(typed.diagnostics); return result;
+  };
+  auto result = finish();
+  if (!result.success() && cache.hits) {
+    // Imported data never bypasses either verifier. If it is structurally
+    // readable but fails verification, discard it and re-check real source.
+    cache.rejected += cache.hits; cache.hits = 0; cache.disabled = true;
+    typed = check_types(resolved, {}, {}, &cache); result = finish();
+  }
+  if (result.success()) cache.store(result.value->module());
   return result;
 }
 } // namespace lang::sema

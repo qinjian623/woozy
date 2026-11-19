@@ -31,6 +31,13 @@ pub struct VerifyResult {
 pub struct VerifiedModule {
     hir hirverify.VerifiedHirModule;
     functions Vec[nativeir.Function];
+    externals Vec[hirverify.ExternalFunction];
+}
+
+func copy_externals(values Vec[hirverify.ExternalFunction]) Vec[hirverify.ExternalFunction] {
+    let out = vec.empty[hirverify.ExternalFunction]();
+    for value in values { vec.push(out, value); }
+    return out;
 }
 
 // Deep-copy the CFG, verify the raw HIR independently, then run the full CFG
@@ -38,6 +45,20 @@ pub struct VerifiedModule {
 pub func verify(input nativeir.Module) VerifyResult {
     let functions = copy_functions(input.functions);
     let checked = hirverify.verify(input.hir, hirverify.VerifyMode.Backend);
+    return verify_checked_hir(checked, functions);
+}
+
+// Lowering from an already-verified HIR module upgrades StaticOnly -> Backend
+// if necessary without re-cloning or re-verifying Backend-verified HIR.
+pub func verify_lowered(input hirverify.VerifiedHirModule,
+                        input_functions Vec[nativeir.Function]) VerifyResult {
+    let functions = copy_functions(input_functions);
+    let checked = hirverify.ensure_backend(input);
+    return verify_checked_hir(checked, functions);
+}
+
+func verify_checked_hir(checked hirverify.VerifyResult,
+                        functions Vec[nativeir.Function]) VerifyResult {
     var result = VerifyResult(state: checked.state, failure: checked.failure,
         diagnostics: copy_diagnostics(checked.diagnostics),
         value: option.Option[VerifiedModule].None);
@@ -50,14 +71,16 @@ pub func verify(input nativeir.Module) VerifyResult {
                 let verified_hir = hirverify.snapshot(verified);
                 let config = hirverify.config(verified);
                 var state = ModuleState(h: verified_hir, config: config,
-                    functions: functions, symbols: vec.empty[FunctionEntry]());
+                    functions: functions, symbols: vec.empty[FunctionEntry](),
+                    externals: hirverify.externals(verified));
                 run_module(inout state);
                 result.state = model.PhaseState.Complete;
                 result.failure = model.FailureKind.Internal;
                 result.diagnostics = vec.empty[model.Diagnostic]();
                 result.value = option.Option[VerifiedModule].Some(
                     VerifiedModule(hir: verified,
-                        functions: copy_functions(state.functions)));
+                        functions: copy_functions(state.functions),
+                        externals: copy_externals(state.externals)));
             } catch error VerifyError {
                 result.state = model.PhaseState.Failed;
                 result.failure = model.FailureKind.Internal;
@@ -81,4 +104,16 @@ pub func snapshot(input VerifiedModule) nativeir.Module
     throws model.SupportError {
     return nativeir.Module(hir: hirverify.snapshot(input.hir),
         functions: copy_functions(input.functions));
+}
+
+pub func function_count(input VerifiedModule) usize {
+    return vec.len(input.functions);
+}
+
+pub func check_hir_capabilities(input VerifiedModule) model.UnitResult {
+    return hirverify.check_verified_capabilities(input.hir);
+}
+
+pub func externals(input VerifiedModule) Vec[hirverify.ExternalFunction] {
+    return copy_externals(input.externals);
 }

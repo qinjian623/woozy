@@ -461,6 +461,49 @@
         "development/docs/ACCEPTANCE.md"
       ],
       "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "SH31",
+      "title": "源码逻辑包增量编译",
+      "status": "in_progress",
+      "depends_on": [
+        "T05",
+        "T06",
+        "T08"
+      ],
+      "primary_role": "compiler",
+      "backup_role": "validation",
+      "reviewer_role": "validation",
+      "owner_instance": "source_incremental_impl",
+      "target_paths": [
+        "include/lang/modules/",
+        "src/modules/",
+        "src/sema/",
+        "src/hir/identity.cpp",
+        "src/backend/native/",
+        "selfhost/src/wzcc/frontcache/",
+        "selfhost/src/wzcc/interface/",
+        "selfhost/src/wzcc/nativeemit/",
+        "selfhost/src/wzcc/nativebuild/"
+      ],
+      "outputs": [
+        "标量持久AST/函数体缓存、本会话ID恢复",
+        "Native分包独立对象、Ninja opt/llc与链接",
+        "稳定声明/类型身份及依赖摘要",
+        "增量编译进度与实际测试报告"
+      ],
+      "acceptance": [
+        "cold/warm及私有body长度变化有实际命令和统计",
+        "接口变化、坏缓存、失败和同输出目录并发行为正确",
+        "C++与Wz持久接口和Native行为经独立检查",
+        "全语言前端缓存及Ninja前端任务完成后才能标done"
+      ],
+      "read": [
+        "docs/SEMANTICS.md",
+        "development/docs/IR_CONTRACTS.md",
+        "development/docs/INCREMENTAL_COMPILATION.md"
+      ],
+      "notes": "本轮可审查阶段：C++与Wz版编译器均已实现并实际验证标量body/AST缓存、ID恢复、按包Native对象及Ninja opt/llc；以真实LLVM摘要决定对象复用。Wz固定v2 cold/warm/private/clean和摘要损坏恢复通过，warm8工具摘要hit/0B读取、0body/0opt/llc；Cpp/Wz小文件失效26命令、Source二分原测试通过。保留全部旧失败及候选。仍全项目resolve/声明/NativeIR及LLVM发射且总是链接；全语言已检查接口/HIR持久导入和Ninja前端并行未完成，新入口暂拒绝C adapters。未做正式Source O2对比或三代，自身状态保持in_progress。"
     }
   ]
 }

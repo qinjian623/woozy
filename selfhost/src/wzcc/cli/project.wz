@@ -1,5 +1,6 @@
 package cli;
 import "app/wzcc/model" as model;
+import "app/wzcc/frontcache" as frontcache;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/project" as project;
@@ -11,6 +12,8 @@ import "app/wzcc/resources" as resources;
 import "app/wzcc/nativelower" as nativelower;
 import "app/wzcc/nativeemit" as nativeemit;
 import "app/wzcc/nativebuild" as nativebuild;
+import "app/wzcc/nativeverify" as nativeverify;
+import "app/wzcc/interface" as interface;
 import "app/wzcc/pythonemit" as pythonemit;
 import "app/wzcc/toolio" as toolio;
 import "std/fs" as fs;
@@ -53,8 +56,48 @@ func missing_main(options Options, sources Vec[model.Source]) i32 throws os.Erro
     return fail(options, sources, "E_CAPABILITY_UNAVAILABLE", "codegen",
         "executable build requires main in the entry module", model.FailureKind.Unsupported);
 }
+func build_native_packages(options Options, original model.Project, native nativeverify.VerifiedModule,
+                           entry usize, settings nativeemit.Options, sources Vec[model.Source], cache frontcache.Context) i32 throws os.Error {
+    try {
+    let input = nativeverify.snapshot(native);
+    if settings.triple != "x86_64-unknown-linux-gnu" {
+        return fail(options, sources, "E_TARGET_UNSUPPORTED", "codegen", "package objects require Linux x86_64", model.FailureKind.Unsupported);
+    }
+    let inputs = vec.empty[nativebuild.PackageInput]();
+    let keys = interface.index(input.hir); let selected = vec.empty[usize]();
+    for package_value in input.hir.resolved.project.modules {
+        var used = false;
+        for function in input.functions { if interface.indexed_owner(keys, function.symbol) == package_value.id { used = true; } }
+        if used { vec.push(selected, package_value.id); }
+    }
+    let emit_start = os.clock_gettime(os.CLOCK_MONOTONIC);
+    let emitted_values = nativeemit.emit_packages(native, entry, settings, selected);
+    let emit_end = os.clock_gettime(os.CLOCK_MONOTONIC);
+    let emit_nanoseconds = u64((emit_end.seconds - emit_start.seconds) * 1000000000 + emit_end.nanoseconds - emit_start.nanoseconds);
+    for var index usize = 0; index < vec.len(emitted_values); index += 1 {
+        let emitted = emitted_values[index]; let package_value = input.hir.resolved.project.modules[selected[index]];
+        switch emitted.value {
+            case option.Option.None: return finish(options, sources, emitted.state, emitted.failure, false, emitted.diagnostics);
+            case option.Option.Some(output): {
+                let digest = frontcache.llvm_digest(output.llvm_sections); var key = ""; var frontend_key = ""; var object = option.Option[Vec[u8]].None;
+                if frontcache.active(cache) {
+                    frontend_key = frontcache.package_key(cache, input.hir, package_value.id);
+                    key = frontcache.object_key(cache, package_value.identity, digest); object = frontcache.load_object(cache, key);
+                }
+                vec.push(inputs, nativebuild.PackageInput(package_id: package_value.id, logical_path: package_value.logical_path,
+                    identity: package_value.identity, object_key: key, frontend_key: frontend_key, llvm_digest: digest,
+                    object: object, output: option.Option[nativeemit.Output].Some(output)));
+            }
+        }
+    }
+    let built = nativebuild.build_cached_packages(inputs, original, options.output, settings.optimization, cache, emit_nanoseconds);
+    return finish(options, sources, built.state, built.failure, built.has_value, built.diagnostics);
+    } catch problem model.SupportError {
+        return fail(options, sources, "E_INTERNAL_ERROR", "toolchain", support_text(problem), model.FailureKind.Internal);
+    }
+}
 func build_native(options Options, original model.Project, resolved model.ResolvedProject,
-                  verified hirverify.VerifiedHirModule, sources Vec[model.Source]) i32 throws os.Error {
+                  verified hirverify.VerifiedHirModule, sources Vec[model.Source], cache frontcache.Context) i32 throws os.Error {
     try {
         switch native_entry(resolved) {
             case option.Option.None: return missing_main(options, sources);
@@ -71,6 +114,9 @@ func build_native(options Options, original model.Project, resolved model.Resolv
                         var settings = nativeemit.default_options();
                         if options.opt == "2" { settings.optimization = 2; }
                         if options.target != "" { settings.triple = options.target; }
+                        if options.package_objects {
+                            return build_native_packages(options, original, native, entry, settings, sources, cache);
+                        }
                         let emitted = nativeemit.emit(native, entry, settings);
                         let has_output = option.is_some(emitted.value);
                         if !render.succeeded(emitted.state, has_output, emitted.diagnostics) {
@@ -143,19 +189,25 @@ func project_command(input Options, manager inout source.Manager) i32 throws os.
         else { library = option.Option[string].Some(resources.standard_library()); }
         let project_options = model.ProjectOptions(manifest: options.project,
             std_source_root: library, std_binding_bundle: binding);
-        let loaded = project.load(project_options, inout manager);
+        var cache = frontcache.context("", "");
+        if options.source_make { cache = frontcache.configure_source_make(options.cache_directory, options.opt, options.target); }
+        else { cache = frontcache.configure(options.cache_directory, options.opt, options.target); }
+        let loaded = project.load_cached(project_options, inout manager, cache);
         if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
             return finish(options, manager.snapshots, loaded.state, loaded.failure, loaded.has_value, loaded.diagnostics);
         }
         var original = loaded.value;
         if options.backend != "" { original.backend = options.backend; }
         options.backend = original.backend;
-        if options.command == "build" && options.backend == "python" && (options.opt != "" || options.target != "") {
+        if options.command == "build" && options.backend == "python" && (options.opt != "" || options.target != "" || options.package_objects || options.source_make) {
             return fail(options, manager.snapshots, "E_DRIVER_ARGUMENT", "toolchain",
-                "--opt and --target require native build", model.FailureKind.Environment);
+                "--opt, --target, --package-objects and --source-make require native build", model.FailureKind.Environment);
+        }
+        if options.command == "build" && options.source_make {
+            return source_make_build(options, original, inout manager, cache);
         }
         let resolved = resolve.resolve_project(original);
-        let checked = sema.check_project(resolved, option.Option[model.CheckConfig].None, hirverify.VerifyMode.Backend);
+        let checked = sema.check_project_cached(resolved, option.Option[model.CheckConfig].None, hirverify.VerifyMode.Backend, cache);
         let has_checked = option.is_some(checked.value);
         if !render.succeeded(checked.state, has_checked, checked.diagnostics) || options.command == "check" {
             return finish(options, manager.snapshots, checked.state, checked.failure, has_checked, checked.diagnostics);
@@ -165,7 +217,7 @@ func project_command(input Options, manager inout source.Manager) i32 throws os.
                 return finish(options, manager.snapshots, checked.state, checked.failure, false, checked.diagnostics);
             case option.Option.Some(verified): {
                 if options.backend == "native" {
-                    return build_native(options, original, resolved.value, verified, manager.snapshots);
+                    return build_native(options, original, resolved.value, verified, manager.snapshots, cache);
                 }
                 return build_python(options, verified, manager.snapshots);
             }

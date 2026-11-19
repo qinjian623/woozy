@@ -2503,7 +2503,7 @@ PhaseResult<Output> emit(const hir::VerifiedHirModule &verified, SymbolId entry,
                          const Options &options, std::stop_token stop) {
   PhaseResult<Output> result;
   try {
-    auto checked = hir::check_backend_capabilities(verified.module(), stop);
+    auto checked = hir::check_backend_capabilities(verified, stop);
     const bool supported = checked.success();
     result.state = checked.state;
     result.failure = checked.failure;

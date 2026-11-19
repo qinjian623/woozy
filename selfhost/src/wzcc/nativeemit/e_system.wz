@@ -124,6 +124,7 @@ func e_process_system_call(instruction nativeir.Instruction,
                 var has_out = false;
                 if operation == 187 {
                     out = storage("i32", inout state);
+                    start_lifetime(out, inout state);
                     has_out = true;
                     var with_out Vec[Value] = [];
                     vec.push(with_out, out);
@@ -144,6 +145,7 @@ func e_process_system_call(instruction nativeir.Instruction,
                 guard(bad, 10, instruction.source, inout state);
                 if has_out {
                     let loaded = e_load("i32", out, inout state);
+                    end_lifetime(out, inout state);
                     return option.Option[Value].Some(loaded);
                 }
                 if e_process_wait(operation) {
@@ -166,6 +168,7 @@ func e_process_system_call(instruction nativeir.Instruction,
             if has_output {
                 let layout = lower_type(output_type, inout state);
                 out = storage(layout, inout state);
+                start_lifetime(out, inout state);
                 var with_out Vec[Value] = [];
                 vec.push(with_out, out);
                 for item in actual { vec.push(with_out, item); }
@@ -174,6 +177,7 @@ func e_process_system_call(instruction nativeir.Instruction,
             var wait_status = e_null();
             if operation == 153 {
                 wait_status = storage("i32", inout state);
+                start_lifetime(wait_status, inout state);
                 vec.push(actual, wait_status);
             }
             let status = runtime(name, "i64", actual, inout state);
@@ -187,6 +191,7 @@ func e_process_system_call(instruction nativeir.Instruction,
                 let payload = e_load(layout, out, inout state);
                 let inner = e_stdlib_finish(option_join, payload, inout state);
                 let joined = e_stdlib_finish(join, inner, inout state);
+                if has_output { end_lifetime(out, inout state); }
                 return option.Option[Value].Some(joined);
             }
             if operation == 153 {
@@ -198,12 +203,15 @@ func e_process_system_call(instruction nativeir.Instruction,
                 let high = e_load("i32", wait_status, inout state);
                 value = e_insert_value(layout, value, high, "1", inout state);
                 let joined = e_stdlib_finish(join, value, inout state);
+                end_lifetime(wait_status, inout state);
+                if has_output { end_lifetime(out, inout state); }
                 return option.Option[Value].Some(joined);
             }
             if has_output {
                 let layout = lower_type(output_type, inout state);
                 let payload = e_load(layout, out, inout state);
                 let joined = e_stdlib_finish(join, payload, inout state);
+                end_lifetime(out, inout state);
                 return option.Option[Value].Some(joined);
             }
             let success = type_of(state, payload_type);
@@ -297,6 +305,7 @@ func e_network_system_call(instruction nativeir.Instruction,
             if output {
                 let layout = lower_type(payload_type, inout state);
                 out = storage(layout, inout state);
+                start_lifetime(out, inout state);
                 vec.push(actual, out);
             }
             let status = runtime(name, "i64", actual, inout state);
@@ -305,6 +314,7 @@ func e_network_system_call(instruction nativeir.Instruction,
                 let layout = lower_type(payload_type, inout state);
                 let payload = e_load(layout, out, inout state);
                 let joined = e_stdlib_finish(join, payload, inout state);
+                end_lifetime(out, inout state);
                 return option.Option[Value].Some(joined);
             }
             let success = type_of(state, payload_type);
@@ -359,6 +369,7 @@ func e_extra_fs_name(operation u32) string {
         case 75: return "lang_sys_nanosleep_vec_v1";
         case 76: return "lang_sys_getrandom_vec_v1";
         case 213: return "lang_sys_stat_v1";
+        case 214: return "lang_sys_flock_v1";
         default: return "";
     }
 }
@@ -468,6 +479,7 @@ func e_extra_math(instruction nativeir.Instruction, operation u32,
     if name == "" { return option.Option[Value].None; }
     if operation == 133 {
         let exponent = storage("i32", inout state);
+        start_lifetime(exponent, inout state);
         var actual Vec[Value] = [];
         vec.push(actual, args[0]);
         vec.push(actual, exponent);
@@ -476,6 +488,7 @@ func e_extra_math(instruction nativeir.Instruction, operation u32,
         var value = result(layout, "insertvalue " + layout +
             " zeroinitializer, double " + fraction.reference + ", 0", inout state);
         let high = e_load("i32", exponent, inout state);
+        end_lifetime(exponent, inout state);
         value = e_insert_value(layout, value, high, "1", inout state);
         return option.Option[Value].Some(value);
     }
@@ -495,6 +508,7 @@ func e_extra_numeric(instruction nativeir.Instruction, operation u32,
     if parse { result_type = declared.type_args[0]; }
     let layout = lower_type(result_type, inout state);
     let out = storage(layout, inout state);
+    start_lifetime(out, inout state);
     if parse {
         let parameter = signature.parameters[0].type_id;
         let address = element_storage(parameter, args[0], inout state);
@@ -505,6 +519,7 @@ func e_extra_numeric(instruction nativeir.Instruction, operation u32,
         let join = e_stdlib_result_begin(instruction.type_id, status, inout state);
         let payload = e_load(layout, out, inout state);
         let joined = e_stdlib_finish(join, payload, inout state);
+        end_lifetime(out, inout state);
         return option.Option[Value].Some(joined);
     }
     var actual Vec[Value] = [];
@@ -512,6 +527,7 @@ func e_extra_numeric(instruction nativeir.Instruction, operation u32,
     vec.push(actual, args[0]);
     runtime(name, "void", actual, inout state);
     let loaded = e_load(layout, out, inout state);
+    end_lifetime(out, inout state);
     return option.Option[Value].Some(loaded);
 }
 
@@ -524,10 +540,12 @@ func e_extra_fs(instruction nativeir.Instruction, operation u32,
     var actual = e_extra_fs_actual(operation, signature, args, inout state);
     var out = e_null();
     var result_type = instruction.type_id;
-    if e_extra_fs_output(operation) {
+    let has_output = e_extra_fs_output(operation);
+    if has_output {
         result_type = declared.type_args[0];
         let layout = lower_type(result_type, inout state);
         out = storage(layout, inout state);
+        start_lifetime(out, inout state);
         if operation == 61 {
             var with_out Vec[Value] = [];
             vec.push(with_out, out);
@@ -541,13 +559,15 @@ func e_extra_fs(instruction nativeir.Instruction, operation u32,
     }
     let status = runtime(name, "i64", actual, inout state);
     if e_extra_fs_raw(operation) {
+        if has_output { end_lifetime(out, inout state); }
         return option.Option[Value].Some(status);
     }
     let join = e_stdlib_result_begin(instruction.type_id, status, inout state);
-    if e_extra_fs_output(operation) {
+    if has_output {
         let layout = lower_type(result_type, inout state);
         let payload = e_load(layout, out, inout state);
         let joined = e_stdlib_finish(join, payload, inout state);
+        end_lifetime(out, inout state);
         return option.Option[Value].Some(joined);
     }
     let success = type_of(state, result_type);
@@ -579,7 +599,7 @@ func e_extra_system_call(instruction nativeir.Instruction,
                 case option.Option.Some(value): return option.Option[Value].Some(value);
                 case option.Option.None: {}
             }
-            if (operation >= 43 && operation <= 76) || operation == 213 {
+            if (operation >= 43 && operation <= 76) || operation == 213 || operation == 214 {
                 return e_extra_fs(instruction, operation, args, inout state);
             }
             return e_process_system_call(instruction, args, inout state);
@@ -596,6 +616,7 @@ func e_value_system_call(instruction nativeir.Instruction,
             if operation == 188 || operation == 189 {
                 let layout = lower_type(instruction.type_id, inout state);
                 let out = storage(layout, inout state);
+                start_lifetime(out, inout state);
                 let receiver_type = value_type(state, instruction.inputs[0]);
                 let source_address = value_address(receiver_type, args[0], inout state);
                 var actual Vec[Value] = [];
@@ -609,6 +630,7 @@ func e_value_system_call(instruction nativeir.Instruction,
                     inout state);
                 guard(bad, 10, instruction.source, inout state);
                 let loaded = e_load(layout, out, inout state);
+                end_lifetime(out, inout state);
                 return option.Option[Value].Some(loaded);
             }
             if operation == 190 {
@@ -641,6 +663,7 @@ func e_value_system_call(instruction nativeir.Instruction,
                 let text_type = declared.type_args[0];
                 let layout = lower_type(text_type, inout state);
                 let out = storage(layout, inout state);
+                start_lifetime(out, inout state);
                 var actual Vec[Value] = [];
                 vec.push(actual, out);
                 vec.push(actual, args[0]);
@@ -651,6 +674,7 @@ func e_value_system_call(instruction nativeir.Instruction,
                     inout state);
                 let payload = e_load(layout, out, inout state);
                 let joined = e_stdlib_finish(join, payload, inout state);
+                end_lifetime(out, inout state);
                 return option.Option[Value].Some(joined);
             }
             if operation >= 34 && operation <= 42 {
@@ -896,6 +920,7 @@ func e_main_system_call(operation u32, instruction nativeir.Instruction,
     if operation == 197 || operation == 199 {
         let layout = lower_type(instruction.type_id, inout state);
         let out = storage(layout, inout state);
+        start_lifetime(out, inout state);
         let receiver_type = value_type(state, instruction.inputs[0]);
         let source_address = value_address(receiver_type, args[0], inout state);
         var actual Vec[Value] = [];
@@ -911,6 +936,7 @@ func e_main_system_call(operation u32, instruction nativeir.Instruction,
         if operation == 197 { name = "lang_slice_new_v1"; }
         runtime(name, "void", actual, inout state);
         let loaded = e_load(layout, out, inout state);
+        end_lifetime(out, inout state);
         return loaded;
     }
     if operation == 198 {
@@ -1012,7 +1038,7 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
                     case option.Option.None: {}
                 }
             }
-            if (operation >= 43 && operation <= 84) || operation == 213 {
+            if (operation >= 43 && operation <= 84) || operation == 213 || operation == 214 {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}

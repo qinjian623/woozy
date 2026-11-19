@@ -8,13 +8,7 @@ import "std/option" as option;
 import "std/vec" as vec;
 
 func a_sorted_insert(entries Vec[usize],value usize) {
-    var position usize=0;
-    for position<vec.len(entries) && entries[position]<value {position+=1;}
-    if position<vec.len(entries) && entries[position]==value {return;}
-    vec.push(entries,value);
-    var index=vec.len(entries)-1;
-    for index>position {entries[index]=entries[index-1];index-=1;}
-    entries[position]=value;
+    let ignored=a_insert(entries,value);
 }
 func a_backend_native(backend model.Backend) bool {
     switch backend {case model.Backend.Native:return true;case model.Backend.Python:return false;}
@@ -133,10 +127,24 @@ func register_function(state inout Checker,r model.NodeRef,inherited Vec[hir.Gen
     a_parameters_ensure(state.parameters,id);
     if prototype {return;}
     a_body_set(state.bodies,id,r);
-    for child_id in ast(inout state,r).children {
-        let block_ref=at(r,child_id);
-        if a_kind_ast(ast(inout state,block_ref).kind,model.AstKind.Block) {
-            a_register_nested(inout state,block_ref,merged);
+    var inspect_body = false;
+    switch state.selected_body_module {
+        case option.Option.None: inspect_body = true;
+        case option.Option.Some(selected): {
+            if r.module == selected || a_kind_ast(ast(inout state,r).kind,model.AstKind.FunctionLiteral) {
+                inspect_body = true;
+            }
+            for template in state.selected_templates {
+                if same_node_key(node_key(template),node_key(r)) { inspect_body = true; }
+            }
+        }
+    }
+    if inspect_body {
+        for child_id in ast(inout state,r).children {
+            let block_ref=at(r,child_id);
+            if a_kind_ast(ast(inout state,block_ref).kind,model.AstKind.Block) {
+                a_register_nested(inout state,block_ref,merged);
+            }
         }
     }
 }

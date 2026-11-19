@@ -1,0 +1,9 @@
+package app;
+
+import "dep" as dep;
+
+func main() i32 {
+    let n i32 = 3;
+    let scaled = dep.scale(n);
+    return scaled + dep.STEP;
+}

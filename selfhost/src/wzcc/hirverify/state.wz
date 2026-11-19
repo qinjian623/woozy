@@ -225,7 +225,7 @@ func option_type_has(value option.Option[usize]) bool {
     return option.is_some(value);
 }
 
-func ids_contains(values Vec[usize], value usize) bool {
+func ids_contains_unsorted(values Vec[usize], value usize) bool {
     for item in values {
         if item == value {
             return true;
@@ -234,17 +234,34 @@ func ids_contains(values Vec[usize], value usize) bool {
     return false;
 }
 
+func ids_lower_bound(values Vec[usize], value usize) usize {
+    var low usize = 0;
+    var high = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if values[middle] < value {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    let position = ids_lower_bound(values, value);
+    return position < vec.len(values) && values[position] == value;
+}
+
 func ids_insert(values Vec[usize], value usize) bool {
-    if ids_contains(values, value) {
+    let position = ids_lower_bound(values, value);
+    let length = vec.len(values);
+    if position < length && values[position] == value {
         return false;
     }
     // Sorted insertion keeps set equality deterministic.
-    var position usize = 0;
-    for position < vec.len(values) && values[position] < value {
-        position += 1;
-    }
     vec.push(values, value);
-    var index = vec.len(values) - 1;
+    var index = length;
     for index > position {
         values[index] = values[index - 1];
         index -= 1;
@@ -254,14 +271,13 @@ func ids_insert(values Vec[usize], value usize) bool {
 }
 
 func ids_remove(values Vec[usize], value usize) {
-    var index usize = 0;
-    for index < vec.len(values) && values[index] != value {
-        index += 1;
-    }
-    if index == vec.len(values) {
+    let position = ids_lower_bound(values, value);
+    let length = vec.len(values);
+    if position >= length || values[position] != value {
         return;
     }
-    for index + 1 < vec.len(values) {
+    var index = position;
+    for index + 1 < length {
         values[index] = values[index + 1];
         index += 1;
     }

@@ -1,0 +1,7 @@
+package left;
+
+import "core" as core;
+
+pub func value() i32 {
+    return core.offset() + 10;
+}

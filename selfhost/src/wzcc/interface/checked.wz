@@ -1,0 +1,226 @@
+package interface;
+
+import "app/wzcc/digest" as digest;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func number(value usize) string { return strconv.format_u64(u64(value)); }
+struct NodeIndex {
+    parent option.Option[usize]; ordinal usize; depth usize; reachable bool;
+    named option.Option[usize]; key string; state u8;
+}
+struct FileIndex { nodes Vec[NodeIndex]; module_targets Vec[option.Option[usize]]; }
+struct Memo { key string; state u8; }
+// Scoped to one unchanged declaration/instance snapshot. The arrays are shared
+// only inside this context; no context survives a frontend mutation.
+pub struct Keys {
+    module hir.HirModule;
+    files Vec[FileIndex]; instances Vec[option.Option[usize]];
+    renamed Vec[option.Option[usize]]; self_refs Vec[option.Option[model.NodeRef]];
+    owners Vec[usize]; declarations Vec[Memo]; names Vec[Memo]; type_keys Vec[Memo];
+}
+func empty_memo() Memo { return Memo(key: "", state: 0); }
+func invalid() model.SupportError { return model.SupportError.Invalid("identity: cyclic or detached logical key"); }
+func base_name(path string) string {
+    var begin usize = 0; var index usize = 0;
+    for rune in path { if rune == 47 { begin = index + 1; } index += 1; }
+    return path[begin:];
+}
+pub func index(module hir.HirModule) Keys throws model.SupportError {
+    let files = vec.empty[FileIndex]();
+    for file in module.resolved.project.files {
+        let nodes = vec.empty[NodeIndex](); let targets = vec.empty[option.Option[usize]]();
+        for node in file.nodes { vec.push(nodes, NodeIndex(parent: option.Option[usize].None, ordinal: 0,
+            depth: 0, reachable: false, named: option.Option[usize].None, key: "", state: 0)); }
+        for token in file.lexed.tokens { vec.push(targets, option.Option[usize].None); }
+        nodes[file.root].reachable = true; let stack = [file.root];
+        for vec.len(stack) != 0 {
+            let parent = stack[vec.len(stack) - 1]; vec.pop(stack);
+            let children = file.nodes[parent].children;
+            for var ordinal usize = 0; ordinal < vec.len(children); ordinal += 1 {
+                let child = children[ordinal];
+                if !nodes[child].reachable {
+                    nodes[child].reachable = true; nodes[child].parent = option.Option[usize].Some(parent);
+                    nodes[child].ordinal = ordinal; nodes[child].depth = nodes[parent].depth + 1; vec.push(stack, child);
+                }
+            }
+        }
+        vec.push(files, FileIndex(nodes: nodes, module_targets: targets));
+    }
+    let instances = vec.empty[option.Option[usize]](); let renamed = vec.empty[option.Option[usize]]();
+    let self_refs = vec.empty[option.Option[model.NodeRef]](); let owners = vec.empty[usize]();
+    let declarations = vec.empty[Memo](); let names = vec.empty[Memo](); let type_keys = vec.empty[Memo]();
+    for symbol in module.resolved.symbols {
+        vec.push(instances, option.Option[usize].None); vec.push(renamed, option.Option[usize].None);
+        vec.push(self_refs, option.Option[model.NodeRef].None); vec.push(owners, symbol.module);
+        vec.push(declarations, empty_memo()); vec.push(names, empty_memo());
+        switch symbol.definition {
+            case option.Option.Some(ref): {
+                let file_id = module.resolved.project.modules[ref.module].files[ref.file];
+                if symbol.name != "" && !option.is_some(files[file_id].nodes[ref.node].named) {
+                    files[file_id].nodes[ref.node].named = option.Option[usize].Some(symbol.id);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    for var id usize = 0; id <= types.size(module.types); id += 1 { vec.push(type_keys, empty_memo()); }
+    for item in module.resolved.self_parameters { self_refs[item.symbol] = option.Option[model.NodeRef].Some(item.source); }
+    for var id usize = 0; id < vec.len(module.instances); id += 1 {
+        instances[module.instances[id].symbol] = option.Option[usize].Some(id);
+    }
+    for var id usize = 0; id < vec.len(module.instances); id += 1 {
+        for item in module.instances[id].renamed {
+            if !option.is_some(instances[item.replacement]) {
+                instances[item.replacement] = option.Option[usize].Some(id);
+                renamed[item.replacement] = option.Option[usize].Some(item.origin);
+            }
+        }
+    }
+    for symbol in module.resolved.symbols {
+        var current = symbol.id; var steps usize = 0;
+        for option.is_some(instances[current]) {
+            switch instances[current] { case option.Option.Some(id): current = module.instances[id].origin; case option.Option.None: {} }
+            steps += 1; if steps > vec.len(module.instances) { throw invalid(); }
+        }
+        owners[symbol.id] = module.resolved.symbols[current].module;
+    }
+    // Occurrences are resolved with file-local aliases. Binary search token
+    // offsets once here; byte offsets never become part of a persistent key.
+    for occurrence in module.resolved.occurrences {
+        let symbol = module.resolved.symbols[occurrence.symbol];
+        if model.symbol_kind_id(symbol.kind) != 6 { continue; }
+        switch symbol.target {
+            case option.Option.Some(target): {
+                let file_id = module.resolved.project.modules[occurrence.source.module].files[occurrence.source.file];
+                let tokens = module.resolved.project.files[file_id].lexed.tokens; var low usize = 0; var high = vec.len(tokens);
+                for low < high { let middle = low + (high - low) / 2;
+                    if tokens[middle].span.begin_byte < occurrence.span.begin_byte { low = middle + 1; } else { high = middle; }
+                }
+                if low < vec.len(tokens) && tokens[low].span.begin_byte == occurrence.span.begin_byte && tokens[low].span.end_byte == occurrence.span.end_byte {
+                    files[file_id].module_targets[low] = option.Option[usize].Some(target);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return Keys(module: module, files: files, instances: instances, renamed: renamed, self_refs: self_refs,
+        owners: owners, declarations: declarations, names: names, type_keys: type_keys);
+}
+pub func indexed_owner(keys Keys, id usize) usize { return keys.owners[id]; }
+pub func ast_path(keys Keys, reference model.NodeRef) Vec[usize] throws model.SupportError {
+    let file_id = keys.module.resolved.project.modules[reference.module].files[reference.file];
+    let nodes = keys.files[file_id].nodes; var current = reference.node; let reverse = vec.empty[usize]();
+    if !nodes[current].reachable { throw invalid(); }
+    for option.is_some(nodes[current].parent) {
+        vec.push(reverse, nodes[current].ordinal);
+        switch nodes[current].parent { case option.Option.Some(id): current = id; case option.Option.None: {} }
+    }
+    let result = vec.empty[usize](); var cursor = vec.len(reverse);
+    for cursor != 0 { cursor -= 1; vec.push(result, reverse[cursor]); } return result;
+}
+func source_key(keys Keys, reference model.NodeRef) string throws model.SupportError {
+    let package_value = keys.module.resolved.project.modules[reference.module]; let file_id = package_value.files[reference.file];
+    let file = keys.module.resolved.project.files[file_id]; let entries = keys.files[file_id].nodes; let info = entries[reference.node];
+    if info.state == 2 { return info.key; } if info.state == 1 || !info.reachable { throw invalid(); }
+    entries[reference.node].state = 1; var key = "";
+    switch info.parent {
+        case option.Option.None: {}
+        case option.Option.Some(parent): {
+            let node = file.nodes[reference.node];
+            if model.ast_kind_id(node.kind) == model.ast_kind_id(model.AstKind.Impl) {
+                var header = "";
+                for var i usize = node.token_begin; i < node.token_end; i += 1 {
+                    let token = file.lexed.tokens[i]; if token.spelling == "{" { break; } header += component(token.spelling);
+                    switch keys.files[file_id].module_targets[i] {
+                        case option.Option.Some(target): header += component("@module") + component(keys.module.resolved.project.modules[target].identity);
+                        case option.Option.None: {}
+                    }
+                }
+                key = declaration_key(package_value.identity, "impl", "", header);
+            } else {
+                var owner = source_key(keys, model.NodeRef(module: reference.module, file: reference.file, node: parent));
+                switch info.named {
+                    case option.Option.Some(id): {
+                        let symbol = keys.module.resolved.symbols[id]; let kind = model.symbol_kind_id(symbol.kind);
+                        if kind == 6 || (kind == 1 && info.depth == 1 && symbol.name == "_") {
+                            owner = declaration_key(package_value.identity, "file", "", base_name(file.lexed.source.path));
+                        }
+                        if kind == 0 || (kind == 1 && (info.depth > 1 || symbol.name == "_")) {
+                            owner = declaration_key(package_value.identity, "local", owner, number(info.ordinal));
+                        }
+                        key = declaration_key(package_value.identity, strconv.format_u64(u64(kind)), owner, symbol.name);
+                    }
+                    case option.Option.None: key = declaration_key(package_value.identity, "child", owner, number(info.ordinal));
+                }
+            }
+        }
+    }
+    entries[reference.node].key = key; entries[reference.node].state = 2; return key;
+}
+func original_key(keys Keys, id usize) string throws model.SupportError {
+    let symbol = keys.module.resolved.symbols[id];
+    switch symbol.definition { case option.Option.Some(ref): return source_key(keys, ref); case option.Option.None: {} }
+    switch keys.self_refs[id] {
+        case option.Option.Some(ref): return declaration_key(keys.module.resolved.project.modules[symbol.module].identity, "Self", source_key(keys, ref), "Self");
+        case option.Option.None: {}
+    }
+    let kind = model.symbol_kind_id(symbol.kind);
+    if kind == 9 || kind == 10 { return declaration_key("prelude", "builtin", "", symbol.name); }
+    throw model.SupportError.Invalid("identity: declaration has no stable source: " + symbol.name);
+}
+pub func indexed_symbol_key(keys Keys, id usize) string throws model.SupportError {
+    let memo = keys.declarations[id]; if memo.state == 2 { return memo.key; } if memo.state == 1 { throw invalid(); }
+    keys.declarations[id].state = 1; var key = "";
+    switch keys.instances[id] {
+        case option.Option.None: key = original_key(keys, id);
+        case option.Option.Some(instance_id): {
+            let instance = keys.module.instances[instance_id]; let package_value = keys.module.resolved.project.modules[indexed_owner(keys, instance.origin)];
+            switch keys.renamed[id] {
+                case option.Option.Some(origin): key = declaration_key(package_value.identity, "instance-member", indexed_symbol_key(keys, instance.symbol), original_key(keys, origin));
+                case option.Option.None: {
+                    var arguments = ""; for argument in instance.type_args { arguments += component(indexed_type_key(keys, argument)); }
+                    key = declaration_key(package_value.identity, "instance", original_key(keys, instance.origin), arguments);
+                }
+            }
+        }
+    }
+    keys.declarations[id].key = key; keys.declarations[id].state = 2; return key;
+}
+pub func indexed_type_key(keys Keys, id usize) string throws model.SupportError {
+    let memo = keys.type_keys[id]; if memo.state == 2 { return memo.key; } if memo.state == 1 { throw invalid(); }
+    keys.type_keys[id].state = 1; var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(keys.module.types, id) { case option.Option.Some(found): value = found; case option.Option.None: throw invalid(); }
+    let kind = model.type_kind_id(value.kind);
+    var key = "wz-type/1:" + component(strconv.format_u64(u64(kind))) + component(strconv.format_u64(u64(value.bits)));
+    if kind == 9 || kind == 10 || kind == 11 || kind == 30 { key += component(indexed_symbol_key(keys, value.declaration)); }
+    if kind == 12 || kind == 15 { key += component(keys.module.resolved.project.foreign_bindings[value.binding].stable_identity); }
+    if value.c_type != 0 {
+        let declaration = keys.module.resolved.project.c_types[usize(value.c_type) - 1];
+        let bundle = keys.module.resolved.project.c_bindings[declaration.bundle];
+        key += component(bundle.contract) + component(bundle.sha256) + component(declaration.module) + component(declaration.identity);
+    }
+    key += component(number(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        var mode = "0"; switch parameter.mode { case model.ParamMode.Inout: mode = "1"; case model.ParamMode.Move: mode = "2"; default: {} }
+        key += component(mode) + component(indexed_type_key(keys, parameter.type_id));
+    }
+    if kind == 8 { key += component(indexed_type_key(keys, value.result)); } else { key += component(""); }
+    switch value.throws_type { case option.Option.Some(error_type): key += component(indexed_type_key(keys, error_type)); case option.Option.None: key += component(""); }
+    key += component(number(vec.len(value.type_args))); for argument in value.type_args { key += component(indexed_type_key(keys, argument)); }
+    keys.type_keys[id].key = key; keys.type_keys[id].state = 2; return key;
+}
+pub func indexed_function_name(keys Keys, id usize) string throws model.SupportError {
+    let memo = keys.names[id]; if memo.state == 2 { return memo.key; }
+    let key = "lang.fn." + digest.sha256(text.bytes(indexed_symbol_key(keys, id)));
+    keys.names[id].key = key; keys.names[id].state = 2; return key;
+}
+pub func function_owner(module hir.HirModule, id usize) usize throws model.SupportError { return indexed_owner(index(module), id); }
+pub func symbol_key(module hir.HirModule, id usize) string throws model.SupportError { return indexed_symbol_key(index(module), id); }
+pub func type_key(module hir.HirModule, id usize) string throws model.SupportError { return indexed_type_key(index(module), id); }
+pub func native_function_name(module hir.HirModule, id usize) string throws model.SupportError { return indexed_function_name(index(module), id); }

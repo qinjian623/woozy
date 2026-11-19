@@ -1,0 +1,41 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "type-failure",
+  "description": "Make app main bind a bool to i32 after a successful base. Expect E_TYPE_MISMATCH; no stale executable.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "must_fail_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": false,
+    "expected_runtime": "compile-time reject",
+    "note": "Type failure after a known-good base. The old successful app/executable must not be published as valid."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "src/main.wz",
+      "old": {
+        "file": "old/src/main.wz",
+        "sha256": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d"
+      },
+      "new": {
+        "file": "new/src/main.wz",
+        "sha256": "42b427a8c9e17179a2257f16b8cbaafbf89b1cba41629419c65489aeb0208e3a"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "check",
+    "check_exit": 1,
+    "status": "error",
+    "error_codes_any": [
+      "E_TYPE_MISMATCH"
+    ]
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

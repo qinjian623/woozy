@@ -1,0 +1,18 @@
+schema_version = 1
+
+[package]
+name = "app"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[dependencies.left]
+kind = "source"
+path = "vendor/left"
+
+[dependencies.right]
+kind = "source"
+path = "vendor/right"

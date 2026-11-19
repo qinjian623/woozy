@@ -1,0 +1,49 @@
+// TEST-ONLY SCAFFOLD for the nativeemit_b harness.
+//
+// This is NOT a layout implementation and must never be merged into
+// app/wzcc/nativelayout.  The production package is written by the Native
+// verifier worker; it is absent from the tree while SH08 B/C/D/E are being
+// implemented, so this stand-in only supplies the documented symbol names and
+// record shape so that nativeemit/b_* can be parsed and type-checked.
+// Every query rejects: the harness exercises only aggregate-free paths.
+package nativelayout;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+
+pub struct AggregateTypes {
+    pub module hir.HirModule;
+    pub context types.Context;
+}
+
+pub func aggregate_types(module hir.HirModule) AggregateTypes {
+    return AggregateTypes(module: module, context: module.types);
+}
+
+func scaffold_reject() model.SupportError {
+    return model.SupportError.Invalid(
+        "nativeemit_b harness scaffold: no aggregate layout implementation");
+}
+
+pub func declaration(state AggregateTypes, id usize) hir.NominalDecl
+    throws model.SupportError {
+    throw scaffold_reject();
+}
+
+pub func fields(state inout AggregateTypes, id usize,
+                variant option.Option[usize]) Vec[hir.FieldDecl]
+    throws model.SupportError {
+    throw scaffold_reject();
+}
+
+pub func field_index(state inout AggregateTypes, id usize, field usize,
+                     variant option.Option[usize]) usize throws model.SupportError {
+    throw scaffold_reject();
+}
+
+pub func variant_index(state AggregateTypes, id usize, variant usize) usize
+    throws model.SupportError {
+    throw scaffold_reject();
+}

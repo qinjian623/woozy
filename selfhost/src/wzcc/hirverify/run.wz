@@ -10,7 +10,7 @@ import "app/wzcc/types" as types;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func run_verification(state inout Verifier) throws Invalid {
+func run_verification(state inout Verifier, externals Vec[ExternalFunction]) throws Invalid {
     need(backend_is(state.m.config.backend, model.Backend.Native) ||
          backend_is(state.m.config.backend, model.Backend.Python),
         "invalid backend");
@@ -45,6 +45,7 @@ func run_verification(state inout Verifier) throws Invalid {
             "foreign typed records differ from declarations");
     }
     declarations(inout state);
+    set_externals(inout state, externals);
 
     let hidden_iterator_symbols = vec.empty[usize]();
     for node in state.m.nodes {
@@ -91,8 +92,7 @@ func run_verification(state inout Verifier) throws Invalid {
         need(template_index(state, template.function.symbol) < 0 &&
              function_entry_index(state, template.function.symbol) < 0,
             "duplicate template identity");
-        vec.push(state.templates, TemplateEntry(symbol:
-            template.function.symbol, index: index));
+        template_push(inout state, template.function.symbol, index);
         vec.push(state.all_functions, AllFunction(in_template: true,
             index: index));
     }
@@ -107,9 +107,8 @@ func run_verification(state inout Verifier) throws Invalid {
             function_value.source, model.SymbolKind.Function, ast.kind);
         need(function_entry_index(state, function_value.symbol) < 0,
             "duplicate function identity");
-        vec.push(state.functions, FunctionEntry(symbol: function_value.symbol,
-            in_template: function_entry.in_template,
-            index: function_entry.index));
+        function_push(inout state, function_value.symbol,
+            function_entry.in_template, function_entry.index);
         let signature = verifier_type(state, function_value.signature);
         need(kind_is(signature.kind, model.TypeKind.Function),
             "function signature kind");

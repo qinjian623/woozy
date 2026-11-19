@@ -63,6 +63,22 @@ struct ExtractedValue {
     value usize;
 }
 
+struct LocalTypeEntry {
+    symbol usize;
+    type_id usize;
+}
+
+struct LowerShared {
+    unit usize;
+    boolean usize;
+    uses_by_consumer Vec[Vec[hir.ValueUse]];
+    temp_by_producer Vec[i64];
+    full_by_node Vec[i64];
+    call_by_node Vec[i64];
+    locals_by_symbol Vec[LocalTypeEntry];
+    aggregates nativelayout.AggregateTypes;
+}
+
 struct Lower {
     h hir.HirModule;
     aggregates nativelayout.AggregateTypes;
@@ -76,6 +92,137 @@ struct Lower {
     temporaries Vec[TemporaryEntry];
     iterations Vec[IterationEntry];
     handlers Vec[HandlerEntry];
+}
+
+func sort_local_types(values Vec[LocalTypeEntry]) Vec[LocalTypeEntry] {
+    let count = vec.len(values);
+    if count <= 1 {
+        return values;
+    }
+    var current = vec.empty[LocalTypeEntry]();
+    vec.reserve(current, count);
+    for value in values {
+        vec.push(current, value);
+    }
+    var width usize = 1;
+    for width < count {
+        let next = vec.empty[LocalTypeEntry]();
+        vec.reserve(next, count);
+        var start usize = 0;
+        for start < count {
+            var mid = start + width;
+            if mid > count { mid = count; }
+            var finish = mid + width;
+            if finish > count { finish = count; }
+            var left = start;
+            var right = mid;
+            for left < mid && right < finish {
+                if current[left].symbol <= current[right].symbol {
+                    vec.push(next, current[left]);
+                    left += 1;
+                } else {
+                    vec.push(next, current[right]);
+                    right += 1;
+                }
+            }
+            for left < mid {
+                vec.push(next, current[left]);
+                left += 1;
+            }
+            for right < finish {
+                vec.push(next, current[right]);
+                right += 1;
+            }
+            start = finish;
+        }
+        current = next;
+        width *= 2;
+    }
+    let merged = vec.empty[LocalTypeEntry]();
+    vec.reserve(merged, count);
+    for value in current {
+        let len = vec.len(merged);
+        if len > 0 && merged[len - 1].symbol == value.symbol {
+            merged[len - 1] = value;
+        } else {
+            vec.push(merged, value);
+        }
+    }
+    return merged;
+}
+
+func local_type_find(entries Vec[LocalTypeEntry], symbol usize) option.Option[usize] {
+    var low usize = 0;
+    var high = vec.len(entries);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        let key = entries[mid].symbol;
+        if key == symbol {
+            return option.Option[usize].Some(entries[mid].type_id);
+        }
+        if key < symbol {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func build_lower_shared(module hir.HirModule) LowerShared throws model.SupportError {
+    var unit usize = 0;
+    var boolean usize = 0;
+    for var id usize = 1; id <= types.size(module.types); id += 1 {
+        let value = module_type(module, id);
+        switch value.kind {
+            case model.TypeKind.Unit: unit = id;
+            case model.TypeKind.Bool: boolean = id;
+            default: {}
+        }
+    }
+    let node_count = vec.len(module.nodes);
+    let uses_by_consumer = vec.empty[Vec[hir.ValueUse]]();
+    vec.reserve(uses_by_consumer, node_count);
+    for var idx usize = 0; idx < node_count; idx += 1 {
+        vec.push(uses_by_consumer, vec.empty[hir.ValueUse]());
+    }
+    for used in module.ownership.uses {
+        if used.consumer < node_count {
+            vec.push(uses_by_consumer[used.consumer], used);
+        }
+    }
+    let temp_by_producer = vec.make[i64](node_count, -1);
+    for var idx usize = 0; idx < vec.len(module.ownership.temporaries); idx += 1 {
+        let producer = module.ownership.temporaries[idx].producer;
+        if producer < node_count && temp_by_producer[producer] < 0 {
+            temp_by_producer[producer] = i64(idx);
+        }
+    }
+    let full_by_node = vec.make[i64](node_count, -1);
+    for var idx usize = 0; idx < vec.len(module.ownership.full_expressions); idx += 1 {
+        let target = module.ownership.full_expressions[idx].node;
+        if target < node_count && full_by_node[target] < 0 {
+            full_by_node[target] = i64(idx);
+        }
+    }
+    let call_by_node = vec.make[i64](node_count, -1);
+    for var idx usize = 0; idx < vec.len(module.ownership.calls); idx += 1 {
+        let target = module.ownership.calls[idx].node;
+        if target < node_count && call_by_node[target] < 0 {
+            call_by_node[target] = i64(idx);
+        }
+    }
+    let raw_locals = vec.empty[LocalTypeEntry]();
+    vec.reserve(raw_locals, vec.len(module.ownership.locals));
+    for local in module.ownership.locals {
+        vec.push(raw_locals, LocalTypeEntry(symbol: local.symbol,
+            type_id: local.type_id));
+    }
+    return LowerShared(unit: unit, boolean: boolean,
+        uses_by_consumer: uses_by_consumer, temp_by_producer: temp_by_producer,
+        full_by_node: full_by_node, call_by_node: call_by_node,
+        locals_by_symbol: sort_local_types(raw_locals),
+        aggregates: nativelayout.aggregate_types(module));
 }
 
 func usize_text(value usize) string {
@@ -541,8 +688,8 @@ func marker(state inout Lower, op nativeir.Op,
 }
 
 // std::map::at for the concrete Try instance handlers.
-func error_exit(state inout Lower, id usize, error_type usize,
-                value usize) throws model.SupportError {
+func error_exit(state inout Lower, shared inout LowerShared, id usize,
+                error_type usize, value usize) throws model.SupportError {
     let site = nativeir.ExitSite(origin: id, kind: hir.ExitKind.Error,
         error_type: option.Option[usize].Some(error_type));
     var target = option.Option[hir.ExitTarget].None;
@@ -558,7 +705,7 @@ func error_exit(state inout Lower, id usize, error_type usize,
         }
         case option.Option.Some(exit_target): {
             let source = node(state, id).source.span;
-            clean(inout state, site, option.Option[usize].Some(value));
+            clean(inout state, inout shared, site, option.Option[usize].Some(value));
             switch exit_target {
                 case hir.ExitTarget.CatchTarget(catch_target): {
                     let handler = handler_require(state, catch_target.try_node,
@@ -589,7 +736,8 @@ func finish(state inout Lower, site nativeir.ExitSite) throws model.SupportError
     }
 }
 
-func actions(state inout Lower, steps Vec[hir.CleanupStep], source model.Span,
+func actions(state inout Lower, shared inout LowerShared,
+             steps Vec[hir.CleanupStep], source model.Span,
              saved option.Option[usize]) throws model.SupportError {
     for step in steps {
         if !live(state) {
@@ -610,7 +758,7 @@ func actions(state inout Lower, steps Vec[hir.CleanupStep], source model.Span,
                 let outer_temporaries = copy_temporaries(state);
                 let outer_iterations = copy_iterations(state);
                 let defer_child = node(state, defer_node).children[0];
-                stmt(inout state, defer_child);
+                stmt(inout state, inout shared, defer_child);
                 state.slots = outer_slots;
                 state.loops = outer_loops;
                 state.handlers = outer_handlers;
@@ -650,7 +798,7 @@ func actions(state inout Lower, steps Vec[hir.CleanupStep], source model.Span,
     }
 }
 
-func batch(state inout Lower, id usize, kind u64,
+func batch(state inout Lower, shared inout LowerShared, id usize, kind u64,
            steps Vec[hir.CleanupStep]) throws model.SupportError {
     var instruction = nativeir.empty_instruction();
     instruction.op = nativeir.Op.OwnershipBegin;
@@ -659,48 +807,31 @@ func batch(state inout Lower, id usize, kind u64,
     instruction.bits = kind;
     instruction.source = node(state, id).source.span;
     push_instruction(inout state, instruction);
-    actions(inout state, steps, instruction.source, option.Option[usize].None);
+    actions(inout state, inout shared, steps, instruction.source,
+        option.Option[usize].None);
     instruction.op = nativeir.Op.OwnershipEnd;
     push_instruction(inout state, instruction);
 }
 
-func full(state inout Lower, id usize) throws model.SupportError {
-    var found = false;
-    var index usize = 0;
-    for var position usize = 0;
-        position < vec.len(state.h.ownership.full_expressions);
-        position += 1 {
-        if state.h.ownership.full_expressions[position].node == id {
-            found = true;
-            index = position;
-            break;
-        }
-    }
-    if found {
+func full(state inout Lower, shared inout LowerShared,
+          id usize) throws model.SupportError {
+    if id < vec.len(shared.full_by_node) && shared.full_by_node[id] >= 0 {
+        let index = usize(shared.full_by_node[id]);
         let steps = vector_copy(state.h.ownership.full_expressions[index].actions);
-        batch(inout state, id, 0, steps);
+        batch(inout state, inout shared, id, 0, steps);
     }
 }
 
-func call_end(state inout Lower, id usize) throws model.SupportError {
-    var found = false;
-    var index usize = 0;
-    for var position usize = 0;
-        position < vec.len(state.h.ownership.calls);
-        position += 1 {
-        if state.h.ownership.calls[position].node == id {
-            found = true;
-            index = position;
-            break;
-        }
-    }
-    if found {
+func call_end(state inout Lower, shared inout LowerShared,
+              id usize) throws model.SupportError {
+    if id < vec.len(shared.call_by_node) && shared.call_by_node[id] >= 0 {
+        let index = usize(shared.call_by_node[id]);
         let steps = vector_copy(state.h.ownership.calls[index].on_return);
-        batch(inout state, id, 1, steps);
+        batch(inout state, inout shared, id, 1, steps);
     }
 }
 
-func clean(state inout Lower, site nativeir.ExitSite,
+func clean(state inout Lower, shared inout LowerShared, site nativeir.ExitSite,
            saved option.Option[usize]) throws model.SupportError {
     var found = false;
     var actions_copy = vec.empty[hir.CleanupStep]();
@@ -728,7 +859,7 @@ func clean(state inout Lower, site nativeir.ExitSite,
         option.Option[usize].None, inputs);
     let source = node(state, site.origin).source.span;
     if vec.len(actions_copy) != 0 {
-        actions(inout state, actions_copy, source, saved);
+        actions(inout state, inout shared, actions_copy, source, saved);
     } else {
         var defers = vec.empty[hir.CleanupStep]();
         for defer_node in deferred {
@@ -736,7 +867,7 @@ func clean(state inout Lower, site nativeir.ExitSite,
                 owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary,
                     identity: u64(defer_node)), type_id: 0));
         }
-        actions(inout state, defers, source, saved);
+        actions(inout state, inout shared, defers, source, saved);
     }
 }
 
@@ -768,7 +899,8 @@ func extracted_find(extracted Vec[ExtractedValue],
     return option.Option[usize].None;
 }
 
-func match_pattern(state inout Lower, pattern hir.Pattern, value usize,
+func match_pattern(state inout Lower, shared inout LowerShared,
+                   pattern hir.Pattern, value usize,
                    failure usize, path Vec[usize],
                    extracted Vec[ExtractedValue]) throws model.SupportError {
     switch pattern.literal {
@@ -845,7 +977,7 @@ func match_pattern(state inout Lower, pattern hir.Pattern, value usize,
     end(inout state, nativeir.Exit.Conditional, [test_value], targets,
         pattern.source.span);
     state.current = matched;
-    let fields = nativelayout.fields(inout state.aggregates, pattern.type_id,
+    let fields = nativelayout.fields(inout shared.aggregates, pattern.type_id,
         pattern.variant);
     for var index usize = 0; index < vec.len(pattern.payload); index += 1 {
         let child = pattern.payload[index];
@@ -867,7 +999,8 @@ func match_pattern(state inout Lower, pattern hir.Pattern, value usize,
         vec.push(child_path, index);
         vec.push(extracted, ExtractedValue(path: child_path,
             value: child_value));
-        match_pattern(inout state, child, child_value, failure, child_path, extracted);
+        match_pattern(inout state, inout shared, child, child_value, failure,
+            child_path, extracted);
     }
 }
 

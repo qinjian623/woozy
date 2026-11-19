@@ -1,0 +1,43 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "01-diamond-private-body",
+  "variant": "private-body",
+  "description": "core.secret returns 6 instead of 5; core.offset() signature is untouched.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "core"
+    ],
+    "may_reuse_packages": [
+      "app",
+      "left",
+      "right"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "40 -> 42",
+    "note": "Private body of core changes. core offset object must be regenerated; left/right public interfaces do not change, but the final program must link the new core object and must not reuse the old executable."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/core/src/lib.wz",
+      "old": {
+        "file": "old/vendor/core/src/lib.wz",
+        "sha256": "ccbbfbe25fb2e7116489d659d9a122435518db296411bf86beee7ac67384d929"
+      },
+      "new": {
+        "file": "new/vendor/core/src/lib.wz",
+        "sha256": "4259dcb27dde77942a2d33c0fdd6895f096975b6654554f1ca35f27d1c612a2e"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 42,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

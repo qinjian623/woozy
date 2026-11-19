@@ -37,14 +37,7 @@ func constant_function_source(state inout Verifier, id usize)
         initializer = unwrapped(state, initializer);
         let ast = file.nodes[initializer.node];
         if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
-            var function i64 = -1;
-            for candidate in state.m.resolved.symbols {
-                if symbol_is(candidate.kind, model.SymbolKind.Function) &&
-                   option.is_some(candidate.definition) &&
-                   same_ref(option_ref(candidate.definition), initializer) {
-                    function = i64(candidate.id);
-                }
-            }
+            let function = defined_last(state.defined_functions, initializer);
             need(function >= 0,
                 "constant function literal has no resolved symbol");
             return FunctionSource(function: usize(function),
@@ -89,15 +82,7 @@ func constant_function_source(state inout Verifier, id usize)
 
 func source_lambda_value(state inout Verifier, reference model.NodeRef,
                          owner usize) hir.FunctionValue throws Invalid {
-    var original i64 = -1;
-    for symbol in state.m.resolved.symbols {
-        if symbol_is(symbol.kind, model.SymbolKind.Function) &&
-           option.is_some(symbol.definition) &&
-           same_ref(option_ref(symbol.definition), reference) {
-            original = i64(symbol.id);
-            break;
-        }
-    }
+    let original = defined_first(state.defined_functions, reference);
     need(original >= 0, "function literal has no original declaration");
     let template_found = template_index(state, usize(original));
     if template_found < 0 {
@@ -356,7 +341,7 @@ func check_bound_method_value(state inout Verifier, node hir.HirNode,
     let impl_index = method_impl_index(state, origin);
     let implementation = state.m.impls[usize(impl_index)];
     let match = vec.empty[model.Substitution]();
-    need(ids_contains(implementation.methods, origin) &&
+    need(ids_contains_unsorted(implementation.methods, origin) &&
          matches(inout state, implementation.self_type, bound.type_id, match),
         "bound method receiver does not select its impl");
     let file = verifier_file(state, node.source.node.module,
@@ -564,12 +549,7 @@ func check_constant(state inout Verifier, node hir.HirNode,
 func constant_source_value_safe(state inout Verifier, module_value hir.HirModule,
                                 context types.Context, node hir.HirNode,
                                 owner usize) hir.ConstantValue throws Invalid {
-    var callback_state = make_verifier(module_value);
-    callback_state.functions = state.functions;
-    callback_state.templates = state.templates;
-    callback_state.nominals = state.nominals;
-    callback_state.instances = state.instances;
-    callback_state.substituted = context;
+    var callback_state = make_callback_verifier(state, context);
     try {
         return constant.source_constant_value(module_value,
             inout state.substituted, node.source.node, node.type_id,

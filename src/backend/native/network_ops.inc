@@ -44,11 +44,16 @@
     }
     const auto result = type(i.type).type_args.at(0);
     auto *out = output ? storage(lower_type(result)) : nullptr;
-    if (out) actual.push_back(out);
+    if (out) {
+      start_lifetime(out);
+      actual.push_back(out);
+    }
     auto *status = runtime(name,builder.getInt64Ty(),actual);
-    return stdlib_result(i.type,status,[&]() -> llvm::Value * {
+    auto *value = stdlib_result(i.type,status,[&]() -> llvm::Value * {
       if (out) return builder.CreateLoad(lower_type(result),out);
       if (type(result).kind == hir::TypeKind::Unit) return builder.getInt8(0);
       return builder.CreateIntCast(status,lower_type(result),signed_(type(result)));
     });
+    end_lifetime(out);
+    return value;
   }

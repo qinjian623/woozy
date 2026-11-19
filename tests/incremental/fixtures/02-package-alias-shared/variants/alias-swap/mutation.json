@@ -1,0 +1,42 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "02-package-alias-shared",
+  "variant": "alias-swap",
+  "description": "In beta_user.wz change the file-local alias left from beta to alpha; beta stays imported by no file. The same alias name now resolves to a different module in this file only.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "may_reuse_packages": [
+      "alpha",
+      "beta"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "40 -> 25",
+    "note": "Only app source changes. The file-local alias left in beta_user.wz resolves to alpha here, while main.wz still resolves left to alpha and would not see imports from beta_user.wz."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "src/beta_user.wz",
+      "old": {
+        "file": "old/src/beta_user.wz",
+        "sha256": "509fded53467c5101b6977a89aeaff640df994cb4f71311399e7ce5f91bb5d1d"
+      },
+      "new": {
+        "file": "new/src/beta_user.wz",
+        "sha256": "4fc5736a22b6ee2710cb0226cf9e187159d907ebde211a5f72fca9bcf0883969"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 25,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

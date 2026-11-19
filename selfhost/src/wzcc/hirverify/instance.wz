@@ -57,12 +57,109 @@ func ref_key_equal(left NodeRefKey, right NodeRefKey) bool {
            left.node == right.node;
 }
 
+func original_less(left OriginalDecl, right OriginalDecl) bool {
+    if left.key.module != right.key.module {
+        return left.key.module < right.key.module;
+    }
+    if left.key.file != right.key.file {
+        return left.key.file < right.key.file;
+    }
+    if left.key.node != right.key.node {
+        return left.key.node < right.key.node;
+    }
+    return left.symbol < right.symbol;
+}
+
+func sort_original_declarations(entries Vec[OriginalDecl]) {
+    let n = vec.len(entries);
+    if n < 2 {
+        return;
+    }
+    let scratch = vec.empty[OriginalDecl]();
+    vec.reserve(scratch, n);
+    for var index usize = 0; index < n; index += 1 {
+        vec.push(scratch, entries[index]);
+    }
+    var width usize = 1;
+    for width < n {
+        var left usize = 0;
+        for left < n {
+            var mid = left + width;
+            if mid > n {
+                mid = n;
+            }
+            var right = left + width * 2;
+            if right > n {
+                right = n;
+            }
+            var i = left;
+            var j = mid;
+            var out = left;
+            for i < mid && j < right {
+                if original_less(entries[j], entries[i]) {
+                    scratch[out] = entries[j];
+                    j += 1;
+                } else {
+                    scratch[out] = entries[i];
+                    i += 1;
+                }
+                out += 1;
+            }
+            for i < mid {
+                scratch[out] = entries[i];
+                i += 1;
+                out += 1;
+            }
+            for j < right {
+                scratch[out] = entries[j];
+                j += 1;
+                out += 1;
+            }
+            left += width * 2;
+        }
+        for var index usize = 0; index < n; index += 1 {
+            entries[index] = scratch[index];
+        }
+        width *= 2;
+    }
+}
+
+func original_cmp(item OriginalDecl, key NodeRefKey) i32 {
+    if item.key.module != key.module {
+        if item.key.module < key.module {
+            return -1;
+        }
+        return 1;
+    }
+    if item.key.file != key.file {
+        if item.key.file < key.file {
+            return -1;
+        }
+        return 1;
+    }
+    if item.key.node != key.node {
+        if item.key.node < key.node {
+            return -1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 func original_symbol(entries Vec[OriginalDecl], key NodeRefKey)
     option.Option[usize] {
-    for entry in entries {
-        if ref_key_equal(entry.key, key) {
-            return option.Option[usize].Some(entry.symbol);
+    var low usize = 0;
+    var high = vec.len(entries);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if original_cmp(entries[mid], key) < 0 {
+            low = mid + 1;
+        } else {
+            high = mid;
         }
+    }
+    if low < vec.len(entries) && original_cmp(entries[low], key) == 0 {
+        return option.Option[usize].Some(entries[low].symbol);
     }
     return option.Option[usize].None;
 }
@@ -735,6 +832,7 @@ func instance_records(state inout Verifier) throws Invalid {
             case option.Option.None: {}
         }
     }
+    sort_original_declarations(original_declarations);
     let template_symbols = vec.empty[SymbolListEntry]();
     let capture_local_symbols = vec.empty[usize]();
     let synthetic_local_symbols = vec.empty[usize]();
@@ -833,13 +931,31 @@ func instance_records(state inout Verifier) throws Invalid {
         vec.push(template_symbols, SymbolListEntry(
             symbol: template.function.symbol, values: originals));
     }
+    let sym_count = vec.len(state.m.resolved.symbols);
+    let fn_local_slot = vec.make[i64](sym_count, -1);
+    let fn_locals = vec.empty[Vec[usize]]();
+    for local in state.locals {
+        if local.value.function < sym_count {
+            var slot = fn_local_slot[local.value.function];
+            if slot < 0 {
+                slot = i64(vec.len(fn_locals));
+                fn_local_slot[local.value.function] = slot;
+                vec.push(fn_locals, vec.empty[usize]());
+            }
+            vec.push(fn_locals[usize(slot)], local.symbol);
+        }
+    }
     let keys = vec.empty[InstanceKeyEntry]();
     for var index usize = 0; index < vec.len(state.m.instances); index += 1 {
         let instance = state.m.instances[index];
-        need(instance_index(state, instance.symbol) < 0,
-            "duplicate instance identity");
-        vec.push(state.instances, InstanceEntry(symbol: instance.symbol,
-            index: index));
+        if instance.symbol < vec.len(state.instance_map) {
+            need(instance_index(state, instance.symbol) == i64(index),
+                "duplicate instance identity");
+        } else {
+            need(instance_index(state, instance.symbol) < 0,
+                "duplicate instance identity");
+        }
+        instance_push(inout state, instance.symbol, index);
         let template_found = template_index(state, instance.origin);
         need(template_found >= 0, "instance origin is not a template");
         let template = state.m.templates[usize(template_found)];
@@ -869,10 +985,20 @@ func instance_records(state inout Verifier) throws Invalid {
                  template.function.source.node),
             "instance function has forged AST source");
         let originals = symbol_list_get(template_symbols, instance.origin);
-        for local in state.locals {
-            if local.value.function == instance.origin {
-                need(ids_contains(originals, local.symbol),
-                    "template local is not an original symbol");
+        if instance.origin < sym_count {
+            let fn_slot = fn_local_slot[instance.origin];
+            if fn_slot >= 0 {
+                for local_sym in fn_locals[usize(fn_slot)] {
+                    need(ids_contains(originals, local_sym),
+                        "template local is not an original symbol");
+                }
+            }
+        } else {
+            for local in state.locals {
+                if local.value.function == instance.origin {
+                    need(ids_contains(originals, local.symbol),
+                        "template local is not an original symbol");
+                }
             }
         }
         need(vec.len(instance.renamed) == vec.len(originals),
@@ -960,10 +1086,20 @@ func instance_records(state inout Verifier) throws Invalid {
                      substitutions) == after_capture.type_id,
                 "instance capture binding mapping mismatch");
         }
-        for local in state.locals {
-            if local.value.function == instance.symbol {
-                need(ids_contains(dest, local.symbol),
-                    "instance local absent from renamed map");
+        if instance.symbol < sym_count {
+            let fn_slot = fn_local_slot[instance.symbol];
+            if fn_slot >= 0 {
+                for local_sym in fn_locals[usize(fn_slot)] {
+                    need(ids_contains(dest, local_sym),
+                        "instance local absent from renamed map");
+                }
+            }
+        } else {
+            for local in state.locals {
+                if local.value.function == instance.symbol {
+                    need(ids_contains(dest, local.symbol),
+                        "instance local absent from renamed map");
+                }
             }
         }
         for symbol_id in dest {
@@ -984,15 +1120,16 @@ func instance_records(state inout Verifier) throws Invalid {
         }
     }
     for function_value in state.m.functions {
-        for template in state.m.templates {
-            if same_ref(function_value.source.node,
-                        template.function.source.node) {
-                let found = instance_index(state, function_value.symbol);
-                need(found >= 0 &&
-                     state.m.instances[usize(found)].origin ==
-                         template.function.symbol,
-                    "concrete template body has no instance origin record");
-            }
+        let start = defined_lower_bound(state.template_source_nodes,
+            function_value.source.node);
+        for var t = start; t < vec.len(state.template_source_nodes) &&
+              defined_ref_cmp(state.template_source_nodes[t],
+                  function_value.source.node) == 0; t += 1 {
+            let found = instance_index(state, function_value.symbol);
+            need(found >= 0 &&
+                 state.m.instances[usize(found)].origin ==
+                     state.template_source_nodes[t].symbol,
+                "concrete template body has no instance origin record");
         }
     }
     for implementation in state.m.impls {

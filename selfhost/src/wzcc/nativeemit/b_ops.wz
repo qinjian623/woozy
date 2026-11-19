@@ -884,8 +884,16 @@ func b_try_call(terminator nativeir.Terminator, block_id usize,
         vec.push(actual, value(state, terminator.inputs[index]));
     }
     switch storage.value {
-        case option.Option.Some(item): vec.push(actual, item);
+        case option.Option.Some(item): {
+            if storage.start_value {
+                start_lifetime(item, inout state);
+            }
+            vec.push(actual, item);
+        }
         case option.Option.None: {}
+    }
+    if storage.start_error {
+        start_lifetime(storage.error, inout state);
     }
     vec.push(actual, storage.error);
     let origin = b_call_origin(state, terminator.origin, terminator.source);

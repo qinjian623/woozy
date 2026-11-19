@@ -1,0 +1,83 @@
+// TEST-ONLY SCAFFOLD: app/wzcc/valueops is still absent from the tree.
+//
+// B does not use valueops directly, but C's owning()/copyability queries and
+// D's weak-target query do.  This stand-in answers only for the non-aggregate
+// types the synthetic harness module contains and rejects everything else, so
+// it can never silently stand in for the real classifier.
+package valueops;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func scaffold_reject() model.SupportError {
+    return model.SupportError.Invalid(
+        "nativeemit_b harness scaffold: no value classification implementation");
+}
+
+func scaffold_kind(module hir.HirModule, type_id usize) model.TypeKind
+    throws model.SupportError {
+    switch types.find(module.types, type_id) {
+        case option.Option.Some(value): return value.kind;
+        case option.Option.None: throw scaffold_reject();
+    }
+}
+
+pub func classify_value(module hir.HirModule, type_id usize) hir.ValueOps
+    throws model.SupportError {
+    let kind = scaffold_kind(module, type_id);
+    switch kind {
+        case model.TypeKind.Unit: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.Bool: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.SignedInt: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.UnsignedInt: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.Isize: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.Usize: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        case model.TypeKind.Float: {
+            return hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+                pod_inout: true, fields: [], reason: "");
+        }
+        default: throw scaffold_reject();
+    }
+}
+
+pub func ordinary_copyable(module hir.HirModule, type_id usize) bool
+    throws model.SupportError {
+    let kind = scaffold_kind(module, type_id);
+    switch kind {
+        case model.TypeKind.NominalStruct: throw scaffold_reject();
+        case model.TypeKind.NominalEnum: throw scaffold_reject();
+        case model.TypeKind.Vec: throw scaffold_reject();
+        case model.TypeKind.String: throw scaffold_reject();
+        default: return true;
+    }
+}
+
+pub func weak_target(module hir.HirModule, type_id usize) bool {
+    return false;
+}
+
+pub func owning_value(module hir.HirModule, type_id usize) bool
+    throws model.SupportError {
+    return classify_value(module, type_id).needs_drop;
+}

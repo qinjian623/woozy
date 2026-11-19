@@ -363,6 +363,12 @@ int64_t lang_sys_ftruncate_v1(int32_t fd, int64_t size) noexcept {
 }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
+int64_t lang_sys_flock_v1(int32_t fd, int32_t operation) noexcept {
+  // Linux x86_64 __NR_flock, verified against asm/unistd_64.h.
+  return sys2(73, static_cast<long>(fd), static_cast<long>(operation));
+}
+
+LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_fsync_v1(int32_t fd) noexcept {
   return sys1(kSysFsync, static_cast<long>(fd));
 }

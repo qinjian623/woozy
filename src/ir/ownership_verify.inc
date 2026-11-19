@@ -7,11 +7,10 @@
     const auto &sig = *types.find(f.signature);
     auto capture_slot = [&](const Slot &slot) {
       if (!slot.binding) return false;
-      for (const auto &hf : h.functions)
-        if (hf.symbol == f.symbol)
-          for (const auto &capture : hf.captures)
-            if (capture.local == *slot.binding)
-              return true;
+      if (const auto *hf = hir_function_for(f.symbol))
+        for (const auto &capture : hf->captures)
+          if (capture.local == *slot.binding)
+            return true;
       return false;
     };
     for (size_t n = 0; n < f.slots.size(); ++n) {
@@ -32,13 +31,20 @@
       auto ref = *s.owner;
       bool match = false;
       if (ref.kind == hir::OwnerKind::binding) {
-        for (const auto &l : h.ownership.locals)
-          if (l.symbol.value == ref.identity && l.type == s.type &&
-              h.scopes.at(l.scope.value).function == f.symbol) match = true;
+        if (auto it = locals_by_symbol.find(ref.identity);
+            it != locals_by_symbol.end())
+          for (const auto *l : it->second)
+            if (l->type == s.type &&
+                h.scopes.at(l->scope.value).function == f.symbol)
+              match = true;
       } else if (ref.kind == hir::OwnerKind::temporary) {
-        for (const auto &t : h.ownership.temporaries)
-          if (t.producer.value == ref.identity && t.type == s.type &&
-              h.scopes.at(h.nodes[t.producer.value].scope.value).function == f.symbol) match = true;
+        if (auto it = temporaries_by_producer.find(ref.identity);
+            it != temporaries_by_producer.end())
+          for (const auto *t : it->second)
+            if (t->type == s.type &&
+                h.scopes.at(h.nodes[t->producer.value].scope.value).function ==
+                    f.symbol)
+              match = true;
       } else if (ref.kind == hir::OwnerKind::iteration && ref.identity < h.nodes.size()) {
         const auto &n = h.nodes[ref.identity];
         match = n.kind() == hir::NodeKind::for_in && h.nodes[n.children[0].value].type == s.type;
@@ -120,8 +126,14 @@
         }
         if (i.op == Op::ownership_begin) {
           need(!batch, "nested ownership batch", i.source); origin = i.origin; kind = i.bits;
-          if (!kind) for (const auto &fe : h.ownership.full_expressions) if (fe.node == *origin) batch = &fe.actions;
-          if (kind) for (const auto &c : h.ownership.calls) if (c.node == *origin) batch = &c.on_return;
+          if (!kind) {
+            if (auto it = full_expressions.find(origin->value);
+                it != full_expressions.end())
+              batch = &it->second->actions;
+          } else {
+            if (auto it = calls.find(origin->value); it != calls.end())
+              batch = &it->second->on_return;
+          }
           need(batch != nullptr, "batch not present in HIR", i.source); next = 0;
         } else if (i.op == Op::ownership_end) {
           need(batch && next == batch->size() && i.origin == origin && i.bits == kind,

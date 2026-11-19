@@ -1,0 +1,79 @@
+package frontcache;
+import "app/wzcc/model" as model;
+
+func ast_kind(value u64) model.AstKind throws Error {
+    switch value {
+        case 0: return model.AstKind.File;
+        case 1: return model.AstKind.Package;
+        case 2: return model.AstKind.Import;
+        case 3: return model.AstKind.Binding;
+        case 4: return model.AstKind.Function;
+        case 5: return model.AstKind.Struct;
+        case 6: return model.AstKind.Enum;
+        case 7: return model.AstKind.Trait;
+        case 8: return model.AstKind.Impl;
+        case 9: return model.AstKind.Field;
+        case 10: return model.AstKind.Variant;
+        case 11: return model.AstKind.GenericParameter;
+        case 12: return model.AstKind.Parameter;
+        case 13: return model.AstKind.Async;
+        case 14: return model.AstKind.Await;
+        case 15: return model.AstKind.NamedType;
+        case 16: return model.AstKind.FunctionType;
+        case 17: return model.AstKind.ParenthesizedType;
+        case 18: return model.AstKind.Block;
+        case 19: return model.AstKind.ExpressionStatement;
+        case 20: return model.AstKind.Assign;
+        case 21: return model.AstKind.If;
+        case 22: return model.AstKind.For;
+        case 23: return model.AstKind.ForIn;
+        case 24: return model.AstKind.Switch;
+        case 25: return model.AstKind.Case;
+        case 26: return model.AstKind.Try;
+        case 27: return model.AstKind.Catch;
+        case 28: return model.AstKind.Defer;
+        case 29: return model.AstKind.Unsafe;
+        case 30: return model.AstKind.Return;
+        case 31: return model.AstKind.Throw;
+        case 32: return model.AstKind.Break;
+        case 33: return model.AstKind.Continue;
+        case 34: return model.AstKind.Name;
+        case 35: return model.AstKind.Literal;
+        case 36: return model.AstKind.Unary;
+        case 37: return model.AstKind.Binary;
+        case 38: return model.AstKind.Call;
+        case 39: return model.AstKind.Argument;
+        case 40: return model.AstKind.Member;
+        case 41: return model.AstKind.NeutralBracket;
+        case 42: return model.AstKind.BracketItem;
+        case 43: return model.AstKind.Slice;
+        case 44: return model.AstKind.List;
+        case 45: return model.AstKind.FunctionLiteral;
+        case 46: return model.AstKind.Parenthesized;
+        case 47: return model.AstKind.BindPattern;
+        case 48: return model.AstKind.LiteralPattern;
+        case 49: return model.AstKind.VariantPattern;
+        case 51: return model.AstKind.TraitObjectType;
+        default: throw Error.Invalid;
+    }
+}
+func token_kind(value u64) model.TokenKind throws Error {
+    switch value {
+        case 0: return model.TokenKind.End;
+        case 1: return model.TokenKind.Identifier;
+        case 2: return model.TokenKind.Integer;
+        case 3: return model.TokenKind.Floating;
+        case 4: return model.TokenKind.StringLiteral;
+        case 5: return model.TokenKind.Keyword;
+        case 6: return model.TokenKind.Punctuation;
+        default: throw Error.Invalid;
+    }
+}
+func trivia_kind(value u64) model.TriviaKind throws Error {
+    switch value {
+        case 0: return model.TriviaKind.Whitespace;
+        case 1: return model.TriviaKind.LineComment;
+        case 2: return model.TriviaKind.BlockComment;
+        default: throw Error.Invalid;
+    }
+}

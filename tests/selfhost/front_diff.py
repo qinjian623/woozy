@@ -15,6 +15,7 @@ frontend or a bare toolchain command is reported instead of passing silently.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -34,6 +35,19 @@ OPERATION_ID = "woozy-SH04-front-diff-one-correction-20261113"
 PROTOCOL = "woozy-selfhost-front/1"
 MODULE_NAMES = ("model", "source", "lexer", "parser")
 EXPECTED_SYNTAX_CASES = 80
+EXPECTED_EDGE_CASES = 28
+# Restored original frontend inventory: every live selfhost .wz file, including
+# selfhost/tests/** fixtures/corpora, plus the driver.  The count is fixed so a
+# silent inventory shrink fails; the complete path/SHA list is written to
+# inputs.json for the run report.
+EXPECTED_SELFHOST_SOURCES = 270
+EXPECTED_CASES = (EXPECTED_SYNTAX_CASES + EXPECTED_EDGE_CASES +
+                  EXPECTED_SELFHOST_SOURCES + 1)
+DEFAULT_JOBS = 4
+# Keep the original per-oracle command budget.  The restored inventory is run in
+# bounded parallel batches; the CTest command budget remains 1200 s and Wz
+# program runs remain 60 s.
+DEFAULT_ORACLE_TIMEOUT = 60.0
 TRAP_NAMES = (
     "woozyc",
     "lang_native_helper",
@@ -200,11 +214,16 @@ def load_cases(case_dir: Path) -> list[dict[str, Any]]:
                 "name": f"syntax/{case['name']}",
                 "path": path,
                 "bytes": payload,
+                "sha256": hashlib.sha256(payload).hexdigest(),
                 "expected_syntax": case["expected_syntax"],
             }
         )
 
     edge_cases = edge_case_definitions()
+    if len(edge_cases) != EXPECTED_EDGE_CASES:
+        raise CheckFailure(
+            f"expected {EXPECTED_EDGE_CASES} edge cases, found {len(edge_cases)}"
+        )
     edge_dir = case_dir / "edge"
     edge_dir.mkdir(parents=True, exist_ok=True)
     for index, (name, payload) in enumerate(edge_cases):
@@ -216,6 +235,7 @@ def load_cases(case_dir: Path) -> list[dict[str, Any]]:
                 "name": f"edge/{name}",
                 "path": path,
                 "bytes": payload,
+                "sha256": hashlib.sha256(payload).hexdigest(),
                 "expected_syntax": None,
             }
         )
@@ -228,6 +248,7 @@ def load_cases(case_dir: Path) -> list[dict[str, Any]]:
                 "name": name,
                 "path": path.resolve(),
                 "bytes": payload,
+                "sha256": hashlib.sha256(payload).hexdigest(),
                 "expected_syntax": None,
             }
         )
@@ -238,17 +259,28 @@ def load_cases(case_dir: Path) -> list[dict[str, Any]]:
             "name": "selfhost/tests/selfhost/front_driver.wz",
             "path": DRIVER_SOURCE.resolve(),
             "bytes": payload,
+            "sha256": hashlib.sha256(payload).hexdigest(),
             "expected_syntax": None,
         }
     )
+    if len(cases) != EXPECTED_CASES:
+        raise CheckFailure(
+            f"expected {EXPECTED_CASES} fixed frontend cases, found {len(cases)}"
+        )
     return cases
 
 
 def selfhost_source_paths() -> list[tuple[str, Path]]:
-    """Read live compiler sources; stale copies cannot substitute missing modules."""
+    """Read every live compiler/test source; stale copies cannot substitute."""
     root = ROOT / "selfhost"
+    paths = sorted(root.rglob("*.wz")) if root.is_dir() else []
+    if len(paths) != EXPECTED_SELFHOST_SOURCES:
+        raise CheckFailure(
+            f"expected {EXPECTED_SELFHOST_SOURCES} selfhost sources under "
+            f"{root}, found {len(paths)}"
+        )
     return [(f"selfhost/{path.relative_to(root)}", path)
-            for path in sorted(root.rglob("*.wz"))] if root.is_dir() else []
+            for path in paths]
 
 
 def edge_case_definitions() -> list[tuple[str, bytes]]:
@@ -411,52 +443,126 @@ def validate_diagnostic_projection(document: dict[str, Any], case_name: str) -> 
         raise CheckFailure(f"{case_name}: lexical diagnostics changed parser recovery")
 
 
+# Evidence records retain only these selected, non-credential run variables.
+# This is a deliberate subset, not the complete process environment; the
+# subprocess still receives the original env object unchanged.
+RECORDED_ENV_KEYS = (
+    "PATH",
+    "LC_ALL",
+    "PYTHONDONTWRITEBYTECODE",
+    "TMPDIR",
+    "LD_LIBRARY_PATH",
+    "WOOZY_TOOLCHAIN_ROOT",
+    "SH04_TRAP_LOG",
+)
+
+
+def recorded_env(env: dict[str, str]) -> dict[str, str]:
+    """Return the allowlisted evidence subset without mutating ``env``."""
+    return {key: env[key] for key in RECORDED_ENV_KEYS if key in env}
+
+
+def write_case_record(path: Path, record: dict[str, Any]) -> None:
+    safe_record = dict(record)
+    if isinstance(safe_record.get("env"), dict):
+        safe_record["env"] = recorded_env(safe_record["env"])
+    path.write_text(json.dumps(safe_record, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def run_oracle(
     binary: Path,
     cases: list[dict[str, Any]],
     args: argparse.Namespace,
     env: dict[str, str],
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    outputs: dict[str, dict[str, Any]] = {}
+) -> tuple[dict[str, Path], list[dict[str, Any]]]:
+    """Run independent oracle processes in a bounded batch."""
+    outputs: dict[str, Path] = {}
     failures: list[dict[str, Any]] = []
     out_dir = args.work_dir / "oracle"
     out_dir.mkdir(parents=True, exist_ok=True)
-    for case in cases:
+
+    def one(case: dict[str, Any]) -> tuple[str, Path | None, dict[str, Any] | None]:
         run = run_process(
             [str(binary), str(case["path"])],
             env=env,
-            timeout=args.timeout,
+            timeout=args.oracle_timeout,
         )
         stem = case["name"].replace("/", "__")
-        (out_dir / f"{stem}.stdout").write_bytes(run["stdout"])
-        (out_dir / f"{stem}.stderr").write_bytes(run["stderr"])
+        stdout_path = out_dir / f"{stem}.stdout"
+        stderr_path = out_dir / f"{stem}.stderr"
+        stdout_path.write_bytes(run["stdout"])
+        stderr_path.write_bytes(run["stderr"])
+        record: dict[str, Any] = {
+            "case": case["name"],
+            "group": case["group"],
+            "input": {"path": str(case["path"]), "sha256": case["sha256"]},
+            "argv": run["command"],
+            "cwd": os.getcwd(),
+            "env": recorded_env(env),
+            "timeout_seconds": args.oracle_timeout,
+            "exit": run["returncode"],
+            "timed_out": run["timed_out"],
+            "stdout": {"path": str(stdout_path),
+                       "sha256": sha256_bytes(run["stdout"]),
+                       "bytes": len(run["stdout"])},
+            "stderr": {"path": str(stderr_path),
+                       "sha256": sha256_bytes(run["stderr"]),
+                       "bytes": len(run["stderr"])},
+            "protocol": "oracle",
+        }
         if run["returncode"] != 0 or run["timed_out"]:
-            failures.append(
-                {
-                    "case": case["name"],
-                    "status": "failed",
-                    "reason": "oracle process failed",
-                    "returncode": run["returncode"],
-                    "timed_out": run["timed_out"],
-                    "output": output_text(run),
-                }
-            )
-            continue
+            record.update({
+                "validation": "failed",
+                "error": "oracle process failed",
+                "output": output_text(run),
+            })
+            write_case_record(out_dir / f"{stem}.json", record)
+            return case["name"], None, {
+                "case": case["name"],
+                "status": "failed",
+                "reason": "oracle process failed",
+                "command": display_command(run["command"]),
+                "returncode": run["returncode"],
+                "timed_out": run["timed_out"],
+                "output": output_text(run),
+            }
         try:
             document = json.loads(run["stdout"].decode("utf-8"))
             oracle_envelope(document, case["name"])
             validate_diagnostic_projection(document, case["name"])
         except (UnicodeDecodeError, json.JSONDecodeError, CheckFailure) as error:
-            failures.append(
-                {
-                    "case": case["name"],
-                    "status": "failed",
-                    "reason": f"invalid oracle output: {error}",
-                    "output": output_text(run),
-                }
-            )
-            continue
-        outputs[case["name"]] = document
+            record.update({
+                "validation": "failed",
+                "error": f"invalid oracle output: {error}",
+                "output": output_text(run),
+            })
+            write_case_record(out_dir / f"{stem}.json", record)
+            return case["name"], None, {
+                "case": case["name"],
+                "status": "failed",
+                "reason": f"invalid oracle output: {error}",
+                "command": display_command(run["command"]),
+                "output": output_text(run),
+            }
+        record["validation"] = "passed"
+        write_case_record(out_dir / f"{stem}.json", record)
+        return case["name"], stdout_path, None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = [pool.submit(one, case) for case in cases]
+        for future in concurrent.futures.as_completed(futures):
+            name, output, failure = future.result()
+            if failure is not None:
+                failures.append(failure)
+            else:
+                assert output is not None
+                outputs[name] = output
+    failures.sort(key=lambda failure: failure.get("case", ""))
     return outputs, failures
 
 
@@ -577,21 +683,18 @@ def build_wz(
 def run_wz(
     binaries: dict[int, Path],
     cases: list[dict[str, Any]],
-    oracle: dict[str, dict[str, Any]],
+    oracle_paths: dict[str, Path],
     args: argparse.Namespace,
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[str]]:
-    results: dict[str, dict[str, Any]] = {}
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Run independent Wz processes in bounded batches and compare on disk."""
     failures: list[dict[str, Any]] = []
     trap_dir = args.work_dir / "runtime-traps"
     trap_log = args.work_dir / "runtime-traps.log"
     write_traps(trap_dir, trap_log)
-    runtime_env = {
-        "PATH": str(trap_dir),
-        "SH04_TRAP_LOG": str(trap_log),
-        "LC_ALL": "C",
-    }
     out_dir = args.work_dir / "wz/output"
     out_dir.mkdir(parents=True, exist_ok=True)
+    all_trap_calls: list[str] = []
+
     for optimization, binary in binaries.items():
         payload = binary.read_bytes()
         for forbidden in ("woozyc", "lang_native_helper", "stage0_oracle", "front_diff.py"):
@@ -603,7 +706,15 @@ def run_wz(
                         "reason": f"Wz binary contains forbidden symbol {forbidden!r}",
                     }
                 )
-        for case in cases:
+        optimization_log = args.work_dir / f"runtime-traps-o{optimization}.log"
+        optimization_log.write_text("", encoding="utf-8")
+        runtime_env = {
+            "PATH": str(trap_dir),
+            "SH04_TRAP_LOG": str(optimization_log),
+            "LC_ALL": "C",
+        }
+
+        def one(case: dict[str, Any]) -> dict[str, Any] | None:
             key = f"o{optimization}/{case['name']}"
             run = run_process(
                 [str(binary), str(case["path"])],
@@ -611,61 +722,147 @@ def run_wz(
                 timeout=args.timeout,
             )
             stem = key.replace("/", "__")
-            (out_dir / f"{stem}.stdout").write_bytes(run["stdout"])
-            (out_dir / f"{stem}.stderr").write_bytes(run["stderr"])
+            stdout_path = out_dir / f"{stem}.stdout"
+            stderr_path = out_dir / f"{stem}.stderr"
+            stdout_path.write_bytes(run["stdout"])
+            stderr_path.write_bytes(run["stderr"])
+            record: dict[str, Any] = {
+                "case": case["name"],
+                "group": case["group"],
+                "optimization": optimization,
+                "input": {"path": str(case["path"]),
+                          "sha256": case["sha256"]},
+                "argv": run["command"],
+                "cwd": os.getcwd(),
+                "env": recorded_env(runtime_env),
+                "timeout_seconds": args.timeout,
+                "exit": run["returncode"],
+                "timed_out": run["timed_out"],
+                "stdout": {"path": str(stdout_path),
+                           "sha256": sha256_bytes(run["stdout"]),
+                           "bytes": len(run["stdout"])},
+                "stderr": {"path": str(stderr_path),
+                           "sha256": sha256_bytes(run["stderr"]),
+                           "bytes": len(run["stderr"])},
+                "protocol": "wz",
+                "expected": None,
+                "protocol_compare": {"status": "not_run"},
+            }
             if run["returncode"] != 0 or run["timed_out"]:
-                failures.append(
-                    {
-                        "case": case["name"],
-                        "optimization": optimization,
-                        "status": "failed",
-                        "reason": "Wz driver process failed",
-                        "returncode": run["returncode"],
-                        "timed_out": run["timed_out"],
-                        "output": output_text(run),
-                    }
-                )
-                continue
+                record.update({
+                    "validation": "failed",
+                    "error": "Wz driver process failed",
+                    "output": output_text(run),
+                })
+                write_case_record(out_dir / f"{stem}.json", record)
+                return {
+                    "case": case["name"],
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": "Wz driver process failed",
+                    "command": display_command(run["command"]),
+                    "returncode": run["returncode"],
+                    "timed_out": run["timed_out"],
+                    "output": output_text(run),
+                }
             try:
                 document = json.loads(run["stdout"].decode("utf-8"))
                 oracle_envelope(document, case["name"])
                 validate_diagnostic_projection(document, case["name"])
             except (UnicodeDecodeError, json.JSONDecodeError, CheckFailure) as error:
-                failures.append(
-                    {
-                        "case": case["name"],
-                        "optimization": optimization,
-                        "status": "failed",
-                        "reason": f"invalid Wz output: {error}",
-                        "output": output_text(run),
-                    }
-                )
-                continue
-            differences = compare(oracle[case["name"]], document)
-            results[key] = document
-            if differences:
-                failures.append(
-                    {
-                        "case": case["name"],
-                        "optimization": optimization,
-                        "status": "failed",
-                        "reason": "protocol differs",
-                        "differences": differences[:20],
-                    }
-                )
-            else:
-                results[key] = document
-    trap_calls = trap_log.read_text(encoding="utf-8", errors="replace").strip()
-    if trap_calls:
-        failures.append(
-            {
-                "phase": "wz-runtime-isolation",
-                "status": "failed",
-                "reason": "Wz driver attempted to execute a trap command",
-                "calls": trap_calls.splitlines()[:20],
+                record.update({
+                    "validation": "failed",
+                    "error": f"invalid Wz output: {error}",
+                    "output": output_text(run),
+                })
+                write_case_record(out_dir / f"{stem}.json", record)
+                return {
+                    "case": case["name"],
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": f"invalid Wz output: {error}",
+                    "command": display_command(run["command"]),
+                    "output": output_text(run),
+                }
+            oracle_path = oracle_paths.get(case["name"])
+            if oracle_path is None:
+                record.update({
+                    "validation": "failed",
+                    "error": "oracle output is missing for this case",
+                })
+                write_case_record(out_dir / f"{stem}.json", record)
+                return {
+                    "case": case["name"],
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": "oracle output is missing for this case",
+                }
+            try:
+                oracle_bytes = oracle_path.read_bytes()
+                expected = json.loads(oracle_bytes.decode("utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                record.update({
+                    "validation": "failed",
+                    "error": f"cannot read oracle output: {error}",
+                })
+                write_case_record(out_dir / f"{stem}.json", record)
+                return {
+                    "case": case["name"],
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": f"cannot read oracle output: {error}",
+                }
+            record["expected"] = {
+                "path": str(oracle_path),
+                "sha256": sha256_bytes(oracle_bytes),
+                "bytes": len(oracle_bytes),
             }
-        )
-    return results, failures, ([] if not trap_calls else trap_calls.splitlines()[:20])
+            differences = compare(expected, document)
+            if differences:
+                record.update({
+                    "validation": "protocol_failed",
+                    "protocol_compare": {
+                        "status": "failed",
+                        "differences": differences[:20],
+                    },
+                })
+                write_case_record(out_dir / f"{stem}.json", record)
+                return {
+                    "case": case["name"],
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": "protocol differs",
+                    "differences": differences[:20],
+                }
+            record["validation"] = "passed"
+            record["protocol_compare"] = {"status": "passed", "differences": []}
+            write_case_record(out_dir / f"{stem}.json", record)
+            return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = [pool.submit(one, case) for case in cases]
+            for future in concurrent.futures.as_completed(futures):
+                failure = future.result()
+                if failure is not None:
+                    failures.append(failure)
+        trap_calls = optimization_log.read_text(
+            encoding="utf-8", errors="replace").strip()
+        if trap_calls:
+            lines = trap_calls.splitlines()[:20]
+            all_trap_calls.extend(lines)
+            failures.append(
+                {
+                    "phase": "wz-runtime-isolation",
+                    "optimization": optimization,
+                    "status": "failed",
+                    "reason": "Wz driver attempted to execute a trap command",
+                    "calls": lines,
+                }
+            )
+    failures.sort(key=lambda failure: (
+        failure.get("case", ""), failure.get("optimization", -1),
+        failure.get("phase", "")))
+    return failures, all_trap_calls
 
 
 def compare(expected: Any, actual: Any, path: str = "$") -> list[str]:
@@ -718,7 +915,14 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path,
                         default=ROOT / f"tmp/checks/{OPERATION_ID}")
     parser.add_argument("--timeout", type=float, default=60.0,
-                        help="timeout per oracle/Wz program run, seconds")
+                        help="timeout per Wz program run, seconds")
+    parser.add_argument("--oracle-timeout", type=float,
+                        default=DEFAULT_ORACLE_TIMEOUT,
+                        help="timeout per C++ oracle run, seconds "
+                             f"(default: {DEFAULT_ORACLE_TIMEOUT:g})")
+    parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
+                        help=f"bounded parallel case batch size "
+                             f"(default: {DEFAULT_JOBS})")
     parser.add_argument("--build-timeout", type=float, default=600.0,
                         help="timeout per oracle/Wz build, seconds")
     parser.add_argument("--env", action="append", default=[],
@@ -726,6 +930,10 @@ def main() -> int:
     parser.add_argument("--require-wz", action="store_true",
                         help="exit nonzero when Wz modules are missing or Wz fails")
     args = parser.parse_args()
+    if args.timeout <= 0 or args.oracle_timeout <= 0:
+        parser.error("--timeout and --oracle-timeout must be positive")
+    if args.jobs <= 0:
+        parser.error("--jobs must be positive")
 
     args.work_dir = args.work_dir.resolve()
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -741,6 +949,11 @@ def main() -> int:
             "cxx": args.cxx,
             "stage0": None,
             "work_dir": str(args.work_dir),
+            "jobs": args.jobs,
+            "oracle_timeout": args.oracle_timeout,
+            "wz_timeout": args.timeout,
+            "fixed_cases": EXPECTED_CASES,
+            "inputs_sha256": None,
         },
         "counts": {},
         "oracle": {},
@@ -760,7 +973,30 @@ def main() -> int:
     groups: dict[str, int] = {}
     for case in cases:
         groups[case["group"]] = groups.get(case["group"], 0) + 1
-    summary["counts"] = {"cases": len(cases), "groups": groups}
+    input_records = [
+        {"name": case["name"], "group": case["group"],
+         "path": str(case["path"]), "sha256": case["sha256"],
+         "bytes": len(case["bytes"])}
+        for case in cases
+    ]
+    input_document = {
+        "schema": "woozy-front-inputs/1",
+        "operation_id": OPERATION_ID,
+        "count": len(input_records),
+        "cases": input_records,
+    }
+    input_text = json.dumps(input_document, ensure_ascii=False, sort_keys=True,
+                            indent=2) + "\n"
+    input_path = args.work_dir / "inputs.json"
+    input_path.write_text(input_text, encoding="utf-8")
+    input_sha = hashlib.sha256(json.dumps(
+        input_records, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+    summary["counts"] = {
+        "cases": len(cases), "groups": groups,
+        "inputs_path": str(input_path), "inputs_sha256": input_sha,
+    }
+    summary["environment"]["inputs_sha256"] = input_sha
 
     oracle_binary, oracle_build_failure = build_oracle(args, env)
     if oracle_build_failure:
@@ -847,7 +1083,7 @@ def main() -> int:
                 print(failure["output"], file=sys.stderr)
         return 1
 
-    wz_outputs, wz_failures, trap_calls = run_wz(binaries, cases, oracle_outputs, args)
+    wz_failures, trap_calls = run_wz(binaries, cases, oracle_outputs, args)
     summary["failures"].extend(wz_failures)
     for optimization in (0, 2):
         total = len(cases)

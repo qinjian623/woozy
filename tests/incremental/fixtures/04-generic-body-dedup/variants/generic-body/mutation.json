@@ -1,0 +1,46 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "04-generic-body-dedup",
+  "variant": "generic-body",
+  "description": "Swap the two returns in dep.choose while keeping the private helper and public signature unchanged.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_reinstantiate": [
+      "dep.choose[i32]"
+    ],
+    "must_recompile_or_relink": [
+      "left",
+      "right",
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "44 -> 66",
+    "note": "Generic body changes without a signature change. Both cross-package users share the same i32 instance, so one invalidation must update both callers."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "51efb97cc341c111de7061e5455d4578b30794cd697ff458246b93f28c21b178"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 66,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

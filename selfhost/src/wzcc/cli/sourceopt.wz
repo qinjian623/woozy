@@ -1,0 +1,100 @@
+package cli;
+
+import "app/wzcc/resources" as resources;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct SourceObjectResult {
+    opt_jobs usize;
+    llc_jobs usize;
+    code string;
+    message string;
+}
+
+func source_object_tool(result inout SourceObjectResult, log inout string,
+                        argv Vec[string], capture string, code string, name string)
+    bool throws os.Error {
+    let process = run_logged(argv, capture, inout log, true);
+    if process.exit_code == 0 && !process.signalled { return true; }
+    result.code = code;
+    result.message = name + " failed with status " + strconv.format_i64(i64(process.exit_code));
+    return false;
+}
+
+func compile_source_unit(result inout SourceObjectResult, log inout string,
+                         tools string, input string, stem string, passes string,
+                         optimization string, triple string) bool throws os.Error {
+    let verified = stem + ".verified.ll";
+    result.opt_jobs += 1;
+    if !source_object_tool(inout result, inout log, [tools + "/opt", "-S",
+        "-passes=" + passes, "-verify-each", "-mtriple=" + triple, "-mcpu=generic",
+        input, "-o", verified], stem + ".opt-capture", "E_IR_INVALID", "LLVM opt") {
+        return false;
+    }
+    result.llc_jobs += 1;
+    return source_object_tool(inout result, inout log, [tools + "/llc", "-filetype=obj",
+        "-O=" + optimization, "-mtriple=" + triple, "-mcpu=generic", "-relocation-model=pic",
+        "-code-model=small", verified, "-o", stem + ".o"], stem + ".llc-capture",
+        "E_NATIVE_BUILD_FAILED", "LLVM llc");
+}
+
+func source_object_partition_tools(root string, optimization string, function_count usize,
+                                   log inout string) Vec[string] throws os.Error {
+    if optimization != "2" || function_count < 512 { return []; }
+    let tools = resources.source_partition_tools(root);
+    if vec.len(tools) == 0 {
+        append_log(inout log, "using single-module O2: llvm-split and llvm-objcopy are not both installed");
+    }
+    return tools;
+}
+
+func compile_source_object(root string, stem string, optimization string, triple string,
+                           has_async bool, partition_tools Vec[string], log inout string)
+    SourceObjectResult throws os.Error {
+    let tools = root + "/toolchain";
+    let input = stem + ".ll";
+    var result = SourceObjectResult(opt_jobs: 0, llc_jobs: 0, code: "", message: "");
+    var passes = "verify";
+    if optimization == "2" { passes = "verify,default<O2>,verify"; }
+    else if has_async { passes = "verify,default<O0>,verify"; }
+    if vec.len(partition_tools) == 0 {
+        let compiled = compile_source_unit(inout result, inout log, tools, input, stem, passes, optimization, triple);
+        return result;
+    }
+
+    // Validate the original before changing its optimization unit.
+    result.opt_jobs += 1;
+    if !source_object_tool(inout result, inout log, [tools + "/opt", "-passes=verify",
+        "-verify-each", "-disable-output", "-mtriple=" + triple, "-mcpu=generic", input],
+        stem + ".verify-capture", "E_IR_INVALID", "LLVM original module verification") {
+        return result;
+    }
+    let partition_count usize = 16;
+    let prefix = stem + ".part-";
+    if !source_object_tool(inout result, inout log, [partition_tools[0], "-j",
+        strconv.format_u64(u64(partition_count)), "--round-robin", "-o", prefix, input],
+        stem + ".split-capture", "E_NATIVE_BUILD_FAILED", "LLVM partition split") {
+        return result;
+    }
+    let combine = [tools + "/ld.lld", "-r"];
+    for var index usize = 0; index < partition_count; index += 1 {
+        let part = prefix + strconv.format_u64(u64(index));
+        if !compile_source_unit(inout result, inout log, tools, part, part, passes, optimization, triple) {
+            return result;
+        }
+        vec.push(combine, part + ".o");
+    }
+    let combined = stem + ".combined.o";
+    vec.push(combine, "-o");
+    vec.push(combine, combined);
+    if !source_object_tool(inout result, inout log, combine, stem + ".combine-capture",
+        "E_NATIVE_BUILD_FAILED", "LLVM partition combine") { return result; }
+
+    // llvm-split promotes local symbols to hidden globals. The source emitter
+    // has no cross-package hidden symbols. Restore locality before linking packages.
+    let localized = source_object_tool(inout result, inout log, [partition_tools[1],
+        "--localize-hidden", combined, stem + ".o"], stem + ".localize-capture",
+        "E_NATIVE_BUILD_FAILED", "LLVM partition symbol localization");
+    return result;
+}

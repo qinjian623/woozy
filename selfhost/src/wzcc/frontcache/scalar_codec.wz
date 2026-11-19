@@ -1,0 +1,141 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/interface" as interface;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct Encoder {
+    module hir.HirModule; keys interface.Keys; package_id usize; bytes Vec[u8]; nodes Vec[usize]; scopes Vec[usize];
+}
+struct SymbolKey { key string; symbol usize; }
+struct Decoder {
+    module hir.HirModule; package_id usize; reader Reader; symbols Vec[SymbolKey];
+    node_base usize; scope_base usize; node_count usize; scope_count usize;
+}
+func find_index(values Vec[usize], wanted usize) usize throws Error {
+    for var index usize = 0; index < vec.len(values); index += 1 { if values[index] == wanted { return index; } }
+    throw Error.Unsupported;
+}
+func encode_symbol(state Encoder, symbol usize) throws Error {
+    try { put_string(state.bytes, interface.indexed_symbol_key(state.keys, symbol)); }
+    catch problem model.SupportError { throw Error.Unsupported; }
+}
+func encode_type(state Encoder, id usize, depth usize) throws Error {
+    need(depth <= 64); var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(state.module.types, id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: throw Error.Unsupported;
+    }
+    let kind = model.type_kind_id(value.kind);
+    if kind > 8 || option.is_some(value.throws_type) { throw Error.Unsupported; }
+    put_number(state.bytes, u64(kind)); put_number(state.bytes, u64(value.bits));
+    if kind == 8 {
+        put_number(state.bytes, u64(vec.len(value.parameters)));
+        for parameter in value.parameters {
+            put_number(state.bytes, mode_number(parameter.mode)); encode_type(state, parameter.type_id, depth + 1);
+        }
+        encode_type(state, value.result, depth + 1);
+    }
+}
+func encode_source(state Encoder, value hir.HirSource) throws Error {
+    if value.node.module != state.package_id { throw Error.Unsupported; }
+    let package_value = state.module.resolved.project.modules[state.package_id];
+    need(value.node.file < vec.len(package_value.files));
+    let file = state.module.resolved.project.files[package_value.files[value.node.file]];
+    put_string(state.bytes, file.lexed.source.path);
+    var path = vec.empty[usize]();
+    try { path = interface.ast_path(state.keys, value.node); } catch problem model.SupportError { throw Error.Unsupported; }
+    put_number(state.bytes, u64(vec.len(path))); for index in path { put_number(state.bytes, u64(index)); }
+    put_span(state.bytes, value.span);
+}
+func encode_node(state Encoder, id usize) throws Error { put_number(state.bytes, u64(find_index(state.nodes, id))); }
+func encode_scope(state Encoder, id usize) throws Error { put_number(state.bytes, u64(find_index(state.scopes, id))); }
+func mode_number(value model.ParamMode) u64 {
+    switch value { case model.ParamMode.Ordinary: return 0; case model.ParamMode.Inout: return 1; case model.ParamMode.Move: return 2; }
+}
+func decode_mode(reader inout Reader) model.ParamMode throws Error {
+    switch number(inout reader) { case 0: return model.ParamMode.Ordinary; case 1: return model.ParamMode.Inout; case 2: return model.ParamMode.Move; default: throw Error.Invalid; }
+}
+func decode_type_kind(value u64) model.TypeKind throws Error {
+    switch value {
+        case 0: return model.TypeKind.Unit; case 1: return model.TypeKind.Bool;
+        case 2: return model.TypeKind.SignedInt; case 3: return model.TypeKind.UnsignedInt;
+        case 4: return model.TypeKind.Float; case 5: return model.TypeKind.String;
+        case 6: return model.TypeKind.Isize; case 7: return model.TypeKind.Usize;
+        case 8: return model.TypeKind.Function; default: throw Error.Invalid;
+    }
+}
+func decode_type(reader inout Reader, context inout types.Context, depth usize) usize throws Error {
+    need(depth <= 64); let kind = decode_type_kind(number(inout reader));
+    let bits = number(inout reader); need(bits <= 64); var value = model.empty_type(kind); value.bits = u32(bits);
+    if model.type_kind_id(kind) == 8 {
+        let size = count(inout reader);
+        for var index usize = 0; index < size; index += 1 {
+            let mode = decode_mode(inout reader); let parameter_type = decode_type(inout reader, inout context, depth + 1);
+            vec.push(value.parameters, model.ParameterType(mode: mode, type_id: parameter_type));
+        }
+        let result = decode_type(inout reader, inout context, depth + 1); value.result = result;
+    }
+    try { return types.intern(inout context, value); }
+    catch problem types.Error { throw Error.Invalid; }
+}
+func read_type(state inout Decoder) usize throws Error {
+    var context = state.module.types;
+    let result = decode_type(inout state.reader, inout context, 0); state.module.types = context;
+    return result;
+}
+func symbol_keys(module hir.HirModule, keys interface.Keys) Vec[SymbolKey] {
+    let result = vec.empty[SymbolKey]();
+    for symbol in module.resolved.symbols {
+        try { vec.push(result, SymbolKey(key: interface.indexed_symbol_key(keys, symbol.id), symbol: symbol.id)); }
+        catch problem model.SupportError {}
+    }
+    for var index usize = 1; index < vec.len(result); index += 1 {
+        let value = result[index]; var cursor = index;
+        for cursor > 0 && value.key < result[cursor - 1].key { result[cursor] = result[cursor - 1]; cursor -= 1; }
+        result[cursor] = value;
+    }
+    return result;
+}
+func decode_symbol(state inout Decoder) usize throws Error {
+    let key = string_value(inout state.reader); var low usize = 0; var high = vec.len(state.symbols);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if state.symbols[mid].key < key { low = mid + 1; } else { high = mid; }
+    }
+    need(low < vec.len(state.symbols) && state.symbols[low].key == key);
+    need(low + 1 == vec.len(state.symbols) || state.symbols[low + 1].key != key);
+    return state.symbols[low].symbol;
+}
+func decode_source(state inout Decoder) hir.HirSource throws Error {
+    let filename = string_value(inout state.reader); let package_value = state.module.resolved.project.modules[state.package_id];
+    var file_index usize = 0;
+    for file_index < vec.len(package_value.files) && state.module.resolved.project.files[package_value.files[file_index]].lexed.source.path != filename { file_index += 1; }
+    need(file_index < vec.len(package_value.files)); let file = state.module.resolved.project.files[package_value.files[file_index]];
+    var node = file.root; let size = count(inout state.reader); need(size <= 1024);
+    for var index usize = 0; index < size; index += 1 {
+        let child = usize(number(inout state.reader)); need(child < vec.len(file.nodes[node].children)); node = file.nodes[node].children[child];
+    }
+    let span = get_span(inout state.reader, file.lexed.source);
+    return hir.HirSource(node: model.NodeRef(module: state.package_id, file: file_index, node: node), span: span);
+}
+func decode_node(state inout Decoder) usize throws Error {
+    let id = usize(number(inout state.reader)); need(id < state.node_count); return state.node_base + id;
+}
+func decode_scope(state inout Decoder) usize throws Error {
+    let id = usize(number(inout state.reader)); need(id < state.scope_count); return state.scope_base + id;
+}
+func encode_argument(state Encoder, value hir.CallArg) throws Error {
+    put_number(state.bytes, u64(value.source_index)); put_number(state.bytes, u64(value.parameter_index));
+    switch value.label { case option.Option.Some(label): put_number(state.bytes, 1); put_string(state.bytes, label); case option.Option.None: put_number(state.bytes, 0); }
+    put_number(state.bytes, mode_number(value.mode)); encode_node(state, value.expression);
+}
+func decode_argument(state inout Decoder) hir.CallArg throws Error {
+    let source_index = number(inout state.reader); let parameter_index = number(inout state.reader);
+    need(source_index <= 4294967295 && parameter_index <= 4294967295);
+    var label = option.Option[string].None; if flag(inout state.reader) { let value = string_value(inout state.reader); label = option.Option[string].Some(value); }
+    let mode = decode_mode(inout state.reader); let expression = decode_node(inout state);
+    return hir.CallArg(source_index: u32(source_index), parameter_index: u32(parameter_index), label: label, mode: mode, expression: expression);
+}

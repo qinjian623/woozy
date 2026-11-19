@@ -1,0 +1,40 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "06-package-set-errors",
+  "kind": "source-package-set",
+  "purpose": "Add/remove source files and source packages, and introduce an import cycle. Includes syntax and type failure variants that must not inherit a previous successful result.",
+  "language_references": [
+    "development/docs/FRONTEND.md §6.1 模块解析",
+    "development/docs/FRONTEND.md §6.2 声明收集和依赖",
+    "docs/SEMANTICS.md §2 包依赖 DAG 与完整循环路径",
+    "development/docs/FRONTEND.md §10 增量检查"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+      "src/extra.wz": "ef64735b138e68e7ab402deaa2b99824ed22b2d734f7b86ca3e340047ed8d935",
+      "src/main.wz": "840bc3ca8bd68ddd5455306f1079def5efec6cf3a4ec472ac41972854cac2a0d",
+      "vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+      "vendor/dep/src/lib.wz": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 12,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "add-file",
+    "remove-file-stale",
+    "add-package",
+    "remove-package-stale",
+    "import-cycle",
+    "syntax-failure",
+    "type-failure"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

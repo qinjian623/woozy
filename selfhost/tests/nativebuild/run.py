@@ -9,10 +9,14 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE.parent))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--woozyc', default=str(ROOT / 'build/woozy-stdlib-native/woozyc'))
 parser.add_argument('--toolchain-root', default=str(ROOT.parent / 'toolchains'))
@@ -146,6 +150,13 @@ try:
         target.write_bytes(source.read_bytes())
         inputs.append({'source': str(source), 'sha256': sha(target)})
     shutil.copy2(HERE / 'main.wz', project / 'src/main.wz')
+    # SH31 added frontcache to nativebuild.wz and interface to the shared
+    # nativeemit state.  Copy the real import closure instead of a stale
+    # hand-written package list; existing reduced nativeemit files stay as-is.
+    skipped_existing = []
+    for record in complete_import_closure(project / 'src', SOURCE,
+                                           skipped=skipped_existing):
+        inputs.append({'source': record['source'], 'sha256': record['sha256']})
     binary_inputs = [TOOLS / name for name in ['opt', 'llc', 'clang', 'ld.lld', 'llvm-ar']]
     binary_inputs += [STRACE, *(STAGE0.parent / 'native' / name for name in
                       ['liblang_native_runtime.a', 'liblang_hosted_runtime.a'])]
@@ -245,6 +256,7 @@ try:
     (WORK / 'inputs.json').write_text(json.dumps(inputs, indent=2))
     result = {'status': 'passed', 'work_dir': str(WORK), 'input_manifest_sha256': sha(WORK / 'inputs.json'),
               'scope': 'real Wz nativebuild tool driver; handmade LLVM inputs',
+              'skipped_existing_packages': skipped_existing,
               'not_run': ['publish recovery itself fails (toolio Rollback branch)', 'full language emitter and new CLI integration'],
               'checks': checks, 'records': records}
 except Exception as error:

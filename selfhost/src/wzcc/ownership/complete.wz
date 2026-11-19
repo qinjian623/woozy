@@ -123,7 +123,7 @@ func intern_members(module inout hir.HirModule, id usize, done Vec[usize],
                 depth + 1);
         }
     }
-    int_remove(active, id);
+    ids_remove(active, id);
     ids_insert(done, id);
 }
 
@@ -159,11 +159,10 @@ func complete_pattern(module inout hir.HirModule, pattern hir.Pattern,
 }
 
 func complete_function(module inout hir.HirModule, function hir.HirFunction,
-                       done Vec[usize]) throws Problem {
+                       done Vec[usize], seen Vec[bool]) throws Problem {
     complete_root(inout module, function.signature, function.source, done);
     let pending = vec.empty[usize]();
     vec.push(pending, function.body);
-    let seen = vec.empty[usize]();
     for vec.len(pending) > 0 {
         let popped = vec.pop(pending);
         var id usize = 0;
@@ -171,10 +170,11 @@ func complete_function(module inout hir.HirModule, function hir.HirFunction,
             case option.Option.Some(value): id = value;
             case option.Option.None: continue;
         }
-        if !ids_insert(seen, id) {
+        let node = node_of(module, id);
+        if seen[id] {
             continue;
         }
-        let node = node_of(module, id);
+        seen[id] = true;
         complete_root(inout module, node.type_id, node.source, done);
         let call_value = node_call(node);
         switch call_value {
@@ -229,10 +229,12 @@ func complete_function(module inout hir.HirModule, function hir.HirFunction,
 
 func complete_ownership(module inout hir.HirModule) throws Problem {
     let done = vec.empty[usize]();
+    let seen = vec.empty[bool]();
+    vec.resize(seen, vec.len(module.nodes), false);
     for function in module.functions {
-        complete_function(inout module, function, done);
+        complete_function(inout module, function, done, seen);
     }
     for template in module.templates {
-        complete_function(inout module, template.function, done);
+        complete_function(inout module, template.function, done, seen);
     }
 }

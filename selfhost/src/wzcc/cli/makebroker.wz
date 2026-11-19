@@ -1,0 +1,161 @@
+// Make owns concurrency. Each live recipe holds one job slot until a compiler
+// cloned from the prepared parent finishes that package.
+package cli;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAKE_SOCKET string = ".wz-source-make/worker";
+
+struct MakeBroker {
+    pid i32;
+    lifetime os.File;
+}
+
+func broker_close(file os.File) {
+    try { os.close(file); } catch problem os.Error {}
+}
+
+func finish_make_broker(broker MakeBroker) {
+    broker_close(broker.lifetime);
+    try { let status = process.wait(broker.pid); } catch problem os.Error {}
+}
+
+func start_make_broker(directory string, options Options, original model.Project,
+                       state MakeState, prepared resolve.PreparedProject,
+                       manager source.Manager) MakeBroker throws os.Error {
+    let dir = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, 0);
+    defer { broker_close(dir); }
+    let listener = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC, 0);
+    defer { broker_close(net.file(listener)); }
+    // The stage is private and may have a name longer than sockaddr_un.
+    let socket_path = "/proc/self/fd/" + strconv.format_i64(i64(os.fd(dir))) +
+        "/" + MAKE_SOCKET;
+    net.bind(listener, net.unix_address(socket_path));
+    net.listen(listener, 128);
+    let lifetime = os.pipe(u32(os.O_CLOEXEC));
+    defer { broker_close(lifetime.read_end); }
+    var keep = false;
+    defer { if !keep { broker_close(lifetime.write_end); } }
+    let pid = process.fork();
+    if pid == 0 {
+        broker_close(lifetime.write_end);
+        try {
+            os.chdir(directory);
+            let quiet = os.open("/dev/null", os.O_WRONLY | os.O_CLOEXEC, 0);
+            let output = os.dup2(quiet, 1);
+            let error = os.dup2(quiet, 2);
+            if os.fd(quiet) >= 3 { broker_close(quiet); }
+            var declarations = option.Option[sema.PreparedPackages].None;
+            if state.cache_dir == "" && vec.len(state.packages) > 1 {
+                declarations = sema.prepare_packages(resolve.resolve_prepared_project(prepared),
+                    option.Option[model.CheckConfig].None);
+            }
+            serve_make_broker(listener, lifetime.read_end, options, original,
+                state, prepared, declarations, manager);
+        } catch problem os.Error {}
+        os.exit(0);
+    }
+    keep = true;
+    return MakeBroker(pid: pid, lifetime: lifetime.write_end);
+}
+
+func serve_make_broker(listener net.Socket, lifetime os.File, options Options,
+                       original model.Project, state MakeState,
+                       prepared resolve.PreparedProject,
+                       declarations option.Option[sema.PreparedPackages],
+                       manager source.Manager) throws os.Error {
+    let rows = [
+        net.PollFd(fd: os.fd(lifetime), events: net.POLLIN, revents: 0),
+        net.PollFd(fd: net.fd(listener), events: net.POLLIN, revents: 0)
+    ];
+    var running usize = 0;
+    defer {
+        broker_close(net.file(listener));
+        for running != 0 {
+            try { let stopped = process.wait(-1); } catch problem os.Error { break; }
+            running -= 1;
+        }
+    }
+    for true {
+        try { let ready = net.poll(rows, -1); }
+        catch problem os.Error {
+            switch problem {
+                case os.Error.Interrupted(code, completed): continue;
+                default: throw problem;
+            }
+        }
+        if rows[0].revents != 0 { return; }
+        if (rows[1].revents & net.POLLIN) == 0 { throw invalid_state(); }
+        let peer = net.accept(listener, u32(net.SOCK_CLOEXEC)).socket;
+        var pid i32 = 0;
+        try { pid = process.fork(); }
+        catch problem os.Error { broker_close(net.file(peer)); throw problem; }
+        if pid == 0 {
+            broker_close(net.file(listener));
+            broker_close(lifetime);
+            try {
+                let request = vec.make[u8](16, 0);
+                if net.recv(peer, request, 16, net.MSG_WAITALL) != 16 { throw invalid_state(); }
+                let id = decode_make_request(request);
+                switch package_by_fixed(state, id) {
+                    case option.Option.None: throw invalid_state();
+                    case option.Option.Some(package_value): {
+                        let status = source_make_compile(options, manager, state, original,
+                            prepared, declarations, package_value);
+                        net.send_all(peer, [u8(status)], 0);
+                    }
+                }
+            } catch problem os.Error {}
+            os.exit(0);
+        }
+        broker_close(net.file(peer));
+        running += 1;
+        for running != 0 {
+            let finished = process.waitpid(-1, process.WNOHANG);
+            if finished.pid == 0 { break; }
+            running -= 1;
+        }
+    }
+}
+
+func decode_make_request(bytes Vec[u8]) string throws os.Error {
+    try { return text.from_bytes(bytes); }
+    catch problem text.Error { throw invalid_state(); }
+}
+
+pub func source_make_worker(options Options, manager inout source.Manager) i32 throws os.Error {
+    let state = read_state(MAKE_STATE);
+    switch package_by_fixed(state, options.make_package) {
+        case option.Option.None: {
+            return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
+                "source-make worker package id is not in the state record", model.FailureKind.Internal);
+        }
+        case option.Option.Some(package_value): {
+            io.println("source-make module start: " + package_value.fixed +
+                " target=" + object_name(package_value));
+            let peer = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC, 0);
+            defer { broker_close(net.file(peer)); }
+            net.connect(peer, net.unix_address(MAKE_SOCKET));
+            net.send_all(peer, text.bytes(package_value.fixed), 0);
+            let result = vec.make[u8](1, 0);
+            if net.recv(peer, result, 1, net.MSG_WAITALL) != 1 {
+                return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
+                    "prepared source-make worker did not return a status", model.FailureKind.Internal);
+            }
+            io.println("source-make module end: " + package_value.fixed +
+                " exit=" + strconv.format_i64(i64(result[0])));
+            return i32(result[0]);
+        }
+    }
+}

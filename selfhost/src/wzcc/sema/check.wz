@@ -2,8 +2,10 @@
 package sema;
 
 import "app/wzcc/hir" as hir;
+import "app/wzcc/frontcache" as frontcache;
 import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/model" as model;
+import "app/wzcc/resolve" as resolve;
 import "std/option" as option;
 import "std/vec" as vec;
 
@@ -112,15 +114,17 @@ func check_config(project model.Project, supplied option.Option[model.CheckConfi
     return config;
 }
 
-pub func check_types(input model.ResolveResult,
-                     config option.Option[model.CheckConfig]) hir.HirResult {
-    if !check_success(input.state, input.has_value, input.diagnostics) {
-        return check_forward_resolve(input);
-    }
+func check_types_unverified(input model.ResolveResult,
+                            config option.Option[model.CheckConfig]) hir.HirResult {
+    return check_types_unverified_cached(input, config, frontcache.context("", ""));
+}
+func check_types_unverified_cached(input model.ResolveResult,
+    config option.Option[model.CheckConfig], cache frontcache.Context) hir.HirResult {
+    if !check_success(input.state, input.has_value, input.diagnostics) { return check_forward_resolve(input); }
     try {
         let actual_config = check_config(input.value.project, config);
         var checker = make_checker(input.value, actual_config);
-        let ownership = run_checker(inout checker);
+        let ownership = run_checker_cached(inout checker, cache);
         if !check_success(ownership.state, ownership.has_value, ownership.diagnostics) {
             if vec.len(ownership.diagnostics) == 0 {
                 var cancelled = check_empty_result();
@@ -130,28 +134,210 @@ pub func check_types(input model.ResolveResult,
             return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
                 failure: ownership.failure));
         }
-        let module = checker.m;
-        let verified = hirverify.verify_types(module);
         var result = check_empty_result();
-        result.state = verified.state;
-        result.failure = verified.failure;
-        result.diagnostics = verified.diagnostics;
-        if check_success(verified.state, verified.has_value, verified.diagnostics) {
-            result.has_value = true;
-            result.value = module;
-        }
+        result.state = model.PhaseState.Complete;
+        result.failure = model.FailureKind.Internal;
+        result.diagnostics = [];
+        result.has_value = true;
+        result.value = checker.m;
         return result;
     } catch error Error { return check_error(error); }
+}
+
+func check_types_package_cached(input model.ResolveResult,
+    config option.Option[model.CheckConfig], cache frontcache.Context,
+    package_id usize) hir.HirResult {
+    if !check_success(input.state, input.has_value, input.diagnostics) { return check_forward_resolve(input); }
+    try {
+        let actual_config = check_config(input.value.project, config);
+        var checker = make_checker(input.value, actual_config);
+        let ownership = run_checker_package(inout checker, cache, package_id);
+        if !check_success(ownership.state, ownership.has_value, ownership.diagnostics) {
+            if vec.len(ownership.diagnostics) == 0 {
+                var cancelled = check_empty_result();
+                cancelled.state = model.PhaseState.Cancelled;
+                return cancelled;
+            }
+            return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+                failure: ownership.failure));
+        }
+        var result = check_empty_result();
+        result.state = model.PhaseState.Complete;
+        result.failure = model.FailureKind.Internal;
+        result.diagnostics = [];
+        result.has_value = true;
+        result.value = checker.m;
+        return result;
+    } catch error Error { return check_error(error); }
+}
+
+pub func check_types(input model.ResolveResult,
+                     config option.Option[model.CheckConfig]) hir.HirResult {
+    let typed = check_types_unverified(input, config);
+    if !check_success(typed.state, typed.has_value, typed.diagnostics) {
+        return typed;
+    }
+    let verified = hirverify.verify_types(typed.value);
+    var result = check_empty_result();
+    result.state = verified.state;
+    result.failure = verified.failure;
+    result.diagnostics = verified.diagnostics;
+    if check_success(verified.state, verified.has_value, verified.diagnostics) {
+        result.has_value = true;
+        result.value = typed.value;
+    }
+    return result;
 }
 
 pub func check_project(input model.ResolveResult,
                        config option.Option[model.CheckConfig],
                        mode hirverify.VerifyMode) hirverify.VerifyResult {
-    let typed = check_types(input, config);
+    let typed = check_types_unverified(input, config);
     if check_success(typed.state, typed.has_value, typed.diagnostics) {
         return hirverify.verify(typed.value, mode);
     }
     return hirverify.VerifyResult(state: typed.state, failure: typed.failure,
         diagnostics: typed.diagnostics,
         value: option.Option[hirverify.VerifiedHirModule].None);
+}
+
+func checked_cache_result(typed hir.HirResult, mode hirverify.VerifyMode) hirverify.VerifyResult {
+    if check_success(typed.state, typed.has_value, typed.diagnostics) { return hirverify.verify(typed.value, mode); }
+    return hirverify.VerifyResult(state: typed.state, failure: typed.failure,
+        diagnostics: typed.diagnostics, value: option.Option[hirverify.VerifiedHirModule].None);
+}
+func checked_package_result(typed hir.HirResult, mode hirverify.VerifyMode,
+                            package_id usize) hirverify.VerifyResult {
+    if check_success(typed.state, typed.has_value, typed.diagnostics) {
+        return hirverify.verify_package(typed.value, mode, package_id);
+    }
+    return hirverify.VerifyResult(state: typed.state, failure: typed.failure,
+        diagnostics: typed.diagnostics, value: option.Option[hirverify.VerifiedHirModule].None);
+}
+pub func check_project_cached(input model.ResolveResult, config option.Option[model.CheckConfig],
+    mode hirverify.VerifyMode, cache frontcache.Context) hirverify.VerifyResult {
+    var typed = check_types_unverified_cached(input, config, cache);
+    var result = checked_cache_result(typed, mode);
+    if !check_success(result.state, option.is_some(result.value), result.diagnostics) && cache.counters[2] != 0 {
+        cache.counters[4] += cache.counters[2]; cache.counters[2] = 0;
+        var disabled = cache; disabled.disabled = true;
+        typed = check_types_unverified_cached(input, config, disabled);
+        result = checked_cache_result(typed, mode);
+    }
+    if check_success(result.state, option.is_some(result.value), result.diagnostics) {
+        switch result.value {
+            case option.Option.Some(verified): {
+                try { let module = hirverify.snapshot(verified); frontcache.store(cache, module); }
+                catch problem model.SupportError {}
+            }
+            case option.Option.None: {}
+        }
+    }
+    return result;
+}
+
+// Exact body checks for one canonical Module after the normal project-wide
+// declaration phase.  This never stores or restores the function-body cache.
+pub func check_project_package_cached(input model.ResolveResult,
+    config option.Option[model.CheckConfig], mode hirverify.VerifyMode,
+    cache frontcache.Context, package_id usize) hirverify.VerifyResult {
+    let templates = resolve.required_templates(input, package_id);
+    let typed = check_types_package_templates(input, config, cache, package_id, templates);
+    return checked_package_result(typed, mode, package_id);
+}
+
+func check_types_package_templates(input model.ResolveResult,
+    config option.Option[model.CheckConfig], cache frontcache.Context,
+    package_id usize, templates Vec[model.NodeRef]) hir.HirResult {
+    if !check_success(input.state, input.has_value, input.diagnostics) { return check_forward_resolve(input); }
+    try {
+        let actual_config = check_config(input.value.project, config);
+        var checker = make_checker(input.value, actual_config);
+        let ownership = run_checker_templates(inout checker, cache, package_id, templates);
+        return package_body_result(checker, ownership);
+    } catch error Error { return check_error(error); }
+}
+
+func package_body_result(checker Checker, ownership model.UnitResult) hir.HirResult {
+    if !check_success(ownership.state, ownership.has_value, ownership.diagnostics) {
+        if vec.len(ownership.diagnostics) == 0 {
+            var cancelled = check_empty_result();
+            cancelled.state = model.PhaseState.Cancelled;
+            return cancelled;
+        }
+        return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+            failure: ownership.failure));
+    }
+    var result = check_empty_result();
+    result.state = model.PhaseState.Complete;
+    result.failure = model.FailureKind.Internal;
+    result.diagnostics = [];
+    result.has_value = true;
+    result.value = checker.m;
+    return result;
+}
+
+pub struct PreparedPackages {
+    checker Checker;
+    function_count usize;
+    entry option.Option[usize];
+}
+
+pub func prepared_entry(prepared PreparedPackages) option.Option[usize] { return prepared.entry; }
+
+pub func prepared_function_count(prepared PreparedPackages) usize { return prepared.function_count; }
+
+// A malformed project still follows its usual per-package diagnostic path.
+pub func prepare_packages(input model.ResolveResult,
+    config option.Option[model.CheckConfig]) option.Option[PreparedPackages] {
+    if !check_success(input.state, input.has_value, input.diagnostics) {
+        return option.Option[PreparedPackages].None;
+    }
+    try {
+        let actual_config = check_config(input.value.project, config);
+        var checker = make_checker(input.value, actual_config);
+        prepare_declarations(inout checker);
+        var count usize = 0;
+        var entry = option.Option[usize].None;
+        for symbol in input.value.symbols {
+            switch symbol.kind {
+                case model.SymbolKind.Function: {
+                    count += 1;
+                    if symbol.module == input.value.project.entry && symbol.name == "main" {
+                        entry = option.Option[usize].Some(symbol.id);
+                    }
+                }
+                default: {}
+            }
+        }
+        return option.Option[PreparedPackages].Some(
+            PreparedPackages(checker: checker, function_count: count, entry: entry));
+    } catch error Error { return option.Option[PreparedPackages].None; }
+}
+
+pub func check_prepared_package(prepared PreparedPackages, mode hirverify.VerifyMode,
+    cache frontcache.Context, package_id usize) hirverify.VerifyResult {
+    let typed = check_prepared_types(prepared, cache, package_id);
+    return checked_package_result(typed, mode, package_id);
+}
+
+func check_prepared_types(prepared PreparedPackages, cache frontcache.Context,
+    package_id usize) hir.HirResult {
+    try {
+        var checker = clone_checker(prepared.checker);
+        let input = model.ResolveResult(state: model.PhaseState.Complete,
+            failure: model.FailureKind.Internal, diagnostics: [], has_value: true,
+            value: checker.m.resolved);
+        let templates = resolve.required_templates(input, package_id);
+        let ownership = run_checker_bodies(inout checker, cache,
+            option.Option[usize].Some(package_id), templates);
+        return package_body_result(checker, ownership);
+    } catch error Error { return check_error(error); }
+}
+
+pub func check_project_package_templates(input model.ResolveResult,
+    config option.Option[model.CheckConfig], mode hirverify.VerifyMode,
+    package_id usize, templates Vec[model.NodeRef]) hirverify.VerifyResult {
+    let typed = check_types_package_templates(input, config, frontcache.context("", ""), package_id, templates);
+    return checked_package_result(typed, mode, package_id);
 }

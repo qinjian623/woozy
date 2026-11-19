@@ -1,0 +1,33 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "03-public-const-signature",
+  "kind": "source-package-set",
+  "purpose": "Public const value change with the same type, and public function signature change. The first must produce a new result; the second must produce an exact type diagnostic.",
+  "language_references": [
+    "development/docs/FRONTEND.md §6.3 pub const 最终公开类型检查",
+    "development/docs/FRONTEND.md §10 模块接口摘要覆盖影响外部常量求值的常量值",
+    "docs/SEMANTICS.md §3 基础类型与推断"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5",
+      "src/main.wz": "02780d4d1bc71b866e6439b6834242e47edb0f64d03ccd58b482755454bd92f5",
+      "vendor/dep/lang.toml": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4",
+      "vendor/dep/src/lib.wz": "79d8614d70b462cc16b447e1c404079110d055d2feb1114c2908cfc96765218b"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 16,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "const-value",
+    "signature-params"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

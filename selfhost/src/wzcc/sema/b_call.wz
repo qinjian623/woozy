@@ -47,7 +47,7 @@ func b_capture_walk(state inout Checker, r model.NodeRef, seen Vec[usize],
                 switch b_locals_find(inout state, environment) {
                     case option.Option.Some(local): {
                         if !b_vec_contains(seen, id) {
-                            vec.push(seen, id);
+                            b_insert_sorted(seen, id);
                             vec.push(uses, CaptureUse(origin: id,
                                 environment: environment, type_id: local.type_id,
                                 first_use: r));

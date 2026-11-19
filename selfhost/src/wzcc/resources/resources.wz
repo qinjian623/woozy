@@ -1,6 +1,10 @@
 package resources;
 
+import "std/fs" as fs;
 import "std/os" as os;
+import "std/process" as process;
+import "std/option" as option;
+import "std/text" as text;
 import "std/path" as path;
 
 pub func directory() string throws os.Error {
@@ -9,4 +13,56 @@ pub func directory() string throws os.Error {
 
 pub func standard_library() string throws os.Error {
     return path.join(directory(),"stdlib");
+}
+
+pub func source_partition_tools(root string) Vec[string] throws os.Error {
+    let split = root + "/toolchain/llvm-split";
+    let objcopy = root + "/toolchain/llvm-objcopy";
+    if fs.exists(split) && fs.exists(objcopy) { return [split, objcopy]; }
+    return [];
+}
+
+// Ninja is a build tool selected by configuration or the caller's PATH.
+pub func ninja() string throws os.Error {
+    switch process.getenv("WOOZY_NINJA") {
+        case option.Option.Some(value): {
+            if value != "" { os.access(value, os.X_OK); return value; }
+        }
+        case option.Option.None: {}
+    }
+    var search = "/usr/bin:/bin";
+    switch process.getenv("PATH") {
+        case option.Option.Some(value): search = value;
+        case option.Option.None: {}
+    }
+    for directory_value in text.split(search, ":") {
+        var candidate = path.join(directory_value, "ninja");
+        if !path.is_absolute(candidate) { candidate = path.join(os.getcwd(), candidate); }
+        try { os.access(candidate, os.X_OK); return candidate; }
+        catch problem os.Error {}
+    }
+    throw os.Error.System(2, 0);
+}
+
+// GNU Make selected by WOOZY_MAKE or the caller's PATH.  Source-make never
+// writes a real path into a Make rule or target name.
+pub func make() string throws os.Error {
+    switch process.getenv("WOOZY_MAKE") {
+        case option.Option.Some(value): {
+            if value != "" { os.access(value, os.X_OK); return value; }
+        }
+        case option.Option.None: {}
+    }
+    var search = "/usr/bin:/bin";
+    switch process.getenv("PATH") {
+        case option.Option.Some(value): search = value;
+        case option.Option.None: {}
+    }
+    for directory_value in text.split(search, ":") {
+        var candidate = path.join(directory_value, "make");
+        if !path.is_absolute(candidate) { candidate = path.join(os.getcwd(), candidate); }
+        try { os.access(candidate, os.X_OK); return candidate; }
+        catch problem os.Error {}
+    }
+    throw os.Error.System(2, 0);
 }

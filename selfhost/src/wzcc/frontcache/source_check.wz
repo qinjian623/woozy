@@ -1,0 +1,150 @@
+package frontcache;
+import "app/wzcc/constant" as constant;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func same_ref(left model.NodeRef, right model.NodeRef) bool {
+    return left.module == right.module && left.file == right.file && left.node == right.node;
+}
+func unwrap(module hir.HirModule, input model.NodeRef) model.NodeRef {
+    var reference = input;
+    let file = module.resolved.project.files[module.resolved.project.modules[reference.module].files[reference.file]];
+    for true {
+        let node = file.nodes[reference.node]; var wrapper = false;
+        switch node.kind {
+            case model.AstKind.Parenthesized: wrapper = true;
+            case model.AstKind.BracketItem: wrapper = true;
+            case model.AstKind.Argument: wrapper = true;
+            default: {}
+        }
+        if wrapper && vec.len(node.children) == 1 { reference.node = node.children[0]; }
+        else { return reference; }
+    }
+}
+func check_children(module hir.HirModule, node hir.HirNode, reference model.NodeRef, expected Vec[usize]) throws Error {
+    need(vec.len(node.children) == vec.len(expected));
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        let actual = unwrap(module, module.nodes[node.children[index]].source.node);
+        let target = unwrap(module, model.NodeRef(module: reference.module, file: reference.file, node: expected[index]));
+        need(same_ref(actual, target));
+    }
+}
+struct SourceOccurrence { source model.NodeRef; symbol usize; }
+func ref_less(left model.NodeRef, right model.NodeRef) bool {
+    if left.module != right.module { return left.module < right.module; }
+    if left.file != right.file { return left.file < right.file; }
+    return left.node < right.node;
+}
+func source_occurrences(module hir.HirModule) Vec[SourceOccurrence] {
+    var entries = vec.empty[SourceOccurrence](); var scratch = vec.empty[SourceOccurrence]();
+    for occurrence in module.resolved.occurrences {
+        let entry = SourceOccurrence(source: unwrap(module, occurrence.source), symbol: occurrence.symbol);
+        vec.push(entries, entry); vec.push(scratch, entry);
+    }
+    let size = vec.len(entries); var width usize = 1;
+    for width < size {
+        var begin usize = 0;
+        for begin < size {
+            var middle = begin + width; if middle > size { middle = size; }
+            var end = middle + width; if end > size { end = size; }
+            var left = begin; var right = middle; var out = begin;
+            for out < end {
+                if left < middle && (right == end || !ref_less(entries[right].source, entries[left].source)) {
+                    scratch[out] = entries[left]; left += 1;
+                } else { scratch[out] = entries[right]; right += 1; }
+                out += 1;
+            }
+            begin = end;
+        }
+        let old = entries; entries = scratch; scratch = old; width *= 2;
+    }
+    return entries;
+}
+func check_symbol(entries Vec[SourceOccurrence], reference model.NodeRef, expected usize) throws Error {
+    var low usize = 0; var high = vec.len(entries);
+    for low < high { let middle = low + (high - low) / 2;
+        if ref_less(entries[middle].source, reference) { low = middle + 1; } else { high = middle; }
+    }
+    need(low < vec.len(entries) && same_ref(entries[low].source, reference));
+    for low < vec.len(entries) && same_ref(entries[low].source, reference) { need(entries[low].symbol == expected); low += 1; }
+}
+func unsupported_type(reference model.NodeRef) usize throws model.SupportError {
+    throw model.SupportError.Invalid("unsupported scalar cache type-source");
+}
+func unsupported_function(reference model.NodeRef, type_id usize) hir.FunctionValue throws model.SupportError {
+    throw model.SupportError.Invalid("unsupported scalar cache function-source");
+}
+func check_literal(module hir.HirModule, node hir.HirNode, reference model.NodeRef) throws Error {
+    var actual = hir.ConstantValue(type_id: node.type_id, data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+    switch node.data {
+        case hir.NodeData.BoolLiteral(value): actual.data = hir.ConstantData.BoolLiteral(value);
+        case hir.NodeData.IntegerLiteral(value): actual.data = hir.ConstantData.IntegerLiteral(value);
+        case hir.NodeData.FloatLiteral(value): actual.data = hir.ConstantData.FloatLiteral(value);
+        case hir.NodeData.StringLiteral(value): actual.data = hir.ConstantData.StringLiteral(value);
+        default: throw Error.Unsupported;
+    }
+    var context = types.clone_context(module.types);
+    try {
+        let expected = constant.source_constant_value(module, inout context, reference, node.type_id,
+            unsupported_type, unsupported_function);
+        need(constant.same_constant_value(actual, expected));
+    } catch problem model.SupportError { throw Error.Unsupported; }
+}
+func binary_text(value hir.BinaryOp) string {
+    let names = ["+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^", "==", "!=", "<", "<=", ">", ">="];
+    return names[usize(binary_number(value))];
+}
+func operator_text(file model.ParseResult, node model.AstNode) string throws Error {
+    need(vec.len(node.children) == 2);
+    let end = file.nodes[node.children[0]].token_end;
+    need(end < vec.len(file.lexed.tokens)); return file.lexed.tokens[end].spelling;
+}
+func check_source(module hir.HirModule, node hir.HirNode, occurrences Vec[SourceOccurrence]) throws Error {
+    let reference = unwrap(module, node.source.node);
+    let file = module.resolved.project.files[module.resolved.project.modules[reference.module].files[reference.file]];
+    let syntax = file.nodes[reference.node]; let kind = model.ast_kind_id(syntax.kind);
+    switch node.data {
+        case hir.NodeData.BoolLiteral(value): check_literal(module, node, reference);
+        case hir.NodeData.IntegerLiteral(value): check_literal(module, node, reference);
+        case hir.NodeData.FloatLiteral(value): check_literal(module, node, reference);
+        case hir.NodeData.StringLiteral(value): check_literal(module, node, reference);
+        case hir.NodeData.Read(value): check_symbol(occurrences, reference, value.symbol);
+        case hir.NodeData.Place(value): check_symbol(occurrences, reference, value.symbol);
+        case hir.NodeData.Binding(value): {
+            need(kind == model.ast_kind_id(model.AstKind.Binding));
+            let symbol = module.resolved.symbols[value.symbol];
+            switch symbol.definition { case option.Option.Some(definition): need(same_ref(definition, reference)); case option.Option.None: throw Error.Invalid; }
+            need(value.writable == (file.lexed.tokens[syntax.token_begin].spelling == "var"));
+            need(vec.len(syntax.children) > 0); check_children(module, node, reference, [syntax.children[vec.len(syntax.children) - 1]]);
+        }
+        case hir.NodeData.Assign(value): {
+            need(kind == model.ast_kind_id(model.AstKind.Assign)); check_children(module, node, reference, syntax.children);
+            var op = "=";
+            switch value.compound { case option.Option.Some(compound): op = binary_text(compound) + "="; case option.Option.None: {} }
+            need(operator_text(file, syntax) == op);
+        }
+        case hir.NodeData.Binary(value): {
+            need(kind == model.ast_kind_id(model.AstKind.Binary)); check_children(module, node, reference, syntax.children);
+            need(operator_text(file, syntax) == binary_text(value.op));
+        }
+        case hir.NodeData.ShortCircuit(value): {
+            need(kind == model.ast_kind_id(model.AstKind.Binary)); check_children(module, node, reference, syntax.children);
+            var op = "&&"; switch value.op { case hir.LogicalOp.And: {} case hir.LogicalOp.Or: op = "||"; }
+            need(operator_text(file, syntax) == op);
+        }
+        case hir.NodeData.Unary(value): {
+            need(kind == model.ast_kind_id(model.AstKind.Unary)); check_children(module, node, reference, syntax.children);
+            let names = ["-", "!", "~"]; need(file.lexed.tokens[syntax.token_begin].spelling == names[usize(unary_number(value.op))]);
+        }
+        case hir.NodeData.Block(value): { need(kind == model.ast_kind_id(model.AstKind.Block)); check_children(module, node, reference, syntax.children); }
+        case hir.NodeData.ExpressionStatement(value): { need(kind == model.ast_kind_id(model.AstKind.ExpressionStatement)); check_children(module, node, reference, syntax.children); }
+        case hir.NodeData.If(value): { need(kind == model.ast_kind_id(model.AstKind.If)); check_children(module, node, reference, syntax.children); }
+        case hir.NodeData.Return(value): { need(kind == model.ast_kind_id(model.AstKind.Return)); check_children(module, node, reference, syntax.children); }
+        case hir.NodeData.Call(value): {}
+        case hir.NodeData.IntegerConvert(value): {}
+        default: throw Error.Unsupported;
+    }
+}

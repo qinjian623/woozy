@@ -1,0 +1,5 @@
+package libcore;
+
+pub func combine(left i32, right i32) i32 {
+    return bump(left) + bump(right);
+}

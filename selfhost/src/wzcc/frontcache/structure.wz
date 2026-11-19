@@ -1,0 +1,79 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func contains(values Vec[usize], wanted usize) bool {
+    for value in values { if value == wanted { return true; } }
+    return false;
+}
+func lookup_type(module hir.HirModule, id usize) model.Type throws Error {
+    switch types.find(module.types, id) { case option.Option.Some(value): return value; case option.Option.None: throw Error.Invalid; }
+}
+struct Walk { node usize; cursor usize; }
+func check_structure(module hir.HirModule, node_base usize, scope_base usize,
+                     function_base usize, functions Vec[usize]) throws Error {
+    let node_count = vec.len(module.nodes) - node_base;
+    let scope_count = vec.len(module.scopes) - scope_base;
+    for var index usize = scope_base; index < vec.len(module.scopes); index += 1 {
+        let scope = module.scopes[index]; need(contains(functions, scope.function));
+        var parent = scope.parent; var depth usize = 0;
+        for option.is_some(parent) {
+            let id = option.unwrap_or(parent, 0); depth += 1;
+            need(id >= scope_base && id < vec.len(module.scopes) && depth <= scope_count);
+            let outer = module.scopes[id]; need(outer.function == scope.function); parent = outer.parent;
+        }
+    }
+    for var index usize = function_base; index < vec.len(module.functions); index += 1 {
+        let function = module.functions[index];
+        need(model.symbol_kind_id(module.resolved.symbols[function.symbol].kind) == model.symbol_kind_id(model.SymbolKind.Function));
+        let signature = lookup_type(module, function.signature);
+        need(model.type_kind_id(signature.kind) == 8 && !option.is_some(signature.throws_type));
+        need(vec.len(signature.parameters) == vec.len(function.parameters));
+        need(function.scope >= scope_base && function.scope < vec.len(module.scopes));
+        need(module.scopes[function.scope].function == function.symbol);
+        need(function.body >= node_base && function.body < vec.len(module.nodes));
+        need(module.nodes[function.body].scope == function.scope);
+    }
+    for var index usize = node_base; index < vec.len(module.nodes); index += 1 {
+        let node = module.nodes[index]; need(node.scope >= scope_base && node.scope < vec.len(module.scopes));
+        switch node.data {
+            case hir.NodeData.Call(call): {
+                let signature = lookup_type(module, call.signature);
+                need(model.type_kind_id(signature.kind) == 8 && !option.is_some(signature.throws_type));
+                need(vec.len(call.args) == vec.len(signature.parameters) && node.type_id == signature.result);
+                var indirect = false;
+                switch call.kind { case hir.CalleeKind.Direct: {} case hir.CalleeKind.FunctionValue: indirect = true; default: throw Error.Invalid; }
+                need(option.is_some(call.callee) == indirect && option.is_some(call.direct_symbol) != indirect);
+                var offset usize = 0; if indirect { offset = 1; }
+                need(vec.len(node.children) == vec.len(call.args) + offset);
+                if indirect { need(node.children[0] == option.unwrap_or(call.callee, 0)); }
+                let parameters = vec.make[bool](vec.len(call.args), false);
+                for var argument_index usize = 0; argument_index < vec.len(call.args); argument_index += 1 {
+                    let argument = call.args[argument_index];
+                    need(usize(argument.source_index) == argument_index && usize(argument.parameter_index) < vec.len(parameters));
+                    need(!parameters[usize(argument.parameter_index)]); parameters[usize(argument.parameter_index)] = true;
+                    need(node.children[argument_index + offset] == argument.expression);
+                }
+            }
+            case hir.NodeData.Return(returned): need(returned.function == module.scopes[node.scope].function);
+            default: {}
+        }
+    }
+    let colors = vec.make[u8](node_count, 0);
+    for var root usize = 0; root < node_count; root += 1 {
+        if colors[root] != 0 { continue; }
+        let stack = [Walk(node: root, cursor: 0)]; colors[root] = 1;
+        for vec.len(stack) != 0 {
+            let top = vec.len(stack) - 1; let current = stack[top];
+            let children = module.nodes[node_base + current.node].children;
+            if current.cursor == vec.len(children) { colors[current.node] = 2; vec.pop(stack); continue; }
+            let child = children[current.cursor]; stack[top].cursor += 1;
+            need(child >= node_base && child < vec.len(module.nodes));
+            let local = child - node_base; need(colors[local] != 1);
+            if colors[local] == 0 { colors[local] = 1; vec.push(stack, Walk(node: local, cursor: 0)); }
+        }
+    }
+}

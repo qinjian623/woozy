@@ -79,11 +79,16 @@ add_library(lang_hosted_runtime STATIC
   $<TARGET_OBJECTS:lang_hosted_replacement>)
 set_target_properties(lang_hosted_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+find_program(LANG_NATIVE_NINJA NAMES ninja REQUIRED)
 add_executable(lang_native_helper helper.cpp)
+target_include_directories(lang_native_helper SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(lang_native_helper PRIVATE lang_sema lang_native lang_driver_process json-c::json-c)
 target_compile_definitions(lang_native_helper PRIVATE
   LANG_NATIVE_RUNTIME="$<TARGET_FILE:lang_native_runtime>"
   LANG_HOSTED_RUNTIME="$<TARGET_FILE:lang_hosted_runtime>"
   LANG_NATIVE_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
-  LANG_NATIVE_LLD="${LLVM_TOOLS_BINARY_DIR}/ld.lld")
+  LANG_NATIVE_LLD="${LLVM_TOOLS_BINARY_DIR}/ld.lld"
+  LANG_NATIVE_OPT="${LLVM_TOOLS_BINARY_DIR}/opt"
+  LANG_NATIVE_LLC="${LLVM_TOOLS_BINARY_DIR}/llc"
+  LANG_NATIVE_NINJA="${LANG_NATIVE_NINJA}")
 add_dependencies(lang_native_helper lang_native_runtime lang_hosted_runtime)

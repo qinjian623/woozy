@@ -45,7 +45,7 @@ pub func produce_ownership(module inout hir.HirModule) model.UnitResult {
         let derived = derive(module);
         module.ownership = derived.records;
         for var index usize = 0; index < vec.len(module.nodes); index += 1 {
-            if ids_contains(derived.checked_nodes, index) {
+            if derived.checked_node[index] {
                 module.nodes[index].exits = derived.exits[index];
             }
         }
@@ -63,14 +63,14 @@ pub func verify_ownership(module hir.HirModule) model.UnitResult {
                 "ownership records differ from independently recomputed tree obligations");
         }
         for var index usize = 0; index < vec.len(module.nodes); index += 1 {
-            if ids_contains(derived.checked_nodes, index) &&
+            if derived.checked_node[index] &&
                !same_exits(module.nodes[index].exits, derived.exits[index]) {
                 throw internal_problem(
                     "ownership exit actions/active output/prefix differ from independently recomputed obligations");
             }
         }
         for var index usize = 0; index < vec.len(module.nodes); index += 1 {
-            if !ids_contains(derived.checked_nodes, index) {
+            if !derived.checked_node[index] {
                 for plan in module.nodes[index].exits {
                     if vec.len(plan.actions) > 0 {
                         throw internal_problem(

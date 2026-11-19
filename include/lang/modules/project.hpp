@@ -208,10 +208,12 @@ struct Module {
   std::optional<BindingModuleRef> binding;
   std::optional<size_t> c_binding; // Project::c_bindings index
 };
+struct ParseCache;
 struct ProjectOptions {
   std::filesystem::path manifest;
   std::optional<std::filesystem::path> std_source_root;
   std::optional<std::filesystem::path> std_binding_bundle;
+  std::shared_ptr<ParseCache> parse_cache;
 };
 struct Project {
   std::filesystem::path root;

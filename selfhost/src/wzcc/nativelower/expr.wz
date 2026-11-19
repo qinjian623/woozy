@@ -40,44 +40,37 @@ func field_access_kind(kind hir.NodeKind) bool {
     }
 }
 
-func first_read_use(state Lower, id usize) option.Option[hir.ValueUse] {
-    for used in state.h.ownership.uses {
-        if used.consumer == id && used.operand == 0 &&
-           !option_some(used.destination) {
-            return option.Option[hir.ValueUse].Some(used);
+func first_read_use(shared LowerShared, id usize) option.Option[hir.ValueUse] {
+    if id < vec.len(shared.uses_by_consumer) {
+        for used in shared.uses_by_consumer[id] {
+            if used.operand == 0 && !option_some(used.destination) {
+                return option.Option[hir.ValueUse].Some(used);
+            }
         }
     }
     return option.Option[hir.ValueUse].None;
 }
 
-func borrow_use(state Lower, consumer usize,
+func borrow_use(shared LowerShared, consumer usize,
                 operand u32) option.Option[hir.ValueUse] {
-    for used in state.h.ownership.uses {
-        if used.consumer == consumer && !option_some(used.destination) &&
-           used.operand == operand &&
-           (use_kind_id(used.kind) == 0 || use_kind_id(used.kind) == 3) {
-            return option.Option[hir.ValueUse].Some(used);
+    if consumer < vec.len(shared.uses_by_consumer) {
+        for used in shared.uses_by_consumer[consumer] {
+            if !option_some(used.destination) && used.operand == operand &&
+               (use_kind_id(used.kind) == 0 || use_kind_id(used.kind) == 3) {
+                return option.Option[hir.ValueUse].Some(used);
+            }
         }
     }
     return option.Option[hir.ValueUse].None;
 }
 
-func call_has_lifetime(state Lower, id usize) bool {
-    for call in state.h.ownership.calls {
-        if call.node == id {
-            return true;
-        }
-    }
-    return false;
+func call_has_lifetime(shared LowerShared, id usize) bool {
+    return id < vec.len(shared.call_by_node) && shared.call_by_node[id] >= 0;
 }
 
-func temporary_produced(state Lower, id usize) bool {
-    for temporary in state.h.ownership.temporaries {
-        if temporary.producer == id {
-            return true;
-        }
-    }
-    return false;
+func temporary_produced(shared LowerShared, id usize) bool {
+    return id < vec.len(shared.temp_by_producer) &&
+           shared.temp_by_producer[id] >= 0;
 }
 
 func constant_value(state inout Lower, value hir.ConstantValue,
@@ -140,20 +133,12 @@ func constant_value(state inout Lower, value hir.ConstantValue,
 }
 
 // Owning full-expressions install their real temporary slot after the value.
-func expr(state inout Lower, id usize) usize throws model.SupportError {
-    let value = raw_expr(inout state, id);
-    var found = false;
-    var index usize = 0;
-    for var position usize = 0;
-        position < vec.len(state.h.ownership.temporaries);
-        position += 1 {
-        if state.h.ownership.temporaries[position].producer == id {
-            found = true;
-            index = position;
-            break;
-        }
-    }
-    if found {
+func expr(state inout Lower, shared inout LowerShared,
+          id usize) usize throws model.SupportError {
+    let value = raw_expr(inout state, inout shared, id);
+    if id < vec.len(shared.temp_by_producer) &&
+       shared.temp_by_producer[id] >= 0 {
+        let index = usize(shared.temp_by_producer[id]);
         let temporary = state.h.ownership.temporaries[index];
         let storage = slot_new(inout state, temporary.type_id);
         state.f.slots[storage].owner = option.Option[hir.OwnerRef].Some(
@@ -165,7 +150,8 @@ func expr(state inout Lower, id usize) usize throws model.SupportError {
     return value;
 }
 
-func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
+func raw_expr(state inout Lower, shared inout LowerShared,
+              id usize) usize throws model.SupportError {
     let current = node(state, id);
     var instruction = nativeir.empty_instruction();
     instruction.type_id = current.type_id;
@@ -202,7 +188,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             let local = slot_require(state, data.symbol);
             let value = access(inout state, nativeir.Op.Load, local,
                 instruction.source);
-            switch first_read_use(state, id) {
+            switch first_read_use(shared, id) {
                 case option.Option.None: return value;
                 case option.Option.Some(used): {
                     if use_kind_id(used.kind) == 1 {
@@ -230,7 +216,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                     return emit(inout state, instruction);
                 }
                 case option.Option.None: {
-                    let value = expr(inout state, current.children[0]);
+                    let value = expr(inout state, inout shared, current.children[0]);
                     take_temporary(inout state, current.children[0]);
                     return value;
                 }
@@ -239,7 +225,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
         case hir.NodeData.VecInit(data): {
             instruction.op = nativeir.Op.VecInit;
             for child in current.children {
-                let value = expr(inout state, child);
+                let value = expr(inout state, inout shared, child);
                 vec.push(instruction.inputs, value);
             }
             for child in current.children {
@@ -260,8 +246,8 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                 }
                 default: instruction.op = nativeir.Op.VecRead;
             }
-            let receiver = expr(inout state, current.children[0]);
-            let index = expr(inout state, current.children[1]);
+            let receiver = expr(inout state, inout shared, current.children[0]);
+            let index = expr(inout state, inout shared, current.children[1]);
             vec.push(instruction.inputs, receiver);
             vec.push(instruction.inputs, index);
             return emit(inout state, instruction);
@@ -271,7 +257,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.op = nativeir.Op.CFieldRead;
             instruction.c_type = data.c_type;
             instruction.c_field = data.field;
-            let receiver = expr(inout state, current.children[0]);
+            let receiver = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, receiver);
             return emit(inout state, instruction);
         }
@@ -279,7 +265,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.origin = option.Option[usize].Some(id);
             instruction.op = nativeir.Op.VecSlice;
             for child in current.children {
-                let value = expr(inout state, child);
+                let value = expr(inout state, inout shared, child);
                 vec.push(instruction.inputs, value);
             }
             var bits u64 = 0;
@@ -297,7 +283,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.origin = option.Option[usize].Some(id);
             instruction.function = data.symbol;
             for child in current.children {
-                let value = expr(inout state, child);
+                let value = expr(inout state, inout shared, child);
                 vec.push(instruction.inputs, value);
             }
             for child in current.children {
@@ -309,7 +295,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.op = nativeir.Op.StructInit;
             vec.resize(instruction.inputs, vec.len(data.fields), 0);
             for argument in data.fields {
-                let value = expr(inout state, argument.expression);
+                let value = expr(inout state, inout shared, argument.expression);
                 instruction.inputs[usize(argument.parameter_index)] = value;
             }
             for argument in data.fields {
@@ -322,7 +308,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.variant = data.variant;
             vec.resize(instruction.inputs, vec.len(data.payload), 0);
             for argument in data.payload {
-                let value = expr(inout state, argument.expression);
+                let value = expr(inout state, inout shared, argument.expression);
                 instruction.inputs[usize(argument.parameter_index)] = value;
             }
             for argument in data.payload {
@@ -347,8 +333,8 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                 throw model.SupportError.Invalid(
                     "non-Vec/Slice index place in expression");
             }
-            let receiver = expr(inout state, current.children[0]);
-            let index = expr(inout state, current.children[1]);
+            let receiver = expr(inout state, inout shared, current.children[0]);
+            let index = expr(inout state, inout shared, current.children[1]);
             let check_source = node(state, current.children[1]).source.span;
             var check_inputs = vec.empty[usize]();
             vec.push(check_inputs, receiver);
@@ -365,10 +351,10 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
         case hir.NodeData.FieldRead(data): {
             instruction.op = nativeir.Op.FieldRead;
             instruction.field = data.field;
-            let receiver = expr(inout state, current.children[0]);
+            let receiver = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, receiver);
             let value = emit(inout state, instruction);
-            if temporary_produced(state, id) {
+            if temporary_produced(shared, id) {
                 instruction.op = nativeir.Op.Copy;
                 var inputs = vec.empty[usize]();
                 vec.push(inputs, value);
@@ -380,10 +366,10 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
         case hir.NodeData.FieldPlace(data): {
             instruction.op = nativeir.Op.FieldAddress;
             instruction.field = data.field;
-            let receiver = expr(inout state, current.children[0]);
+            let receiver = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, receiver);
             let value = emit(inout state, instruction);
-            if temporary_produced(state, id) {
+            if temporary_produced(shared, id) {
                 instruction.op = nativeir.Op.Copy;
                 var inputs = vec.empty[usize]();
                 vec.push(inputs, value);
@@ -395,7 +381,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
         case hir.NodeData.Unary(data): {
             instruction.op = nativeir.Op.Unary;
             instruction.unary = data.op;
-            let value = expr(inout state, current.children[0]);
+            let value = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, value);
             return emit(inout state, instruction);
         }
@@ -403,8 +389,8 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.origin = option.Option[usize].Some(id);
             instruction.op = nativeir.Op.Binary;
             instruction.binary = data.op;
-            let left = expr(inout state, current.children[0]);
-            let right = expr(inout state, current.children[1]);
+            let left = expr(inout state, inout shared, current.children[0]);
+            let right = expr(inout state, inout shared, current.children[1]);
             vec.push(instruction.inputs, left);
             vec.push(instruction.inputs, right);
             return emit(inout state, instruction);
@@ -412,12 +398,12 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
         case hir.NodeData.IntegerConvert(data): {
             instruction.op = nativeir.Op.Convert;
             instruction.origin = option.Option[usize].Some(id);
-            let value = expr(inout state, current.children[0]);
+            let value = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, value);
             return emit(inout state, instruction);
         }
         case hir.NodeData.ShortCircuit(data): {
-            let left = expr(inout state, current.children[0]);
+            let left = expr(inout state, inout shared, current.children[0]);
             let boolean = state.boolean;
             let result = slot_new(inout state, boolean);
             store(inout state, result, left, instruction.source);
@@ -439,7 +425,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             end(inout state, nativeir.Exit.Conditional, [left], targets,
                 instruction.source);
             state.current = right;
-            let right_value = expr(inout state, current.children[1]);
+            let right_value = expr(inout state, inout shared, current.children[1]);
             store(inout state, result, right_value, instruction.source);
             jump(inout state, join, instruction.source);
             state.current = join;
@@ -471,7 +457,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                 case model.TypeKind.Unit: unit_error = true;
                 default: {}
             }
-            let future = expr(inout state, current.children[0]);
+            let future = expr(inout state, inout shared, current.children[0]);
             let ready = block(inout state);
             let fail = block(inout state);
             let cancelled = block(inout state);
@@ -503,7 +489,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                 end(inout state, nativeir.Exit.Unreachable, [], [],
                     instruction.source);
             } else {
-                error_exit(inout state, id, error_type, error_value);
+                error_exit(inout state, inout shared, id, error_type, error_value);
             }
             // Cancellation runs the recorded cancel exit plan: defers and
             // owning locals/temporaries of every exited scope, then a no-value
@@ -512,7 +498,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             let cancel_site = nativeir.ExitSite(origin: id,
                 kind: hir.ExitKind.Cancel,
                 error_type: option.Option[usize].None);
-            clean(inout state, cancel_site, option.Option[usize].None);
+            clean(inout state, inout shared, cancel_site, option.Option[usize].None);
             end(inout state, nativeir.Exit.CancelReturn, [], [],
                 instruction.source);
             finish(inout state, cancel_site);
@@ -528,7 +514,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             instruction.origin = option.Option[usize].Some(id);
             instruction.variant = data.trait_ref.declaration;
             instruction.methods = vector_copy(data.methods);
-            let value = expr(inout state, current.children[0]);
+            let value = expr(inout state, inout shared, current.children[0]);
             vec.push(instruction.inputs, value);
             return emit(inout state, instruction);
         }
@@ -543,9 +529,9 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             // formals in declaration order even when named arguments were
             // reordered.
             for argument in data.args {
-                let value = expr(inout state, argument.expression);
+                let value = expr(inout state, inout shared, argument.expression);
                 instruction.inputs[usize(argument.parameter_index)] = value;
-                switch borrow_use(state, id, argument.source_index) {
+                switch borrow_use(shared, id, argument.source_index) {
                     case option.Option.Some(used): {
                         switch used.root {
                             case option.Option.Some(root): {
@@ -569,7 +555,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                 }
             }
             let result = emit(inout state, instruction);
-            call_end(inout state, id);
+            call_end(inout state, inout shared, id);
             return result;
         }
         case hir.NodeData.Call(data): {
@@ -606,7 +592,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                     case option.Option.Some(node_id): {
                         has_callee = true;
                         callee_node = node_id;
-                        callee = expr(inout state, node_id);
+                        callee = expr(inout state, inout shared, node_id);
                     }
                     case option.Option.None: {
                         var function_value = nativeir.empty_instruction();
@@ -688,9 +674,9 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             }
             // Evaluation follows source order. Only the saved values are
             // reordered.
-            let has_lifetime = call_has_lifetime(state, id);
+            let has_lifetime = call_has_lifetime(shared, id);
             for argument in data.args {
-                let value = expr(inout state, argument.expression);
+                let value = expr(inout state, inout shared, argument.expression);
                 instruction.inputs[usize(argument.parameter_index) +
                     argument_offset] = value;
                 if has_lifetime &&
@@ -699,7 +685,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
                     if has_callee {
                         use_offset = 1;
                     }
-                    switch borrow_use(state, id,
+                    switch borrow_use(shared, id,
                         argument.source_index + u32(use_offset)) {
                         case option.Option.Some(used): {
                             switch used.root {
@@ -746,7 +732,7 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             }
             if !has_throws {
                 let result = emit(inout state, instruction);
-                call_end(inout state, id);
+                call_end(inout state, inout shared, id);
                 return result;
             }
             let ok = block(inout state);
@@ -770,9 +756,9 @@ func raw_expr(state inout Lower, id usize) usize throws model.SupportError {
             state.f.blocks[state.current].terminator.origin =
                 option.Option[usize].Some(id);
             state.current = fail;
-            error_exit(inout state, id, throws_type, error_value);
+            error_exit(inout state, inout shared, id, throws_type, error_value);
             state.current = ok;
-            call_end(inout state, id);
+            call_end(inout state, inout shared, id);
             return value;
         }
         default: {

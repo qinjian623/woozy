@@ -59,6 +59,8 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE.parent))
+from wzcc_closure import complete_import_closure  # noqa: E402
 DEFAULT_STAGE0 = ROOT / "build/woozy-stdlib-native/woozyc"
 DEFAULT_TOOLCHAIN = ROOT.parent / "toolchains"
 DEFAULT_TIMEOUT = 600.0
@@ -194,6 +196,7 @@ def stage_project(work: pathlib.Path, name: str, packages: list[str],
         target = ROOT / "selfhost" / "src" / "wzcc" / package
         (src / package).symlink_to(target, target_is_directory=True)
     shutil.copy2(main_source, project / "src" / "main.wz")
+    complete_import_closure(project / "src", ROOT / "selfhost/src/wzcc")
     shutil.copy2(manifest_source, project / "lang.toml")
     return project
 
@@ -231,6 +234,7 @@ def stage_helper_project(work: pathlib.Path, name: str,
         target.mkdir()
         shutil.copy2(source, target / source.name)
     shutil.copy2(HERE / "helpers" / "main.wz", src / "main.wz")
+    complete_import_closure(project / "src", ROOT / "selfhost/src/wzcc")
     shutil.copy2(HERE / "helpers" / "lang.toml", project / "lang.toml")
     return project
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "lang/ir/native.hpp"
 
+namespace lang::hir { class IdentityKeys; }
 namespace lang::backend::native {
 inline constexpr std::string_view runtime_abi = "lang-native-scalars/1";
 inline constexpr std::string_view ownership_runtime_abi = "lang-native-values/1";
@@ -9,6 +10,11 @@ struct Options {
   std::string cpu = "generic";
   std::string features;
   unsigned optimization = 0; // exactly 0 or 2
+  // Select one logical source package; other functions are declarations.
+  std::optional<ModuleId> package;
+  std::shared_ptr<hir::IdentityKeys> identities;
+  std::shared_ptr<const std::vector<size_t>> source_order; // read-only CFG function indices
+  bool llvm_only = false; // verified assembly for the package build driver
 };
 struct Output {
   std::vector<uint8_t> object;

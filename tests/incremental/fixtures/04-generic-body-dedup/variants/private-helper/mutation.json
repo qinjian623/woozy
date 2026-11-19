@@ -1,0 +1,46 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "04-generic-body-dedup",
+  "variant": "private-helper",
+  "description": "dep.prefer_left returns false instead of true. dep.choose[i32] is used by both left and right packages.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_reinstantiate": [
+      "dep.choose[i32]"
+    ],
+    "must_recompile_or_relink": [
+      "left",
+      "right",
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "44 -> 66",
+    "note": "The private helper body is reachable from the generic body. The single shared dep.choose[i32] instance must be invalidated; both left and right callers observe 22 and 44."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "17570ceb001e87ee8cbe1835db19077af1f5e11a554c24cbdb3c68d2fc5c3141"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "149d9430c372712cc5a43f9969e9c845bf16042de9fa08e934a334b0b5c7690d"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 66,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

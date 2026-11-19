@@ -1,0 +1,38 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "remove-file-stale",
+  "description": "Remove src/extra.wz while main still calls extra(). Expect E_NAME_NOT_FOUND; the previous successful app must not be reused.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "must_fail_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": false,
+    "expected_runtime": "compile-time reject",
+    "note": "File deletion changes the package declaration table. A cached success from the base must not survive."
+  },
+  "actions": [
+    {
+      "op": "remove",
+      "path": "src/extra.wz",
+      "old": {
+        "file": "old/src/extra.wz",
+        "sha256": "ef64735b138e68e7ab402deaa2b99824ed22b2d734f7b86ca3e340047ed8d935"
+      },
+      "new": null
+    }
+  ],
+  "expect": {
+    "mode": "check",
+    "check_exit": 1,
+    "status": "error",
+    "error_codes_any": [
+      "E_NAME_NOT_FOUND"
+    ]
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

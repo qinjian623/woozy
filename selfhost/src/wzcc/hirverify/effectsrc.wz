@@ -5,6 +5,8 @@ package hirverify;
 import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
+import "std/hash" as hash;
+import "std/map" as map;
 import "std/option" as option;
 import "std/vec" as vec;
 
@@ -14,8 +16,14 @@ struct CountEntry {
 }
 
 struct NodeTypeEntry {
-    node usize;
+    source model.NodeRef;
     types Vec[usize];
+    next option.Option[usize];
+}
+
+struct NodeTypeIndex {
+    entries Vec[NodeTypeEntry];
+    heads map.Map[u64, usize];
 }
 
 func count_add(entries Vec[CountEntry], node usize) {
@@ -49,16 +57,43 @@ func count_equal(left Vec[CountEntry], right Vec[CountEntry]) bool {
     return true;
 }
 
-func node_type_add(entries Vec[NodeTypeEntry], node usize, type_id usize) {
-    for var index usize = 0; index < vec.len(entries); index += 1 {
-        if entries[index].node == node {
-            ids_insert(entries[index].types, type_id);
-            return;
+func node_type_hash(source model.NodeRef) u64 {
+    return hash.combine(hash.combine(hash.combine(0, u64(source.module)),
+        u64(source.file)), u64(source.node));
+}
+
+func node_type_find(index NodeTypeIndex, source model.NodeRef) option.Option[usize] {
+    var current = map.get(index.heads, node_type_hash(source));
+    for {
+        switch current {
+            case option.Option.None: return option.Option[usize].None;
+            case option.Option.Some(position): {
+                let entry = index.entries[position];
+                if entry.source.module == source.module &&
+                   entry.source.file == source.file && entry.source.node == source.node {
+                    return option.Option[usize].Some(position);
+                }
+                current = entry.next;
+            }
         }
     }
+}
+
+func node_type_add(index NodeTypeIndex, source model.NodeRef, type_id usize) {
+    switch node_type_find(index, source) {
+        case option.Option.Some(position): {
+            ids_insert(index.entries[position].types, type_id);
+            return;
+        }
+        case option.Option.None: {}
+    }
+    let key = node_type_hash(source);
     let types = vec.empty[usize]();
     ids_insert(types, type_id);
-    vec.push(entries, NodeTypeEntry(node: node, types: types));
+    let position = vec.len(index.entries);
+    vec.push(index.entries, NodeTypeEntry(source: source, types: types,
+        next: map.get(index.heads, key)));
+    let ignored = map.insert(index.heads, key, position);
 }
 
 // One index for the whole run.  The entries are sorted by function symbol and
@@ -103,27 +138,100 @@ func function_node_index_add(entries Vec[FunctionNodeIndex], symbol usize,
     entries[position] = FunctionNodeIndex(symbol: symbol, nodes: nodes);
 }
 
+func sort_function_node_index(values Vec[FunctionNodeIndex]) {
+    let n = vec.len(values);
+    if n < 2 {
+        return;
+    }
+    let scratch = vec.empty[FunctionNodeIndex]();
+    vec.reserve(scratch, n);
+    for var index usize = 0; index < n; index += 1 {
+        vec.push(scratch, values[index]);
+    }
+    var width usize = 1;
+    for width < n {
+        var left usize = 0;
+        for left < n {
+            var mid = left + width;
+            if mid > n {
+                mid = n;
+            }
+            var right = left + width * 2;
+            if right > n {
+                right = n;
+            }
+            var i = left;
+            var j = mid;
+            var out = left;
+            for i < mid && j < right {
+                if values[j].symbol < values[i].symbol {
+                    scratch[out] = values[j];
+                    j += 1;
+                } else {
+                    scratch[out] = values[i];
+                    i += 1;
+                }
+                out += 1;
+            }
+            for i < mid {
+                scratch[out] = values[i];
+                i += 1;
+                out += 1;
+            }
+            for j < right {
+                scratch[out] = values[j];
+                j += 1;
+                out += 1;
+            }
+            left += width * 2;
+        }
+        for var index usize = 0; index < n; index += 1 {
+            values[index] = scratch[index];
+        }
+        width *= 2;
+    }
+}
+
 func build_function_node_index(state inout Verifier) {
+    let sym_count = vec.len(state.m.resolved.symbols);
+    let slot_by_sym = vec.make[i64](sym_count, -1);
     let entries = vec.empty[FunctionNodeIndex]();
+    let overflow = vec.empty[FunctionNodeIndex]();
     for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
         let node = state.m.nodes[index];
         if node.scope < vec.len(state.m.scopes) {
-            function_node_index_add(entries,
-                state.m.scopes[node.scope].function, index);
+            let symbol = state.m.scopes[node.scope].function;
+            if symbol < sym_count {
+                let slot = slot_by_sym[symbol];
+                if slot < 0 {
+                    slot_by_sym[symbol] = i64(vec.len(entries));
+                    let nodes = vec.empty[usize]();
+                    vec.push(nodes, index);
+                    vec.push(entries, FunctionNodeIndex(symbol: symbol,
+                        nodes: nodes));
+                } else {
+                    vec.push(entries[usize(slot)].nodes, index);
+                }
+            } else {
+                function_node_index_add(overflow, symbol, index);
+            }
         }
     }
+    for entry in overflow {
+        vec.push(entries, entry);
+    }
+    sort_function_node_index(entries);
     state.function_node_index = entries;
 }
 
-func node_type_unique(entries Vec[NodeTypeEntry], node usize)
+func node_type_unique(index NodeTypeIndex, source model.NodeRef)
     option.Option[usize] {
-    for entry in entries {
-        if entry.node == node {
-            if vec.len(entry.types) == 1 {
-                return option.Option[usize].Some(entry.types[0]);
-            }
-            return option.Option[usize].None;
+    switch node_type_find(index, source) {
+        case option.Option.Some(position): {
+            let types = index.entries[position].types;
+            if vec.len(types) == 1 { return option.Option[usize].Some(types[0]); }
         }
+        case option.Option.None: {}
     }
     return option.Option[usize].None;
 }
@@ -138,13 +246,14 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     let expected_foreign_calls = vec.empty[usize]();
     let actual_foreign_reads = vec.empty[usize]();
     let actual_foreign_calls = vec.empty[usize]();
-    let node_types = vec.empty[NodeTypeEntry]();
+    let node_types = NodeTypeIndex(entries: vec.empty[NodeTypeEntry](),
+        heads: map.new[u64, usize]());
     let function_nodes = function_node_index_find(state.function_node_index,
         function_value.symbol);
     if function_nodes >= 0 {
         for node_id in state.function_node_index[usize(function_nodes)].nodes {
             let node = state.m.nodes[node_id];
-            node_type_add(node_types, node.source.node.node, node.type_id);
+            node_type_add(node_types, node.source.node, node.type_id);
         }
     }
     let todo = vec.empty[usize]();
@@ -685,7 +794,7 @@ func source_local_type(state Verifier, module usize, file_index usize,
 
 func source_ast_type(state inout Verifier, module usize, file_index usize,
                      file model.ParseResult, id usize, depth usize,
-                     node_types Vec[NodeTypeEntry], function_symbol usize)
+                     node_types NodeTypeIndex, function_symbol usize)
     option.Option[usize] throws Invalid {
     if depth > 64 {
         return option.Option[usize].None;
@@ -754,7 +863,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
                 }
             }
         }
-        let unique = node_type_unique(node_types, unwrapped);
+        let unique = node_type_unique(node_types, model.NodeRef(module: module, file: file_index, node: unwrapped));
         if option.is_some(unique) {
             return unique;
         }
@@ -818,7 +927,7 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
                 }
             }
         }
-        return node_type_unique(node_types, unwrapped);
+        return node_type_unique(node_types, model.NodeRef(module: module, file: file_index, node: unwrapped));
     }
     if ast_is(node.kind, model.AstKind.NeutralBracket) &&
        vec.len(node.children) == 2 {

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SELFHOST = Path(__file__).resolve().parent
 if str(SELFHOST) not in sys.path:
     sys.path.insert(0, str(SELFHOST))
-from corpus import TOOL_NAMES, _run_process_impl, parse_trace  # noqa: E402
+from corpus import TOOL_NAMES, _run_process_impl, _timeout_number, parse_trace  # noqa: E402
 
 STAGE0_MACROS = (
     "LANG_STD_SOURCE_ROOT",
@@ -27,6 +27,7 @@ STAGE0_MACROS = (
 )
 RUNTIME_ARCHIVES = ("liblang_native_runtime.a", "liblang_hosted_runtime.a")
 PYTHON_RUNTIME = ("langrt.py", "unicode18.py")
+SOURCE_MAKE_PARTITION_TOOLS = ("llvm-split", "llvm-objcopy")
 STAGE0_FILE_MACROS = (
     "LANG_NATIVE_HELPER",
     "LANG_NATIVE_RUNTIME",
@@ -111,7 +112,7 @@ def _required_file(path, label):
     return path.resolve(strict=True)
 
 
-def inspect_stage0(seed, toolchain):
+def inspect_stage0(seed, toolchain, package_objects=False):
     """Read the CMake build configuration that fixed the C++ seed's inputs."""
     seed = _required_file(seed, "stage0 seed")
     build_dir = seed.parent
@@ -179,7 +180,19 @@ def inspect_stage0(seed, toolchain):
             raise RuntimeError(
                 f"stage0 {name} differs from --toolchain: {actual} != "
                 f"{selected_tools[name]}")
+    package_tools = {}
+    if package_objects:
+        for name, macro in (("opt", "LANG_NATIVE_OPT"),
+                            ("llc", "LANG_NATIVE_LLC"),
+                            ("ninja", "LANG_NATIVE_NINJA")):
+            macro_path = _single_macro(helper_defines, macro, build_ninja)
+            actual = _required_file(macro_path, f"stage0 {name}")
+            if name != "ninja" and actual != (toolchain / "bin" / name).resolve(strict=True):
+                raise RuntimeError(f"stage0 {name} differs from --toolchain: {actual}")
+            package_tools[name] = {"path": str(actual), "macro_path": macro_path,
+                                   "sha256": digest(actual)}
     return {
+        **({"package_tools": package_tools} if package_objects else {}),
         "seed": {"path": str(seed), "sha256": digest(seed)},
         "helper": {"path": str(helper), "macro_path": str(helper_macro),
                    "sha256": digest(helper)},
@@ -289,6 +302,14 @@ def _compare_stage0_inputs(stage0, resources):
                 f"{macros[macro]} {actual} != {frozen}")
 
 
+    for name, item in stage0.get("package_tools", {}).items():
+        if str(Path(item["macro_path"]).resolve(strict=True)) != item["path"]:
+            raise RuntimeError(f"stage0 {name} target changed: {item['macro_path']}")
+        frozen = resources / ("stage0/ninja" if name == "ninja" else f"toolchain/{name}")
+        if digest(Path(item["macro_path"])) != digest(frozen):
+            raise RuntimeError(f"stage0 {name} differs from frozen copy")
+
+
 def _add_tree(snapshot, prefix, root, strict=True, all_files=False):
     root = Path(root)
     try:
@@ -318,7 +339,7 @@ def _add_file(snapshot, key, path, strict=True):
     snapshot["paths"][key] = str(target)
 
 
-def _frozen_inputs(output, stage0, toolchain, strict=True):
+def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=None):
     snapshot = {"files": {}, "paths": {}}
     _add_tree(snapshot, "compiler_sources", output / "source/src", strict)
     _add_file(snapshot, "compiler_manifest", output / "source/lang.toml", strict)
@@ -359,6 +380,12 @@ def _frozen_inputs(output, stage0, toolchain, strict=True):
     for name in ("clang", "ld.lld"):
         _add_file(snapshot, f"stage0/tools/{name}", stage0["tools"][name]["path"],
                   strict)
+    for name, item in stage0.get("package_tools", {}).items():
+        _add_file(snapshot, f"stage0/package_tools/{name}", item["macro_path"], strict)
+        if name == "ninja":
+            _add_file(snapshot, "stage0_frozen/ninja", output / "resources/stage0/ninja", strict)
+    for name, path in (source_make_tools or {}).items():
+        _add_file(snapshot, f"source_make_tools/{name}", path, strict)
     snapshot["paths"]["selected_toolchain"] = str(toolchain.resolve())
     return snapshot
 
@@ -382,6 +409,8 @@ def _snapshot_digest(snapshot):
 
 
 def run(args):
+    if _timeout_number(args.timeout) is None:
+        raise ValueError("timeout must be a positive finite number")
     output = args.out_dir.resolve()
     if output.exists() and any(output.iterdir()):
         raise RuntimeError(f"output directory must be empty: {output}")
@@ -395,12 +424,18 @@ def run(args):
     stage_label = "setup"
     current_record = None
     try:
+        strace = None
+        if args.stages > 1:
+            # Keep './name' distinct from a bare PATH lookup and resolve it
+            # before launching any compiler in the frozen source directory.
+            requested = args.strace if args.strace is not None else "strace"
+            found = shutil.which(requested)
+            if not found:
+                raise RuntimeError(f"executable strace is required for later stages: {requested}")
+            strace = Path(found).absolute()
         stage0_entry = Path(args.stage0).absolute()
         stage0_path = args.stage0.resolve(strict=True)
         toolchain = args.toolchain.resolve(strict=True)
-        strace = args.strace
-        if args.stages > 1 and not strace:
-            raise RuntimeError("strace is required to check later-stage subprocesses")
         resources = output / "resources"
         resources.mkdir()
         report["compiler_sources"] = copy_sources(source, output / "source/src")
@@ -417,27 +452,57 @@ def run(args):
         tools = resources / "toolchain"
         tools.mkdir()
         allowed_tools = set()
-        for name in TOOL_NAMES:
+        uses_source_make = getattr(args, "source_make", False) and args.stages > 1
+        partition_tools = SOURCE_MAKE_PARTITION_TOOLS if uses_source_make and args.opt == "2" else ()
+        for name in (*TOOL_NAMES, *partition_tools):
             executable = (toolchain / "bin" / name).resolve(strict=True)
             (tools / name).symlink_to(executable)
             allowed_tools.add(str(executable))
         environment = dict(os.environ)
+        source_make_tools = {}
+        if uses_source_make:
+            source_make_tools = {name: Path(path) for name, path in {
+                "make": "/usr/bin/make", "shell": "/bin/sh",
+                "mkdir": "/usr/bin/mkdir"}.items()}
+            source_make_tools.update({name: tools / name for name in partition_tools})
+            for name, path in source_make_tools.items():
+                _required_file(path, f"source-make {name}")
+            # Do not inherit outer Make options, jobserver settings, extra
+            # makefiles, or command-line variable overrides.
+            for name in ("GNUMAKEFLAGS", "MAKEFILES", "MAKEOVERRIDES", "MFLAGS",
+                         "MAKELEVEL", "MAKE_RESTARTS"):
+                environment.pop(name, None)
+            environment["MAKEFLAGS"] = f"-j{getattr(args, 'jobs', 1)}"
+            version = subprocess.run([str(source_make_tools["make"]), "--version"],
+                                     env=environment, capture_output=True, text=True, check=False)
+            if version.returncode or not version.stdout.startswith("GNU Make "):
+                raise RuntimeError("source-make requires GNU Make")
+            environment["WOOZY_MAKE"] = str(source_make_tools["make"])
+            environment["PATH"] = "/usr/bin:/bin"
+            allowed_tools.update(str(path.resolve()) for path in source_make_tools.values())
+            report["source_make_tools"] = {name: str(path)
+                                           for name, path in source_make_tools.items()}
         libraries = [str(toolchain / "lib"), str(args.libxml_dir.resolve())]
         if environment.get("LD_LIBRARY_PATH"):
             libraries.append(environment["LD_LIBRARY_PATH"])
         environment["LD_LIBRARY_PATH"] = ":".join(libraries)
 
         stage_label = "stage0"
-        stage0 = inspect_stage0(stage0_path, toolchain)
+        stage0 = inspect_stage0(stage0_path, toolchain,
+                                package_objects=getattr(args, "source_make", False))
         stage0["seed"]["entry_path"] = str(stage0_entry)
         frozen_stage0 = resources / "stage0"
         frozen_stage0.mkdir()
         _freeze_reference(stage0["seed"]["path"], frozen_stage0 / "woozyc")
         _freeze_reference(stage0["helper"]["path"],
                           frozen_stage0 / "lang_native_helper")
+        if "ninja" in stage0.get("package_tools", {}):
+            _freeze_reference(stage0["package_tools"]["ninja"]["path"],
+                              frozen_stage0 / "ninja")
         _compare_stage0_inputs(stage0, resources)
         report["stage0"] = stage0
-        expected_inputs = _frozen_inputs(output, stage0, toolchain, strict=True)
+        expected_inputs = _frozen_inputs(output, stage0, toolchain, strict=True,
+                                         source_make_tools=source_make_tools)
         _compare_stage0_inputs(stage0, resources)
         report["frozen_inputs"] = expected_inputs
         expected_digest = _snapshot_digest(expected_inputs)
@@ -446,7 +511,8 @@ def run(args):
         compiler_sha256 = stage0["seed"]["sha256"]
         for generation in range(1, args.stages + 1):
             stage_label = f"stage{generation}"
-            before = _frozen_inputs(output, stage0, toolchain, strict=False)
+            before = _frozen_inputs(output, stage0, toolchain, strict=False,
+                                    source_make_tools=source_make_tools)
             if before != expected_inputs:
                 raise RuntimeError(
                     f"frozen inputs changed before {stage_label}: "
@@ -462,6 +528,8 @@ def run(args):
                        str(output / "source/lang.toml"), "--backend", "native",
                        "--opt", args.opt, "--out-dir", str(stage / "build"),
                        "--format", "json"]
+            if getattr(args, "source_make", False):
+                command.insert(4, "--package-objects" if generation == 1 else "--source-make")
             trace = stage / "exec.log"
             traced = command
             if generation > 1:
@@ -491,7 +559,8 @@ def run(args):
                 })
 
                 failures = []
-                after = _frozen_inputs(output, stage0, toolchain, strict=False)
+                after = _frozen_inputs(output, stage0, toolchain, strict=False,
+                                    source_make_tools=source_make_tools)
                 if after != expected_inputs:
                     record["input_changes"] = _input_changes(
                         expected_inputs, after)
@@ -564,18 +633,23 @@ def main():
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--stages", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--opt", choices=("0", "2"), default="2")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="parallel source Make workers (default: 1)")
+    parser.add_argument("--source-make", action="store_true",
+                        help="use package objects for stage 1 and source Make for stages 2 and 3")
     parser.add_argument("--toolchain", type=Path,
                         default=ROOT.parent / "toolchains/llvm-22.1.8")
     parser.add_argument("--runtime-dir", type=Path,
                         default=ROOT / "build/woozy-stdlib-native/native")
     parser.add_argument("--libxml-dir", type=Path,
                         default=ROOT.parent / "toolchains/libxml2-legacy-2.13.9/usr/lib")
-    parser.add_argument("--strace", type=Path,
-                        default=shutil.which("strace"))
+    parser.add_argument("--strace", help="strace executable (default: find strace on PATH)")
     parser.add_argument("--timeout", type=float, default=7200)
     args = parser.parse_args()
-    if args.timeout <= 0:
-        parser.error("timeout must be positive")
+    if args.jobs <= 0:
+        parser.error("jobs must be positive")
+    if _timeout_number(args.timeout) is None:
+        parser.error("timeout must be a positive finite number")
     try:
         run(args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:

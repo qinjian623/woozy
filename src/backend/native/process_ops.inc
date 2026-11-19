@@ -23,7 +23,10 @@
                        operation == SystemOperation::ipc_sem_value;
     if (plain) {
       auto *out = operation == SystemOperation::ipc_sem_value ? storage(builder.getInt32Ty()) : nullptr;
-      if (out) actual.insert(actual.begin(),out);
+      if (out) {
+        start_lifetime(out);
+        actual.insert(actual.begin(),out);
+      }
       auto *status = runtime(name.c_str(),builder.getInt64Ty(),actual);
       auto *bad = builder.CreateICmpSLT(status,builder.getInt64(0));
       if (wait) {
@@ -31,7 +34,11 @@
         bad = builder.CreateAnd(bad,builder.CreateICmpNE(status,builder.getInt64(expected)));
       }
       guard(bad,10,i.source);
-      if (out) return builder.CreateLoad(builder.getInt32Ty(),out);
+      if (out) {
+        auto *loaded = builder.CreateLoad(builder.getInt32Ty(),out);
+        end_lifetime(out);
+        return loaded;
+      }
       if (wait) return builder.CreateICmpEQ(status,builder.getInt64(0));
       return builder.getInt8(0);
     }
@@ -61,11 +68,17 @@
     default: break;
     }
     auto *out = output ? storage(lower_type(output_type)) : nullptr;
-    if (out) actual.insert(actual.begin(),out);
+    if (out) {
+      start_lifetime(out);
+      actual.insert(actual.begin(),out);
+    }
     auto *wait_status = operation == SystemOperation::process_waitpid ? storage(builder.getInt32Ty()) : nullptr;
-    if (wait_status) actual.push_back(wait_status);
+    if (wait_status) {
+      start_lifetime(wait_status);
+      actual.push_back(wait_status);
+    }
     auto *status = runtime(name.c_str(),builder.getInt64Ty(),actual);
-    return stdlib_result(i.type,status,[&]() -> llvm::Value * {
+    auto *result_value = stdlib_result(i.type,status,[&]() -> llvm::Value * {
       if (getenv) return stdlib_option(result,builder.CreateICmpEQ(status,builder.getInt64(1)),[&]() -> llvm::Value * {
         return builder.CreateLoad(lower_type(output_type),out);
       });
@@ -78,4 +91,7 @@
       if (type(result).kind == hir::TypeKind::Unit) return builder.getInt8(0);
       return builder.CreateIntCast(status,lower_type(result),signed_(type(result)));
     });
+    end_lifetime(wait_status);
+    end_lifetime(out);
+    return result_value;
   }

@@ -1,0 +1,101 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func sort_strings(values Vec[string]) {
+    for var index usize = 1; index < vec.len(values); index += 1 {
+        var cursor = index;
+        for cursor > 0 && values[cursor] < values[cursor - 1] {
+            let previous = values[cursor - 1]; values[cursor - 1] = values[cursor]; values[cursor] = previous;
+            cursor -= 1;
+        }
+    }
+}
+func component(value string) string {
+    let out = vec.empty[u8](); put_string(out, value);
+    try { return text.from_bytes(out); } catch problem text.Error { return ""; }
+}
+func interface_text(project model.Project, package_id usize) string {
+    let package_value = project.modules[package_id]; let records = vec.empty[string]();
+    for var file_index usize = 0; file_index < vec.len(package_value.files); file_index += 1 {
+        let file = project.files[package_value.files[file_index]];
+        var imports = "";
+        for import_value in package_value.imports {
+            if import_value.file != file_index { continue; }
+            let node = file.nodes[import_value.node];
+            imports += component(import_value.alias) + component(file.lexed.tokens[node.token_begin + 1].string_value);
+        }
+        for id in file.nodes[file.root].children {
+            let node = file.nodes[id]; let kind = model.ast_kind_id(node.kind);
+            let exported = file.lexed.tokens[node.token_begin].spelling == "pub";
+            var generic = false;
+            for child in node.children { if model.ast_kind_id(file.nodes[child].kind) == 11 { generic = true; } }
+            // Exported constants and layouts can depend on private declarations.
+            let layout = kind == model.ast_kind_id(model.AstKind.Struct) ||
+                kind == model.ast_kind_id(model.AstKind.Enum);
+            if !exported && !generic && kind != 8 && kind != 7 && !layout &&
+               kind != model.ast_kind_id(model.AstKind.Binding) { continue; }
+            var end = node.token_end;
+            if kind == 4 && !generic {
+                for child in node.children { if model.ast_kind_id(file.nodes[child].kind) == 18 { end = file.nodes[child].token_begin; } }
+            }
+            var record = "";
+            for var token usize = node.token_begin; token < end; token += 1 { record += component(file.lexed.tokens[token].spelling); }
+            record += component(imports); vec.push(records, record);
+        }
+    }
+    sort_strings(records); var result = "";
+    for record in records { result += component(record); }
+    return result;
+}
+func interface_dependencies(project model.Project, package_id usize,
+                           visited Vec[usize], records Vec[string]) {
+    for seen in visited { if seen == package_id { return; } }
+    vec.push(visited, package_id);
+    let package_value = project.modules[package_id];
+    for import_value in package_value.imports {
+        let dependency = project.modules[import_value.target];
+        vec.push(records, dependency.identity + interface_text(project, import_value.target));
+        interface_dependencies(project, import_value.target, visited, records);
+    }
+}
+pub func project_package_key(cache Context, project model.Project, package_id usize) string {
+    let package_value = project.modules[package_id]; let out = vec.empty[u8]();
+    put_string(out, "wz-front-scalar/1"); put_string(out, cache.fingerprint); put_string(out, package_value.identity);
+    put_number(out, u64(project.word_bits)); put_number(out, u64(project.entry));
+    if project.hosted { put_number(out, 1); } else { put_number(out, 0); }
+    put_string(out, project.backend);
+    for file_id in package_value.files {
+        let input = project.files[file_id].lexed.source;
+        put_string(out, input.path); put_string(out, hash_bytes(input.original));
+    }
+    let dependencies = vec.empty[string]();
+    var visited = vec.empty[usize]();
+    interface_dependencies(project, package_id, visited, dependencies);
+    for other in project.modules {
+        for file_id in other.files {
+            let file = project.files[file_id];
+            for node_id in file.nodes[file.root].children {
+                if model.ast_kind_id(file.nodes[node_id].kind) == 8 {
+                    vec.push(dependencies, other.identity + interface_text(project, other.id));
+                }
+            }
+        }
+    }
+    for binding in project.bindings { vec.push(dependencies, binding.sha256); }
+    for binding in project.c_bindings { vec.push(dependencies, binding.sha256); }
+    sort_strings(dependencies); var previous = option.Option[string].None;
+    for dependency in dependencies {
+        var repeated = false;
+        switch previous { case option.Option.Some(value): repeated = value == dependency; case option.Option.None: {} }
+        if !repeated { put_string(out, dependency); }
+        previous = option.Option[string].Some(dependency);
+    }
+    return hash_bytes(out);
+}
+pub func package_key(cache Context, module hir.HirModule, package_id usize) string {
+    return project_package_key(cache, module.resolved.project, package_id);
+}

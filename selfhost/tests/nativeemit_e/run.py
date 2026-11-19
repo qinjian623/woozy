@@ -14,10 +14,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE.parent))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--woozyc', default=str(ROOT / 'build/woozy-stdlib-native/woozyc'))
 parser.add_argument('--toolchain-root', default=str(ROOT.parent / 'toolchains'))
@@ -44,6 +48,14 @@ ENV = dict(os.environ)
 compat = str(TOOLCHAIN / 'libxml2-legacy-2.13.9/usr/lib')
 ENV['LD_LIBRARY_PATH'] = compat + (':' + ENV['LD_LIBRARY_PATH'] if ENV.get('LD_LIBRARY_PATH') else '')
 ENV['TMPDIR'] = str(WORK)
+
+# Save only the run settings needed in results.json.
+RECORDED_ENV = {
+    key: ENV[key]
+    for key in ('PATH', 'LC_ALL', 'PYTHONDONTWRITEBYTECODE', 'TMPDIR',
+                'LD_LIBRARY_PATH', 'WOOZY_TOOLCHAIN_ROOT')
+    if key in ENV
+}
 
 # Cross-group names supplied by B/C/D and the layout/verify packages.  They are
 # expected to be absent in a standalone E worktree; anything else is an error.
@@ -79,11 +91,20 @@ def run(label, argv, expected=0, input_bytes=None):
                             capture_output=True, timeout=args.timeout)
     (WORK / (label + '.stdout')).write_bytes(result.stdout)
     (WORK / (label + '.stderr')).write_bytes(result.stderr)
-    records.append({'label': label, 'argv': [str(x) for x in argv],
-                    'exit': result.returncode, 'expected_exit': expected,
-                    'stdout_bytes': len(result.stdout),
-                    'stdout_sha256': hashlib.sha256(result.stdout).hexdigest(),
-                    'stderr_bytes': len(result.stderr)})
+    records.append({
+        'label': label,
+        'argv': [str(x) for x in argv],
+        'expected_exit': expected,
+        'exit': result.returncode,
+        'timeout': args.timeout,
+        'env': RECORDED_ENV,
+        'stdout': {'path': str(WORK / (label + '.stdout')),
+                   'bytes': len(result.stdout),
+                   'sha256': hashlib.sha256(result.stdout).hexdigest()},
+        'stderr': {'path': str(WORK / (label + '.stderr')),
+                   'bytes': len(result.stderr),
+                   'sha256': hashlib.sha256(result.stderr).hexdigest()},
+    })
     if result.returncode != expected:
         raise RuntimeError(f'{label}: {result.returncode}: '
                            f'{result.stderr.decode(errors="replace")[-1000:]}')
@@ -125,6 +146,17 @@ try:
             copied.append(package + '/' + source.name)
     (PROJECT / 'src/main.wz').write_bytes((HERE / 'main.wz').read_bytes())
     inputs.append({'source': str(HERE / 'main.wz'), 'sha256': sha(HERE / 'main.wz')})
+    # SH31 added interface to the shared nativeemit state/emit files.  Copy the
+    # real import closure; a missing production package is left for the check
+    # stage to report with its normal diagnostics.
+    closure_error = None
+    skipped_existing = []
+    try:
+        for record in complete_import_closure(PROJECT / 'src', SOURCE_ROOT,
+                                               skipped=skipped_existing):
+            inputs.append({'source': record['source'], 'sha256': record['sha256']})
+    except FileNotFoundError as error:
+        closure_error = str(error)
     (WORK / 'inputs.json').write_text(json.dumps(inputs, indent=2))
 
     check = subprocess.run([str(STAGE0), 'check', '--project',
@@ -133,9 +165,22 @@ try:
                            timeout=args.timeout)
     (WORK / 'check.stdout').write_bytes(check.stdout)
     (WORK / 'check.stderr').write_bytes(check.stderr)
-    records.append({'label': 'wz-check', 'argv': [str(STAGE0), 'check'],
-                    'exit': check.returncode, 'stdout_bytes': len(check.stdout),
-                    'stderr_bytes': len(check.stderr)})
+    records.append({
+        'label': 'wz-check',
+        'argv': [str(STAGE0), 'check', '--project',
+                 str(PROJECT / 'lang.toml'), '--backend', 'native',
+                 '--format', 'json'],
+        'expected_exit': 0,
+        'exit': check.returncode,
+        'timeout': args.timeout,
+        'env': RECORDED_ENV,
+        'stdout': {'path': str(WORK / 'check.stdout'),
+                   'bytes': len(check.stdout),
+                   'sha256': hashlib.sha256(check.stdout).hexdigest()},
+        'stderr': {'path': str(WORK / 'check.stderr'),
+                   'bytes': len(check.stderr),
+                   'sha256': hashlib.sha256(check.stderr).hexdigest()},
+    })
     document = None
     try:
         document = json.loads(check.stdout.decode().strip().splitlines()[-1])
@@ -158,7 +203,10 @@ try:
                   'records': records}
     elif check.returncode == 0 and not diagnostics:
         result = {'status': 'passed', 'scope': 'full package; adapter fixture',
-                  'work_dir': str(WORK), 'copied': copied, 'records': records}
+                  'closure_error': closure_error,
+                  'work_dir': str(WORK), 'copied': copied,
+                  'skipped_existing_packages': skipped_existing,
+                  'records': records}
         build_dir = WORK / 'build-O0'
         build = run('wz-build-O0', [STAGE0, 'build', '--project',
                     PROJECT / 'lang.toml', '--backend', 'native', '--opt', '0',
@@ -190,7 +238,9 @@ try:
                   'missing_cross_group': sorted(set(missing)),
                   'full_package_check': 'not_run',
                   'build': 'not_run', 'execution': 'not_run',
-                  'work_dir': str(WORK), 'copied': copied, 'records': records}
+                  'work_dir': str(WORK), 'copied': copied,
+                  'skipped_existing_packages': skipped_existing,
+                  'records': records}
     else:
         result = {'status': 'failed',
                   'reason': 'unexpected check diagnostics',

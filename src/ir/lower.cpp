@@ -3,6 +3,7 @@
 #include <map>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
 
 namespace lang::ir {
 namespace {
@@ -25,9 +26,46 @@ bool uses_slot(Op op) {
     return false;
   }
 }
+struct ModuleIndex {
+  detail::AggregateTypes aggregates;
+  TypeId unit;
+  TypeId boolean;
+  std::unordered_map<uint64_t, const hir::FullExpression *> full_expressions;
+  std::unordered_map<uint64_t, const hir::CallLifetime *> calls;
+  std::unordered_map<uint64_t, const hir::Temporary *> temporaries;
+  std::unordered_map<uint64_t, std::vector<const hir::ValueUse *>>
+      uses_by_consumer;
+  std::unordered_map<uint64_t, const hir::LocalLifetime *> locals_by_symbol;
+
+  explicit ModuleIndex(const hir::HirModule &h) : aggregates(h) {
+    for (uint64_t t = 1; t <= h.types.size(); ++t) {
+      auto k = h.types.find(TypeId{t})->kind;
+      if (k == hir::TypeKind::Unit)
+        unit = TypeId{t};
+      if (k == hir::TypeKind::Bool)
+        boolean = TypeId{t};
+    }
+    full_expressions.reserve(h.ownership.full_expressions.size());
+    for (const auto &fe : h.ownership.full_expressions)
+      full_expressions.emplace(fe.node.value, &fe);
+    calls.reserve(h.ownership.calls.size());
+    for (const auto &c : h.ownership.calls)
+      calls.emplace(c.node.value, &c);
+    temporaries.reserve(h.ownership.temporaries.size());
+    for (const auto &t : h.ownership.temporaries)
+      temporaries.emplace(t.producer.value, &t);
+    uses_by_consumer.reserve(h.ownership.uses.size());
+    for (const auto &u : h.ownership.uses)
+      uses_by_consumer[u.consumer.value].push_back(&u);
+    locals_by_symbol.reserve(h.ownership.locals.size());
+    for (const auto &l : h.ownership.locals)
+      locals_by_symbol[l.symbol.value] = &l;
+  }
+};
 class Lower {
   const hir::HirModule &h;
-  detail::AggregateTypes aggregates;
+  const ModuleIndex &idx;
+  detail::AggregateTypes &aggregates;
   Function f;
   BlockId current;
   uint64_t next_value = 0;
@@ -107,12 +145,13 @@ class Lower {
     i.op = Op::ownership_end; f.blocks[current.value].instructions.push_back(i);
   }
   void full(HirNodeId id) {
-    for (const auto &fe : h.ownership.full_expressions)
-      if (fe.node == id) { batch(id, 0, fe.actions); return; }
+    if (auto it = idx.full_expressions.find(id.value);
+        it != idx.full_expressions.end())
+      batch(id, 0, it->second->actions);
   }
   void call_end(HirNodeId id) {
-    for (const auto &c : h.ownership.calls)
-      if (c.node == id) { batch(id, 1, c.on_return); return; }
+    if (auto it = idx.calls.find(id.value); it != idx.calls.end())
+      batch(id, 1, it->second->on_return);
   }
   std::map<std::pair<HirNodeId, uint32_t>, Handler> handlers;
   const hir::ExitPlan *plan(const ExitSite &site) const {
@@ -324,14 +363,13 @@ class Lower {
   }
   ValueId expr(HirNodeId id) {
     auto value = raw_expr(id);
-    for (const auto &t : h.ownership.temporaries)
-      if (t.producer == id) {
-        auto storage = slot(t.type);
-        f.slots[storage.value].owner = hir::OwnerRef{hir::OwnerKind::temporary, id.value};
-        temporaries[id] = storage;
-        store(storage, value, node(id).source.span);
-        break;
-      }
+    if (auto it = idx.temporaries.find(id.value); it != idx.temporaries.end()) {
+      auto storage = slot(it->second->type);
+      f.slots[storage.value].owner =
+          hir::OwnerRef{hir::OwnerKind::temporary, id.value};
+      temporaries[id] = storage;
+      store(storage, value, node(id).source.span);
+    }
     return value;
   }
   ValueId constant_value(const hir::ConstantValue &value, SourceSpan source,
@@ -392,12 +430,16 @@ class Lower {
       return emit(i);
     case hir::NodeKind::read: {
       auto value = access(Op::load, slots.at(std::get<hir::Read>(n.data).symbol), i.source);
-      for (const auto &u : h.ownership.uses)
-        if (u.consumer == id && u.operand == 0 && !u.destination) {
-          i.op = u.kind == hir::UseKind::copy ? Op::copy : Op::borrow;
-          i.inputs = {value}; i.origin = id;
-          return emit(i);
-        }
+      if (auto found_uses = idx.uses_by_consumer.find(id.value);
+          found_uses != idx.uses_by_consumer.end()) {
+        for (const auto *u : found_uses->second)
+          if (u->operand == 0 && !u->destination) {
+            i.op = u->kind == hir::UseKind::copy ? Op::copy : Op::borrow;
+            i.inputs = {value};
+            i.origin = id;
+            return emit(i);
+          }
+      }
       return value;
     }
     case hir::NodeKind::move: {
@@ -490,9 +532,11 @@ class Lower {
                     : std::get<hir::FieldPlace>(n.data).field;
       i.inputs = {expr(n.children[0])};
       { auto value = emit(i);
-        bool own = false;
-        for (const auto &t : h.ownership.temporaries) if (t.producer == id) own = true;
-        if (own) { i.op = Op::copy; i.inputs = {value}; return emit(i); }
+        if (idx.temporaries.contains(id.value)) {
+          i.op = Op::copy;
+          i.inputs = {value};
+          return emit(i);
+        }
         return value;
       }
     case hir::NodeKind::unary:
@@ -593,22 +637,24 @@ class Lower {
       i.inputs.resize(dispatch.args.size());
       // Evaluation follows source order, but the vtable ABI receives formals
       // in declaration order even when named arguments were reordered.
+      const auto found_uses = idx.uses_by_consumer.find(id.value);
       for (const auto &a : dispatch.args) {
         auto value = expr(a.expression);
         i.inputs[a.parameter_index] = value;
-        for (const auto &u : h.ownership.uses)
-          if (u.consumer == id && !u.destination &&
-              u.operand == a.source_index &&
-              (u.kind == hir::UseKind::borrow ||
-               u.kind == hir::UseKind::inout)) {
-            if (u.root)
-              begin_borrow({hir::OwnerKind::binding, u.root->value}, value,
-                           i.source);
-            else if (owning(u.type))
-              begin_borrow({hir::OwnerKind::temporary, a.expression.value},
-                           value, i.source);
-            break;
-          }
+        if (found_uses != idx.uses_by_consumer.end()) {
+          for (const auto *u : found_uses->second)
+            if (!u->destination && u->operand == a.source_index &&
+                (u->kind == hir::UseKind::borrow ||
+                 u->kind == hir::UseKind::inout)) {
+              if (u->root)
+                begin_borrow({hir::OwnerKind::binding, u->root->value}, value,
+                             i.source);
+              else if (owning(u->type))
+                begin_borrow({hir::OwnerKind::temporary, a.expression.value},
+                             value, i.source);
+              break;
+            }
+        }
       }
       auto result = emit(i);
       call_end(id);
@@ -668,18 +714,24 @@ class Lower {
       i.inputs.resize(c.args.size() + argument_offset);
       if (!system && !c_foreign) i.inputs[0] = callee;
       // Evaluation follows source order. Only the saved values are reordered.
+      const bool lifetime = idx.calls.contains(id.value);
+      const auto found_uses = idx.uses_by_consumer.find(id.value);
       for (const auto &arg : c.args) {
         auto value = expr(arg.expression);
         i.inputs[arg.parameter_index + argument_offset] = value;
-        bool lifetime = false;
-        for (const auto &call : h.ownership.calls) if (call.node == id) lifetime = true;
-        if (lifetime && arg.mode != hir::ParamMode::move) {
+        if (lifetime && arg.mode != hir::ParamMode::move &&
+            found_uses != idx.uses_by_consumer.end()) {
           size_t offset = c.callee ? 1 : 0;
-          for (const auto &u : h.ownership.uses)
-            if (u.consumer == id && !u.destination && u.operand == arg.source_index + offset &&
-                (u.kind == hir::UseKind::borrow || u.kind == hir::UseKind::inout)) {
-              if (u.root) begin_borrow({hir::OwnerKind::binding, u.root->value}, value, i.source);
-              else if (owning(u.type)) begin_borrow({hir::OwnerKind::temporary, arg.expression.value}, value, i.source);
+          for (const auto *u : found_uses->second)
+            if (!u->destination && u->operand == arg.source_index + offset &&
+                (u->kind == hir::UseKind::borrow ||
+                 u->kind == hir::UseKind::inout)) {
+              if (u->root)
+                begin_borrow({hir::OwnerKind::binding, u->root->value}, value,
+                             i.source);
+              else if (owning(u->type))
+                begin_borrow({hir::OwnerKind::temporary, arg.expression.value},
+                             value, i.source);
               break;
             }
         }
@@ -903,9 +955,11 @@ class Lower {
       }
       auto target = expr(n.children[0]);
       if (place.kind() == hir::NodeKind::field_place)
-        for (const auto &fe : h.ownership.full_expressions) if (fe.node == id)
-          for (const auto &a : fe.actions) if (a.kind == hir::CleanupKind::end_borrow)
-            begin_borrow(a.owner, target, s);
+        if (auto it = idx.full_expressions.find(id.value);
+            it != idx.full_expressions.end())
+          for (const auto &a : it->second->actions)
+            if (a.kind == hir::CleanupKind::end_borrow)
+              begin_borrow(a.owner, target, s);
       auto compound = std::get<hir::Assign>(n.data).compound;
       std::optional<ValueId> lhs;
       if (compound)
@@ -1107,8 +1161,9 @@ class Lower {
       auto element_type = h.types.find(node(n.children[0]).type)->type_args.empty()
                               ? TypeId{} : h.types.find(node(n.children[0]).type)->type_args[0];
       if (h.types.find(node(n.children[0]).type)->kind == hir::TypeKind::String)
-        for (const auto &local : h.ownership.locals)
-          if (local.symbol == fi.element) element_type = local.type;
+        if (auto it = idx.locals_by_symbol.find(fi.element.value);
+            it != idx.locals_by_symbol.end())
+          element_type = it->second->type;
       Instruction read; read.op = Op::iteration_read; read.type = element_type;
       read.slot = hidden; read.source = s;
       auto element = emit(read);
@@ -1154,15 +1209,10 @@ class Lower {
   }
 
 public:
-  Lower(const hir::HirModule &input, const hir::HirFunction &fn)
-      : h(input), aggregates(input) {
-    for (uint64_t t = 1; t <= h.types.size(); ++t) {
-      auto k = h.types.find(TypeId{t})->kind;
-      if (k == hir::TypeKind::Unit)
-        unit = TypeId{t};
-      if (k == hir::TypeKind::Bool)
-        boolean = TypeId{t};
-    }
+  Lower(const hir::HirModule &input, ModuleIndex &index,
+        const hir::HirFunction &fn)
+      : h(input), idx(index), aggregates(index.aggregates), unit(index.unit),
+        boolean(index.boolean) {
     f.symbol = fn.symbol;
     f.signature = fn.signature;
     f.async = fn.async;
@@ -1289,7 +1339,7 @@ public:
 };
 } // namespace
 PhaseResult<VerifiedModule> lower(const hir::VerifiedHirModule &input) {
-  auto capabilities = hir::check_backend_capabilities(input.module());
+  auto capabilities = hir::check_backend_capabilities(input);
   if (!capabilities.success()) {
     PhaseResult<VerifiedModule> r;
     r.state = capabilities.state;
@@ -1315,8 +1365,9 @@ PhaseResult<VerifiedModule> lower(const hir::VerifiedHirModule &input) {
   }
   try {
     Module m{input, {}};
+    ModuleIndex index(input.module());
     for (const auto &f : input.module().functions)
-      m.functions.push_back(Lower(input.module(), f).take());
+      m.functions.push_back(Lower(input.module(), index, f).take());
     return verify(m);
   } catch (const std::exception &e) {
     PhaseResult<VerifiedModule> r;

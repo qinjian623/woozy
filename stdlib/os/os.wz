@@ -114,6 +114,11 @@ pub struct FileInfo {
     pub accessed Timespec; pub modified Timespec; pub changed Timespec;
 }
 pub struct Pipe { pub read_end File; pub write_end File; }
+pub const LOCK_SH i32 = 1;
+pub const LOCK_EX i32 = 2;
+pub const LOCK_NB i32 = 4;
+pub const LOCK_UN i32 = 8;
+pub func flock(file File, operation i32) throws Error { check(__woozy_os_flock(file.descriptor, operation)); }
 pub const O_DIRECTORY i32 = 65536;
 pub const O_NOFOLLOW i32 = 131072;
 pub const F_OK i32 = 0;

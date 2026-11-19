@@ -1,6 +1,5 @@
 #include "lang/syntax/token.hpp"
 #include <algorithm>
-#include <regex>
 
 namespace lang {
 namespace {
@@ -63,8 +62,66 @@ PhaseResult<TokenBuffer> lex(std::shared_ptr<const SourceSnapshot> source,
       return text.substr(p, s.size()) == s;
     };
     std::vector<Trivia> trivia;
-    const std::regex number(
-        R"((0b[01](_?[01])*|0o[0-7](_?[0-7])*|0x[0-9a-fA-F](_?[0-9a-fA-F])*|(0|[1-9](_?[0-9])*)(\.[0-9](_?[0-9])*)?([eE][+-]?[0-9](_?[0-9])*)?))");
+    auto scan_digits = [](std::string_view s, size_t &idx, auto pred) -> bool {
+      if (idx >= s.size() || !pred(static_cast<unsigned char>(s[idx])))
+        return false;
+      ++idx;
+      while (idx < s.size()) {
+        if (s[idx] == '_') {
+          if (idx + 1 >= s.size() ||
+              !pred(static_cast<unsigned char>(s[idx + 1])))
+            return false;
+          idx += 2;
+        } else if (pred(static_cast<unsigned char>(s[idx]))) {
+          ++idx;
+        } else {
+          break;
+        }
+      }
+      return true;
+    };
+    auto valid_number_literal = [&](std::string_view s) -> bool {
+      auto is_bin = [](unsigned char c) { return c == '0' || c == '1'; };
+      auto is_oct = [](unsigned char c) { return c >= '0' && c <= '7'; };
+      auto is_dec = [](unsigned char c) { return c >= '0' && c <= '9'; };
+      auto is_hex = [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+               (c >= 'A' && c <= 'F');
+      };
+      if (s.empty())
+        return false;
+      if (s.size() >= 2 && s[0] == '0') {
+        size_t idx = 2;
+        if (s[1] == 'b')
+          return scan_digits(s, idx, is_bin) && idx == s.size();
+        if (s[1] == 'o')
+          return scan_digits(s, idx, is_oct) && idx == s.size();
+        if (s[1] == 'x')
+          return scan_digits(s, idx, is_hex) && idx == s.size();
+      }
+      size_t idx = 0;
+      if (s[0] == '0') {
+        idx = 1;
+      } else if (s[0] >= '1' && s[0] <= '9') {
+        if (!scan_digits(s, idx, is_dec))
+          return false;
+      } else {
+        return false;
+      }
+      if (idx < s.size() && s[idx] == '.') {
+        ++idx;
+        if (!scan_digits(s, idx, is_dec))
+          return false;
+      }
+      if (idx < s.size() && (s[idx] == 'e' || s[idx] == 'E')) {
+        ++idx;
+        if (idx < s.size() && (s[idx] == '+' || s[idx] == '-'))
+          ++idx;
+        if (!scan_digits(s, idx, is_dec))
+          return false;
+      }
+      return idx == s.size();
+    };
     while (true) {
       check_cancelled(stop);
       size_t begin = p;
@@ -132,7 +189,7 @@ PhaseResult<TokenBuffer> lex(std::shared_ptr<const SourceSnapshot> source,
           ++p;
         }
         auto spelling = text.substr(begin, p - begin);
-        bad = !std::regex_match(spelling.begin(), spelling.end(), number);
+        bad = !valid_number_literal(spelling);
         kind = spelling.find_first_of(".eE") != spelling.npos &&
                        !(spelling.size() > 1 && spelling[0] == '0' &&
                          spelling[1] == 'x')

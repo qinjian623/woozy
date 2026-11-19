@@ -74,9 +74,48 @@ bool type_contains_parameter(const HirModule &m, TypeId id) {
   return false;
 }
 } // namespace
+namespace {
+uint64_t mix_type_hash(uint64_t seed, uint64_t value) {
+  value += 0x9e3779b97f4a7c15ULL;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  value ^= value >> 31;
+  return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+uint64_t hash_type(const Type &t) {
+  uint64_t h = mix_type_hash(0x517cc1b727220a95ULL, static_cast<uint64_t>(t.kind));
+  h = mix_type_hash(h, t.bits);
+  h = mix_type_hash(h, t.declaration.value);
+  h = mix_type_hash(h, t.binding.value);
+  h = mix_type_hash(h, t.c_type);
+  h = mix_type_hash(h, t.result.value);
+  h = mix_type_hash(h, t.throws_type ? 1ULL : 0ULL);
+  if (t.throws_type)
+    h = mix_type_hash(h, t.throws_type->value);
+  h = mix_type_hash(h, t.parameters.size());
+  for (const auto &p : t.parameters) {
+    h = mix_type_hash(h, static_cast<uint64_t>(p.mode));
+    h = mix_type_hash(h, p.type.value);
+  }
+  h = mix_type_hash(h, t.type_args.size());
+  for (const auto &a : t.type_args)
+    h = mix_type_hash(h, a.value);
+  return h;
+}
+} // namespace
 const Type *TypeContext::find(TypeId id) const {
   return id.value && id.value <= entries_.size() ? &entries_[id.value - 1]
                                                  : nullptr;
+}
+void TypeContext::rehash_table(size_t capacity) {
+  hash_table_.assign(capacity, 0);
+  const size_t mask = capacity - 1;
+  for (size_t i = 0; i < entries_.size(); ++i) {
+    size_t slot = static_cast<size_t>(hash_type(entries_[i])) & mask;
+    while (hash_table_[slot])
+      slot = (slot + 1) & mask;
+    hash_table_[slot] = static_cast<uint64_t>(i + 1);
+  }
 }
 TypeId TypeContext::intern(Type t) {
   auto bad = [] {
@@ -183,37 +222,75 @@ TypeId TypeContext::intern(Type t) {
   for (auto a : t.type_args)
     if (!find(a))
       bad();
-  for (size_t i = 0; i < entries_.size(); ++i)
-    if (entries_[i] == t)
-      return TypeId{i + 1};
+  const uint64_t h = hash_type(t);
+  size_t slot = 0;
+  if (!hash_table_.empty()) {
+    const size_t mask = hash_table_.size() - 1;
+    slot = static_cast<size_t>(h) & mask;
+    while (const uint64_t id = hash_table_[slot]) {
+      if (entries_[id - 1] == t)
+        return TypeId{id};
+      slot = (slot + 1) & mask;
+    }
+  }
+  if (hash_table_.empty() ||
+      (entries_.size() + 1) * 4 >= hash_table_.size() * 3) {
+    rehash_table(hash_table_.empty() ? 32 : hash_table_.size() * 2);
+    const size_t mask = hash_table_.size() - 1;
+    slot = static_cast<size_t>(h) & mask;
+    while (hash_table_[slot])
+      slot = (slot + 1) & mask;
+  }
   entries_.push_back(std::move(t));
-  return TypeId{entries_.size()};
+  const uint64_t id = entries_.size();
+  hash_table_[slot] = id;
+  return TypeId{id};
 }
 TypeId substitute(TypeId id, const Substitutions &sub, TypeContext &ctx) {
-  std::map<uint64_t, TypeId> cache;
+  const size_t initial_size = ctx.size();
+  std::vector<TypeId> cache(initial_size + 1, TypeId{0});
   std::function<TypeId(TypeId)> visit = [&](TypeId current) {
-    if (auto it = cache.find(current.value); it != cache.end())
-      return it->second;
+    if (current.value < cache.size() && cache[current.value].value)
+      return cache[current.value];
+    auto record = [&](TypeId resolved) {
+      if (current.value < cache.size())
+        cache[current.value] = resolved;
+      return resolved;
+    };
     const auto *found = ctx.find(current);
     if (!found)
       throw std::invalid_argument("substitution missing type");
-    auto t = *found;
-    if (t.kind == TypeKind::TypeParameter) {
+    if (found->kind == TypeKind::TypeParameter) {
       for (auto [s, value] : sub)
-        if (s == t.declaration)
-          return cache[current.value] = value;
-      return cache[current.value] = current;
+        if (s == found->declaration)
+          return record(value);
+      return record(current);
     }
-    for (auto &a : t.type_args)
-      a = visit(a);
-    for (auto &p : t.parameters)
-      p.type = visit(p.type);
+    auto t = *found;
+    bool changed = false;
+    for (auto &a : t.type_args) {
+      const TypeId next = visit(a);
+      changed = changed || next != a;
+      a = next;
+    }
+    for (auto &p : t.parameters) {
+      const TypeId next = visit(p.type);
+      changed = changed || next != p.type;
+      p.type = next;
+    }
     if (t.kind == TypeKind::Function) {
-      t.result = visit(t.result);
-      if (t.throws_type)
-        t.throws_type = visit(*t.throws_type);
+      const TypeId next_result = visit(t.result);
+      changed = changed || next_result != t.result;
+      t.result = next_result;
+      if (t.throws_type) {
+        const TypeId next_error = visit(*t.throws_type);
+        changed = changed || next_error != *t.throws_type;
+        t.throws_type = next_error;
+      }
     }
-    return cache[current.value] = ctx.intern(std::move(t));
+    if (!changed)
+      return record(current);
+    return record(ctx.intern(std::move(t)));
   };
   return visit(id);
 }
@@ -8303,6 +8380,22 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
   }
   return r;
 }
+PhaseResult<std::monostate>
+check_backend_capabilities(const VerifiedHirModule &verified,
+                           std::stop_token stop) {
+  if (stop.stop_requested()) {
+    PhaseResult<std::monostate> r;
+    r.state = PhaseState::cancelled;
+    return r;
+  }
+  if (verified.mode() == VerifyMode::backend) {
+    PhaseResult<std::monostate> r;
+    r.value = std::monostate{};
+    r.state = PhaseState::complete;
+    return r;
+  }
+  return check_backend_capabilities(verified.module(), stop);
+}
 PhaseResult<VerifiedHirModule> verify(const HirModule &input,
                                       std::stop_token stop, VerifyMode mode) {
   PhaseResult<VerifiedHirModule> r;
@@ -8333,7 +8426,7 @@ PhaseResult<VerifiedHirModule> verify(const HirModule &input,
       return r;
     }
     check_cancelled(stop);
-    r.value = VerifiedHirModule(std::move(module));
+    r.value = VerifiedHirModule(std::move(module), mode);
     r.state = PhaseState::complete;
   } catch (const Cancelled &) {
     r.state = PhaseState::cancelled;

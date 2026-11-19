@@ -18,7 +18,9 @@ def symbols(mode):
 
 
 defined = {name for name, kind in symbols('--defined-only')}
+# ELF x86_64 linkers supply this symbol when resolving position-independent code.
+linker_defined = {('_GLOBAL_OFFSET_TABLE_', 'U')}
 missing = {(name, kind) for name, kind in symbols('--undefined-only')
-           if name not in defined} - {('main', 'U'), ('lang_vec_observe_v1', 'w')}
+           if name not in defined} - {('main', 'U'), ('lang_vec_observe_v1', 'w')} - linker_defined
 assert not missing, f'Native runtime depends on external symbols: {sorted(missing)}'
 print(json.dumps(dict(status='passed', unresolved=['main', 'lang_vec_observe_v1'])))

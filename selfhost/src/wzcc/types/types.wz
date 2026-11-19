@@ -18,15 +18,11 @@ import "std/vec" as vec;
 
 pub struct Context {
     entries Vec[model.Type];
+    table Vec[usize];
 }
 
 pub enum Error {
     Invalid(message string);
-}
-
-struct CacheEntry {
-    key usize;
-    value usize;
 }
 
 struct BindingEntry {
@@ -147,7 +143,8 @@ func throws_equal(left option.Option[usize],
 }
 
 pub func context() Context {
-    return Context(entries: vec.empty[model.Type]());
+    return Context(entries: vec.empty[model.Type](),
+        table: vec.empty[usize]());
 }
 
 // A genuine value copy of the C++ TypeContext for table-copy experiments.
@@ -159,20 +156,60 @@ pub func clone_context(state Context) Context {
     for value in state.entries {
         vec.push(out, copy_type(value));
     }
-    return Context(entries: out);
+    return Context(entries: out, table: copy_ids(state.table));
 }
 
 func has_type(state Context, id usize) bool {
     return id != 0 && id <= vec.len(state.entries);
 }
 
-func find_cached(cache Vec[CacheEntry], key usize) i64 {
-    for var index usize = 0; index < vec.len(cache); index += 1 {
-        if cache[index].key == key {
-            return i64(index);
-        }
+func hash_mix(seed u64, value u64) u64 {
+    var mixed = seed ^ (value + 0x9e3779b97f4a7c15);
+    mixed = (mixed ^ (mixed >> 30)) * 0xbf58476d1ce4e5b9;
+    mixed = (mixed ^ (mixed >> 27)) * 0x94d049bb133111eb;
+    mixed ^= mixed >> 31;
+    mixed ^= mixed >> 33;
+    mixed *= 0xff51afd7ed558ccd;
+    mixed ^= mixed >> 33;
+    mixed *= 0xc4ceb9fe1a85ec53;
+    return mixed ^ (mixed >> 33);
+}
+
+func hash_type(value model.Type) u64 {
+    var h = hash_mix(0x517cc1b727220a95, u64(model.type_kind_id(value.kind)));
+    h = hash_mix(h, u64(value.bits));
+    h = hash_mix(h, u64(value.declaration));
+    h = hash_mix(h, u64(value.binding));
+    h = hash_mix(h, u64(value.c_type));
+    h = hash_mix(h, u64(value.result));
+    if option.is_some(value.throws_type) {
+        h = hash_mix(h, 1);
+        h = hash_mix(h, u64(option_usize(value.throws_type)));
+    } else {
+        h = hash_mix(h, 0);
     }
-    return -1;
+    h = hash_mix(h, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        h = hash_mix(h, u64(mode_id(parameter.mode)));
+        h = hash_mix(h, u64(parameter.type_id));
+    }
+    h = hash_mix(h, u64(vec.len(value.type_args)));
+    for arg in value.type_args {
+        h = hash_mix(h, u64(arg));
+    }
+    return h;
+}
+
+func rehash(state inout Context, capacity usize) {
+    state.table = vec.make[usize](capacity, 0);
+    let mask = capacity - 1;
+    for var index usize = 0; index < vec.len(state.entries); index += 1 {
+        var slot = usize(hash_type(state.entries[index])) & mask;
+        for state.table[slot] != 0 {
+            slot = (slot + 1) & mask;
+        }
+        state.table[slot] = index + 1;
+    }
 }
 
 func find_binding(bindings Vec[BindingEntry], symbol usize) i64 {
@@ -309,13 +346,36 @@ pub func intern(state inout Context, value model.Type) usize throws Error {
         }
     }
 
-    for var index usize = 0; index < vec.len(state.entries); index += 1 {
-        if equal(state.entries[index], value) {
-            return index + 1;
+    let digest = hash_type(value);
+    var slot usize = 0;
+    if vec.len(state.table) > 0 {
+        let mask = vec.len(state.table) - 1;
+        slot = usize(digest) & mask;
+        for state.table[slot] != 0 {
+            let existing = state.table[slot];
+            if equal(state.entries[existing - 1], value) {
+                return existing;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    if vec.len(state.table) == 0 ||
+       (vec.len(state.entries) + 1) * 4 >= vec.len(state.table) * 3 {
+        var next_capacity usize = 32;
+        if vec.len(state.table) > 0 {
+            next_capacity = vec.len(state.table) * 2;
+        }
+        rehash(inout state, next_capacity);
+        let mask = vec.len(state.table) - 1;
+        slot = usize(digest) & mask;
+        for state.table[slot] != 0 {
+            slot = (slot + 1) & mask;
         }
     }
     vec.push(state.entries, copy_type(value));
-    return vec.len(state.entries);
+    let id = vec.len(state.entries);
+    state.table[slot] = id;
+    return id;
 }
 
 pub func find(state Context, id usize) option.Option[model.Type] {
@@ -369,48 +429,72 @@ func require_type(state Context, id usize, message string) model.Type throws Err
 
 func substitute_visit(current usize, substitutions Vec[model.Substitution],
                       state inout Context,
-                      cache Vec[CacheEntry]) usize throws Error {
-    let cached = find_cached(cache, current);
-    if cached >= 0 {
-        return cache[usize(cached)].value;
+                      cache Vec[usize]) usize throws Error {
+    if current < vec.len(cache) && cache[current] != 0 {
+        return cache[current];
     }
     var value = require_type(state, current, "substitution missing type");
     if kind_is(value.kind, model.TypeKind.TypeParameter) {
         for substitution in substitutions {
             if substitution.symbol == value.declaration {
-                vec.push(cache, CacheEntry(key: current,
-                    value: substitution.type_id));
+                if current < vec.len(cache) {
+                    cache[current] = substitution.type_id;
+                }
                 return substitution.type_id;
             }
         }
-        vec.push(cache, CacheEntry(key: current, value: current));
+        if current < vec.len(cache) {
+            cache[current] = current;
+        }
         return current;
     }
+    var changed = false;
     for var index usize = 0; index < vec.len(value.type_args); index += 1 {
-        value.type_args[index] = substitute_visit(value.type_args[index],
+        let next = substitute_visit(value.type_args[index],
             substitutions, inout state, cache);
-    }
-    for var index usize = 0; index < vec.len(value.parameters); index += 1 {
-        value.parameters[index].type_id = substitute_visit(
-            value.parameters[index].type_id, substitutions, inout state, cache);
-    }
-    if kind_is(value.kind, model.TypeKind.Function) {
-        value.result = substitute_visit(value.result, substitutions,
-            inout state, cache);
-        if option.is_some(value.throws_type) {
-            value.throws_type = option.Option[usize].Some(substitute_visit(
-                option_usize(value.throws_type), substitutions, inout state,
-                cache));
+        if next != value.type_args[index] {
+            changed = true;
+            value.type_args[index] = next;
         }
     }
-    let result = intern(inout state, value);
-    vec.push(cache, CacheEntry(key: current, value: result));
+    for var index usize = 0; index < vec.len(value.parameters); index += 1 {
+        let next = substitute_visit(value.parameters[index].type_id,
+            substitutions, inout state, cache);
+        if next != value.parameters[index].type_id {
+            changed = true;
+            value.parameters[index].type_id = next;
+        }
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        let next_result = substitute_visit(value.result, substitutions,
+            inout state, cache);
+        if next_result != value.result {
+            changed = true;
+            value.result = next_result;
+        }
+        if option.is_some(value.throws_type) {
+            let previous_error = option_usize(value.throws_type);
+            let next_error = substitute_visit(previous_error, substitutions,
+                inout state, cache);
+            if next_error != previous_error {
+                changed = true;
+                value.throws_type = option.Option[usize].Some(next_error);
+            }
+        }
+    }
+    var result = current;
+    if changed {
+        result = intern(inout state, value);
+    }
+    if current < vec.len(cache) {
+        cache[current] = result;
+    }
     return result;
 }
 
 pub func substitute(id usize, substitutions Vec[model.Substitution],
                     state inout Context) usize throws Error {
-    let cache = vec.empty[CacheEntry]();
+    let cache = vec.make[usize](vec.len(state.entries) + 1, 0);
     return substitute_visit(id, substitutions, inout state, cache);
 }
 
@@ -436,28 +520,19 @@ func dereference(id usize, bindings Vec[BindingEntry],
     return current;
 }
 
-func id_seen(seen Vec[usize], id usize) bool {
-    for value in seen {
-        if value == id {
-            return true;
-        }
-    }
-    return false;
-}
-
 func occurs(variable usize, root usize, bindings Vec[BindingEntry],
             state Context) bool throws Error {
     let pending = vec.empty[usize]();
-    let seen = vec.empty[usize]();
+    let seen = vec.make[bool](vec.len(state.entries) + 1, false);
     vec.push(pending, root);
     for vec.len(pending) > 0 {
         let popped = vec.pop(pending);
         let id = dereference(option_usize(popped), bindings, state);
-        if id_seen(seen, id) {
+        if id < vec.len(seen) && seen[id] {
             continue;
         }
-        vec.push(seen, id);
         let value = require_type(state, id, "overlap type reference");
+        seen[id] = true;
         if kind_is(value.kind, model.TypeKind.TypeParameter) &&
            value.declaration == variable {
             return true;

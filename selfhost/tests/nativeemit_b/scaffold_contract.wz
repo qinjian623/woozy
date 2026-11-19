@@ -1,0 +1,290 @@
+// TEST-ONLY SCAFFOLD for the nativeemit_b harness.
+//
+// The C/D/E owners of SELFHOST_NATIVEEMIT.md are written by other workers and
+// are absent from the tree while SH08 is in progress.  This file supplies only
+// their documented symbol names so that nativeemit/b_* can be parsed, resolved
+// and type-checked, plus a few honest minimal bodies that the B harness really
+// exercises (owning=false for the scalar-only test module, non-capturing
+// function values, and the GC runtime hooks).
+//
+// It is never merged: the production definitions live in values.wz, async_gc.wz
+// and system.wz.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+// ---- C: values.wz stand-ins -------------------------------------------------
+
+func owning(type_id usize, state inout Emitter) bool throws Error {
+    // The harness module contains only scalar/string types, which never own.
+    return false;
+}
+
+func value_op(type_id usize, copy bool, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: value_op");
+}
+
+func copy_value(type_id usize, value Value, state inout Emitter) Value throws Error {
+    return value;
+}
+
+func destroy_slot(slot usize, type_id usize, state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: destroy_slot");
+}
+
+func env_record_type(fields Vec[usize], state inout Emitter) string throws Error {
+    throw invalid("nativeemit_b harness scaffold: env_record_type");
+}
+
+func env_record_op(fields Vec[usize], copy bool, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: env_record_op");
+}
+
+func make_environment(fields Vec[usize], children Vec[Value],
+                      state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: make_environment");
+}
+
+func function_thunk(symbol usize, state inout Emitter) Value throws Error {
+    return call_target(state, symbol);
+}
+
+func bound_adapter(schema hir.FunctionValue, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: bound_adapter");
+}
+
+func function_value(instruction nativeir.Instruction, args Vec[Value],
+                    state inout Emitter) Value throws Error {
+    // Correct for a non-capturing, non-bound function value only.
+    let code = call_target(state, instruction.function);
+    return Value(type_name: FN_TYPE, reference: FN_TYPE + " { ptr " +
+        code.reference + ", ptr null }");
+}
+
+func function_value_info(state Emitter, value_id usize) option.Option[FunctionValueInfo] {
+    return option.Option[FunctionValueInfo].None;
+}
+
+func trait_box_op(concrete usize, clone bool, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: trait_box_op");
+}
+
+func trait_method_thunk(dyn_type usize, concrete usize, target usize,
+                        state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: trait_method_thunk");
+}
+
+func trait_vtable(dyn_type usize, concrete usize, methods Vec[usize],
+                  state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: trait_vtable");
+}
+
+func thread_bridge(entry_type usize, state inout Emitter) ThreadBridge throws Error {
+    throw invalid("nativeemit_b harness scaffold: thread_bridge");
+}
+
+func thread_spawn(instruction nativeir.Instruction, args Vec[Value],
+                  state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: thread_spawn");
+}
+
+func weak_system_call(instruction nativeir.Instruction, args Vec[Value],
+                      state inout Emitter) option.Option[Value] throws Error {
+    return option.Option[Value].None;
+}
+
+func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
+                            state inout Emitter) option.Option[Value] throws Error {
+    // Only the non-capturing Op::Function path is exercised by the B harness.
+    switch instruction.op {
+        case nativeir.Op.Function: {
+            let value = function_value(instruction, args, inout state);
+            return option.Option[Value].Some(value);
+        }
+        default: throw invalid("nativeemit_b harness scaffold: emit_value_instruction");
+    }
+}
+
+// ---- D: async_gc.wz stand-ins ----------------------------------------------
+
+func scan_c_resource_flags(state inout Emitter) throws Error {}
+
+func type_owns_c_resource(type_id usize, state inout Emitter) bool throws Error {
+    return false;
+}
+
+func promise_type(task_type usize, state inout Emitter) PromiseLayout throws Error {
+    throw invalid("nativeemit_b harness scaffold: promise_type");
+}
+
+func coroutine_signature(type_id usize, state inout Emitter) Signature throws Error {
+    throw invalid("nativeemit_b harness scaffold: coroutine_signature");
+}
+
+func declare_async(function_index usize, state inout Emitter) SourceFunction throws Error {
+    throw invalid("nativeemit_b harness scaffold: declare_async");
+}
+
+func async_begin(function_index usize, state inout Emitter) AsyncState throws Error {
+    throw invalid("nativeemit_b harness scaffold: async_begin");
+}
+
+func copy_async_ordinary_parameters(function_index usize,
+                                    state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: copy_async_ordinary_parameters");
+}
+
+func build_async_frame_gc(function_index usize, owner_slots Vec[usize],
+                          state inout Emitter) AsyncFrameGcPlan throws Error {
+    throw invalid("nativeemit_b harness scaffold: build_async_frame_gc");
+}
+
+func async_publish_and_suspend(function_index usize,
+                               state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: async_publish_and_suspend");
+}
+
+func emit_async_terminator(terminator nativeir.Terminator, block_id usize,
+                           state inout Emitter) bool throws Error {
+    return false;
+}
+
+func async_finish(function_index usize, state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: async_finish");
+}
+
+func emit_async_main(entry usize, state inout Emitter) bool throws Error {
+    return false;
+}
+
+func has_strong_edge(type_id usize, state inout Emitter) bool throws Error {
+    return false;
+}
+
+func gc_trace_value(type_id usize, address Value, visitor Value,
+                    visit_context Value, state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: gc_trace_value");
+}
+
+func gc_register_vec(object Value, element_type usize,
+                     state inout Emitter) throws Error {}
+
+func gc_register_fields(object Value, fields Vec[usize],
+                        state inout Emitter) throws Error {}
+
+func gc_poll(state inout Emitter) throws Error {
+    runtime("lang_gc_runtime_poll_v1", "void", [], inout state);
+}
+
+func gc_loop_safepoints(function nativeir.Function) LoopSafepoints throws Error {
+    return LoopSafepoints(headers: [], exits: []);
+}
+
+func gc_collect_loop_exit(state inout Emitter) throws Error {}
+
+func gc_enter_critical(state inout Emitter) Value throws Error {
+    return runtime("lang_gc_program_enter_critical_v1", "i32", [], inout state);
+}
+
+func gc_leave_critical(token Value, state inout Emitter) throws Error {
+    runtime("lang_gc_program_leave_critical_v1", "void", [token], inout state);
+}
+
+func gc_enter_safe(state inout Emitter) Value throws Error {
+    return runtime("lang_gc_program_enter_safe_v1", "i32", [], inout state);
+}
+
+func gc_leave_safe(token Value, state inout Emitter) throws Error {
+    runtime("lang_gc_program_leave_safe_v1", "void", [token], inout state);
+}
+
+// ---- E: system.wz stand-ins -------------------------------------------------
+
+func c_ref_type(reference model.CTypeRef, state inout Emitter) string throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_ref_type");
+}
+
+func c_lower_type(type_id usize, state inout Emitter) string throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_lower_type");
+}
+
+func to_c_storage(type_id usize, value Value, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: to_c_storage");
+}
+
+func from_c_storage(type_id usize, value Value, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: from_c_storage");
+}
+
+func resource_operation(c_type u32, copy bool, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: resource_operation");
+}
+
+func callback_bridge(symbol usize, c_type u32, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: callback_bridge");
+}
+
+func callback_trampoline(symbol usize, c_type u32, state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: callback_trampoline");
+}
+
+func registration_dispatcher(c_type u32, userdata usize,
+                             state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: registration_dispatcher");
+}
+
+func borrow_registration(owner Value, state inout Emitter) RegistrationBorrow throws Error {
+    throw invalid("nativeemit_b harness scaffold: borrow_registration");
+}
+
+func end_registration_borrow(borrow RegistrationBorrow,
+                             state inout Emitter) throws Error {
+    throw invalid("nativeemit_b harness scaffold: end_registration_borrow");
+}
+
+func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
+                    state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: c_foreign_call");
+}
+
+func emit_c_instruction(instruction nativeir.Instruction, args Vec[Value],
+                        state inout Emitter) option.Option[Value] throws Error {
+    return option.Option[Value].None;
+}
+
+func system_call(instruction nativeir.Instruction, args Vec[Value],
+                 state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: system_call");
+}
+
+func value_address(type_id usize, value Value, state inout Emitter) Value throws Error {
+    let type_name = lower_type(type_id, inout state);
+    let address = storage(type_name, inout state);
+    append("store " + typed(value) + ", ptr " + address.reference, inout state);
+    return address;
+}
+
+func text_binary(instruction nativeir.Instruction, left Value, right Value,
+                 state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: text_binary");
+}
+
+func stdlib_variant(type_id usize, tag u32, payload option.Option[Value],
+                    state inout Emitter) Value throws Error {
+    throw invalid("nativeemit_b harness scaffold: stdlib_variant");
+}
+
+func finalize_c_adapter(state inout Emitter) throws Error {}
+
+func registration_callback(project model.Project,
+                           callable model.CCallableDecl) option.Option[RegistrationCallback] {
+    return option.Option[RegistrationCallback].None;
+}
+
+func registration_close(project model.Project, callable model.CCallableDecl) bool {
+    return false;
+}

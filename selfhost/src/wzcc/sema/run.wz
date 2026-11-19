@@ -2,6 +2,7 @@
 package sema;
 
 import "app/wzcc/hir" as hir;
+import "app/wzcc/frontcache" as frontcache;
 import "app/wzcc/hirclone" as hirclone;
 import "app/wzcc/model" as model;
 import "app/wzcc/ownership" as ownership;
@@ -45,9 +46,78 @@ func run_insert_index(values Vec[usize], value usize) {
     values[position] = value;
 }
 
+func run_sort_node_symbols(entries Vec[NodeSymbolEntry]) {
+    let n = vec.len(entries);
+    if n < 2 { return; }
+    let scratch = vec.empty[NodeSymbolEntry]();
+    vec.reserve(scratch, n);
+    for var index usize = 0; index < n; index += 1 { vec.push(scratch, entries[index]); }
+    var width usize = 1;
+    for width < n {
+        var left usize = 0;
+        for left < n {
+            var mid = left + width; if mid > n { mid = n; }
+            var right = left + width * 2; if right > n { right = n; }
+            var i = left; var j = mid; var out = left;
+            for i < mid && j < right {
+                if run_key_less(entries[j].key, entries[i].key) {
+                    scratch[out] = entries[j]; j += 1;
+                } else {
+                    scratch[out] = entries[i]; i += 1;
+                }
+                out += 1;
+            }
+            for i < mid { scratch[out] = entries[i]; i += 1; out += 1; }
+            for j < right { scratch[out] = entries[j]; j += 1; out += 1; }
+            left += width * 2;
+        }
+        for var index usize = 0; index < n; index += 1 { entries[index] = scratch[index]; }
+        width *= 2;
+    }
+}
+
+func run_sort_usize(values Vec[usize]) {
+    let n = vec.len(values);
+    if n < 2 { return; }
+    let scratch = vec.empty[usize]();
+    vec.reserve(scratch, n);
+    for var index usize = 0; index < n; index += 1 { vec.push(scratch, values[index]); }
+    var width usize = 1;
+    for width < n {
+        var left usize = 0;
+        for left < n {
+            var mid = left + width; if mid > n { mid = n; }
+            var right = left + width * 2; if right > n { right = n; }
+            var i = left; var j = mid; var out = left;
+            for i < mid && j < right {
+                if values[j] < values[i] { scratch[out] = values[j]; j += 1; }
+                else { scratch[out] = values[i]; i += 1; }
+                out += 1;
+            }
+            for i < mid { scratch[out] = values[i]; i += 1; out += 1; }
+            for j < right { scratch[out] = values[j]; j += 1; out += 1; }
+            left += width * 2;
+        }
+        for var index usize = 0; index < n; index += 1 { values[index] = scratch[index]; }
+        width *= 2;
+    }
+}
+
+func run_dedup_sorted(values Vec[usize]) Vec[usize] {
+    run_sort_usize(values);
+    let out = vec.empty[usize]();
+    for value in values {
+        if vec.len(out) == 0 || out[vec.len(out) - 1] != value {
+            vec.push(out, value);
+        }
+    }
+    return out;
+}
+
 // module already owns its mutable resolved/type arrays.
 func initialize_checker(module hir.HirModule) Checker throws Error {
-    var state = Checker(m: module, occurrences: [], definitions: [],
+    var state = Checker(m: module, selected_body_module: option.Option[usize].None,
+        selected_templates: [], occurrences: [], definitions: [],
         signatures: [], trait_signature_context: [], parameters: [], locals: [],
         constants: [], evaluating: [], function: 0, scope: 0, cleanup_depth: 0,
         async_function: false, current_result: 0,
@@ -67,16 +137,37 @@ func initialize_checker(module hir.HirModule) Checker throws Error {
     state.boolean = boolean;
     let i64_type = scalar(inout state, model.TypeKind.SignedInt, 64);
     state.i64_type = i64_type;
+    let raw_defs = vec.empty[NodeSymbolEntry]();
+    vec.reserve(raw_defs, vec.len(state.m.resolved.symbols));
     for symbol in state.m.resolved.symbols {
         switch symbol.definition {
             case option.Option.Some(location):
-                run_put_node_symbol(state.definitions, node_key(location), symbol.id, false);
+                vec.push(raw_defs, NodeSymbolEntry(key: node_key(location),
+                    symbol: symbol.id));
             case option.Option.None: {}
         }
     }
+    run_sort_node_symbols(raw_defs);
+    for entry in raw_defs {
+        let len_defs = vec.len(state.definitions);
+        if len_defs == 0 || !same_node_key(state.definitions[len_defs - 1].key, entry.key) {
+            vec.push(state.definitions, entry);
+        }
+    }
+    let raw_occ = vec.empty[NodeSymbolEntry]();
+    vec.reserve(raw_occ, vec.len(state.m.resolved.occurrences));
     for occurrence in state.m.resolved.occurrences {
-        run_put_node_symbol(state.occurrences, node_key(occurrence.source),
-            occurrence.symbol, true);
+        vec.push(raw_occ, NodeSymbolEntry(key: node_key(occurrence.source),
+            symbol: occurrence.symbol));
+    }
+    run_sort_node_symbols(raw_occ);
+    for entry in raw_occ {
+        let len_occ = vec.len(state.occurrences);
+        if len_occ > 0 && same_node_key(state.occurrences[len_occ - 1].key, entry.key) {
+            state.occurrences[len_occ - 1] = entry;
+        } else {
+            vec.push(state.occurrences, entry);
+        }
     }
     return state;
 }
@@ -92,14 +183,16 @@ func make_checker(resolved model.ResolvedProject,
 
 func run_generic_owners(entries Vec[GenericParamsEntry]) Vec[usize] {
     let owners = vec.empty[usize]();
-    for entry in entries { run_insert_index(owners, entry.owner); }
-    return owners;
+    vec.reserve(owners, vec.len(entries));
+    for entry in entries { vec.push(owners, entry.owner); }
+    return run_dedup_sorted(owners);
 }
 
 func run_body_symbols(entries Vec[BodyEntry]) Vec[usize] {
     let symbols = vec.empty[usize]();
-    for entry in entries { run_insert_index(symbols, entry.symbol); }
-    return symbols;
+    vec.reserve(symbols, vec.len(entries));
+    for entry in entries { vec.push(symbols, entry.symbol); }
+    return run_dedup_sorted(symbols);
 }
 
 func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
@@ -144,6 +237,27 @@ func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
 // Return ownership's real phase result: its empty-diagnostic failure means
 // Cancelled in CPP, which must not be disguised as Error.Support.
 func run_checker(state inout Checker) model.UnitResult throws Error {
+    return run_checker_cached(inout state, frontcache.context("", ""));
+}
+func run_checker_cached(state inout Checker, cache frontcache.Context) model.UnitResult throws Error {
+    return run_checker_selected(inout state, cache, option.Option[usize].None, []);
+}
+func run_checker_package(state inout Checker, cache frontcache.Context,
+                             package_id usize) model.UnitResult throws Error {
+    return run_checker_selected(inout state, cache, option.Option[usize].Some(package_id), []);
+}
+// Package workers use the same project-wide declaration phase but inspect only
+// function bodies owned by one canonical Module.  No body-cache reader or
+// writer participates in this mode.
+func run_checker_selected(state inout Checker, cache frontcache.Context,
+                          selected option.Option[usize], templates Vec[model.NodeRef]) model.UnitResult throws Error {
+    state.selected_body_module = selected;
+    state.selected_templates = templates;
+    prepare_declarations(inout state);
+    return run_checker_bodies(inout state, cache, selected, templates);
+}
+
+func prepare_declarations(state inout Checker) throws Error {
     declarations(inout state);
     for trait_declaration in state.m.traits {
         run_check_bounds(inout state, trait_declaration.params,
@@ -162,15 +276,15 @@ func run_checker(state inout Checker) model.UnitResult throws Error {
     // generic_params and bodies are CPP maps, not declaration-order arrays.
     for owner in run_generic_owners(state.generic_params) {
         var parameters = vec.empty[hir.GenericParam]();
-        for entry in state.generic_params {
-            if entry.owner == owner { parameters = entry.params; break; }
+        switch a_generic_params_get(state.generic_params, owner) {
+            case option.Option.Some(found): parameters = found;
+            case option.Option.None: {}
         }
         var self = option.Option[usize].None;
-        for entry in state.trait_signature_context {
-            if entry.method == owner {
+        switch a_trait_signature_get(state.trait_signature_context, owner) {
+            case option.Option.Some(entry):
                 self = option.Option[usize].Some(entry.trait_self);
-                break;
-            }
+            case option.Option.None: {}
         }
         let environment = vec.empty[usize]();
         for trait_declaration in state.m.traits {
@@ -216,7 +330,37 @@ func run_checker(state inout Checker) model.UnitResult throws Error {
             default: {}
         }
     }
-    for id in run_body_symbols(state.bodies) { check_body(inout state, id); }
+}
+
+func run_checker_bodies(state inout Checker, cache frontcache.Context,
+                        selected option.Option[usize],
+                        templates Vec[model.NodeRef]) model.UnitResult throws Error {
+    state.selected_body_module = selected;
+    state.selected_templates = templates;
+    for template_ref in templates {
+        let template_symbol = definition(inout state, template_ref);
+        check_body(inout state, template_symbol);
+    }
+    var restored = vec.empty[usize]();
+    switch selected {
+        case option.Option.None: restored = run_dedup_sorted(frontcache.restore(cache, inout state.m));
+        case option.Option.Some(package_id): {}
+    }
+    var cached_index usize = 0;
+    for id in run_body_symbols(state.bodies) {
+        var selected_body = true;
+        switch selected {
+            case option.Option.None: {}
+            case option.Option.Some(package_id): {
+                selected_body = id < vec.len(state.m.resolved.symbols) &&
+                    state.m.resolved.symbols[id].module == package_id;
+            }
+        }
+        if !selected_body { continue; }
+        for cached_index < vec.len(restored) && restored[cached_index] < id { cached_index += 1; }
+        if cached_index < vec.len(restored) && restored[cached_index] == id { continue; }
+        cache.counters[5] += 1; check_body(inout state, id);
+    }
     // transform_node may append functions; CPP visits a concrete snapshot.
     let concrete_bodies = vec.empty[usize]();
     for function in state.m.functions { vec.push(concrete_bodies, function.body); }
@@ -255,8 +399,12 @@ func run_checker(state inout Checker) model.UnitResult throws Error {
         case option.Option.Some(id): {
             var found = false;
             var index usize = 0;
-            for entry in state.nominal_ids {
-                if entry.symbol == id { found = true; index = entry.index; break; }
+            switch a_nominal_id_get(state.nominal_ids, id) {
+                case option.Option.Some(nominal_index): {
+                    found = true;
+                    index = nominal_index;
+                }
+                case option.Option.None: {}
             }
             if !found { throw internal_error("map::at"); }
             if index >= vec.len(state.m.nominals) { throw internal_error("invalid sema nominal reference"); }
@@ -267,4 +415,10 @@ func run_checker(state inout Checker) model.UnitResult throws Error {
         case option.Option.None: {}
     }
     return ownership.produce_ownership(inout state.m);
+}
+
+func run_checker_templates(state inout Checker, cache frontcache.Context,
+                           package_id usize, templates Vec[model.NodeRef])
+    model.UnitResult throws Error {
+    return run_checker_selected(inout state, cache, option.Option[usize].Some(package_id), templates);
 }

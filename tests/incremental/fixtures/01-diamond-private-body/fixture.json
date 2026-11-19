@@ -1,0 +1,36 @@
+{
+  "schema": "woozy-incremental-source-fixture/1",
+  "id": "01-diamond-private-body",
+  "kind": "source-package-set",
+  "purpose": "Four-node diamond (app -> left/right -> core): change a private non-generic helper body in core while the public signature stays identical. main returns the concrete total.",
+  "language_references": [
+    "docs/SEMANTICS.md §2 名称与模块",
+    "development/docs/FRONTEND.md §6.2 声明收集和依赖",
+    "development/docs/FRONTEND.md §10 增量检查"
+  ],
+  "base": {
+    "project": "base",
+    "file_sha256": {
+      "lang.toml": "efecc011e083cfdd9a0b9d6101c88356c89644eb96b1a4c8063019d1499c54bd",
+      "src/main.wz": "b9455879adcc9cce8d8a6cf3b087fbff0b224c4d60228ab5a7d0eadcb15abf1a",
+      "vendor/core/lang.toml": "22a8af3a37da888a2090e01e11384d952637eb1363619607fd18fbe5448339e1",
+      "vendor/core/src/lib.wz": "ccbbfbe25fb2e7116489d659d9a122435518db296411bf86beee7ac67384d929",
+      "vendor/left/lang.toml": "3b5ad08ebd62c2b0abd72c14e6539ba5189a751f19a3448988bd02e4f5282c93",
+      "vendor/left/src/lib.wz": "b5731344beb8e940e1d4a88089cff5099a9cf75fdb934dd265623544cd5be4e9",
+      "vendor/right/lang.toml": "2963bfa8150df25c3aecfff29cbd66e688c58635b8a11d9750a680c6d6be2981",
+      "vendor/right/src/lib.wz": "99a827d974ad4c85f85c88140500b876941fe098a6706417395ebf3c17779bb7"
+    },
+    "expect": {
+      "mode": "build-and-run",
+      "build_exit": 0,
+      "status": "ok",
+      "run_exit": 40,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "variants": [
+    "private-body"
+  ],
+  "limits": "Reference language behavior only. No cache/Ninja/compiler implementation is exercised or claimed."
+}

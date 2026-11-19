@@ -75,6 +75,8 @@ struct CaptureLocalEntry { local usize; value hir.CaptureBinding; }
 
 struct Checker {
     m hir.HirModule;
+    selected_body_module option.Option[usize];
+    selected_templates Vec[model.NodeRef];
     // CPP stop_token has no current Wz facade equivalent: no fake bool/token.
     occurrences Vec[NodeSymbolEntry]; definitions Vec[NodeSymbolEntry];
     signatures Vec[SymbolTypeEntry];

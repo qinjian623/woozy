@@ -1,0 +1,59 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "remove-package-stale",
+  "description": "Remove the dep dependency entry and dep source files while main still imports dep. Expect E_IMPORT_NOT_FOUND; stale success must not survive.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "must_fail_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": false,
+    "expected_runtime": "compile-time reject",
+    "note": "Removing a declared package/file set must fail the still-present import. A previous successful app or object must not be reused."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "lang.toml",
+      "old": {
+        "file": "old/lang.toml",
+        "sha256": "b34f6d4bbedcf1d2548e33f042ff411e4d512651c476350b500a9a3bfa61c8b5"
+      },
+      "new": {
+        "file": "new/lang.toml",
+        "sha256": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb"
+      }
+    },
+    {
+      "op": "remove",
+      "path": "vendor/dep/lang.toml",
+      "old": {
+        "file": "old/vendor/dep/lang.toml",
+        "sha256": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4"
+      },
+      "new": null
+    },
+    {
+      "op": "remove",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b"
+      },
+      "new": null
+    }
+  ],
+  "expect": {
+    "mode": "check",
+    "check_exit": 1,
+    "status": "error",
+    "error_codes_any": [
+      "E_IMPORT_NOT_FOUND"
+    ]
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

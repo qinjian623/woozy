@@ -1,0 +1,51 @@
+package app;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+func rejected(result model.UnitResult, expected string) bool throws os.Error {
+    switch result.state { case model.PhaseState.Failed: {} default: return false; }
+    if result.has_value || vec.len(result.diagnostics) != 1 { return false; }
+    let diagnostic = result.diagnostics[0];
+    io.println(diagnostic.code + ":" + diagnostic.message);
+    return diagnostic.code == "E_IR_INVALID" && diagnostic.message == expected;
+}
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) != 2 { return 2; }
+    let bytes = fs.read_file(args[1]);
+    let parsed = parser.parse(lexer.lex(source.snapshot(1, 1, 1, args[1], bytes[0:vec.len(bytes)])));
+    if !parsed.has_value || parsed.recovered { return 3; }
+    try {
+        let original = build_generated(parsed);
+        let valid = hirverify.verify_types(original);
+        if !valid.has_value || vec.len(valid.diagnostics) != 0 { return 4; }
+        io.println("valid instance accepted");
+        if vec.len(original.instances) != 1 { return 5; }
+        var bad = hirclone.clone_module(original);
+        vec.push(bad.instances, bad.instances[0]);
+        if !rejected(hirverify.verify_types(bad), "duplicate instance identity") { return 6; }
+        bad = hirclone.clone_module(original);
+        bad.instances[0].origin = original.functions[0].symbol;
+        if !rejected(hirverify.verify_types(bad), "instance origin is not a template") { return 7; }
+        bad = hirclone.clone_module(original);
+        bad.instances[0].symbol = 999999;
+        if !rejected(hirverify.verify_types(bad), "out-of-range SymbolId") { return 8; }
+        bad = hirclone.clone_module(original);
+        bad.instances[0].type_args[0] = 999999;
+        if !rejected(hirverify.verify_types(bad), "missing or out-of-range TypeId") { return 9; }
+    } catch error types.Error { return 10; }
+    catch error model.SupportError { return 11; }
+    io.println("instance lookup controls passed");
+    return 0;
+}

@@ -1,0 +1,121 @@
+package frontcache;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/interface" as interface;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func decode_package(state inout Decoder, key string) Vec[usize] throws Error {
+    need(string_value(inout state.reader) == "wz-front-scalar/1"); need(string_value(inout state.reader) == key);
+    let node_count = count(inout state.reader); let scope_count = count(inout state.reader);
+    state.node_count = node_count; state.scope_count = scope_count;
+    let package_value = state.module.resolved.project.modules[state.package_id]; var source_nodes usize = 0;
+    for file_id in package_value.files { source_nodes += vec.len(state.module.resolved.project.files[file_id].nodes); }
+    need(node_count <= source_nodes * 8 + 16 && scope_count <= source_nodes * 2 + 8);
+    for var index usize = 0; index < scope_count; index += 1 {
+        let function = decode_symbol(inout state); need(state.module.resolved.symbols[function].module == state.package_id);
+        var parent = option.Option[usize].None;
+        if flag(inout state.reader) { let id = decode_scope(inout state); parent = option.Option[usize].Some(id); }
+        let source = decode_source(inout state);
+        vec.push(state.module.scopes, hir.HirScope(function: function, parent: parent, source: source));
+    }
+    for var index usize = 0; index < node_count; index += 1 {
+        let type_id = read_type(inout state); let source = decode_source(inout state); let scope = decode_scope(inout state);
+        let size = count(inout state.reader); let children = vec.empty[usize]();
+        for var child_index usize = 0; child_index < size; child_index += 1 { let id = decode_node(inout state); vec.push(children, id); }
+        let data = decode_data(inout state);
+        vec.push(state.module.nodes, hir.HirNode(type_id: type_id, source: source, scope: scope, children: children, data: data, errors: [], exits: []));
+    }
+    let count_value = count(inout state.reader); need(count_value != 0); let functions = vec.empty[usize]();
+    for var index usize = 0; index < count_value; index += 1 {
+        let symbol = decode_symbol(inout state); let signature = read_type(inout state);
+        need(state.module.resolved.symbols[symbol].module == state.package_id && !contains(functions, symbol)); vec.push(functions, symbol);
+        let parameters = vec.empty[hir.Parameter](); let parameter_count = count(inout state.reader);
+        for var parameter_index usize = 0; parameter_index < parameter_count; parameter_index += 1 {
+            let id = decode_symbol(inout state); let label = string_value(inout state.reader); vec.push(parameters, hir.Parameter(symbol: id, label: label));
+        }
+        let body = decode_node(inout state); let scope = decode_scope(inout state); let source = decode_source(inout state);
+        vec.push(state.module.functions, hir.HirFunction(symbol: symbol, signature: signature, parameters: parameters,
+            body: body, scope: scope, source: source, captures: [], is_async: false));
+    }
+    done(state.reader); return functions;
+}
+pub func restore(cache Context, module inout hir.HirModule) Vec[usize] {
+    let restored = vec.empty[usize](); if !active(cache) { return restored; }
+    var keys = vec.empty[SymbolKey]();
+    try { keys = symbol_keys(module, interface.index(module)); } catch problem model.SupportError { return restored; }
+    let occurrences = source_occurrences(module);
+    for package_value in module.resolved.project.modules {
+        if vec.len(package_value.files) == 0 { continue; }
+        cache.counters[3] += 1;
+        let key = package_key(cache, module, package_value.id);
+        switch get(cache.directory + "/frontend", key + ".hir") {
+            case option.Option.None: {}
+            case option.Option.Some(bytes): {
+                let old_nodes = vec.len(module.nodes); let old_scopes = vec.len(module.scopes); let old_functions = vec.len(module.functions);
+                var decoder = Decoder(module: module, package_id: package_value.id, reader: Reader(bytes: bytes, cursor: 0),
+                    symbols: keys, node_base: old_nodes, scope_base: old_scopes, node_count: 0, scope_count: 0);
+                var accepted = false;
+                try {
+                    let functions = decode_package(inout decoder, key);
+                    check_structure(decoder.module, old_nodes, old_scopes, old_functions, functions);
+                    for var index usize = old_nodes; index < vec.len(decoder.module.nodes); index += 1 { check_source(decoder.module, decoder.module.nodes[index], occurrences); }
+                    module = decoder.module; for id in functions { vec.push(restored, id); }
+                    cache.counters[3] -= 1; cache.counters[2] += 1; accepted = true;
+                } catch problem Error { cache.counters[4] += 1; }
+                if !accepted {
+                    module.types = decoder.module.types;
+                    module.nodes = module.nodes[:old_nodes]; module.scopes = module.scopes[:old_scopes]; module.functions = module.functions[:old_functions];
+                }
+            }
+        }
+    }
+    return restored;
+}
+func encode_package(module hir.HirModule, keys interface.Keys, occurrences Vec[SourceOccurrence], package_id usize, key string) Vec[u8] throws Error {
+    let functions = vec.empty[hir.HirFunction](); let nodes = vec.empty[usize](); let scopes = vec.empty[usize]();
+    for template in module.templates { if interface.indexed_owner(keys, template.function.symbol) == package_id { throw Error.Unsupported; } }
+    for function in module.functions {
+        if interface.indexed_owner(keys, function.symbol) != package_id { continue; }
+        if function.is_async || vec.len(function.captures) != 0 { throw Error.Unsupported; }
+        for instance in module.instances { if instance.symbol == function.symbol { throw Error.Unsupported; } }
+        vec.push(functions, function);
+    }
+    if vec.len(functions) == 0 { throw Error.Unsupported; }
+    for var index usize = 0; index < vec.len(module.scopes); index += 1 {
+        if interface.indexed_owner(keys, module.scopes[index].function) == package_id { vec.push(scopes, index); }
+    }
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 { if contains(scopes, module.nodes[index].scope) { vec.push(nodes, index); } }
+    let bytes = vec.empty[u8](); let state = Encoder(module: module, keys: keys, package_id: package_id, bytes: bytes, nodes: nodes, scopes: scopes);
+    put_string(bytes, "wz-front-scalar/1"); put_string(bytes, key); put_number(bytes, u64(vec.len(nodes))); put_number(bytes, u64(vec.len(scopes)));
+    for index in scopes {
+        let scope = module.scopes[index]; encode_symbol(state, scope.function);
+        switch scope.parent { case option.Option.Some(parent): put_number(bytes, 1); encode_scope(state, parent); case option.Option.None: put_number(bytes, 0); }
+        encode_source(state, scope.source);
+    }
+    for index in nodes {
+        let node = module.nodes[index]; check_source(module, node, occurrences);
+        encode_type(state, node.type_id, 0); encode_source(state, node.source); encode_scope(state, node.scope);
+        put_number(bytes, u64(vec.len(node.children))); for child in node.children { encode_node(state, child); } encode_data(state, node);
+    }
+    put_number(bytes, u64(vec.len(functions)));
+    for function in functions {
+        encode_symbol(state, function.symbol); encode_type(state, function.signature, 0); put_number(bytes, u64(vec.len(function.parameters)));
+        for parameter in function.parameters { encode_symbol(state, parameter.symbol); put_string(bytes, parameter.label); }
+        encode_node(state, function.body); encode_scope(state, function.scope); encode_source(state, function.source);
+    }
+    return bytes;
+}
+pub func store(cache Context, module hir.HirModule) {
+    if !active(cache) { return; }
+    try {
+    let keys = interface.index(module); let occurrences = source_occurrences(module);
+    for package_value in module.resolved.project.modules {
+        if vec.len(package_value.files) == 0 { continue; }
+        try {
+            let key = package_key(cache, module, package_value.id); let bytes = encode_package(module, keys, occurrences, package_value.id, key);
+            put(cache.directory + "/frontend", key + ".hir", bytes);
+        } catch problem Error {}
+    }
+    } catch problem model.SupportError {}
+}

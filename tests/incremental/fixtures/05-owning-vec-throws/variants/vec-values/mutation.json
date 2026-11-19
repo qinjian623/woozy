@@ -1,0 +1,41 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "05-owning-vec-throws",
+  "variant": "vec-values",
+  "description": "dep.make returns [3, 7, 5] instead of [3, 4, 5]; main returns the observed second element (4 -> 7) after alias and Weak checks.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "dep"
+    ],
+    "must_recompile_or_relink": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "4 -> 7",
+    "note": "Only the owning Vec payload changes. Alias sharing, Weak release and typed throw cleanup must remain correct; app observes the new element value."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "74435fa6f0239ac4c74042787f1d131c83dd02308ad2d3fa8ecdf07d9113aa80"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "991beffe65c6daa0e36fd0a63b01363b2874df6b4d3956926730c7ef2f053387"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 7,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

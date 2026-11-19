@@ -1,0 +1,42 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "02-package-alias-shared",
+  "variant": "shared-helper-body",
+  "description": "Change app.shared_bonus body in helpers.wz from 5 to 6; main in another file must observe the package-level change.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app"
+    ],
+    "may_reuse_packages": [
+      "alpha",
+      "beta"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": true,
+    "expected_runtime": "40 -> 41",
+    "note": "A non-public same-package helper body changes in another file; app package code must be rebuilt as a unit."
+  },
+  "actions": [
+    {
+      "op": "replace",
+      "path": "src/helpers.wz",
+      "old": {
+        "file": "old/src/helpers.wz",
+        "sha256": "3ca85f9e6dfbdd1d2c3f43da5c5dd4422ab52232f591ef91cc05cb8433dcb5f6"
+      },
+      "new": {
+        "file": "new/src/helpers.wz",
+        "sha256": "416379c61862c7a6e58e770ef5d1219d0e9e2f4994fca5c8e18b534b76316c6f"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "build-and-run",
+    "build_exit": 0,
+    "status": "ok",
+    "run_exit": 41,
+    "stdout": "",
+    "stderr": ""
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

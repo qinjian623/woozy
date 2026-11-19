@@ -1,0 +1,73 @@
+{
+  "schema": "woozy-incremental-mutation/1",
+  "fixture": "06-package-set-errors",
+  "variant": "import-cycle",
+  "description": "Add cycleb and make dep import cycleb while cycleb imports dep. Expect E_IMPORT_CYCLE with the dep -> cycleb -> dep path.",
+  "expected_invalidation": {
+    "must_rebuild_packages": [
+      "app",
+      "dep",
+      "cycleb"
+    ],
+    "must_fail_packages": [
+      "app"
+    ],
+    "must_not_serve_stale_success": true,
+    "must_update_final_link": false,
+    "expected_runtime": "compile-time reject",
+    "note": "Package graph gains a cycle. Module resolution must report the full cycle and must not reuse cached successful dep objects."
+  },
+  "actions": [
+    {
+      "op": "add",
+      "path": "vendor/cycleb/lang.toml",
+      "old": null,
+      "new": {
+        "file": "new/vendor/cycleb/lang.toml",
+        "sha256": "5a70320ac054a8d54bf6d2c00bb66f48e52fef88f62023fd19a7e14e39c11cb2"
+      }
+    },
+    {
+      "op": "add",
+      "path": "vendor/cycleb/src/lib.wz",
+      "old": null,
+      "new": {
+        "file": "new/vendor/cycleb/src/lib.wz",
+        "sha256": "b3d26ee349dc2a0f809f6edd39c5cd441b75cc06ae973f6b54c98aa32a8f491d"
+      }
+    },
+    {
+      "op": "replace",
+      "path": "vendor/dep/lang.toml",
+      "old": {
+        "file": "old/vendor/dep/lang.toml",
+        "sha256": "87d7602628a76fd2e38166326df705a71d306c60c9e9e1c5e23ffbcb429a79d4"
+      },
+      "new": {
+        "file": "new/vendor/dep/lang.toml",
+        "sha256": "b139aff489a367634796a963b3f7dd32c9dfadb4ffcca6465f8490fd1d656ad8"
+      }
+    },
+    {
+      "op": "replace",
+      "path": "vendor/dep/src/lib.wz",
+      "old": {
+        "file": "old/vendor/dep/src/lib.wz",
+        "sha256": "419106d5d4dcec7d8b01bdb5ff2c05eec767110995d90071652984bd63f2726b"
+      },
+      "new": {
+        "file": "new/vendor/dep/src/lib.wz",
+        "sha256": "95f2559d04870bc994506e812b7de4008a3d15bb6b0335fc117a432c15f4e016"
+      }
+    }
+  ],
+  "expect": {
+    "mode": "check",
+    "check_exit": 1,
+    "status": "error",
+    "error_codes_any": [
+      "E_IMPORT_CYCLE"
+    ]
+  },
+  "measurement_note": "expected_invalidation is a design expectation only; this reference run measures language result, not cache hits."
+}

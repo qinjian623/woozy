@@ -1,0 +1,101 @@
+package frontcache;
+import "app/wzcc/digest" as digest;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source_api;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const BYTE_LIMIT usize = 67108864;
+pub struct Context {
+    pub directory string;
+    pub fingerprint string;
+    pub disabled bool;
+    // parse hit/miss, frontend hit/miss, rejected, checked bodies, object hit/miss
+    pub counters Vec[usize];
+}
+pub func context(directory string, fingerprint string) Context {
+    return Context(directory: directory, fingerprint: fingerprint, disabled: false,
+        counters: vec.make[usize](12, 0));
+}
+pub func active(cache Context) bool { return cache.directory != "" && !cache.disabled; }
+struct Reader { bytes Vec[u8]; cursor usize; }
+enum Error { Invalid; Unsupported; }
+func need(value bool) throws Error { if !value { throw Error.Invalid; } }
+func put_number(bytes Vec[u8], value u64) {
+    for byte in text.bytes(strconv.format_u64(value) + ":") { vec.push(bytes, byte); }
+}
+func put_string(bytes Vec[u8], value string) {
+    let data = text.bytes(value); put_number(bytes, u64(vec.len(data)));
+    for byte in data { vec.push(bytes, byte); }
+}
+func number(reader inout Reader) u64 throws Error {
+    var result u64 = 0; var digits usize = 0;
+    for reader.cursor < vec.len(reader.bytes) {
+        let byte = reader.bytes[reader.cursor]; reader.cursor += 1;
+        if byte == 58 { need(digits > 0); return result; }
+        need(byte >= 48 && byte <= 57 && digits < 20);
+        let digit = u64(byte - 48);
+        need(result <= (18446744073709551615 - digit) / 10);
+        result = result * 10 + digit; digits += 1;
+    }
+    throw Error.Invalid;
+}
+func count(reader inout Reader) usize throws Error {
+    let value = number(inout reader);
+    need(value <= u64(vec.len(reader.bytes) - reader.cursor) && value <= 2000000);
+    return usize(value);
+}
+func flag(reader inout Reader) bool throws Error {
+    let value = number(inout reader); need(value <= 1); return value == 1;
+}
+func string_value(reader inout Reader) string throws Error {
+    let length = count(inout reader); let start = reader.cursor; reader.cursor += length;
+    try { return text.from_bytes(reader.bytes[start:start + length]); }
+    catch problem text.Error { throw Error.Invalid; }
+}
+func done(reader Reader) throws Error { need(reader.cursor == vec.len(reader.bytes)); }
+func get(directory string, name string) option.Option[Vec[u8]] {
+    try {
+        let file = os.open(directory + "/" + name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, 0);
+        defer { try { os.close(file); } catch problem os.Error {} }
+        let info = os.fstat(file);
+        if !fs.is_file(info) || info.size < 65 || info.size > i64(BYTE_LIMIT) { return option.Option[Vec[u8]].None; }
+        let bytes = io.read_all(file);
+        if vec.len(bytes) < 65 || vec.len(bytes) > BYTE_LIMIT || bytes[64] != 10 { return option.Option[Vec[u8]].None; }
+        let expected = text.from_bytes(bytes[:64]);
+        let body = bytes[65:vec.len(bytes)];
+        if digest.sha256(body) != expected { return option.Option[Vec[u8]].None; }
+        return option.Option[Vec[u8]].Some(body);
+    } catch problem os.Error {} catch problem text.Error {}
+    return option.Option[Vec[u8]].None;
+}
+func put(directory string, name string, bytes Vec[u8]) {
+    if vec.len(bytes) > BYTE_LIMIT { return; }
+    try {
+        var stage = toolio.stage(directory, "cache");
+        defer { toolio.cleanup(stage); }
+        let out = text.bytes(digest.sha256(bytes) + "\n");
+        for byte in bytes { vec.push(out, byte); }
+        fs.write_file(stage.path + "/" + name, out, 0o600);
+        toolio.publish_file(stage, name);
+    } catch problem toolio.Error {} catch problem os.Error {}
+}
+func hash_bytes(bytes Vec[u8]) string { return digest.sha256(bytes); }
+func same_span(left model.Span, right model.Span) bool {
+    return left.snapshot == right.snapshot && left.begin_byte == right.begin_byte && left.end_byte == right.end_byte;
+}
+func put_span(bytes Vec[u8], value model.Span) {
+    put_number(bytes, value.begin_byte); put_number(bytes, value.end_byte);
+}
+func get_span(reader inout Reader, source model.Source) model.Span throws Error {
+    let start = number(inout reader); let end = number(inout reader);
+    need(start <= end && end <= u64(vec.len(source.original)));
+    need(source_api.has_boundary(source, start) && source_api.has_boundary(source, end));
+    return model.Span(snapshot: source.id, begin_byte: start, end_byte: end);
+}

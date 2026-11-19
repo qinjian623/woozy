@@ -81,6 +81,8 @@ func clone_checker(state Checker) Checker throws Error {
     // Scalars/Options containing only scalars and immutable strings may share.
     // Every Vec below, including keys/payloads nested inside entries, is fresh.
     var out=state;
+    out.selected_templates=vec.empty[model.NodeRef]();
+    for reference in state.selected_templates {vec.push(out.selected_templates,reference);}
     try {out.m=hirclone.clone_module(state.m);}
     catch error model.SupportError {throw Error.Support(error);}
     out.occurrences=vec.empty[NodeSymbolEntry]();for value in state.occurrences {vec.push(out.occurrences,value);}

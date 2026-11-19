@@ -318,11 +318,16 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
     need(verifier_symbol(state, origin).name == source.name,
         "type-qualified call target name differs from source");
     var impl_index i64 = -1;
-    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-        if ids_contains(state.m.impls[index].methods, origin) {
-            need(impl_index < 0,
-                "type-qualified call target belongs to two impls");
-            impl_index = i64(index);
+    if origin < vec.len(state.impl_method_map) {
+        impl_index = impl_method_lookup(state, origin);
+        need(impl_index != -2, "type-qualified call target belongs to two impls");
+    } else {
+        for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                need(impl_index < 0,
+                    "type-qualified call target belongs to two impls");
+                impl_index = i64(index);
+            }
         }
     }
     var has_impl = impl_index >= 0;
@@ -474,19 +479,20 @@ func check_explicit_method_arguments(state inout Verifier, node hir.HirNode,
     need(callee_id(call.kind) == 0 && option.is_some(call.direct_symbol),
         "explicit method type arguments require a direct call");
     var origin = option_usize(call.direct_symbol);
-    var has_instance = false;
-    for instance in state.m.instances {
-        if instance.symbol == origin {
-            has_instance = true;
-            origin = instance.origin;
-            break;
-        }
+    let inst = instance_index(state, origin);
+    if inst >= 0 {
+        origin = state.m.instances[usize(inst)].origin;
     }
     var impl_index i64 = -1;
-    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-        if ids_contains(state.m.impls[index].methods, origin) {
-            need(impl_index < 0, "explicit method target belongs to two impls");
-            impl_index = i64(index);
+    if origin < vec.len(state.impl_method_map) {
+        impl_index = impl_method_lookup(state, origin);
+        need(impl_index != -2, "explicit method target belongs to two impls");
+    } else {
+        for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                need(impl_index < 0, "explicit method target belongs to two impls");
+                impl_index = i64(index);
+            }
         }
     }
     need(impl_index >= 0, "explicit method target is not an impl method");
@@ -503,13 +509,8 @@ func check_explicit_method_arguments(state inout Verifier, node hir.HirNode,
     need(vec.len(source.explicit_arguments) == own,
         "explicit method type argument count differs from declaration");
     var actual = call.type_args;
-    if has_instance {
-        for instance in state.m.instances {
-            if instance.symbol == option_usize(call.direct_symbol) {
-                actual = instance.type_args;
-                break;
-            }
-        }
+    if inst >= 0 {
+        actual = state.m.instances[usize(inst)].type_args;
     }
     need(vec.len(actual) == vec.len(all),
         "explicit method call lost complete type arguments");
@@ -537,15 +538,9 @@ func source_template_bound(state inout Verifier, source SourceMethodCall,
             declaration: 0, args: []), parameter: 0);
     }
     var origin = owner;
-    var has_instance = false;
-    var instance_index usize = 0;
-    for var index usize = 0; index < vec.len(state.m.instances); index += 1 {
-        if state.m.instances[index].symbol == owner {
-            has_instance = true;
-            instance_index = index;
-            origin = state.m.instances[index].origin;
-            break;
-        }
+    let owner_inst = instance_index(state, owner);
+    if owner_inst >= 0 {
+        origin = state.m.instances[usize(owner_inst)].origin;
     }
     let found = template_index(state, origin);
     if found < 0 {
@@ -565,8 +560,8 @@ func source_template_bound(state inout Verifier, source SourceMethodCall,
             declaration: 0, args: []), parameter: 0);
     }
     var bound = option_trait_ref(real[usize(declared)].trait_ref);
-    if has_instance {
-        let instance = state.m.instances[instance_index];
+    if owner_inst >= 0 {
+        let instance = state.m.instances[usize(owner_inst)];
         need(vec.len(real) == vec.len(instance.type_args),
             "template instance parameter count");
         let sub = vec.empty[model.Substitution]();
@@ -624,10 +619,15 @@ func method_value_target(state Verifier, node hir.HirNode,
 
 func method_impl_index(state Verifier, origin usize) i64 throws Invalid {
     var result i64 = -1;
-    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-        if ids_contains(state.m.impls[index].methods, origin) {
-            need(result < 0, "method value target belongs to two impls");
-            result = i64(index);
+    if origin < vec.len(state.impl_method_map) {
+        result = impl_method_lookup(state, origin);
+        need(result != -2, "method value target belongs to two impls");
+    } else {
+        for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                need(result < 0, "method value target belongs to two impls");
+                result = i64(index);
+            }
         }
     }
     need(result >= 0, "method value target is not an impl method");
@@ -635,8 +635,12 @@ func method_impl_index(state Verifier, origin usize) i64 throws Invalid {
 }
 
 func impl_method_exists(state Verifier, method usize) bool {
+    if method < vec.len(state.impl_method_map) {
+        let slot = state.impl_method_map[method];
+        return slot >= 0 || slot == -2;
+    }
     for implementation in state.m.impls {
-        if ids_contains(implementation.methods, method) {
+        if ids_contains_unsorted(implementation.methods, method) {
             return true;
         }
     }
@@ -1086,6 +1090,55 @@ func is_weak_operation(operation u32) bool {
         spec.name == "__woozy_weak_upgrade");
 }
 
+func private_template_call(state Verifier, node hir.HirNode, symbol usize)
+    bool throws Invalid {
+    if symbol >= vec.len(state.m.resolved.symbols) ||
+       node.scope >= vec.len(state.m.scopes) { return false; }
+    let target = state.m.resolved.symbols[symbol];
+    if node.source.node.module != target.module { return false; }
+    let owner = state.m.scopes[node.scope].function;
+    var defining_template = false;
+    for template in state.m.templates {
+        if template.function.symbol == owner &&
+           template.function.source.node.module == target.module {
+            defining_template = true;
+        }
+    }
+    for instance in state.m.instances {
+        if instance.symbol != owner || instance.origin >= vec.len(state.m.resolved.symbols) { continue; }
+        let origin = state.m.resolved.symbols[instance.origin];
+        if origin.module == target.module { defining_template = true; }
+    }
+    if !defining_template { return false; }
+    let file = verifier_file(state, node.source.node.module, node.source.node.file);
+    if node.source.node.node >= vec.len(file.nodes) { return false; }
+    let syntax = file.nodes[node.source.node.node];
+    if !ast_is(syntax.kind, model.AstKind.Call) || vec.len(syntax.children) == 0 { return false; }
+    var callee = node.source.node;
+    callee.node = syntax.children[0];
+    callee = unwrapped(state, callee);
+    if ast_is(file.nodes[callee.node].kind, model.AstKind.NeutralBracket) {
+        if vec.len(file.nodes[callee.node].children) == 0 { return false; }
+        callee.node = file.nodes[callee.node].children[0];
+    }
+    return same_option_symbol(resolved_source(state, callee),
+        option.Option[usize].Some(symbol));
+}
+
+func private_template_external(state Verifier, symbol usize) bool throws Invalid {
+    for node in state.m.nodes {
+        switch node.data {
+            case hir.NodeData.Call(value): {
+                if option.is_some(value.direct_symbol) &&
+                   option_usize(value.direct_symbol) == symbol &&
+                   private_template_call(state, node, symbol) { return true; }
+            }
+            default: {}
+        }
+    }
+    return false;
+}
+
 func check_call(state inout Verifier, node hir.HirNode, call hir.Call)
     throws Invalid {
     need((callee_id(call.kind) == 3) == option.is_some(call.system),
@@ -1123,9 +1176,23 @@ func check_call(state inout Verifier, node hir.HirNode, call hir.Call)
         }
         let found = function_entry_index(state,
             option_usize(call.direct_symbol));
-        need(found >= 0, "function identity has no HIR definition");
+        if found < 0 {
+            let external = external_entry_index(state,
+                option_usize(call.direct_symbol));
+            need(external >= 0, "function identity has no HIR definition");
+            let declaration = state.external_functions[usize(external)];
+            let target = verifier_symbol(state, declaration.symbol);
+            if !target.exported && !external_trait_method(state.m, declaration.symbol) {
+                need(private_template_call(state, node, declaration.symbol),
+                    "private external call is not from its defining template");
+            }
+            need(source_signature(inout state, declaration.source.node) ==
+                     call.signature,
+                 "external call signature differs from its source declaration");
+        } else {
+            direct_index = usize(found);
+        }
         direct_found = true;
-        direct_index = usize(found);
         need(instantiated_signature(inout state,
                  option_usize(call.direct_symbol), call.type_args) ==
              call.signature,

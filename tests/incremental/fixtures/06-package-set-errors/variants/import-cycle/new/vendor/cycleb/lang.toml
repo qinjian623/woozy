@@ -1,0 +1,14 @@
+schema_version = 1
+
+[package]
+name = "cycleb"
+source_root = "src"
+entry = "cycleb"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[dependencies.dep]
+kind = "source"
+path = "../dep"

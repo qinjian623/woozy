@@ -156,18 +156,10 @@ func source_generics(state Verifier, source hir.HirSource) Vec[usize]
             }
             var reference = source.node;
             reference.node = child;
-            var found = option.Option[usize].None;
-            for symbol in state.m.resolved.symbols {
-                if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) &&
-                   option.is_some(symbol.definition) &&
-                   same_ref(option_ref(symbol.definition), reference) {
-                    found = option.Option[usize].Some(symbol.id);
-                }
-            }
-            need(option.is_some(found),
-                "generic parameter source has no symbol");
+            let found = defined_last(state.defined_type_params, reference);
+            need(found >= 0, "generic parameter source has no symbol");
             vec.push(entries, GenericOffset(offset: syntax.span.begin_byte,
-                symbol: option_usize(found)));
+                symbol: usize(found)));
         }
     }
     // Insertion sort by source offset, matching std::sort on begin_byte.
@@ -720,6 +712,25 @@ func satisfies(state inout Verifier, actual usize, trait_ref hir.TraitRef,
                 count = 1;
             }
         }
+        if count == 0 {
+            let parameter = verifier_symbol(state, value.declaration);
+            if symbol_is(parameter.kind, model.SymbolKind.TypeParameter) &&
+               option.is_some(parameter.definition) && option.is_some(parameter.declaration) {
+                let source = hir.HirSource(node: option_ref(parameter.definition),
+                    span: option_span_value(parameter.declaration));
+                declaration(inout state, value.declaration, source,
+                    model.SymbolKind.TypeParameter, model.AstKind.GenericParameter);
+                let file = verifier_file(state, source.node.module, source.node.file);
+                let syntax = file.nodes[source.node.node];
+                if vec.len(syntax.children) == 1 {
+                    var reference = source.node;
+                    reference.node = syntax.children[0];
+                    if same_trait_ref(source_trait_application(inout state, reference), trait_ref) {
+                        count = 1;
+                    }
+                }
+            }
+        }
     } else {
         for implementation in state.m.impls {
             switch implementation.trait_ref {
@@ -1066,24 +1077,11 @@ func type_patterns_overlap_state(state inout Verifier, left usize,
 }
 
 func declarations(state inout Verifier) throws Invalid {
-    for nominal in state.m.nominals {
-        need(nominal_index(state, nominal.symbol) < 0 ||
-             state.nominals[usize(nominal_index(state, nominal.symbol))].index !=
-                 vec.len(state.nominals),
-            "duplicate nominal declaration");
-        // The map is populated once below; use an explicit duplicate check.
-    }
     for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
         let nominal = state.m.nominals[index];
-        var duplicate = false;
-        for entry in state.nominals {
-            if entry.symbol == nominal.symbol {
-                duplicate = true;
-            }
-        }
-        need(!duplicate, "duplicate nominal declaration");
-        vec.push(state.nominals, NominalEntry(symbol: nominal.symbol,
-            index: index));
+        need(nominal_index(state, nominal.symbol) < 0,
+            "duplicate nominal declaration");
+        nominal_push(inout state, nominal.symbol, index);
         need(kind_is(nominal.kind, model.TypeKind.NominalStruct) ||
              kind_is(nominal.kind, model.TypeKind.NominalEnum),
             "nominal declaration kind");
@@ -1174,13 +1172,49 @@ func declarations(state inout Verifier) throws Invalid {
                         "generic trait method move/inout is unsupported");
                 }
             }
-            for function in state.m.functions {
-                need(function.symbol != method.symbol,
+        }
+    }
+    let sym_count = vec.len(state.m.resolved.symbols);
+    let has_fn = vec.make[bool](sym_count, false);
+    let has_tmpl = vec.make[bool](sym_count, false);
+    for function in state.m.functions {
+        if function.symbol < sym_count {
+            has_fn[function.symbol] = true;
+        }
+    }
+    for template in state.m.templates {
+        if template.function.symbol < sym_count {
+            has_tmpl[template.function.symbol] = true;
+        }
+    }
+    for trait_value in state.m.traits {
+        for method in trait_value.methods {
+            if method.symbol < sym_count {
+                need(!has_fn[method.symbol],
                     "trait prototype has fake executable body");
-            }
-            for template in state.m.templates {
-                need(template.function.symbol != method.symbol,
+                need(!has_tmpl[method.symbol],
                     "trait prototype has fake template body");
+            } else {
+                for function in state.m.functions {
+                    need(function.symbol != method.symbol,
+                        "trait prototype has fake executable body");
+                }
+                for template in state.m.templates {
+                    need(template.function.symbol != method.symbol,
+                        "trait prototype has fake template body");
+                }
+            }
+        }
+    }
+    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+        for method in state.m.impls[index].methods {
+            if method < vec.len(state.impl_method_map) {
+                if state.impl_method_map[method] < 0 &&
+                   state.impl_method_map[method] != -2 {
+                    state.impl_method_map[method] = i64(index);
+                } else {
+                    state.impl_method_map[method] = -2;
+                }
             }
         }
     }

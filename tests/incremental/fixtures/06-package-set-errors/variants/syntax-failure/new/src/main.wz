@@ -1,0 +1,8 @@
+package app;
+
+import "dep" as dep;
+
+func main() i32 {
+    let value = dep.answer()
+    return value + extra();
+}

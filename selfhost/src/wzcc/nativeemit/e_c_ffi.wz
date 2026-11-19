@@ -434,8 +434,10 @@ func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
             if has_out {
                 let layout = c_lower_type(call_signature.result, inout state);
                 out = storage(layout, inout state);
+                start_lifetime(out, inout state);
             }
             var actual Vec[Value] = [];
+            var slots Vec[Value] = [];
             var borrows Vec[RegistrationBorrow] = [];
             var registration_code = e_null();
             var registration_env = e_null();
@@ -457,6 +459,8 @@ func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
                 let spelling = c_ref_type(declaration.parameters[index].type_ref,
                     inout state);
                 let slot = storage(spelling, inout state);
+                start_lifetime(slot, inout state);
+                vec.push(slots, slot);
                 var handled = false;
                 switch registration {
                     case option.Option.Some(mapping): {
@@ -570,9 +574,13 @@ func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
             for var index usize = vec.len(borrows); index > 0; index -= 1 {
                 end_registration_borrow(borrows[index - 1], inout state);
             }
+            for slot in slots {
+                end_lifetime(slot, inout state);
+            }
             switch registration {
                 case option.Option.Some(mapping): {
                     let raw = e_load("ptr", out, inout state);
+                    if has_out { end_lifetime(out, inout state); }
                     var finish_args Vec[Value] = [];
                     vec.push(finish_args, registration_context);
                     vec.push(finish_args, raw);
@@ -584,6 +592,7 @@ func c_foreign_call(instruction nativeir.Instruction, args Vec[Value],
             if !has_out { return Value(type_name: "i8", reference: "0"); }
             let layout = c_lower_type(call_signature.result, inout state);
             let loaded = e_load(layout, out, inout state);
+            end_lifetime(out, inout state);
             return from_c_storage(call_signature.result, loaded, inout state);
         }
     }

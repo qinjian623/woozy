@@ -1,0 +1,8 @@
+package app;
+
+import "dep" as dep;
+import "other" as other;
+
+func main() i32 {
+    return dep.answer() + extra() + other.bonus();
+}

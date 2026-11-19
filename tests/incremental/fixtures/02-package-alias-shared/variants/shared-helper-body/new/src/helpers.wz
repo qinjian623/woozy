@@ -1,0 +1,5 @@
+package app;
+
+func shared_bonus() i32 {
+    return 6;
+}

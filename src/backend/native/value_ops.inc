@@ -3,10 +3,18 @@
   std::map<uint64_t, llvm::Function *> trait_drop_fns, trait_clone_fns;
   llvm::Function *vec_retain_fast = nullptr, *vec_release_fast = nullptr;
   std::vector<llvm::Value *> active;
-  llvm::AllocaInst *storage(llvm::Type *type) {
+  llvm::AllocaInst *storage(llvm::Type *type, const char *name = "") {
     auto &entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
     llvm::IRBuilder<> alloc(&entry, entry.begin());
-    return alloc.CreateAlloca(type);
+    return alloc.CreateAlloca(type, nullptr, name);
+  }
+  void start_lifetime(llvm::AllocaInst *alloca_inst) {
+    if (alloca_inst)
+      builder.CreateLifetimeStart(alloca_inst);
+  }
+  void end_lifetime(llvm::AllocaInst *alloca_inst) {
+    if (alloca_inst)
+      builder.CreateLifetimeEnd(alloca_inst);
   }
   uint64_t stride(TypeId id) {
     auto size = module.getDataLayout().getTypeAllocSize(lower_type(id)).getFixedValue();

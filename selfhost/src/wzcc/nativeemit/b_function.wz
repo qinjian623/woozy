@@ -7,6 +7,7 @@
 package nativeemit;
 
 import "app/wzcc/hir" as hir;
+import "app/wzcc/interface" as interface;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
 import "std/option" as option;
@@ -82,8 +83,40 @@ func b_incoming_has(state Emitter, block usize) bool {
 
 // ---- declaration ------------------------------------------------------------
 
+func worker_instance(state Emitter, symbol usize) bool {
+    if state.worker_instance_linkage == "" { return false; }
+    for instance in state.input.hir.instances {
+        if instance.symbol == symbol { return true; }
+    }
+    return false;
+}
+
+func owns_function(state Emitter, symbol usize) bool {
+    if state.worker_instance_linkage != "" { return option.is_some(b_hir_index(state, symbol)); }
+    switch state.package_selection {
+        case option.Option.Some(package_id): {
+            switch state.identities { case option.Option.Some(keys): return interface.indexed_owner(keys, symbol) == package_id; case option.Option.None: return false; }
+        }
+        case option.Option.None: return true;
+    }
+}
+func source_name(state Emitter, symbol usize) string throws Error {
+    if !option.is_some(state.package_selection) { return "lang.fn." + number(symbol); }
+    try {
+        switch state.identities {
+            case option.Option.Some(keys): return interface.indexed_function_name(keys, symbol);
+            case option.Option.None: throw invalid("missing package identity index");
+        }
+    }
+    catch problem model.SupportError {
+        switch problem {
+            case model.SupportError.Invalid(message): throw invalid(message);
+            case model.SupportError.Limit(message): throw invalid(message);
+        }
+    }
+}
 func declare_source_functions(state inout Emitter) throws Error {
-    for var index usize = 0; index < vec.len(state.input.functions); index += 1 {
+    for index in state.source_order {
         let function = state.input.functions[index];
         if function.is_async {
             // D creates the coroutine plus its start/resume/destroy helpers and
@@ -94,13 +127,39 @@ func declare_source_functions(state inout Emitter) throws Error {
         }
         let capturing = b_capturing(state, function.symbol);
         let sig = signature(function.signature, capturing, false, inout state);
-        let name = "lang.fn." + number(function.symbol);
-        let text_index = new_function(name, sig, "internal", "", inout state);
-        let code = function_reference(state, text_index);
+        let name = source_name(state, function.symbol);
+        var text_index usize = 0;
+        var code = Value(type_name: "ptr", reference: "");
+        if owns_function(state, function.symbol) {
+            var linkage = "internal";
+            if option.is_some(state.package_selection) { linkage = ""; }
+            if worker_instance(state, function.symbol) { linkage = state.worker_instance_linkage; }
+            text_index = new_function(name, sig, linkage, "", inout state);
+            code = function_reference(state, text_index);
+        } else { code = declare_function(name, sig, inout state); }
         let hir_index = b_hir_index(state, function.symbol);
         vec.push(state.b.source_functions, SourceFunction(symbol: function.symbol,
             signature: function.signature, native_index: index,
             text_index: text_index, hir_index: hir_index, code: code));
+    }
+}
+
+// External declarations come from nativeverify's checked cross-package
+// boundary.  They never have HIR bodies here; only a real signature is
+// declared and direct calls resolve through source_function.
+func declare_external_functions(values Vec[ExternalSource], state inout Emitter) throws Error {
+    for value in values {
+        var present = false;
+        for function in state.b.source_functions {
+            if function.symbol == value.symbol { present = true; }
+        }
+        if present { continue; }
+        let sig = signature(value.signature, false, false, inout state);
+        let name = source_name(state, value.symbol);
+        let code = declare_function(name, sig, inout state);
+        vec.push(state.b.source_functions, SourceFunction(symbol: value.symbol,
+            signature: value.signature, native_index: 0, text_index: 0,
+            hir_index: option.Option[usize].None, code: code));
     }
 }
 
@@ -245,7 +304,16 @@ func b_declare_iterations(function nativeir.Function,
 
 func b_declare_incoming(function nativeir.Function,
                         state inout Emitter) throws Error {
-    for var block usize = 0; block < vec.len(function.blocks); block += 1 {
+    let block_count = vec.len(function.blocks);
+    var pred_count = vec.make[usize](block_count, 0);
+    for var block usize = 0; block < block_count; block += 1 {
+        for target in function.blocks[block].terminator.targets {
+            if target < block_count {
+                pred_count[target] += 1;
+            }
+        }
+    }
+    for var block usize = 0; block < block_count; block += 1 {
         let terminator = function.blocks[block].terminator;
         if nativeir.exit_id(terminator.kind) !=
            nativeir.exit_id(nativeir.Exit.TryCall) {
@@ -261,16 +329,24 @@ func b_declare_incoming(function nativeir.Function,
         let error_type = b_throws_type(state, sig);
         let error_name = lower_type(error_type, inout state);
         let error_slot = storage(error_name, inout state);
-        vec.push(state.frame.try_outputs, TryOutput(block: block,
-            value: value_slot, error: error_slot));
         let success_block = b_target(terminator, 0);
         let error_block = b_target(terminator, 1);
+        let unique_success = option.is_some(value_slot) &&
+            success_block != error_block &&
+            success_block < block_count && pred_count[success_block] == 1;
+        let unique_error = success_block != error_block &&
+            error_block < block_count && pred_count[error_block] == 1;
+        vec.push(state.frame.try_outputs, TryOutput(block: block,
+            value: value_slot, error: error_slot,
+            start_value: unique_success, start_error: unique_error));
         vec.push(state.frame.incoming, IncomingValue(block: success_block,
-            type_id: sig.result, address: value_slot));
+            type_id: sig.result, address: value_slot,
+            end_after_load: unique_success));
         vec.push(state.frame.incoming, IncomingValue(block: error_block,
-            type_id: error_type, address: option.Option[Value].Some(error_slot)));
+            type_id: error_type, address: option.Option[Value].Some(error_slot),
+            end_after_load: unique_error));
     }
-    for var block usize = 0; block < vec.len(function.blocks); block += 1 {
+    for var block usize = 0; block < block_count; block += 1 {
         let terminator = function.blocks[block].terminator;
         if nativeir.exit_id(terminator.kind) !=
            nativeir.exit_id(nativeir.Exit.Await) {
@@ -289,9 +365,11 @@ func b_declare_incoming(function nativeir.Function,
             if b_incoming_has(state, target) {
                 throw invalid("await side target already has an incoming value");
             }
+            let unique_side = target < block_count && pred_count[target] == 1;
             vec.push(state.frame.incoming, IncomingValue(block: target,
                 type_id: payload,
-                address: option.Option[Value].Some(address)));
+                address: option.Option[Value].Some(address),
+                end_after_load: unique_side));
         }
     }
 }
@@ -436,6 +514,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     for block_index in order {
         let reference = state.frame.blocks[block_index];
         position(reference, inout state);
+        var end_address = option.Option[Value].None;
         for parameter_value in function.blocks[block_index].parameters {
             let found = b_incoming(state, block_index);
             var produced = Value(type_name: "i8", reference: "zeroinitializer");
@@ -446,6 +525,9 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
                             let type_name = lower_type(parameter_value.type_id, inout state);
                             produced = result(type_name, "load " + type_name +
                                 ", ptr " + address.reference, inout state);
+                            if entry.end_after_load {
+                                end_address = option.Option[Value].Some(address);
+                            }
                         }
                         case option.Option.None: {
                             let type_name = lower_type(parameter_value.type_id, inout state);
@@ -461,6 +543,10 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
             vec.push(state.frame.values, ValueBinding(
                 value_id: parameter_value.value,
                 type_id: parameter_value.type_id, value: produced));
+        }
+        switch end_address {
+            case option.Option.Some(address): end_lifetime(address, inout state);
+            case option.Option.None: {}
         }
         // Stable safepoint: function entry, loop headers and loop exits.
         if block_index == 0 || b_contains(points.headers, block_index) {
@@ -548,7 +634,7 @@ func emit_main(entry usize, state inout Emitter) throws Error {
     // any source code runs and finish only after all wrapper cleanup.  A module
     // with no graph registration never activates the GC world.
     var init_status = Value(type_name: "i64", reference: "0");
-    if state.d.gc_program_required {
+    if state.d.gc_program_required || option.is_some(state.package_selection) {
         init_status = runtime("lang_gc_program_init_v1", "i64", [], inout state);
     }
     let condition = result("i1", "icmp ne " + typed(init_status) + ", 0",

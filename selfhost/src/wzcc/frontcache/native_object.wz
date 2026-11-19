@@ -1,0 +1,139 @@
+package frontcache;
+import "app/wzcc/model" as model;
+import "app/wzcc/resources" as resources;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub func configure(directory string, optimization string, target string) Context throws os.Error {
+    if directory == "" { return context("", ""); }
+    var cache = context(directory, "");
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-package-build/1");
+    put_string(bytes, optimization); put_string(bytes, target);
+    let root = resources.directory();
+    for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a", root + "/runtime/liblang_hosted_runtime.a",
+        root + "/toolchain/opt", root + "/toolchain/llc", root + "/toolchain/clang", root + "/toolchain/ld.lld", resources.ninja()] {
+        put_string(bytes, file_digest(cache, path));
+    }
+    cache.fingerprint = hash_bytes(bytes); return cache;
+}
+
+// Source-make owns Make itself, not Ninja.  The key still binds the actual
+// compiler executable, LLVM tools, runtime archives, target and optimization.
+pub func configure_source_make(directory string, optimization string,
+                               target string) Context throws os.Error {
+    if directory == "" { return context("", ""); }
+    var cache = context(directory, "");
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-source-make-build/1");
+    put_string(bytes, optimization); put_string(bytes, target);
+    let root = resources.directory();
+    for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a",
+        root + "/runtime/liblang_hosted_runtime.a", root + "/toolchain/opt",
+        root + "/toolchain/llc", root + "/toolchain/clang",
+        root + "/toolchain/ld.lld", resources.make()] {
+        put_string(bytes, file_digest(cache, path));
+    }
+    if optimization == "2" {
+        for path in resources.source_partition_tools(root) {
+            put_string(bytes, file_digest(cache, path));
+        }
+    }
+    cache.fingerprint = hash_bytes(bytes); return cache;
+}
+pub func source_object_key(cache Context, package_key string) string {
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-source-package-object/1");
+    put_string(bytes, cache.fingerprint); put_string(bytes, package_key);
+    return hash_bytes(bytes) + ".obj";
+}
+pub func object_key(cache Context, package_identity string, llvm_digest string) string {
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-native-llvm-object/1");
+    put_string(bytes, cache.fingerprint); put_string(bytes, package_identity); put_string(bytes, llvm_digest);
+    return hash_bytes(bytes) + ".obj";
+}
+pub func llvm_digest(sections Vec[string]) string {
+    // Section boundaries are irrelevant: opt receives their exact concatenation.
+    let bytes = vec.empty[u8](); for section in sections { for byte in text.bytes(section) { vec.push(bytes, byte); } }
+    return hash_bytes(bytes);
+}
+func little(bytes Vec[u8], offset usize, width usize) u64 throws Error {
+    need(offset <= vec.len(bytes) && width <= vec.len(bytes) - offset); var value u64 = 0;
+    for var index usize = 0; index < width; index += 1 { value |= u64(bytes[offset + index]) << u64(index * 8); } return value;
+}
+func region(bytes Vec[u8], offset u64, size u64) throws Error {
+    need(offset <= u64(vec.len(bytes)) && size <= u64(vec.len(bytes)) - offset);
+}
+struct Section { kind u64; offset u64; size u64; link u64; info u64; entry u64; }
+func terminated(bytes Vec[u8], offset u64, size u64, name u64) throws Error {
+    need(name < size); var cursor = offset + name;
+    for cursor < offset + size { if bytes[usize(cursor)] == 0 { return; } cursor += 1; } throw Error.Invalid;
+}
+// Bounded ELF64 ET_REL structure validation before a cached object reaches lld.
+// Unknown/unsupported encodings fall back to the existing compiler path.
+func valid_object(bytes Vec[u8]) bool {
+    try {
+        need(vec.len(bytes) >= 64 && bytes[0] == 127 && bytes[1] == 69 && bytes[2] == 76 && bytes[3] == 70);
+        need(bytes[4] == 2 && bytes[5] == 1 && bytes[6] == 1);
+        need(little(bytes, 16, 2) == 1 && little(bytes, 18, 2) == 62 && little(bytes, 20, 4) == 1);
+        need(little(bytes, 52, 2) == 64 && little(bytes, 56, 2) == 0 && little(bytes, 58, 2) == 64);
+        let offset = little(bytes, 40, 8); let count_value = little(bytes, 60, 2); let strings_id = little(bytes, 62, 2);
+        need(count_value != 0 && strings_id < count_value); region(bytes, offset, count_value * 64);
+        let sections = vec.empty[Section]();
+        for var index u64 = 0; index < count_value; index += 1 {
+            let base = usize(offset + index * 64); let kind = little(bytes, base + 4, 4);
+            let section_offset = little(bytes, base + 24, 8); let size = little(bytes, base + 32, 8);
+            let alignment = little(bytes, base + 48, 8); need(alignment == 0 || (alignment & (alignment - 1)) == 0);
+            if kind != 8 { region(bytes, section_offset, size); }
+            vec.push(sections, Section(kind: kind, offset: section_offset, size: size,
+                link: little(bytes, base + 40, 4), info: little(bytes, base + 44, 4), entry: little(bytes, base + 56, 8)));
+        }
+        need(sections[0].kind == 0 && sections[usize(strings_id)].kind == 3);
+        let section_names = sections[usize(strings_id)];
+        for var index usize = 0; index < vec.len(sections); index += 1 {
+            let section = sections[index]; terminated(bytes, section_names.offset, section_names.size, little(bytes, usize(offset) + index * 64, 4));
+            if section.kind == 2 {
+                need(section.entry == 24 && section.size % 24 == 0 && section.link < count_value);
+                let names = sections[usize(section.link)]; need(names.kind == 3 && section.info <= section.size / 24);
+                var cursor = section.offset;
+                for cursor < section.offset + section.size {
+                    terminated(bytes, names.offset, names.size, little(bytes, usize(cursor), 4));
+                    let target = little(bytes, usize(cursor) + 6, 2); need(target < count_value || target == 65521 || target == 65522);
+                    cursor += 24;
+                }
+            }
+            if section.kind == 4 || section.kind == 9 {
+                var width u64 = 24; if section.kind == 9 { width = 16; }
+                need(section.entry == width && section.size % width == 0 && section.link < count_value && section.info < count_value);
+                let symbols = sections[usize(section.link)]; need(symbols.kind == 2 && symbols.entry == 24);
+                var cursor = section.offset;
+                for cursor < section.offset + section.size {
+                    need(little(bytes, usize(cursor) + 8, 8) >> 32 < symbols.size / 24);
+                    need(little(bytes, usize(cursor), 8) < sections[usize(section.info)].size); cursor += width;
+                }
+            }
+        }
+        return true;
+    } catch problem Error { return false; }
+}
+pub func load_object(cache Context, key string) option.Option[Vec[u8]] {
+    if !active(cache) { return option.Option[Vec[u8]].None; }
+    switch get(cache.directory + "/frontend", key) {
+        case option.Option.Some(bytes): {
+            try {
+                var reader = Reader(bytes: bytes, cursor: 0); need(string_value(inout reader) == "wz-native-object/1");
+                need(string_value(inout reader) == key); let size = number(inout reader);
+                need(size == u64(vec.len(bytes) - reader.cursor)); let object = bytes[reader.cursor:];
+                if valid_object(object) { cache.counters[6] += 1; return option.Option[Vec[u8]].Some(object); }
+            } catch problem Error {}
+        }
+        case option.Option.None: {}
+    }
+    cache.counters[7] += 1; return option.Option[Vec[u8]].None;
+}
+pub func store_object(cache Context, key string, bytes Vec[u8]) {
+    if !active(cache) || !valid_object(bytes) { return; }
+    let record = vec.empty[u8](); put_string(record, "wz-native-object/1"); put_string(record, key);
+    put_number(record, u64(vec.len(bytes))); for byte in bytes { vec.push(record, byte); }
+    put(cache.directory + "/frontend", key, record);
+}
