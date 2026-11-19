@@ -54,8 +54,8 @@ func decode_utf8(bytes Vec[u8], offset usize) string throws Error {
     }
 }
 
-func skip_whitespace(source string, cursor inout usize) {
-    for cursor < text.len(source) {
+func skip_whitespace(source Vec[u32], cursor inout usize) {
+    for cursor < vec.len(source) {
         let rune = source[cursor];
         if rune == 32 || rune == 9 || rune == 10 || rune == 13 {
             cursor += 1;
@@ -75,6 +75,34 @@ func hex_value(rune u32) u32 {
     if rune <= 57 { return rune - 48; }
     if rune <= 70 { return rune - 55; }
     return rune - 87;
+}
+
+// Materialize the code points once so the parser and writer can index them in
+// constant time. std/text.runes goes through string indexing (lang_text_at_v1),
+// which rescans from the first byte for every index; decoding text.bytes here
+// keeps this pass linear for large inputs.
+func materialize_runes(value string) Vec[u32] {
+    let bytes = text.bytes(value);
+    let out = vec.empty[u32]();
+    vec.reserve(out, text.len(value));
+    var index usize = 0;
+    for index < vec.len(bytes) {
+        let first = u32(bytes[index]);
+        if first < 0x80 {
+            vec.push(out, first);
+            index += 1;
+        } else if first < 0xe0 {
+            vec.push(out, ((first & 0x1f) << 6) | (u32(bytes[index + 1]) & 0x3f));
+            index += 2;
+        } else if first < 0xf0 {
+            vec.push(out, ((first & 0x0f) << 12) | ((u32(bytes[index + 1]) & 0x3f) << 6) | (u32(bytes[index + 2]) & 0x3f));
+            index += 3;
+        } else {
+            vec.push(out, ((first & 0x07) << 18) | ((u32(bytes[index + 1]) & 0x3f) << 12) | ((u32(bytes[index + 2]) & 0x3f) << 6) | (u32(bytes[index + 3]) & 0x3f));
+            index += 4;
+        }
+    }
+    return out;
 }
 
 func push_byte(out Vec[u8], value u32) {
@@ -99,10 +127,10 @@ func push_rune(out Vec[u8], rune u32) {
     }
 }
 
-func parse_hex4(source string, cursor inout usize) u32 throws Error {
+func parse_hex4(source Vec[u32], cursor inout usize) u32 throws Error {
     var value u32 = 0;
     for var index usize = 0; index < 4; index += 1 {
-        if cursor >= text.len(source) {
+        if cursor >= vec.len(source) {
             throw Error.Syntax(cursor);
         }
         let rune = source[cursor];
@@ -115,11 +143,11 @@ func parse_hex4(source string, cursor inout usize) u32 throws Error {
     return value;
 }
 
-func parse_string(source string, cursor inout usize) string throws Error {
+func parse_string(source Vec[u32], cursor inout usize) string throws Error {
     cursor += 1;
     let out = vec.empty[u8]();
     for true {
-        if cursor >= text.len(source) {
+        if cursor >= vec.len(source) {
             throw Error.Syntax(cursor);
         }
         let rune = source[cursor];
@@ -136,7 +164,7 @@ func parse_string(source string, cursor inout usize) string throws Error {
             continue;
         }
         cursor += 1;
-        if cursor >= text.len(source) {
+        if cursor >= vec.len(source) {
             throw Error.Syntax(cursor);
         }
         let escape = source[cursor];
@@ -176,7 +204,7 @@ func parse_string(source string, cursor inout usize) string throws Error {
         cursor += 1;
         let high = parse_hex4(source, inout cursor);
         if high >= 0xd800 && high <= 0xdbff {
-            if cursor + 1 >= text.len(source) || source[cursor] != 92 || source[cursor + 1] != 117 {
+            if cursor + 1 >= vec.len(source) || source[cursor] != 92 || source[cursor + 1] != 117 {
                 throw Error.Syntax(cursor);
             }
             cursor += 2;
@@ -196,65 +224,75 @@ func parse_string(source string, cursor inout usize) string throws Error {
     throw Error.Syntax(cursor);
 }
 
-func parse_number(source string, cursor inout usize) string throws Error {
+func parse_number(source Vec[u32], cursor inout usize) string throws Error {
     let start = cursor;
+    let out = vec.empty[u8]();
     if source[cursor] == 45 {
+        push_byte(out, 45);
         cursor += 1;
     }
-    if cursor >= text.len(source) {
+    if cursor >= vec.len(source) {
         throw Error.Syntax(start);
     }
     if source[cursor] == 48 {
+        push_byte(out, source[cursor]);
         cursor += 1;
     } else if is_digit(source[cursor]) {
+        push_byte(out, source[cursor]);
         cursor += 1;
-        for cursor < text.len(source) && is_digit(source[cursor]) {
+        for cursor < vec.len(source) && is_digit(source[cursor]) {
+            push_byte(out, source[cursor]);
             cursor += 1;
         }
     } else {
         throw Error.Syntax(cursor);
     }
-    if cursor < text.len(source) && source[cursor] == 46 {
+    if cursor < vec.len(source) && source[cursor] == 46 {
+        push_byte(out, source[cursor]);
         cursor += 1;
-        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+        if cursor >= vec.len(source) || !is_digit(source[cursor]) {
             throw Error.Syntax(cursor);
         }
-        for cursor < text.len(source) && is_digit(source[cursor]) {
+        for cursor < vec.len(source) && is_digit(source[cursor]) {
+            push_byte(out, source[cursor]);
             cursor += 1;
         }
     }
-    if cursor < text.len(source) && (source[cursor] == 101 || source[cursor] == 69) {
+    if cursor < vec.len(source) && (source[cursor] == 101 || source[cursor] == 69) {
+        push_byte(out, source[cursor]);
         cursor += 1;
-        if cursor < text.len(source) && (source[cursor] == 43 || source[cursor] == 45) {
+        if cursor < vec.len(source) && (source[cursor] == 43 || source[cursor] == 45) {
+            push_byte(out, source[cursor]);
             cursor += 1;
         }
-        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+        if cursor >= vec.len(source) || !is_digit(source[cursor]) {
             throw Error.Syntax(cursor);
         }
-        for cursor < text.len(source) && is_digit(source[cursor]) {
+        for cursor < vec.len(source) && is_digit(source[cursor]) {
+            push_byte(out, source[cursor]);
             cursor += 1;
         }
     }
-    return source[start:cursor];
+    return decode_utf8(out, start);
 }
 
-func match_word(source string, cursor inout usize, word string) bool {
-    let length = text.len(word);
-    if length > text.len(source) - cursor {
-        return false;
+func match_word(source Vec[u32], cursor inout usize, word string) bool {
+    var length usize = 0;
+    for rune in word {
+        if cursor + length >= vec.len(source) || source[cursor + length] != rune {
+            return false;
+        }
+        length += 1;
     }
-    if source[cursor:cursor + length] == word {
-        cursor += length;
-        return true;
-    }
-    return false;
+    cursor += length;
+    return true;
 }
 
-func parse_array(source string, cursor inout usize, depth usize) Value throws Error {
+func parse_array(source Vec[u32], cursor inout usize, depth usize) Value throws Error {
     cursor += 1;
     let items = vec.empty[Value]();
     skip_whitespace(source, inout cursor);
-    if cursor >= text.len(source) {
+    if cursor >= vec.len(source) {
         throw Error.Syntax(cursor);
     }
     if source[cursor] == 93 {
@@ -265,7 +303,7 @@ func parse_array(source string, cursor inout usize, depth usize) Value throws Er
         let item = parse_value(source, inout cursor, depth + 1);
         vec.push(items, item);
         skip_whitespace(source, inout cursor);
-        if cursor >= text.len(source) {
+        if cursor >= vec.len(source) {
             throw Error.Syntax(cursor);
         }
         if source[cursor] == 44 {
@@ -282,11 +320,11 @@ func parse_array(source string, cursor inout usize, depth usize) Value throws Er
     throw Error.Syntax(cursor);
 }
 
-func parse_object(source string, cursor inout usize, depth usize) Value throws Error {
+func parse_object(source Vec[u32], cursor inout usize, depth usize) Value throws Error {
     cursor += 1;
     let members = vec.empty[Member]();
     skip_whitespace(source, inout cursor);
-    if cursor >= text.len(source) {
+    if cursor >= vec.len(source) {
         throw Error.Syntax(cursor);
     }
     if source[cursor] == 125 {
@@ -294,12 +332,12 @@ func parse_object(source string, cursor inout usize, depth usize) Value throws E
         return Value.Object(members);
     }
     for true {
-        if cursor >= text.len(source) || source[cursor] != 34 {
+        if cursor >= vec.len(source) || source[cursor] != 34 {
             throw Error.Syntax(cursor);
         }
         let name = parse_string(source, inout cursor);
         skip_whitespace(source, inout cursor);
-        if cursor >= text.len(source) || source[cursor] != 58 {
+        if cursor >= vec.len(source) || source[cursor] != 58 {
             throw Error.Syntax(cursor);
         }
         cursor += 1;
@@ -317,7 +355,7 @@ func parse_object(source string, cursor inout usize, depth usize) Value throws E
             vec.push(members, Member(name: name, value: member_value));
         }
         skip_whitespace(source, inout cursor);
-        if cursor >= text.len(source) {
+        if cursor >= vec.len(source) {
             throw Error.Syntax(cursor);
         }
         if source[cursor] == 44 {
@@ -334,8 +372,8 @@ func parse_object(source string, cursor inout usize, depth usize) Value throws E
     throw Error.Syntax(cursor);
 }
 
-func parse_value(source string, cursor inout usize, depth usize) Value throws Error {
-    if cursor >= text.len(source) {
+func parse_value(source Vec[u32], cursor inout usize, depth usize) Value throws Error {
+    if cursor >= vec.len(source) {
         throw Error.Syntax(cursor);
     }
     let rune = source[cursor];
@@ -368,11 +406,12 @@ func parse_value(source string, cursor inout usize, depth usize) Value throws Er
 }
 
 pub func parse(source string) Value throws Error {
+    let runes = materialize_runes(source);
     var cursor usize = 0;
-    skip_whitespace(source, inout cursor);
-    let value = parse_value(source, inout cursor, 0);
-    skip_whitespace(source, inout cursor);
-    if cursor != text.len(source) {
+    skip_whitespace(runes, inout cursor);
+    let value = parse_value(runes, inout cursor, 0);
+    skip_whitespace(runes, inout cursor);
+    if cursor != vec.len(runes) {
         throw Error.Syntax(cursor);
     }
     return value;
@@ -382,18 +421,20 @@ func valid_number(token string) bool {
     if text.len(token) == 0 {
         return false;
     }
+    let runes = materialize_runes(token);
     var cursor usize = 0;
     try {
-        let parsed = parse_number(token, inout cursor);
-        return cursor == text.len(token);
+        let parsed = parse_number(runes, inout cursor);
+        return cursor == vec.len(runes);
     } catch error Error {
         return false;
     }
 }
 
 func push_ascii(out Vec[u8], value string) {
-    for rune in value {
-        push_byte(out, rune);
+    let bytes = text.bytes(value);
+    for var index usize = 0; index < vec.len(bytes); index += 1 {
+        vec.push(out, bytes[index]);
     }
 }
 
@@ -410,7 +451,9 @@ func push_hex4(out Vec[u8], value u32) {
 
 func write_string(out Vec[u8], value string) {
     push_byte(out, 34);
-    for rune in value {
+    let runes = materialize_runes(value);
+    for var index usize = 0; index < vec.len(runes); index += 1 {
+        let rune = runes[index];
         if rune == 34 {
             push_byte(out, 92);
             push_byte(out, 34);
