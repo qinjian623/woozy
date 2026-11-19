@@ -1,9 +1,41 @@
 # Editor integration
 
+## Install the editor configuration
+
+On Linux, run the [setup tool](../editor/setup.py) from the repository root
+with Python 3, Neovim 0.10 or later, Emacs with Eglot (included in Emacs 29
+or later), and a working `woozyc` executable. See the [compiler build guide](BUILD.md),
+[Neovim LSP documentation](https://neovim.io/doc/user/lsp/), and
+[Eglot manual](https://www.gnu.org/software/emacs/manual/html_mono/eglot.html).
+
+```sh
+python3 development/editor/setup.py
+```
+
+The tool installs Woozy syntax highlighting and automatic LSP startup for
+both editors. It uses the `woozyc` found on `PATH` at setup time and writes its
+absolute path into the editor settings. Pass `--compiler` to select another
+executable, including a build outside `PATH`.
+
+```sh
+python3 development/editor/setup.py --editor neovim
+python3 development/editor/setup.py --editor emacs --compiler /path/to/woozyc
+```
+
+Neovim files go in the user config directory selected by `XDG_CONFIG_HOME`
+and `NVIM_APPNAME`. Emacs loads the installed mode and Eglot settings from a
+marked block in its init file. Use `--emacs-init FILE` for a custom init.
+Running setup again updates the managed files and block. Setup stops before
+changing files if it finds a conflicting Woozy file that it does not manage.
+The tool uses local files and the selected compiler executable.
+
+Restart your editor and open a `.wz` file. Files under the same
+`lang.toml` use the same project root for LSP.
+
+## Language server
+
 The C++ and self-hosted Woozy builds of `woozyc` provide syntax diagnostics
 and whole-document formatting. The C++ frontend-only build works without LLVM.
-Use [the build guide](BUILD.md) to build `woozyc` and put it on your editor's
-`PATH`, or set the server command to its executable path.
 
 Run `woozyc lsp` to start the server on standard input and output.
 Use the self-hosted build for completion, type information on hover,
@@ -38,26 +70,8 @@ stderr and no formatted output. Use `fmt -` to format text from stdin.
 
 ## Neovim
 
-Add this to `init.lua` to start the built-in LSP client when a `.wz` file
-opens. Use `:lua vim.lsp.buf.format({ name = "woozyc" })` to format the buffer.
+Use `:lua vim.lsp.buf.format({ name = "woozyc" })` to format the buffer.
 [Neovim LSP documentation](https://neovim.io/doc/user/lsp/).
-
-```lua
-vim.filetype.add({ extension = { wz = "woozy" } })
-
-vim.api.nvim_create_autocmd("FileType", {
-  group = vim.api.nvim_create_augroup("woozy-lsp", { clear = true }),
-  pattern = "woozy",
-  callback = function(args)
-    vim.lsp.start({
-      name = "woozyc",
-      cmd = { "woozyc", "lsp" },
-      root_dir = vim.fs.root(args.buf, { "lang.toml", ".git" })
-        or vim.fs.dirname(vim.api.nvim_buf_get_name(args.buf)),
-    }, { bufnr = args.buf })
-  end,
-})
-```
 
 ## Vim
 
@@ -78,14 +92,5 @@ augroup END
 
 ## Emacs
 
-Add this to your Emacs init file. After opening a `.wz` file, run
-`M-x eglot` to connect and `M-x eglot-format-buffer` to format.
+Use `M-x eglot-format-buffer` to format the buffer.
 [Eglot server configuration](https://www.gnu.org/software/emacs/manual/html_node/eglot/Setting-Up-LSP-Servers.html).
-
-```elisp
-(define-derived-mode woozy-mode prog-mode "Woozy")
-(add-to-list 'auto-mode-alist '("\\.wz\\'" . woozy-mode))
-
-(with-eval-after-load 'eglot
-  (add-to-list 'eglot-server-programs '(woozy-mode . ("woozyc" "lsp"))))
-```

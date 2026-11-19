@@ -32,6 +32,16 @@ Most of the guides below are in Chinese.
 - See [calling C libraries](docs/FFI.md) for typed C bindings, pointers, buffers, resources, and callbacks.
 - Browse the [examples](examples/) for functions, numbers, errors, and argument passing, or try the [TCP chat server and client](examples/chat/README.md) and the [async HTTP server](examples/http_server/README.md).
 
+## Editor setup
+
+Neovim and Emacs can highlight `.wz` files and start the Woozy language server automatically. With the self-hosted compiler, the server adds completion, hover, definition lookup, and live project diagnostics. Run this from the checkout with `woozyc` on your `PATH`.
+
+```sh
+python3 development/editor/setup.py
+```
+
+See the [editor guide](development/docs/EDITOR.md) for prerequisites, single-editor setup, and compiler selection.
+
 ## Language basics
 
 Types follow names, as in `count i32`. Local bindings can infer their types. Function parameters require an explicit type. Simple statements end with a semicolon.

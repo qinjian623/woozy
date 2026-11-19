@@ -30,6 +30,16 @@ func main() throws os.Error {
 - [调用 C 库](docs/FFI.md)：有类型的 C 绑定、指针、缓冲区、资源和回调。
 - [示例](examples/)：函数、数值、错误处理和参数传递；另有可运行的 [TCP 聊天 server/client](examples/chat/README.md) 和 [异步 HTTP server](examples/http_server/README.md)。
 
+## 编辑器配置
+
+Neovim 和 Emacs 打开 `.wz` 文件时可自动启用语法高亮和 Woozy LSP。自举版编译器还提供补全、悬停、定义跳转和实时项目诊断。将 `woozyc` 放在 `PATH` 上，然后在仓库根目录运行以下命令。
+
+```sh
+python3 development/editor/setup.py
+```
+
+环境要求、单个编辑器的安装方式和编译器选择见[编辑器配置](development/docs/EDITOR.md)。
+
 ## 主要规则
 
 类型写在名字后面，如 `count i32`。局部绑定可以推断类型，函数参数必须声明类型。简单语句以分号结束。
