@@ -1,0 +1,1049 @@
+// Minimal structural scanner used when the parser cannot describe an edit.
+//
+// It works on the lexer token stream only, so `foo.` and other incomplete
+// statements still contribute their enclosing function, parameters, block
+// scopes and declarations.  It never invents a symbol from a name alone.
+package editorcomplete;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct TokenData {
+    pub tokens Vec[model.Token];
+    pub braces Vec[usize];
+    pub parens Vec[usize];
+    pub brackets Vec[usize];
+}
+
+pub struct LocalHint {
+    pub name string;
+    pub kind i32;
+    pub has_type bool;
+    pub type_parts Vec[string];
+    pub visible_from usize;
+}
+
+pub struct TypeDecl {
+    pub kind u32;
+    pub name string;
+    pub exported bool;
+    pub generic bool;
+    pub body_open usize;
+    pub body_close usize;
+}
+
+pub struct MemberDecl {
+    pub name string;
+    pub kind i32;
+    pub exported bool;
+    pub has_type bool;
+    pub type_parts Vec[string];
+}
+
+pub struct FuncDecl {
+    pub func_token usize;
+    pub body_open usize;
+    pub body_close usize;
+    pub params Vec[LocalHint];
+    pub generics Vec[LocalHint];
+}
+
+pub struct ParamList {
+    pub params Vec[LocalHint];
+    pub valid bool;
+}
+
+pub struct ParamSegment {
+    pub valid bool;
+    pub hint LocalHint;
+}
+
+pub struct TopSymbol {
+    pub name string;
+    pub kind i32;
+    pub exported bool;
+}
+
+struct ScopeFrame {
+    close_at usize;
+    names Vec[LocalHint];
+}
+
+pub func token_text(data TokenData, index usize) string {
+    if index < vec.len(data.tokens) {
+        return data.tokens[index].spelling;
+    }
+    return "";
+}
+
+pub func token_is_identifier(data TokenData, index usize) bool {
+    if index >= vec.len(data.tokens) { return false; }
+    return model.token_kind_id(data.tokens[index].kind) == 1;
+}
+
+pub func token_is_word(data TokenData, index usize, word string) bool {
+    if index >= vec.len(data.tokens) { return false; }
+    return data.tokens[index].spelling == word;
+}
+
+func build_matches(tokens Vec[model.Token], open string, close string) Vec[usize] {
+    let count = vec.len(tokens);
+    var out = vec.make[usize](count, 0);
+    var index usize = 0;
+    for index < count {
+        out[index] = index;
+        index += 1;
+    }
+    var stack = vec.empty[usize]();
+    index = 0;
+    for index < count {
+        let text = tokens[index].spelling;
+        if text == open {
+            vec.push(stack, index);
+        } else if text == close && vec.len(stack) > 0 {
+            let start = stack[vec.len(stack) - 1];
+            let removed = vec.pop(stack);
+            out[start] = index;
+            out[index] = start;
+        }
+        index += 1;
+    }
+    return out;
+}
+
+pub func token_data(tokens Vec[model.Token]) TokenData {
+    return TokenData(tokens: tokens,
+        braces: build_matches(tokens, "{", "}"),
+        parens: build_matches(tokens, "(", ")"),
+        brackets: build_matches(tokens, "[", "]"));
+}
+
+pub func brace_close(data TokenData, open usize) usize {
+    if open < vec.len(data.braces) && data.braces[open] > open {
+        return data.braces[open];
+    }
+    if vec.len(data.tokens) > 0 {
+        return vec.len(data.tokens) - 1;
+    }
+    return 0;
+}
+
+func find_body_open(data TokenData, start usize) usize {
+    let count = vec.len(data.tokens);
+    var index = start;
+    var parens usize = 0;
+    var brackets usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if parens == 0 && brackets == 0 {
+            if text == "{" { return index; }
+            if text == ";" || text == "}" { return count; }
+        }
+        index += 1;
+    }
+    return count;
+}
+
+func find_loop_body(data TokenData, start usize) usize {
+    let count = vec.len(data.tokens);
+    var index = start;
+    var parens usize = 0;
+    var brackets usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if parens == 0 && brackets == 0 {
+            if text == "{" { return index; }
+            if text == "}" { return count; }
+        }
+        index += 1;
+    }
+    return count;
+}
+
+func find_function_body(data TokenData, start usize, literal bool) usize {
+    let count = vec.len(data.tokens);
+    var index = start;
+    var parens usize = 0;
+    var brackets usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if parens == 0 && brackets == 0 {
+            if text == "{" { return index; }
+            if text == ";" || text == "}" || text == "=" { return count; }
+            if literal && (text == "," || text == ")" || text == "]") {
+                return count;
+            }
+        }
+        index += 1;
+    }
+    return count;
+}
+
+pub func parse_type_parts(tokens Vec[model.Token], start usize, end usize)
+    Vec[string] {
+    var parts = vec.empty[string]();
+    var index = start;
+    for index < end {
+        let text = tokens[index].spelling;
+        if text == "inout" || text == "move" || text == "dyn" {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    if index >= end { return parts; }
+    if model.token_kind_id(tokens[index].kind) != 1 { return parts; }
+    vec.push(parts, tokens[index].spelling);
+    index += 1;
+    for index + 1 < end {
+        if tokens[index].spelling != "." { break; }
+        if model.token_kind_id(tokens[index + 1].kind) != 1 { break; }
+        vec.push(parts, tokens[index + 1].spelling);
+        index += 2;
+    }
+    return parts;
+}
+
+func parse_param_segment(data TokenData, start usize, end usize)
+    ParamSegment {
+    var index = start;
+    for index < end {
+        let text = data.tokens[index].spelling;
+        if text == "inout" || text == "move" {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    if index >= end || !token_is_identifier(data, index) {
+        return ParamSegment(valid: false,
+            hint: LocalHint(name: "", kind: 0, has_type: false,
+                type_parts: [], visible_from: 0));
+    }
+    let name = data.tokens[index].spelling;
+    index += 1;
+    if index >= end {
+        return ParamSegment(valid: false,
+            hint: LocalHint(name: "", kind: 0, has_type: false,
+                type_parts: [], visible_from: 0));
+    }
+    let parts = parse_type_parts(data.tokens, index, end);
+    return ParamSegment(valid: true,
+        hint: LocalHint(name: name, kind: LSP_VARIABLE,
+            has_type: vec.len(parts) > 0, type_parts: parts,
+            visible_from: 0));
+}
+
+func parse_params(data TokenData, open usize, close usize) ParamList {
+    var params = vec.empty[LocalHint]();
+    var valid = true;
+    var segment_start = open + 1;
+    var parens usize = 0;
+    var brackets usize = 0;
+    var index = open + 1;
+    for index < close {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if text == "," && parens == 0 && brackets == 0 {
+            let segment = parse_param_segment(data, segment_start, index);
+            if segment.valid {
+                vec.push(params, segment.hint);
+            } else {
+                valid = false;
+            }
+            segment_start = index + 1;
+        }
+        index += 1;
+    }
+    if segment_start < close {
+        let segment = parse_param_segment(data, segment_start, close);
+        if segment.valid {
+            vec.push(params, segment.hint);
+        } else {
+            valid = false;
+        }
+    }
+    return ParamList(params: params, valid: valid);
+}
+
+func parse_generics(data TokenData, open usize, close usize)
+    Vec[LocalHint] {
+    var out = vec.empty[LocalHint]();
+    var segment_start = open + 1;
+    var depth usize = 0;
+    var index = open + 1;
+    for index < close {
+        let text = data.tokens[index].spelling;
+        if text == "[" {
+            depth += 1;
+        } else if text == "]" {
+            if depth > 0 { depth -= 1; }
+        } else if text == "," && depth == 0 {
+            add_generic(inout out, data, segment_start, index);
+            segment_start = index + 1;
+        }
+        index += 1;
+    }
+    if segment_start < close {
+        add_generic(inout out, data, segment_start, close);
+    }
+    return out;
+}
+
+func add_generic(state inout Vec[LocalHint], data TokenData, start usize,
+                 end usize) {
+    var index = start;
+    for index < end && !token_is_identifier(data, index) {
+        index += 1;
+    }
+    if index >= end { return; }
+    let name = data.tokens[index].spelling;
+    if name == "_" { return; }
+    vec.push(state, LocalHint(name: name, kind: LSP_TYPE_PARAMETER,
+        has_type: false, type_parts: [],
+        visible_from: 0));
+}
+
+func literal_prefix(data TokenData, index usize) bool {
+    if index == 0 { return false; }
+    let text = data.tokens[index - 1].spelling;
+    return text == "=" || text == "(" || text == "," || text == "[" ||
+        text == "return" || text == ":" || text == "{" || text == "}" ||
+        text == ";";
+}
+
+pub func scan_funcs(data TokenData) Vec[FuncDecl] {
+    var out = vec.empty[FuncDecl]();
+    let count = vec.len(data.tokens);
+    var index usize = 0;
+    for index < count {
+        if data.tokens[index].spelling != "func" {
+            index += 1;
+            continue;
+        }
+        let after = index + 1;
+        if token_is_identifier(data, after) {
+            var cursor = after + 1;
+            var generics = vec.empty[LocalHint]();
+            if cursor < count && data.tokens[cursor].spelling == "[" {
+                let generic_close = data.brackets[cursor];
+                if generic_close > cursor {
+                    generics = parse_generics(data, cursor, generic_close);
+                    cursor = generic_close + 1;
+                }
+            }
+            if cursor < count && data.tokens[cursor].spelling == "(" {
+                let params_close = data.parens[cursor];
+                if params_close > cursor {
+                    let body_open = find_function_body(data,
+                        params_close + 1, false);
+                    if body_open < count {
+                        let parsed = parse_params(data, cursor, params_close);
+                        if parsed.valid {
+                            let body_close = brace_close(data, body_open);
+                            vec.push(out, FuncDecl(func_token: index,
+                                body_open: body_open, body_close: body_close,
+                                params: parsed.params, generics: generics));
+                        }
+                    }
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if after < count && data.tokens[after].spelling == "(" &&
+           literal_prefix(data, index) {
+            let params_close = data.parens[after];
+            if params_close > after {
+                let parsed = parse_params(data, after, params_close);
+                if parsed.valid {
+                    let body_open = find_function_body(data,
+                        params_close + 1, true);
+                    if body_open < count {
+                        let body_close = brace_close(data, body_open);
+                        vec.push(out, FuncDecl(func_token: index,
+                            body_open: body_open, body_close: body_close,
+                            params: parsed.params, generics: []));
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    return out;
+}
+
+func find_case_end(data TokenData, start usize, stop usize) usize {
+    var index = start + 1;
+    var braces usize = 0;
+    var parens usize = 0;
+    var brackets usize = 0;
+    for index < stop {
+        let text = data.tokens[index].spelling;
+        if text == "{" {
+            braces += 1;
+        } else if text == "}" {
+            if braces > 0 {
+                braces -= 1;
+            } else {
+                return index;
+            }
+        } else if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if braces == 0 && parens == 0 && brackets == 0 {
+            if text == "case" || text == "default" { return index; }
+        }
+        index += 1;
+    }
+    return stop;
+}
+
+func find_statement_semicolon(data TokenData, start usize, stop usize)
+    usize {
+    var index = start;
+    var parens usize = 0;
+    var brackets usize = 0;
+    var braces usize = 0;
+    for index < stop {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if text == "{" {
+            braces += 1;
+        } else if text == "}" {
+            if braces > 0 {
+                braces -= 1;
+            } else {
+                return no_index();
+            }
+        } else if text == ";" && parens == 0 && brackets == 0 &&
+                  braces == 0 {
+            return index;
+        }
+        index += 1;
+    }
+    return no_index();
+}
+
+func push_scope(state inout Vec[ScopeFrame], close_at usize) usize {
+    let id = vec.len(state);
+    vec.push(state, ScopeFrame(close_at: close_at,
+        names: vec.empty[LocalHint]()));
+    return id;
+}
+
+func pop_scopes(state inout Vec[ScopeFrame], at usize, strict bool) {
+    for vec.len(state) > 1 {
+        let close_at = state[vec.len(state) - 1].close_at;
+        if strict {
+            if close_at >= at { break; }
+        } else {
+            if close_at > at { break; }
+        }
+        let removed = vec.pop(state);
+    }
+}
+
+func add_scope_hint(state inout Vec[ScopeFrame], hint LocalHint) {
+    if hint.name == "" || hint.name == "_" { return; }
+    vec.push(state[vec.len(state) - 1].names, hint);
+}
+
+func add_binding(state inout Vec[ScopeFrame], data TokenData,
+                 start usize, limit usize, body_close usize) {
+    let name_index = start + 1;
+    if !token_is_identifier(data, name_index) { return; }
+    let name = data.tokens[name_index].spelling;
+    if name == "_" { return; }
+    let semicolon = find_statement_semicolon(data, name_index + 1,
+        body_close);
+    if semicolon == no_index() || semicolon >= limit { return; }
+    let visible_from = semicolon + 1;
+    var index = name_index + 1;
+    for index < semicolon {
+        let text = data.tokens[index].spelling;
+        if text == "inout" || text == "move" {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    var parts = vec.empty[string]();
+    if index < semicolon && data.tokens[index].spelling == "=" {
+        let value_start = index + 1;
+        if token_is_identifier(data, value_start) && value_start < semicolon {
+            var after = value_start + 1;
+            if after + 1 < semicolon &&
+               data.tokens[after].spelling == "." &&
+               token_is_identifier(data, after + 1) {
+                after += 2;
+            }
+            var open = after;
+            if open < semicolon && data.tokens[open].spelling == "[" {
+                let close = data.brackets[open];
+                if close > open && close < semicolon { open = close + 1; }
+            }
+            if open < semicolon && data.tokens[open].spelling == "(" &&
+               data.parens[open] == semicolon - 1 {
+                vec.push(parts, data.tokens[value_start].spelling);
+                if after == value_start + 3 { vec.push(parts, data.tokens[after - 1].spelling); }
+            }
+        }
+    } else {
+        parts = parse_type_parts(data.tokens, index, semicolon);
+    }
+    add_scope_hint(inout state, LocalHint(name: name, kind: LSP_VARIABLE,
+        has_type: vec.len(parts) > 0, type_parts: parts,
+        visible_from: visible_from));
+}
+
+func choose_function(funcs Vec[FuncDecl], cursor usize) usize {
+    var result = no_index();
+    var best_open = no_index();
+    var index usize = 0;
+    for index < vec.len(funcs) {
+        let value = funcs[index];
+        if value.body_open < cursor && cursor <= value.body_close {
+            if value.body_open < best_open {
+                best_open = value.body_open;
+                result = index;
+            }
+        }
+        index += 1;
+    }
+    return result;
+}
+
+func find_func_decl(funcs Vec[FuncDecl], func_token usize) usize {
+    var index usize = 0;
+    for index < vec.len(funcs) {
+        if funcs[index].func_token == func_token {
+            return index;
+        }
+        index += 1;
+    }
+    return no_index();
+}
+
+func add_hints_with_visibility(state inout Vec[ScopeFrame],
+                               hints Vec[LocalHint], visible_from usize) {
+    for hint in hints {
+        add_scope_hint(inout state, LocalHint(name: hint.name,
+            kind: hint.kind, has_type: hint.has_type,
+            type_parts: hint.type_parts,
+            visible_from: visible_from));
+    }
+}
+
+pub func scan_locals(data TokenData, cursor usize) Vec[LocalHint] {
+    let funcs = scan_funcs(data);
+    let chosen = choose_function(funcs, cursor);
+    if chosen == no_index() { return vec.empty[LocalHint](); }
+    let current = funcs[chosen];
+    var scopes = vec.empty[ScopeFrame]();
+    let root_close = current.body_close;
+    let root = push_scope(inout scopes, root_close);
+    add_hints_with_visibility(inout scopes, current.params, 0);
+    add_hints_with_visibility(inout scopes, current.generics, 0);
+    var index = current.body_open + 1;
+    for index < cursor && index < current.body_close {
+        pop_scopes(inout scopes, index, false);
+        let text = data.tokens[index].spelling;
+        if text == "{" {
+            let close = brace_close(data, index);
+            if close > index {
+                let opened = push_scope(inout scopes, close);
+            } else {
+                let opened = push_scope(inout scopes, index + 1);
+            }
+        } else if text == "for" {
+            let body_open = find_loop_body(data, index + 1);
+            var body_close = index + 1;
+            if body_open < vec.len(data.tokens) {
+                body_close = brace_close(data, body_open);
+            }
+            let opened = push_scope(inout scopes, body_close + 1);
+            if token_is_identifier(data, index + 1) &&
+               token_word_is(data, index + 2, "in") {
+                let name = data.tokens[index + 1].spelling;
+                var visible_from = index + 1;
+                if body_open < vec.len(data.tokens) {
+                    visible_from = body_open + 1;
+                }
+                add_scope_hint(inout scopes, LocalHint(name: name,
+                    kind: LSP_VARIABLE, has_type: false, type_parts: [],
+                    visible_from: visible_from));
+            }
+        } else if text == "catch" {
+            let body_open = find_body_open(data, index + 1);
+            var body_close = index + 1;
+            if body_open < vec.len(data.tokens) {
+                body_close = brace_close(data, body_open);
+            }
+            let opened = push_scope(inout scopes, body_close + 1);
+            if token_is_identifier(data, index + 1) {
+                let name = data.tokens[index + 1].spelling;
+                var type_end = body_open;
+                if type_end > vec.len(data.tokens) {
+                    type_end = vec.len(data.tokens);
+                }
+                let parts = parse_type_parts(data.tokens, index + 2,
+                    type_end);
+                var visible_from = index + 1;
+                if body_open < vec.len(data.tokens) {
+                    visible_from = body_open + 1;
+                }
+                add_scope_hint(inout scopes, LocalHint(name: name,
+                    kind: LSP_VARIABLE, has_type: vec.len(parts) > 0,
+                    type_parts: parts,
+                    visible_from: visible_from));
+            }
+        } else if text == "case" || text == "default" {
+            let close = find_case_end(data, index, current.body_close);
+            let opened = push_scope(inout scopes, close);
+        } else if text == "func" {
+            let found = find_func_decl(funcs, index);
+            if found != no_index() {
+                let value = funcs[found];
+                if value.body_open > index {
+                    let opened = push_scope(inout scopes,
+                        value.body_close + 1);
+                    add_hints_with_visibility(inout scopes, value.params,
+                        value.body_open + 1);
+                    add_hints_with_visibility(inout scopes, value.generics,
+                        value.body_open + 1);
+                }
+            }
+        } else if text == "let" || text == "var" || text == "const" {
+            add_binding(inout scopes, data, index, cursor,
+                current.body_close);
+        }
+        index += 1;
+    }
+    pop_scopes(inout scopes, cursor, true);
+    var out = vec.empty[LocalHint]();
+    var seen = vec.empty[string]();
+    var scope_index = vec.len(scopes);
+    for scope_index > 0 {
+        scope_index -= 1;
+        let names = scopes[scope_index].names;
+        var name_index = vec.len(names);
+        for name_index > 0 {
+            name_index -= 1;
+            let hint = names[name_index];
+            if hint.visible_from > cursor { continue; }
+            var duplicate = false;
+            for previous in seen {
+                if previous == hint.name { duplicate = true; }
+            }
+            if duplicate { continue; }
+            vec.push(seen, hint.name);
+            vec.push(out, hint);
+        }
+    }
+    return out;
+}
+
+func token_word_is(data TokenData, index usize, word string) bool {
+    return token_is_word(data, index, word);
+}
+
+func type_keyword_kind(text string) u32 {
+    if text == "struct" { return AST_STRUCT; }
+    if text == "enum" { return AST_ENUM; }
+    if text == "trait" { return AST_TRAIT; }
+    return 0;
+}
+
+pub func scan_type_decls(data TokenData) Vec[TypeDecl] {
+    var out = vec.empty[TypeDecl]();
+    let count = vec.len(data.tokens);
+    var depth usize = 0;
+    var index usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "}" {
+            if depth > 0 { depth -= 1; }
+            index += 1;
+            continue;
+        }
+        if depth == 0 {
+            let kind = type_keyword_kind(text);
+            if kind != 0 {
+                let name_index = index + 1;
+                if token_is_identifier(data, name_index) {
+                    let body_open = find_body_open(data, name_index + 1);
+                    if body_open < count {
+                        let body_close = brace_close(data, body_open);
+                        var exported = false;
+                        if index > 0 &&
+                           data.tokens[index - 1].spelling == "pub" {
+                            exported = true;
+                        }
+                        vec.push(out, TypeDecl(kind: kind,
+                            name: data.tokens[name_index].spelling,
+                            exported: exported,
+                            generic: data.tokens[name_index + 1].spelling == "[",
+                            body_open: body_open,
+                            body_close: body_close));
+                        index = body_close + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        if text == "{" { depth += 1; }
+        index += 1;
+    }
+    return out;
+}
+
+func previous_is_pub(data TokenData, index usize) bool {
+    if index > 0 && data.tokens[index - 1].spelling == "pub" {
+        return true;
+    }
+    if index > 1 && data.tokens[index - 1].spelling == "async" &&
+       data.tokens[index - 2].spelling == "pub" {
+        return true;
+    }
+    return false;
+}
+
+pub func scan_top_symbols(data TokenData) Vec[TopSymbol] {
+    var out = vec.empty[TopSymbol]();
+    let count = vec.len(data.tokens);
+    var depth usize = 0;
+    var index usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "}" {
+            if depth > 0 { depth -= 1; }
+            index += 1;
+            continue;
+        }
+        if depth == 0 {
+            if text == "func" {
+                let name_index = index + 1;
+                if token_is_identifier(data, name_index) {
+                    vec.push(out, TopSymbol(
+                        name: data.tokens[name_index].spelling,
+                        kind: LSP_FUNCTION,
+                        exported: previous_is_pub(data, index)));
+                    let body_open = find_function_body(data, name_index + 1,
+                        false);
+                    if body_open < count {
+                        index = brace_close(data, body_open) + 1;
+                        continue;
+                    }
+                }
+            } else if text == "struct" || text == "enum" ||
+                      text == "trait" {
+                let name_index = index + 1;
+                if token_is_identifier(data, name_index) {
+                    var kind = LSP_CLASS;
+                    if text == "struct" { kind = LSP_STRUCT; }
+                    else if text == "enum" { kind = LSP_ENUM; }
+                    vec.push(out, TopSymbol(
+                        name: data.tokens[name_index].spelling, kind: kind,
+                        exported: previous_is_pub(data, index)));
+                    let body_open = find_body_open(data, name_index + 1);
+                    if body_open < count {
+                        index = brace_close(data, body_open) + 1;
+                        continue;
+                    }
+                }
+            } else if text == "const" {
+                let name_index = index + 1;
+                if token_is_identifier(data, name_index) {
+                    vec.push(out, TopSymbol(
+                        name: data.tokens[name_index].spelling,
+                        kind: LSP_CONSTANT,
+                        exported: previous_is_pub(data, index)));
+                }
+            }
+        }
+        if text == "{" { depth += 1; }
+        index += 1;
+    }
+    return out;
+}
+
+func find_semicolon(data TokenData, start usize, stop usize) usize {
+    var index = start;
+    var parens usize = 0;
+    var brackets usize = 0;
+    for index < stop {
+        let text = data.tokens[index].spelling;
+        if text == "(" {
+            parens += 1;
+        } else if text == ")" {
+            if parens > 0 { parens -= 1; }
+        } else if text == "[" {
+            brackets += 1;
+        } else if text == "]" {
+            if brackets > 0 { brackets -= 1; }
+        } else if text == ";" && parens == 0 && brackets == 0 {
+            return index;
+        } else if text == "}" && parens == 0 && brackets == 0 {
+            return no_index();
+        }
+        index += 1;
+    }
+    return no_index();
+}
+
+pub func extract_type_members(data TokenData, decl TypeDecl)
+    Vec[MemberDecl] {
+    var out = vec.empty[MemberDecl]();
+    var index = decl.body_open + 1;
+    for index < decl.body_close {
+        var exported = false;
+        if data.tokens[index].spelling == "pub" {
+            exported = true;
+            index += 1;
+            if index >= decl.body_close { break; }
+        }
+        let text = data.tokens[index].spelling;
+        if text == "}" { break; }
+        if text == "func" || text == "async" {
+            // Re-scan the method here so the member record and the jump use
+            // the same token positions.
+            var cursor = index;
+            if data.tokens[cursor].spelling == "async" { cursor += 1; }
+            if cursor < decl.body_close &&
+               data.tokens[cursor].spelling == "func" {
+                cursor += 1;
+                if cursor < decl.body_close &&
+                   token_is_identifier(data, cursor) {
+                    let name = data.tokens[cursor].spelling;
+                    cursor += 1;
+                    if cursor < decl.body_close &&
+                       data.tokens[cursor].spelling == "[" {
+                        let close = data.brackets[cursor];
+                        if close > cursor { cursor = close + 1; }
+                    }
+                    if cursor < decl.body_close &&
+                       data.tokens[cursor].spelling == "(" {
+                        let params_close = data.parens[cursor];
+                        if params_close > cursor {
+                            var parts = vec.empty[string]();
+                            let after = params_close + 1;
+                            if after < decl.body_close &&
+                               data.tokens[after].spelling != "throws" {
+                                parts = parse_type_parts(data.tokens, after,
+                                    decl.body_close);
+                            }
+                            vec.push(out, MemberDecl(name: name,
+                                kind: LSP_METHOD, exported: exported,
+                                has_type: vec.len(parts) > 0,
+                                type_parts: parts));
+                            var scan = params_close + 1;
+                            var parens usize = 0;
+                            var brackets usize = 0;
+                            var body_open = no_index();
+                            var semicolon = no_index();
+                            for scan < decl.body_close {
+                                let current = data.tokens[scan].spelling;
+                                if current == "(" {
+                                    parens += 1;
+                                } else if current == ")" {
+                                    if parens > 0 { parens -= 1; }
+                                } else if current == "[" {
+                                    brackets += 1;
+                                } else if current == "]" {
+                                    if brackets > 0 { brackets -= 1; }
+                                } else if parens == 0 && brackets == 0 {
+                                    if current == "{" {
+                                        body_open = scan;
+                                        break;
+                                    }
+                                    if current == ";" {
+                                        semicolon = scan;
+                                        break;
+                                    }
+                                    if current == "}" { break; }
+                                }
+                                scan += 1;
+                            }
+                            if body_open != no_index() {
+                                index = brace_close(data, body_open) + 1;
+                            } else if semicolon != no_index() {
+                                index = semicolon + 1;
+                            } else {
+                                index = decl.body_close;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if decl.kind == AST_STRUCT {
+            if !token_is_identifier(data, index) {
+                index += 1;
+                continue;
+            }
+            let name = data.tokens[index].spelling;
+            let semi = find_semicolon(data, index + 1, decl.body_close);
+            if semi == no_index() {
+                index = decl.body_close;
+                continue;
+            }
+            let parts = parse_type_parts(data.tokens, index + 1, semi);
+            vec.push(out, MemberDecl(name: name, kind: LSP_FIELD,
+                exported: exported, has_type: vec.len(parts) > 0,
+                type_parts: parts));
+            index = semi + 1;
+            continue;
+        }
+        if decl.kind == AST_ENUM {
+            if !token_is_identifier(data, index) {
+                index += 1;
+                continue;
+            }
+            let name = data.tokens[index].spelling;
+            var cursor = index + 1;
+            if cursor < decl.body_close &&
+               data.tokens[cursor].spelling == "(" {
+                let close = data.parens[cursor];
+                if close > cursor { cursor = close + 1; }
+            }
+            let semi = find_semicolon(data, cursor, decl.body_close);
+            vec.push(out, MemberDecl(name: name, kind: LSP_ENUM_MEMBER,
+                exported: true, has_type: false, type_parts: []));
+            if semi == no_index() {
+                index = decl.body_close;
+            } else {
+                index = semi + 1;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    return out;
+}
+
+pub struct ImplDecl {
+    pub self_parts Vec[string];
+    pub has_trait bool;
+    pub trait_parts Vec[string];
+    pub body_open usize;
+    pub body_close usize;
+    pub methods Vec[MemberDecl];
+}
+
+pub func scan_impls(data TokenData) Vec[ImplDecl] {
+    var out = vec.empty[ImplDecl]();
+    let count = vec.len(data.tokens);
+    var depth usize = 0;
+    var index usize = 0;
+    for index < count {
+        let text = data.tokens[index].spelling;
+        if text == "}" {
+            if depth > 0 { depth -= 1; }
+            index += 1;
+            continue;
+        }
+        if depth == 0 && text == "impl" {
+            var cursor = index + 1;
+            if cursor < count && data.tokens[cursor].spelling == "[" {
+                let close = data.brackets[cursor];
+                if close > cursor { cursor = close + 1; }
+            }
+            let body_open = find_body_open(data, cursor);
+            if body_open < count {
+                let body_close = brace_close(data, body_open);
+                var has_trait = false;
+                var for_index = body_open;
+                var scan = cursor;
+                var parens usize = 0;
+                var brackets usize = 0;
+                for scan < body_open {
+                    let current = data.tokens[scan].spelling;
+                    if current == "(" {
+                        parens += 1;
+                    } else if current == ")" {
+                        if parens > 0 { parens -= 1; }
+                    } else if current == "[" {
+                        brackets += 1;
+                    } else if current == "]" {
+                        if brackets > 0 { brackets -= 1; }
+                    } else if current == "for" && parens == 0 &&
+                              brackets == 0 {
+                        has_trait = true;
+                        for_index = scan;
+                        break;
+                    }
+                    scan += 1;
+                }
+                var self_parts = parse_type_parts(data.tokens, cursor,
+                    body_open);
+                var trait_parts = vec.empty[string]();
+                if has_trait {
+                    trait_parts = parse_type_parts(data.tokens, cursor,
+                        for_index);
+                    self_parts = parse_type_parts(data.tokens,
+                        for_index + 1, body_open);
+                }
+                let fake = TypeDecl(kind: AST_TRAIT, name: "",
+                    exported: false, generic: false, body_open: body_open,
+                    body_close: body_close);
+                vec.push(out, ImplDecl(self_parts: self_parts,
+                    has_trait: has_trait, trait_parts: trait_parts,
+                    body_open: body_open, body_close: body_close,
+                    methods: extract_type_members(data, fake)));
+                index = body_close + 1;
+                continue;
+            }
+        }
+        if text == "{" { depth += 1; }
+        index += 1;
+    }
+    return out;
+}

@@ -1,0 +1,195 @@
+// Editor-facing semantic analysis over in-memory file overlays.
+//
+// A nonempty manifest uses the real project loader, resolver and type checker.
+// Diagnostics belong to the first stage that fails; the resolved project is
+// retained after a type failure so editor queries can still use its symbols and
+// occurrences. No backend, subprocess or LLVM tool is invoked.
+//
+// An empty manifest analyses the first overlay as one standalone file through
+// the real lexer and parser. The synthetic project has no imports: a standalone
+// buffer cannot discover or resolve its imported modules, so cross-file
+// analysis requires the containing manifest. If parsing fails, the returned
+// sources still contain the exact snapshot used by every syntax diagnostic.
+package editorproject;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/option" as option;
+import "std/path" as path;
+import "std/vec" as vec;
+
+pub struct Analysis {
+    pub resolved option.Option[model.ResolvedProject];
+    pub typed option.Option[hir.HirModule];
+    pub sources Vec[model.Source];
+    pub diagnostics Vec[model.Diagnostic];
+}
+
+func accepted(state model.PhaseState, has_value bool,
+              diagnostics Vec[model.Diagnostic]) bool {
+    if !has_value { return false; }
+    switch state {
+        case model.PhaseState.Complete: {}
+        default: return false;
+    }
+    for diagnostic in diagnostics {
+        if diagnostic.severity == "error" { return false; }
+    }
+    return true;
+}
+
+func no_resolved() option.Option[model.ResolvedProject] {
+    return option.Option[model.ResolvedProject].None;
+}
+
+func no_typed() option.Option[hir.HirModule] {
+    return option.Option[hir.HirModule].None;
+}
+
+func resolved_value(value model.ResolvedProject, present bool) option.Option[model.ResolvedProject] {
+    if present { return option.Option[model.ResolvedProject].Some(value); }
+    return no_resolved();
+}
+
+func typed_value(value hir.HirModule, present bool) option.Option[hir.HirModule] {
+    if present { return option.Option[hir.HirModule].Some(value); }
+    return no_typed();
+}
+
+func project_analysis(manifest string, overlays Vec[project.Overlay],
+                      manager inout source.Manager) Analysis {
+    let loaded = project.load_overlay(
+        model.ProjectOptions(manifest: manifest,
+            std_source_root: option.Option[string].None,
+            std_binding_bundle: option.Option[string].None),
+        inout manager, overlays);
+    if !accepted(loaded.state, loaded.has_value, loaded.diagnostics) {
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: loaded.diagnostics);
+    }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !accepted(resolved.state, resolved.has_value, resolved.diagnostics) {
+        return Analysis(
+            resolved: resolved_value(resolved.value, resolved.has_value),
+            typed: no_typed(), sources: manager.snapshots,
+            diagnostics: resolved.diagnostics);
+    }
+    let checked = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    return Analysis(
+        resolved: option.Option[model.ResolvedProject].Some(resolved.value),
+        typed: typed_value(checked.value, checked.has_value),
+        sources: manager.snapshots, diagnostics: checked.diagnostics);
+}
+
+func has_imports(parsed model.ParseResult) bool {
+    let root = parsed.nodes[parsed.root];
+    for child in root.children {
+        if model.ast_kind_id(parsed.nodes[child].kind) == 2 { return true; }
+    }
+    return false;
+}
+
+func import_limitation() model.Diagnostic {
+    var diagnostic = model.diagnostic("E_CAPABILITY_UNAVAILABLE", "resolve",
+        "standalone analysis does not resolve imports; open the containing manifest",
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return diagnostic;
+}
+
+func package_name(parsed model.ParseResult) string {
+    if parsed.root >= vec.len(parsed.nodes) { return "editor"; }
+    let root = parsed.nodes[parsed.root];
+    if vec.len(root.children) == 0 { return "editor"; }
+    let declaration = parsed.nodes[root.children[0]];
+    if model.ast_kind_id(declaration.kind) != 1 { return "editor"; }
+    let position = declaration.token_begin + 1;
+    if position >= vec.len(parsed.lexed.tokens) { return "editor"; }
+    return parsed.lexed.tokens[position].spelling;
+}
+
+func standalone_project(parsed model.ParseResult, filename string) model.Project {
+    var value = model.empty_project();
+    value.root = path.dir(filename);
+    value.package_name = package_name(parsed);
+    value.entry = 0;
+    value.files = [parsed];
+    value.modules = [model.Module(id: 0, logical_path: "editor",
+        identity: "editor:" + filename, package_name: value.package_name,
+        files: [0], imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None)];
+    return value;
+}
+
+func standalone_analysis(overlays Vec[project.Overlay],
+                         manager inout source.Manager) Analysis {
+    if vec.len(overlays) == 0 {
+        var diagnostic = model.diagnostic("E_EDITOR_SOURCE", "resolve",
+            "standalone analysis requires one overlay file",
+            model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+        diagnostic.has_primary = false;
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: [diagnostic]);
+    }
+    let item = overlays[0];
+    let file_id = source.add_file(inout manager, item.path);
+    let snapshot = source.update(inout manager, file_id, item.content);
+    if !snapshot.valid {
+        let diagnostic = model.diagnostic("E_INVALID_SOURCE", "lex",
+            snapshot.error_message,
+            source.raw_span(snapshot, snapshot.error_byte,
+                snapshot.error_byte + snapshot.error_length));
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: [diagnostic]);
+    }
+    let lexed = lexer.lex(snapshot);
+    if !accepted(lexed.state, lexed.has_value, lexed.diagnostics) {
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: lexed.diagnostics);
+    }
+    let parsed = parser.parse(lexed);
+    if !accepted(parsed.state, parsed.has_value, parsed.diagnostics) {
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: parsed.diagnostics);
+    }
+    // Root discovery belongs to the editor host. Without a manifest, resolving
+    // an import would require guessing the project root or inventing module
+    // bytes, so keep the real syntax result and report the missing capability.
+    if has_imports(parsed) {
+        let diagnostics = vec.empty[model.Diagnostic]();
+        for diagnostic in parsed.diagnostics { vec.push(diagnostics, diagnostic); }
+        vec.push(diagnostics, import_limitation());
+        return Analysis(resolved: no_resolved(), typed: no_typed(),
+            sources: manager.snapshots, diagnostics: diagnostics);
+    }
+    let resolved = resolve.resolve_project(
+        standalone_project(parsed, snapshot.path));
+    if !accepted(resolved.state, resolved.has_value, resolved.diagnostics) {
+        return Analysis(
+            resolved: resolved_value(resolved.value, resolved.has_value),
+            typed: no_typed(), sources: manager.snapshots,
+            diagnostics: resolved.diagnostics);
+    }
+    let checked = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    return Analysis(
+        resolved: option.Option[model.ResolvedProject].Some(resolved.value),
+        typed: typed_value(checked.value, checked.has_value),
+        sources: manager.snapshots, diagnostics: checked.diagnostics);
+}
+
+pub func analyze(manifest string, overlays Vec[project.Overlay]) Analysis {
+    var manager = source.manager();
+    if manifest != "" {
+        return project_analysis(manifest, overlays, inout manager);
+    }
+    return standalone_analysis(overlays, inout manager);
+}

@@ -1,0 +1,434 @@
+package editorlsp;
+
+import "app/wzcc/editorproject" as editorproject;
+import "app/wzcc/model" as model;
+import "app/wzcc/project" as project;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/path" as path;
+import "std/sync" as sync;
+import "std/text" as text;
+import "std/time" as time;
+import "std/vec" as vec;
+
+struct Publication {
+    uri string;
+    version option.Option[i64];
+    revision u64;
+    diagnostics Vec[json.Value];
+}
+
+struct Work {
+    key string;
+    manifest string;
+    generation u64;
+    documents Vec[Document];
+    open Vec[Document];
+}
+
+struct View {
+    generation u64;
+    analysis editorproject.Analysis;
+    known option.Option[model.ResolvedProject];
+    publications Vec[Publication];
+}
+
+struct Slot {
+    work Work;
+    pending bool;
+    view option.Option[View];
+}
+
+// The mutex protects shared state and ensures that each JSON-RPC frame is written
+// intact. A check runs without it, against immutable copies of the open buffers.
+struct Service {
+    output io.Writer;
+    gate sync.Mutex;
+    changed sync.Condvar;
+    documents Vec[Document];
+    slots Vec[Slot];
+    generation Vec[u64];
+    next_slot Vec[usize];
+    stopped Vec[bool];
+    failed Vec[bool];
+}
+
+func service(output io.Writer) Service {
+    return Service(output: output, gate: sync.mutex(), changed: sync.condvar(),
+        documents: [], slots: [], generation: [0], next_slot: [0], stopped: [false],
+        failed: [false]);
+}
+
+func work_key(document Document) string {
+    if document.manifest != "" { return document.manifest; }
+    return document.uri;
+}
+
+func slot_index(state Service, key string) usize {
+    let size = vec.len(state.slots);
+    for var index usize = 0; index < size; index += 1 {
+        if state.slots[index].work.key == key { return index; }
+    }
+    return size;
+}
+
+func stop_checks(state Service) {
+    state.stopped[0] = true;
+    sync.notify_all(state.changed);
+}
+
+// A check that cannot finish must be visible to requests instead of leaving
+// them waiting on a dead worker.
+func fail_checks(state Service) {
+    sync.lock(state.gate);
+    state.failed[0] = true;
+    sync.notify_all(state.changed);
+    sync.unlock(state.gate);
+}
+
+func add_uri(uris Vec[string], uri string) {
+    if uri == "" { return; }
+    for item in uris {
+        if item == uri { return; }
+    }
+    vec.push(uris, uri);
+}
+
+func owned_documents(open Vec[Document], key string) Vec[Document] {
+    let owned = vec.empty[Document]();
+    for item in open {
+        if work_key(item) == key { vec.push(owned, item); }
+    }
+    return owned;
+}
+
+func overlays_for(work Work) Vec[project.Overlay] {
+    var documents = work.open;
+    if work.manifest == "" { documents = work.documents; }
+    let overlays = vec.empty[project.Overlay]();
+    for document in documents {
+        if work.manifest != "" && !text.starts_with(document.filename, "/") { continue; }
+        vec.push(overlays, project.Overlay(path: document.filename,
+            content: text.bytes(document.text)));
+    }
+    return overlays;
+}
+
+// A removed view may still have been the only publisher of some URIs.
+func forget_slot(state Service, index usize, affected Vec[string]) {
+    let slot = state.slots[index];
+    switch slot.view {
+        case option.Option.Some(view): {
+            for item in view.publications { add_uri(affected, item.uri); }
+        }
+        case option.Option.None: {}
+    }
+    for document in slot.work.documents { add_uri(affected, document.uri); }
+    let size = vec.len(state.slots);
+    state.slots[index] = state.slots[size - 1];
+    let removed = vec.pop(state.slots);
+}
+
+func affected_project(slot Slot, document Document) bool {
+    switch slot.view {
+        case option.Option.None: return true;
+        case option.Option.Some(view): {
+            if view.generation != slot.work.generation ||
+               !option.is_some(view.analysis.resolved) { return true; }
+            let directory = path.dir(document.filename);
+            for snapshot in view.analysis.sources {
+                if path.dir(snapshot.path) == directory { return true; }
+            }
+            return option.is_some(snapshot_for_path(view.analysis.sources, document.filename));
+        }
+    }
+}
+
+// An imported module can have its own manifest. Capture all open sources,
+// including dependencies; only repeat work for a project they can affect.
+func schedule(state Service, document Document, closed_uri string) bool throws os.Error {
+    let open = vec.empty[Document]();
+    for item in state.documents { vec.push(open, item); }
+    let changed_key = work_key(document);
+    let generation = state.generation[0] + 1;
+    var scheduled = false;
+    let affected = vec.empty[string]();
+    let keys = vec.empty[string]();
+    for slot in state.slots { vec.push(keys, slot.work.key); }
+    for key in keys {
+        let index = slot_index(state, key);
+        if index >= vec.len(state.slots) { continue; }
+        let manifest = state.slots[index].work.manifest;
+        if key != changed_key &&
+           (manifest == "" || !affected_project(state.slots[index], document)) { continue; }
+        let owned = owned_documents(open, key);
+        if vec.len(owned) == 0 {
+            forget_slot(state, index, affected);
+            continue;
+        }
+        state.slots[index].work = Work(key: key, manifest: manifest,
+            generation: generation, documents: owned, open: open);
+        state.slots[index].pending = true;
+        scheduled = true;
+    }
+    if slot_index(state, changed_key) == vec.len(state.slots) {
+        let owned = owned_documents(open, changed_key);
+        if vec.len(owned) > 0 {
+            vec.push(state.slots, Slot(work: Work(key: changed_key,
+                manifest: document.manifest, generation: generation,
+                documents: owned, open: open),
+                pending: true, view: option.Option[View].None));
+            scheduled = true;
+        }
+    }
+    if scheduled { state.generation[0] = generation; }
+    if closed_uri != "" { add_uri(affected, closed_uri); }
+    if !recompute_publications(state, affected) { return false; }
+    sync.notify_all(state.changed);
+    return true;
+}
+
+func pending_slot(state Service) usize {
+    let size = vec.len(state.slots);
+    for var step usize = 0; step < size; step += 1 {
+        let index = (state.next_slot[0] + step) % size;
+        if state.slots[index].pending { return index; }
+    }
+    return size;
+}
+
+func has_work(state Service) bool {
+    sync.lock(state.gate);
+    defer { sync.unlock(state.gate); }
+    for !state.stopped[0] && pending_slot(state) == vec.len(state.slots) {
+        sync.wait(state.changed, state.gate);
+    }
+    return !state.stopped[0];
+}
+
+func take_work(state Service) option.Option[Work] {
+    sync.lock(state.gate);
+    defer { sync.unlock(state.gate); }
+    if state.stopped[0] { return option.Option[Work].None; }
+    let selected = pending_slot(state);
+    if selected == vec.len(state.slots) { return option.Option[Work].None; }
+    state.slots[selected].pending = false;
+    state.next_slot[0] = selected + 1;
+    return option.Option[Work].Some(state.slots[selected].work);
+}
+
+func run_checks(state Service) i64 {
+    try {
+        for has_work(state) {
+            time.sleep_ms(75);
+            switch take_work(state) {
+                case option.Option.Some(work): {
+                    let analysis = editorproject.analyze(work.manifest, overlays_for(work));
+                    if !finish_work(state, work, analysis) {
+                        fail_checks(state);
+                        return 1;
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+    } catch problem os.Error {
+        fail_checks(state);
+        return 1;
+    }
+    return 0;
+}
+
+func snapshot_for_path(snapshots Vec[model.Source], filename string) option.Option[model.Source] {
+    for snapshot in snapshots {
+        if snapshot.path == filename { return option.Option[model.Source].Some(snapshot); }
+    }
+    for snapshot in snapshots {
+        if same_file_path(snapshot.path, filename) { return option.Option[model.Source].Some(snapshot); }
+    }
+    return option.Option[model.Source].None;
+}
+
+func snapshot_for_id(snapshots Vec[model.Source], id u64) option.Option[model.Source] {
+    if id > 0 && id <= u64(vec.len(snapshots)) && snapshots[usize(id - 1)].id == id {
+        return option.Option[model.Source].Some(snapshots[usize(id - 1)]);
+    }
+    return option.Option[model.Source].None;
+}
+
+func publication_index(items Vec[Publication], uri string) usize {
+    for var index usize = 0; index < vec.len(items); index += 1 {
+        if items[index].uri == uri { return index; }
+    }
+    return vec.len(items);
+}
+
+func open_for_path(open Vec[Document], filename string) option.Option[Document] {
+    for document in open {
+        if document.filename == filename { return option.Option[Document].Some(document); }
+    }
+    for document in open {
+        if same_file_path(document.filename, filename) { return option.Option[Document].Some(document); }
+    }
+    return option.Option[Document].None;
+}
+
+func diagnostic_publications(work Work, analysis editorproject.Analysis) Vec[Publication] {
+    let items = vec.empty[Publication]();
+    for document in work.documents {
+        var diagnostics = vec.empty[json.Value]();
+        if !option.is_some(snapshot_for_path(analysis.sources, document.filename)) {
+            diagnostics = diagnostics_for(document.uri, document.text);
+        }
+        vec.push(items, Publication(uri: document.uri,
+            version: option.Option[i64].Some(document.version),
+            revision: document.revision, diagnostics: diagnostics));
+    }
+    for diagnostic in analysis.diagnostics {
+        switch snapshot_for_id(analysis.sources, diagnostic.primary.snapshot) {
+            case option.Option.Some(snapshot): {
+                var uri = file_uri(snapshot.path);
+                var version = option.Option[i64].None;
+                var revision u64 = 0;
+                switch open_for_path(work.open, snapshot.path) {
+                    case option.Option.Some(document): {
+                        uri = document.uri;
+                        version = option.Option[i64].Some(document.version);
+                        revision = document.revision;
+                    }
+                    case option.Option.None: {}
+                }
+                if uri == "" { continue; }
+                let index = publication_index(items, uri);
+                if index == vec.len(items) {
+                    vec.push(items, Publication(uri: uri, version: version,
+                        revision: revision, diagnostics: []));
+                }
+                vec.push(items[index].diagnostics, diagnostic_json(snapshot, diagnostic));
+            }
+            case option.Option.None: {
+                if vec.len(work.documents) == 0 { continue; }
+                let document = work.documents[0];
+                let snapshot = source_for_document(document);
+                var unlocated = diagnostic;
+                unlocated.has_primary = false;
+                vec.push(items[0].diagnostics, diagnostic_json(snapshot, unlocated));
+            }
+        }
+    }
+    return items;
+}
+
+// The newest installed view remains the slot's publication while a replacement
+// is pending.  Replacing it on schedule would let an unrelated project clear a
+// result that is still valid for the current open revisions.
+// Selection order for one URI: an open document's own slot wins over another
+// project that also analyses it; otherwise the newest installed view wins.
+// Open documents accept only publications with their current version, so a
+// result captured before the open revision cannot overwrite it.
+func selected_publication(state Service, uri string) option.Option[Publication] {
+    var current = option.Option[Document].None;
+    for document in state.documents {
+        if document.uri == uri {
+            current = option.Option[Document].Some(document);
+            break;
+        }
+    }
+    var selected = option.Option[Publication].None;
+    var selected_priority = i32(0);
+    var selected_generation = u64(0);
+    for var index usize = 0; index < vec.len(state.slots); index += 1 {
+        let slot = state.slots[index];
+        switch slot.view {
+            case option.Option.Some(view): {
+                let found = publication_index(view.publications, uri);
+                if found == vec.len(view.publications) { continue; }
+                let item = view.publications[found];
+                var priority = i32(1);
+                switch current {
+                    case option.Option.Some(document): {
+                        switch item.version {
+                            case option.Option.Some(version): {
+                                if version != document.version || item.revision != document.revision {
+                                    continue;
+                                }
+                            }
+                            case option.Option.None: continue;
+                        }
+                        if slot.work.key == work_key(document) { priority = 0; }
+                    }
+                    case option.Option.None: {
+                        switch item.version {
+                            case option.Option.Some(_): continue;
+                            case option.Option.None: {}
+                        }
+                    }
+                }
+                if !option.is_some(selected) || priority < selected_priority ||
+                   (priority == selected_priority && view.generation > selected_generation) {
+                    selected = option.Option[Publication].Some(item);
+                    selected_priority = priority;
+                    selected_generation = view.generation;
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return selected;
+}
+
+func recompute_publications(state Service, uris Vec[string]) bool throws os.Error {
+    for uri in uris {
+        var open = false;
+        for document in state.documents {
+            if document.uri == uri { open = true; break; }
+        }
+        switch selected_publication(state, uri) {
+            case option.Option.Some(item): {
+                if !publish(state.output, item.uri, option.is_some(item.version),
+                            option.unwrap_or(item.version, 0), item.diagnostics) {
+                    return false;
+                }
+            }
+            case option.Option.None: {
+                // No current, version-matching result exists for an open
+                // document.  Leave it alone until a view produces one rather
+                // than overwriting the open revision with an unversioned clear.
+                if !open && !publish_clear(state.output, uri) { return false; }
+            }
+        }
+    }
+    return true;
+}
+
+func finish_work(state Service, work Work, analysis editorproject.Analysis) bool throws os.Error {
+    let items = vec.empty[Publication]();
+    if work.manifest != "" {
+        for item in diagnostic_publications(work, analysis) { vec.push(items, item); }
+    }
+    sync.lock(state.gate);
+    defer { sync.unlock(state.gate); }
+    if state.stopped[0] { return true; }
+    let index = slot_index(state, work.key);
+    if index >= vec.len(state.slots) || state.slots[index].work.generation != work.generation {
+        return true;
+    }
+    let affected = vec.empty[string]();
+    var known = analysis.resolved;
+    switch state.slots[index].view {
+        case option.Option.Some(previous): {
+            if !option.is_some(known) { known = previous.known; }
+            for item in previous.publications { add_uri(affected, item.uri); }
+        }
+        case option.Option.None: {}
+    }
+    for item in items { add_uri(affected, item.uri); }
+    for document in work.documents { add_uri(affected, document.uri); }
+    state.slots[index].view = option.Option[View].Some(View(generation: work.generation,
+        analysis: analysis, known: known, publications: items));
+    if !recompute_publications(state, affected) { return false; }
+    sync.notify_all(state.changed);
+    return true;
+}

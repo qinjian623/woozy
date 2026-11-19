@@ -1,0 +1,562 @@
+// Language server over stdin/stdout for Woozy source buffers.
+//
+// Open documents stay in memory; project checks use their text in place of
+// the files on disk.
+package editorlsp;
+
+import "app/wzcc/editorformat" as editorformat;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/render" as render;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/sync" as sync;
+import "std/text" as text;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const SERVER_NAME string = "woozyc";
+const SERVER_VERSION string = "0.1.0-selfhost (compiler-dev/1)";
+
+struct Document {
+    uri string;
+    filename string;
+    manifest string;
+    version i64;
+    revision u64;
+    text string;
+}
+
+enum ServerState { Initial; Running; Shutdown; }
+
+struct Outcome {
+    stop bool;
+    code i32;
+    state ServerState;
+}
+
+func proceed(state ServerState) Outcome {
+    return Outcome(stop: false, code: 0, state: state);
+}
+
+func terminate(state ServerState, code i32) Outcome {
+    return Outcome(stop: true, code: code, state: state);
+}
+
+func initialize_result() json.Value {
+    let sync = vec.empty[json.Member]();
+    vec.push(sync, member("openClose", json_bool(true)));
+    vec.push(sync, member("change", json_number("1")));
+
+    let capabilities = vec.empty[json.Member]();
+    vec.push(capabilities, member("textDocumentSync", json_object(sync)));
+    vec.push(capabilities,
+        member("positionEncoding", json_string("utf-16")));
+    vec.push(capabilities,
+        member("documentFormattingProvider", json_bool(true)));
+    vec.push(capabilities, member("hoverProvider", json_bool(true)));
+    vec.push(capabilities, member("definitionProvider", json_bool(true)));
+    vec.push(capabilities, member("completionProvider",
+        json_object([member("triggerCharacters", json_array([json_string(".")]))])));
+
+    let info = vec.empty[json.Member]();
+    vec.push(info, member("name", json_string(SERVER_NAME)));
+    vec.push(info, member("version", json_string(SERVER_VERSION)));
+
+    let result = vec.empty[json.Member]();
+    vec.push(result, member("capabilities", json_object(capabilities)));
+    vec.push(result, member("serverInfo", json_object(info)));
+    return json_object(result);
+}
+
+func valid_uri(uri string) bool {
+    if text.len(uri) == 0 { return false; }
+    for rune in uri {
+        if rune == 0 { return false; }
+    }
+    return true;
+}
+
+func find_document(documents Vec[Document],
+                   uri string) option.Option[usize] {
+    for var index usize = 0; index < vec.len(documents); index += 1 {
+        if documents[index].uri == uri {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func remove_document(documents Vec[Document], index usize) {
+    var cursor = index;
+    for cursor + 1 < vec.len(documents) {
+        documents[cursor] = documents[cursor + 1];
+        cursor += 1;
+    }
+    let ignored = vec.pop(documents);
+}
+
+func has_bom(bytes Vec[u8]) bool {
+    return vec.len(bytes) >= 3 &&
+        bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+}
+
+// Source positions omit the leading BOM, but the LSP buffer text includes it.
+func buffer_position(snapshot model.Source, byte u64) model.Position {
+    var position = source.position(snapshot, byte);
+    if position.line == 0 && has_bom(snapshot.original) {
+        position.character += 1;
+    }
+    return position;
+}
+
+func position_json(position model.Position) json.Value {
+    let out = vec.empty[json.Member]();
+    vec.push(out,
+        member("line", json_number(strconv.format_u64(position.line))));
+    vec.push(out, member("character",
+        json_number(strconv.format_u64(position.character))));
+    return json_object(out);
+}
+
+func range_json(start model.Position, end model.Position) json.Value {
+    let out = vec.empty[json.Member]();
+    vec.push(out, member("start", position_json(start)));
+    vec.push(out, member("end", position_json(end)));
+    return json_object(out);
+}
+
+func diagnostic_json(snapshot model.Source,
+                     diagnostic model.Diagnostic) json.Value {
+    var start = model.Position(line: 0, character: 0);
+    var end = start;
+    if snapshot.valid && diagnostic.has_primary {
+        start = buffer_position(snapshot, diagnostic.primary.begin_byte);
+        end = buffer_position(snapshot, diagnostic.primary.end_byte);
+    } else if !snapshot.valid {
+        let prefix_bytes =
+            snapshot.original[0:usize(snapshot.error_byte)];
+        let prefix = source.snapshot(1, 1, 1, "editor", prefix_bytes);
+        let at = buffer_position(prefix, u64(vec.len(prefix.original)));
+        start = at;
+        end = at;
+    }
+    var severity = "1";
+    if diagnostic.severity == "warning" { severity = "2"; }
+    let out = vec.empty[json.Member]();
+    vec.push(out, member("range", range_json(start, end)));
+    vec.push(out, member("severity", json_number(severity)));
+    vec.push(out, member("code", json_string(diagnostic.code)));
+    vec.push(out, member("source", json_string(SERVER_NAME)));
+    vec.push(out, member("message", json_string(diagnostic.message)));
+    return json_object(out);
+}
+
+func diagnostics_for(uri string, value string) Vec[json.Value] {
+    let snapshot =
+        source.snapshot(1, 1, 1, uri, text.bytes(value));
+    let lexed = lexer.lex(snapshot);
+    var diagnostics = lexed.diagnostics;
+    if render.succeeded(lexed.state, lexed.has_value, lexed.diagnostics) {
+        let parsed = parser.parse(lexed);
+        diagnostics = parsed.diagnostics;
+    }
+    let out = vec.empty[json.Value]();
+    for diagnostic in diagnostics {
+        vec.push(out, diagnostic_json(snapshot, diagnostic));
+    }
+    return out;
+}
+
+func source_for_document(document Document) model.Source {
+    return source.snapshot(1, 1, 1, document.filename, text.bytes(document.text));
+}
+
+func publish(output io.Writer, uri string, has_version bool, version i64,
+             diagnostics Vec[json.Value]) bool throws os.Error {
+    let params = vec.empty[json.Member]();
+    vec.push(params, member("uri", json_string(uri)));
+    vec.push(params, member("diagnostics", json_array(diagnostics)));
+    if has_version {
+        vec.push(params, member("version",
+            json_number(strconv.format_i64(version))));
+    }
+    let message = envelope();
+    vec.push(message,
+        member("method", json_string("textDocument/publishDiagnostics")));
+    vec.push(message, member("params", json_object(params)));
+    return send(output, json_object(message));
+}
+
+func publish_document(output io.Writer,
+                      document Document) bool throws os.Error {
+    return publish(output, document.uri, true, document.version,
+        diagnostics_for(document.uri, document.text));
+}
+
+func publish_clear(output io.Writer, uri string) bool throws os.Error {
+    return publish(output, uri, false, 0, vec.empty[json.Value]());
+}
+
+func document_uri(params json.Value) option.Option[string] {
+    let identifier = field_or_null(params, "textDocument");
+    switch field_string(identifier, "uri") {
+        case option.Option.Some(uri): {
+            if valid_uri(uri) { return option.Option[string].Some(uri); }
+            return option.Option[string].None;
+        }
+        case option.Option.None: return option.Option[string].None;
+    }
+}
+
+// Full synchronization: every change must omit "range"; the last text wins.
+func changed_text(params json.Value) option.Option[string] {
+    switch json.field(params, "contentChanges") {
+        case option.Option.Some(changes_value): {
+            switch array_items(changes_value) {
+                case option.Option.Some(changes): {
+                    var result = option.Option[string].None;
+                    for change in changes {
+                        switch json.field(change, "range") {
+                            case option.Option.Some(_):
+                                return option.Option[string].None;
+                            case option.Option.None: {}
+                        }
+                        switch field_string(change, "text") {
+                            case option.Option.Some(value):
+                                result = option.Option[string].Some(value);
+                            case option.Option.None:
+                                return option.Option[string].None;
+                        }
+                    }
+                    return result;
+                }
+                case option.Option.None: {
+                    return option.Option[string].None;
+                }
+            }
+        }
+        case option.Option.None: return option.Option[string].None;
+    }
+}
+
+func update_document(service Service, method string, params json.Value) bool throws os.Error {
+    let output = service.output;
+    let documents = service.documents;
+    let identifier = field_or_null(params, "textDocument");
+    var uri = "";
+    switch field_string(identifier, "uri") {
+        case option.Option.Some(value): {
+            if !valid_uri(value) { return true; }
+            uri = value;
+        }
+        case option.Option.None: return true;
+    }
+    let existing = find_document(documents, uri);
+    if method == "textDocument/didClose" {
+        switch existing {
+            case option.Option.Some(index): {
+                let document = documents[index];
+                remove_document(documents, index);
+                return schedule(service, document, uri);
+            }
+            case option.Option.None: return true;
+        }
+    }
+
+    var version = i64(0);
+    switch field_integer(identifier, "version") {
+        case option.Option.Some(value): version = value;
+        case option.Option.None: return true;
+    }
+    let opening = method == "textDocument/didOpen";
+    switch existing {
+        case option.Option.Some(index): {
+            if opening { return true; }
+            if version <= documents[index].version { return true; }
+        }
+        case option.Option.None: {
+            if !opening { return true; }
+        }
+    }
+
+    var value = "";
+    if opening {
+        switch field_string(identifier, "text") {
+            case option.Option.Some(item): value = item;
+            case option.Option.None: return true;
+        }
+    } else {
+        switch changed_text(params) {
+            case option.Option.Some(item): value = item;
+            case option.Option.None: return true;
+        }
+    }
+
+    let revision = service.generation[0] + 1;
+    var document = Document(uri: uri, filename: "", manifest: "", version: version,
+        revision: revision, text: value);
+    switch existing {
+        case option.Option.Some(index): {
+            documents[index].version = version;
+            documents[index].revision = revision;
+            documents[index].text = value;
+            document = documents[index];
+        }
+        case option.Option.None: {
+            let filename = file_path(uri);
+            if filename == "" { document.filename = uri; }
+            else {
+                document.filename = filename;
+                document.manifest = nearest_manifest(filename);
+            }
+            vec.push(documents, document);
+        }
+    }
+    if document.manifest == "" && !publish_document(output, document) { return false; }
+    return schedule(service, document, "");
+}
+
+func same_bytes(value string, bytes Vec[u8]) bool {
+    let encoded = text.bytes(value);
+    if vec.len(encoded) != vec.len(bytes) { return false; }
+    for var index usize = 0; index < vec.len(encoded); index += 1 {
+        if encoded[index] != bytes[index] { return false; }
+    }
+    return true;
+}
+
+func format_document(output io.Writer, id json.Value,
+                     documents Vec[Document],
+                     params json.Value) bool throws os.Error {
+    var uri = "";
+    switch document_uri(params) {
+        case option.Option.Some(value): uri = value;
+        case option.Option.None: {
+            return respond_error(output, id, -32602,
+                "Expected a text document URI");
+        }
+    }
+    let edits = vec.empty[json.Value]();
+    switch find_document(documents, uri) {
+        case option.Option.Some(index): {
+            let snapshot =
+                source.snapshot(1, 1, 1, uri,
+                    text.bytes(documents[index].text));
+            let formatted = editorformat.format(snapshot);
+            if formatted.has_value && snapshot.valid &&
+               !same_bytes(formatted.text, snapshot.original) {
+                if text.byte_len(formatted.text) > MAX_BODY_BYTES {
+                    return respond_error(output, id, -32603,
+                        "Formatted document is too large");
+                }
+                let end = buffer_position(snapshot,
+                    u64(vec.len(snapshot.original)));
+                let edit = vec.empty[json.Member]();
+                vec.push(edit, member("range",
+                    range_json(model.Position(line: 0, character: 0), end)));
+                vec.push(edit, member("newText",
+                    json_string(formatted.text)));
+                vec.push(edits, json_object(edit));
+            }
+        }
+        case option.Option.None: {}
+    }
+    return respond(output, id, "result", json_array(edits));
+}
+
+func request_id_valid(value json.Value) bool {
+    switch value {
+        case json.Value.String(item): return true;
+        case json.Value.Number(item): {
+            switch as_integer(value) {
+                case option.Option.Some(_): return true;
+                case option.Option.None: return false;
+            }
+        }
+        case _: return false;
+    }
+}
+
+func handle_message(service Service,
+                    message json.Value,
+                    state ServerState) Outcome throws os.Error {
+    sync.lock(service.gate);
+    defer { sync.unlock(service.gate); }
+    let output = service.output;
+    let documents = service.documents;
+    var protocol_ok = false;
+    switch field_string(message, "jsonrpc") {
+        case option.Option.Some(value): protocol_ok = value == "2.0";
+        case option.Option.None: {}
+    }
+    var method = "";
+    var method_ok = false;
+    switch field_string(message, "method") {
+        case option.Option.Some(value): {
+            method = value;
+            method_ok = text.len(value) > 0;
+        }
+        case option.Option.None: {}
+    }
+    var id = json_null();
+    var has_id = false;
+    switch json.field(message, "id") {
+        case option.Option.Some(value): {
+            id = value;
+            has_id = true;
+        }
+        case option.Option.None: {}
+    }
+    var id_ok = true;
+    if has_id { id_ok = request_id_valid(id); }
+    if !protocol_ok || !method_ok || !id_ok {
+        if !respond_error(output, json_null(), -32600,
+                          "Invalid request") {
+            return terminate(state, 1);
+        }
+        return proceed(state);
+    }
+
+    if method == "exit" && !has_id {
+        var was_shutdown = false;
+        switch state {
+            case ServerState.Shutdown: was_shutdown = true;
+            case _: {}
+        }
+        if was_shutdown { return terminate(state, 0); }
+        return terminate(state, 1);
+    }
+
+    if service.failed[0] {
+        if has_id && !respond_error(output, id, -32603,
+                                     "Language server checks failed") {
+            return terminate(state, 1);
+        }
+        return terminate(state, 1);
+    }
+
+    switch state {
+        case ServerState.Initial: {
+            if has_id && method == "initialize" {
+                if !respond(output, id, "result", initialize_result()) {
+                    return terminate(state, 1);
+                }
+                return proceed(ServerState.Running);
+            }
+            if has_id && !respond_error(output, id, -32002,
+                                        "Server not initialized") {
+                return terminate(state, 1);
+            }
+            return proceed(state);
+        }
+        case ServerState.Shutdown: {
+            if has_id && !respond_error(output, id, -32600,
+                                         "Server has shut down") {
+                return terminate(state, 1);
+            }
+            return proceed(state);
+        }
+        case ServerState.Running: {
+            if has_id {
+                if method == "shutdown" {
+                    stop_checks(service);
+                    vec.clear(documents);
+                    if !respond(output, id, "result", json_null()) {
+                        return terminate(state, 1);
+                    }
+                    return proceed(ServerState.Shutdown);
+                }
+                if method == "initialize" {
+                    if !respond_error(output, id, -32600,
+                                      "Server already initialized") {
+                        return terminate(state, 1);
+                    }
+                } else if method == "textDocument/formatting" {
+                    if !format_document(output, id, documents,
+                                        field_or_null(message, "params")) {
+                        return terminate(state, 1);
+                    }
+                } else if method == "textDocument/completion" ||
+                          method == "textDocument/hover" ||
+                          method == "textDocument/definition" {
+                    if !query_document(service, id, method, field_or_null(message, "params")) {
+                        return terminate(state, 1);
+                    }
+                    if service.failed[0] { return terminate(state, 1); }
+                } else if !respond_error(output, id, -32601,
+                                         "Method not found") {
+                    return terminate(state, 1);
+                }
+                return proceed(state);
+            }
+            if method == "textDocument/didOpen" ||
+               method == "textDocument/didChange" ||
+               method == "textDocument/didClose" {
+                if !update_document(service, method, field_or_null(message, "params")) {
+                    return terminate(state, 1);
+                }
+            }
+            return proceed(state);
+        }
+    }
+}
+
+func report_parse_error(service Service) bool throws os.Error {
+    sync.lock(service.gate);
+    defer { sync.unlock(service.gate); }
+    return respond_error(service.output, json_null(), -32700, "Parse error");
+}
+
+pub func run() i32 throws os.Error {
+    var state = ServerState.Initial;
+    let input = io.reader(os.stdin());
+    let output = io.writer(os.stdout());
+    let server = service(output);
+    let worker = thread.spawn(run_checks, server);
+    defer {
+        sync.lock(server.gate);
+        stop_checks(server);
+        sync.unlock(server.gate);
+    }
+    for true {
+        var length usize = 0;
+        switch read_header(input) {
+            case option.Option.Some(value): length = value;
+            case option.Option.None: return 1;
+        }
+        var body = vec.empty[u8]();
+        switch read_body(input, length) {
+            case option.Option.Some(value): body = value;
+            case option.Option.None: return 1;
+        }
+        var body_text = "";
+        var parsed = option.Option[json.Value].None;
+        switch decode_body(body) {
+            case option.Option.Some(value): body_text = value;
+            case option.Option.None: {}
+        }
+        if body_text != "" {
+            parsed = parse_body(body_text);
+        }
+        var message = json_null();
+        switch parsed {
+            case option.Option.Some(value): message = value;
+            case option.Option.None: {
+                if !report_parse_error(server) {
+                    return 1;
+                }
+                continue;
+            }
+        }
+        let outcome = handle_message(server, message, state);
+        if outcome.stop { return outcome.code; }
+        state = outcome.state;
+    }
+    return 1;
+}

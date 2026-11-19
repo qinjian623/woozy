@@ -1,0 +1,244 @@
+// Bounded stdio framing and JSON-RPC envelopes for the editor server.
+//
+// The limits and the malformed-header policy match src/driver/lsp.cpp:
+// a header block may not exceed 8192 bytes, a body may not exceed 8 MiB,
+// Content-Length must appear once with a decimal value, and unknown headers
+// are ignored.  Nothing here reads project files or starts another program.
+package editorlsp;
+
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAX_HEADER_BYTES usize = 8192;
+const MAX_BODY_BYTES usize = 8 * 1024 * 1024;
+
+func header_name(line Vec[u8], colon usize) bool {
+    if colon != 14 { return false; }
+    let expected = text.bytes("content-length");
+    for var index usize = 0; index < 14; index += 1 {
+        var byte = line[index];
+        if byte >= 65 && byte <= 90 { byte += 32; }
+        if byte != expected[index] { return false; }
+    }
+    return true;
+}
+
+// Returns the declared body length, or None for EOF and every malformed or
+// over-limit header block.  Header bytes include the terminating line feeds.
+func read_header(input io.Reader) option.Option[usize] throws os.Error {
+    var header_bytes usize = 0;
+    var length = option.Option[usize].None;
+    for true {
+        let line = vec.empty[u8]();
+        var line_done = false;
+        var eof = false;
+        for !line_done && !eof {
+            switch io.read_byte(input) {
+                case option.Option.None: eof = true;
+                case option.Option.Some(byte): {
+                    header_bytes += 1;
+                    if header_bytes > MAX_HEADER_BYTES {
+                        return option.Option[usize].None;
+                    }
+                    if byte == 10 {
+                        line_done = true;
+                    } else {
+                        vec.push(line, byte);
+                    }
+                }
+            }
+        }
+        if eof { return option.Option[usize].None; }
+        if vec.len(line) > 0 && line[vec.len(line) - 1] == 13 {
+            let ignored = vec.pop(line);
+        }
+        if vec.len(line) == 0 { break; }
+
+        var colon usize = vec.len(line);
+        for var index usize = 0; index < vec.len(line); index += 1 {
+            if line[index] == 58 {
+                colon = index;
+                break;
+            }
+        }
+        if colon == vec.len(line) || colon == 0 {
+            return option.Option[usize].None;
+        }
+        if !header_name(line, colon) { continue; }
+
+        var start usize = colon + 1;
+        for start < vec.len(line) &&
+            (line[start] == 32 || line[start] == 9) {
+            start += 1;
+        }
+        var end usize = vec.len(line);
+        for end > start && (line[end - 1] == 32 || line[end - 1] == 9) {
+            end -= 1;
+        }
+        if start == end { return option.Option[usize].None; }
+        switch length {
+            case option.Option.Some(_): return option.Option[usize].None;
+            case option.Option.None: {}
+        }
+        var size u64 = 0;
+        for var index usize = start; index < end; index += 1 {
+            let byte = line[index];
+            if byte < 48 || byte > 57 {
+                return option.Option[usize].None;
+            }
+            size = size * 10 + u64(byte - 48);
+            if size > u64(MAX_BODY_BYTES) {
+                return option.Option[usize].None;
+            }
+        }
+        length = option.Option[usize].Some(usize(size));
+    }
+    return length;
+}
+
+func read_body(input io.Reader, length usize) option.Option[Vec[u8]] throws os.Error {
+    let body = vec.empty[u8]();
+    vec.reserve(body, length);
+    var index usize = 0;
+    for index < length {
+        switch io.read_byte(input) {
+            case option.Option.None: return option.Option[Vec[u8]].None;
+            case option.Option.Some(byte): vec.push(body, byte);
+        }
+        index += 1;
+    }
+    return option.Option[Vec[u8]].Some(body);
+}
+
+func decode_body(bytes Vec[u8]) option.Option[string] {
+    try {
+        return option.Option[string].Some(text.from_bytes(bytes));
+    } catch error text.Error {
+        return option.Option[string].None;
+    }
+}
+
+func parse_body(body string) option.Option[json.Value] {
+    try {
+        return option.Option[json.Value].Some(json.parse(body));
+    } catch error json.Error {
+        return option.Option[json.Value].None;
+    }
+}
+
+func send(output io.Writer, message json.Value) bool throws os.Error {
+    var body = "";
+    try { body = json.serialize(message); }
+    catch error json.Error { return false; }
+    let bytes = text.bytes(body);
+    let header = "Content-Length: " +
+        strconv.format_u64(u64(vec.len(bytes))) + "\r\n\r\n";
+    io.write_text(output, header);
+    io.write(output, bytes);
+    io.flush(output);
+    return true;
+}
+
+func json_object(items Vec[json.Member]) json.Value {
+    return json.Value.Object(items);
+}
+
+func json_array(items Vec[json.Value]) json.Value {
+    return json.Value.Array(items);
+}
+
+func json_string(value string) json.Value {
+    return json.Value.String(value);
+}
+
+func json_number(token string) json.Value {
+    return json.Value.Number(token);
+}
+
+func json_bool(value bool) json.Value {
+    return json.Value.Bool(value);
+}
+
+func json_null() json.Value {
+    return json.Value.Null;
+}
+
+func member(name string, value json.Value) json.Member {
+    return json.Member(name: name, value: value);
+}
+
+func envelope() Vec[json.Member] {
+    let out = vec.empty[json.Member]();
+    vec.push(out, member("jsonrpc", json_string("2.0")));
+    return out;
+}
+
+func respond(output io.Writer, id json.Value, key string,
+             value json.Value) bool throws os.Error {
+    let message = envelope();
+    vec.push(message, member("id", id));
+    vec.push(message, member(key, value));
+    return send(output, json_object(message));
+}
+
+func respond_error(output io.Writer, id json.Value, code i64,
+                   message string) bool throws os.Error {
+    let error = vec.empty[json.Member]();
+    vec.push(error, member("code", json_number(strconv.format_i64(code))));
+    vec.push(error, member("message", json_string(message)));
+    return respond(output, id, "error", json_object(error));
+}
+
+func field_or_null(value json.Value, name string) json.Value {
+    switch json.field(value, name) {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return json.Value.Null;
+    }
+}
+
+func as_string(value json.Value) option.Option[string] {
+    switch value {
+        case json.Value.String(item): return option.Option[string].Some(item);
+        case _: return option.Option[string].None;
+    }
+}
+
+func field_string(value json.Value, name string) option.Option[string] {
+    switch json.field(value, name) {
+        case option.Option.Some(item): return as_string(item);
+        case option.Option.None: return option.Option[string].None;
+    }
+}
+
+func as_integer(value json.Value) option.Option[i64] {
+    switch value {
+        case json.Value.Number(item): {
+            try { return option.Option[i64].Some(json.as_i64(value)); }
+            catch error json.Error {
+                return option.Option[i64].None;
+            }
+        }
+        case _: return option.Option[i64].None;
+    }
+}
+
+func field_integer(value json.Value, name string) option.Option[i64] {
+    switch json.field(value, name) {
+        case option.Option.Some(item): return as_integer(item);
+        case option.Option.None: return option.Option[i64].None;
+    }
+}
+
+func array_items(value json.Value) option.Option[Vec[json.Value]] {
+    switch value {
+        case json.Value.Array(items): {
+            return option.Option[Vec[json.Value]].Some(items);
+        }
+        case _: return option.Option[Vec[json.Value]].None;
+    }
+}

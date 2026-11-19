@@ -43,6 +43,10 @@ func standard_library() string throws Stop {
     try {return resources.standard_library();} catch problem os.Error {throw Stop.Io(io_failure("","",problem));}
 }
 struct Claim { name string; identity string; }
+// Editor buffers replace the bytes at an absolute path. A path that cannot be
+// canonicalized (for example a new unsaved file) keeps its lexical spelling.
+pub struct Overlay { pub path string; pub content Vec[u8]; }
+struct PreparedOverlay { path string; content Vec[u8]; }
 struct Loader {
     cache frontcache.Context;
     options model.ProjectOptions;
@@ -53,6 +57,7 @@ struct Loader {
     configs Vec[model.ManifestConfig];
     identities Vec[model.PathIndex];
     claims Vec[Claim];
+    overlays Vec[PreparedOverlay];
 }
 
 func error(state inout Loader, code string, message string,
@@ -88,6 +93,77 @@ func io_error(state inout Loader, failure IoFailure, where option.Option[model.S
         }
     }
     error(inout state,"E_INPUT_IO",message,where,model.FailureKind.Environment);
+}
+func overlay_path(value string) string {
+    // Canonicalize the parent even when the final file is a new unsaved path.
+    // This keeps a buffer under a symlinked package directory equal to the
+    // canonical directory the loader opens.
+    try {return paths.join(paths.canonical(path.dir(value)),path.base(value));}
+    catch problem os.Error {
+        try {return paths.canonical(value);}
+        catch problem os.Error {return path.clean(value);}
+    }
+}
+func prepare_overlays(overlays Vec[Overlay]) Vec[PreparedOverlay] {
+    let prepared=vec.empty[PreparedOverlay]();
+    for item in overlays {
+        vec.push(prepared,PreparedOverlay(path:overlay_path(item.path),content:item.content));
+    }
+    return prepared;
+}
+func same_file(left string,right string) bool {
+    if left==right||path.clean(left)==path.clean(right) {return true;}
+    try {return paths.canonical(left)==paths.canonical(right);}
+    catch problem os.Error {return false;}
+}
+func overlay_index(state Loader,name string) option.Option[usize] {
+    for var index usize=0;index<vec.len(state.overlays);index+=1 {
+        if same_file(name,state.overlays[index].path) {return option.Option[usize].Some(index);}
+    }
+    return option.Option[usize].None;
+}
+func overlay_read(item PreparedOverlay,filename string,
+                  manager inout source.Manager) input.ReadResult {
+    let file_id=source.add_file(inout manager,filename);
+    let snapshot=source.update(inout manager,file_id,item.content);
+    if !snapshot.valid {
+        let diagnostic=model.diagnostic("E_INVALID_SOURCE","lex",
+            snapshot.error_message,
+            source.raw_span(snapshot,snapshot.error_byte,
+                snapshot.error_byte+snapshot.error_length));
+        return input.ReadResult(state:model.PhaseState.Failed,
+            failure:model.FailureKind.Source,diagnostics:[diagnostic],
+            has_value:false,value:snapshot);
+    }
+    return input.ReadResult(state:model.PhaseState.Complete,
+        failure:model.FailureKind.Internal,diagnostics:[],
+        has_value:true,value:snapshot);
+}
+func read_source(state Loader,manager inout source.Manager,
+                 filename string) input.ReadResult {
+    switch overlay_index(state,filename) {
+        case option.Option.Some(index):return overlay_read(state.overlays[index],filename,inout manager);
+        case option.Option.None:return input.read(filename,inout manager);
+    }
+}
+func contains_path(values Vec[string],value string) bool {
+    for item in values {if same_file(item,value) {return true;}}
+    return false;
+}
+// New unsaved .wz files are discovered only inside directories the normal
+// loader already opens. The direct parent must be that canonical directory.
+func add_overlay_files(state Loader,directory string,files Vec[string]) {
+    if vec.len(state.overlays)==0 {return;}
+    for item in state.overlays {
+        let filename=path.base(item.path);
+        if !text.ends_with(filename,".wz") {continue;}
+        var parent=path.dir(item.path);var candidate=item.path;
+        try {parent=paths.canonical(parent);candidate=paths.join(parent,filename);}
+        catch problem os.Error {}
+        if parent!=directory||contains_path(files,candidate) {continue;}
+        vec.push(files,candidate);
+    }
+    sorted(files);
 }
 func ident(value string) bool {
     if value=="" {return false;}
@@ -384,11 +460,12 @@ func resolve(state inout Loader,manager inout source.Manager,name string,
         vec.push(files,filename_path);
     }
     sorted(files);
+    add_overlay_files(state,directory,files);
     if vec.len(files)==0 {
         fail(inout state,"E_MODULE_EMPTY","no .wz files in "+directory,where,model.FailureKind.Environment);
     }
     for filename in files {
-        let reading=input.read(filename,inout manager);
+        let reading=read_source(state,inout manager,filename);
         append_diagnostics(inout state,reading.diagnostics,reading.failure);
         if !render.succeeded(reading.state,reading.has_value,reading.diagnostics) {throw Stop.Abort;}
         let parsed=parse_input(inout state,reading.value);
@@ -467,9 +544,21 @@ pub func load(options model.ProjectOptions,manager inout source.Manager) model.P
     return load_cached(options, inout manager, frontcache.context("", ""));
 }
 pub func load_cached(options model.ProjectOptions,manager inout source.Manager,cache frontcache.Context) model.ProjectResult {
+    return load_with_overlays(options,inout manager,cache,[]);
+}
+// Editor overlays never use the on-disk frontend cache: buffer text must not be
+// written to a cache directory, and an unsaved revision must not reuse a stale
+// AST keyed by the previous file contents.
+pub func load_overlay(options model.ProjectOptions,manager inout source.Manager,
+                      overlays Vec[Overlay]) model.ProjectResult {
+    return load_with_overlays(options,inout manager,frontcache.context("", ""),overlays);
+}
+func load_with_overlays(options model.ProjectOptions,manager inout source.Manager,
+                        cache frontcache.Context,overlays Vec[Overlay]) model.ProjectResult {
 
     var state=Loader(cache:cache,options:options,project:model.empty_project(),store:model.binding_store(),
-        diagnostics:[],failure:model.FailureKind.Source,configs:[],identities:[],claims:[]);
+        diagnostics:[],failure:model.FailureKind.Source,configs:[],identities:[],claims:[],
+        overlays:prepare_overlays(overlays));
     var has_value=false;
     try {
         state.project.root=path.dir(canonical_path(options.manifest));

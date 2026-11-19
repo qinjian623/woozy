@@ -1,0 +1,177 @@
+package editorlsp;
+
+import "app/wzcc/editorcomplete" as editorcomplete;
+import "app/wzcc/editornavigate" as editornavigate;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/sync" as sync;
+import "std/time" as time;
+import "std/vec" as vec;
+
+func monotonic_ns() i64 throws os.Error {
+    let now = time.monotonic();
+    return now.seconds * 1000000000 + now.nanoseconds;
+}
+
+func wait_for_view(service Service, index usize) option.Option[View] throws os.Error {
+    let generation = service.slots[index].work.generation;
+    let deadline = monotonic_ns() + 300000000;
+    for true {
+        if service.failed[0] { return option.Option[View].None; }
+        let view = service.slots[index].view;
+        switch view {
+            case option.Option.Some(value): {
+                if value.generation == generation { return view; }
+            }
+            case option.Option.None: {}
+        }
+        let remaining = deadline - monotonic_ns();
+        if remaining <= 0 { return view; }
+        let signaled = sync.wait_for(service.changed, service.gate, remaining);
+    }
+}
+
+func completion_response(snapshot model.Source, byte u64,
+                         resolved option.Option[model.ResolvedProject],
+                         typed option.Option[hir.HirModule]) json.Value {
+    let items = vec.empty[json.Value]();
+    for item in editorcomplete.complete(snapshot, byte, resolved, typed) {
+        vec.push(items, json_object([member("label", json_string(item.label)),
+            member("kind", json_number(strconv.format_i64(i64(item.kind))))]));
+    }
+    return json_array(items);
+}
+
+func span_range(snapshot model.Source, span model.Span) json.Value {
+    if span.begin_byte > span.end_byte || span.snapshot != snapshot.id ||
+       !source.has_boundary(snapshot, span.begin_byte) ||
+       !source.has_boundary(snapshot, span.end_byte) { return json_null(); }
+    return range_json(buffer_position(snapshot, span.begin_byte),
+        buffer_position(snapshot, span.end_byte));
+}
+
+func definition_response(service Service, snapshots Vec[model.Source],
+                         span model.Span) json.Value {
+    switch snapshot_for_id(snapshots, span.snapshot) {
+        case option.Option.None: return json_null();
+        case option.Option.Some(snapshot): {
+            var uri = file_uri(snapshot.path);
+            switch open_for_path(service.documents, snapshot.path) {
+                case option.Option.Some(document): uri = document.uri;
+                case option.Option.None: {}
+            }
+            if uri == "" { return json_null(); }
+            let range = span_range(snapshot, span);
+            switch range {
+                case json.Value.Null: return json_null();
+                case _: return json_object([member("uri", json_string(uri)), member("range", range)]);
+            }
+        }
+    }
+}
+
+func query_document(service Service, id json.Value, method string,
+                    params json.Value) bool throws os.Error {
+    var uri = "";
+    switch document_uri(params) {
+        case option.Option.Some(value): uri = value;
+        case option.Option.None:
+            return respond_error(service.output, id, -32602, "Expected a text document URI");
+    }
+    let position = field_or_null(params, "position");
+    let line = option.unwrap_or(field_integer(position, "line"), -1);
+    let character = option.unwrap_or(field_integer(position, "character"), -1);
+    if line < 0 || character < 0 {
+        return respond_error(service.output, id, -32602, "Expected a valid position");
+    }
+    var result = json_null();
+    let completion = method == "textDocument/completion";
+    if completion { result = json_array([]); }
+    switch find_document(service.documents, uri) {
+        case option.Option.None: {}
+        case option.Option.Some(index): {
+            let document = service.documents[index];
+            let slot = slot_index(service, work_key(document));
+            if slot < vec.len(service.slots) {
+                var view = service.slots[slot].view;
+                if !completion || !option.is_some(view) { view = wait_for_view(service, slot); }
+                if service.failed[0] {
+                    let ignored = respond_error(service.output, id, -32603,
+                        "Language server checks failed");
+                    return false;
+                }
+                result = document_query(service, document, method, u64(line), u64(character), view);
+            }
+        }
+    }
+    return respond(service.output, id, "result", result);
+}
+
+func query_snapshot(current option.Option[model.Source], document Document) model.Source {
+    switch current {
+        case option.Option.Some(value): return value;
+        case option.Option.None: return source_for_document(document);
+    }
+}
+
+func document_query(service Service, document Document, method string, line u64, character u64,
+                    view option.Option[View]) json.Value {
+    let completion = method == "textDocument/completion";
+    var current = option.Option[model.Source].None;
+    var snapshots = vec.empty[model.Source]();
+    var resolved = option.Option[model.ResolvedProject].None;
+    var typed = option.Option[hir.HirModule].None;
+    switch view {
+        case option.Option.Some(value): {
+            let slot = slot_index(service, work_key(document));
+            if completion { resolved = value.known; }
+            if value.generation == service.slots[slot].work.generation {
+                switch snapshot_for_path(value.analysis.sources, document.filename) {
+                    case option.Option.Some(snapshot): {
+                        current = option.Option[model.Source].Some(snapshot);
+                        snapshots = value.analysis.sources;
+                        if !completion || option.is_some(value.analysis.resolved) {
+                            resolved = value.analysis.resolved;
+                        }
+                        typed = value.analysis.typed;
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    let snapshot = query_snapshot(current, document);
+    switch position_byte(snapshot, line, character) {
+        case option.Option.None: {
+            if completion { return json_array([]); }
+            return json_null();
+        }
+        case option.Option.Some(byte): {
+            if completion { return completion_response(snapshot, byte, resolved, typed); }
+            if method == "textDocument/definition" {
+                switch editornavigate.definition(snapshot, byte, resolved, typed) {
+                    case option.Option.None: return json_null();
+                    case option.Option.Some(span): return definition_response(service, snapshots, span);
+                }
+            }
+            switch editornavigate.hover(snapshot, byte, resolved, typed) {
+                case option.Option.None: return json_null();
+                case option.Option.Some(info): {
+                    let contents = json_object([member("kind", json_string("plaintext")),
+                        member("value", json_string(info.text))]);
+                    let range = span_range(snapshot, info.span);
+                    switch range {
+                        case json.Value.Null: return json_object([member("contents", contents)]);
+                        case _: return json_object([member("contents", contents), member("range", range)]);
+                    }
+                }
+            }
+        }
+    }
+}

@@ -5,6 +5,7 @@
 | 要做的事 | 入口 |
 | --- | --- |
 | 构建编译器、运行示例 | [构建与运行](docs/BUILD.md)、[自举检查](docs/SELFHOST_BOOTSTRAP.md) |
+| 配置编辑器、格式化和检查源码 | [编辑器配置](docs/EDITOR.md) |
 | 了解源码结构与开发约定 | [开发说明](DEVELOPMENT.md)、[前端](docs/FRONTEND.md)、[IR](docs/IR_CONTRACTS.md)、[后端](docs/BACKENDS.md) |
 | 查询实现范围 | [泛型与方法](docs/GENERICS.md)、[动态 trait 对象](docs/TRAIT_OBJECTS.md)、[值与清理](docs/T09_EXECUTION.md)、[互操作](docs/INTEROP.md) |
 | 了解原生线程实现 | [线程、锁与原子计数](docs/CONCURRENCY_NATIVE.md) |

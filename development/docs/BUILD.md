@@ -10,7 +10,7 @@ build/frontend-debug/woozyc --help
 build/frontend-debug/woozyc --version
 ```
 
-帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build 已支持 Python/64 和 Linux x86_64 原生标量程序；未开启 LANG_ENABLE_LLVM 时原生 build 明确拒绝。lsp 和 capabilities 仍返回 E_CAPABILITY_UNAVAILABLE。
+帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build 已支持 Python/64 和 Linux x86_64 原生标量程序；未开启 LANG_ENABLE_LLVM 时原生 build 明确拒绝。C++ 版的 `woozyc lsp` 和 `woozyc fmt` 也可用在不带 LLVM 的构建中，见 [编辑器配置](EDITOR.md)。`capabilities` 仍返回 `E_CAPABILITY_UNAVAILABLE`。
 
 ```sh
 build/frontend-debug/woozyc check --syntax-only examples/core.wz

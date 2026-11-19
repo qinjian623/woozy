@@ -7,6 +7,7 @@ pub struct Options {
     pub error string;
     pub command string;
     pub syntax bool;
+    pub format_check bool;
     pub package_objects bool;
     pub source_make bool;
     pub make_state string;
@@ -28,7 +29,7 @@ func not_flag(value string) bool { return text.len(value) > 0 && value[0] != 45;
 pub func arguments(args Vec[string]) Options {
     var options = Options(valid: false,
         error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, lsp or capabilities",
-        command: "", syntax: false, package_objects: false, source_make: false,
+        command: "", syntax: false, format_check: false, package_objects: false, source_make: false,
         make_state: "", make_package: "", cache_directory: "", json: false,
         path: "", project: "", output: "", opt: "", debug_info: false, target: "", std_binding: "", backend: "");
     if vec.len(args) < 2 { return options; }
@@ -37,7 +38,33 @@ pub func arguments(args Vec[string]) Options {
         options.valid = vec.len(args) == 2;
         return options;
     }
-    if options.command == "lsp" || options.command == "capabilities" {
+    if options.command == "lsp" {
+        options.error = "E_DRIVER_ARGUMENT: use lsp [--stdio]";
+        options.valid = vec.len(args) == 2 ||
+            (vec.len(args) == 3 && args[2] == "--stdio");
+        return options;
+    }
+    if options.command == "capabilities" {
+        options.valid = true;
+        return options;
+    }
+    if options.command == "fmt" {
+        options.error = "E_DRIVER_ARGUMENT: use fmt [--check] FILE|-";
+        var check = false;
+        var index usize = 2;
+        if index < vec.len(args) && args[index] == "--check" {
+            check = true; index += 1;
+        }
+        var literal = false;
+        if index < vec.len(args) && args[index] == "--" {
+            literal = true; index += 1;
+        }
+        if index + 1 != vec.len(args) { return options; }
+        let argument = args[index];
+        if argument == "" { return options; }
+        if !literal && argument != "-" && argument[0] == 45 { return options; }
+        options.path = argument;
+        options.format_check = check;
         options.valid = true;
         return options;
     }

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def run(command, expected=0):
     result = subprocess.run([str(item) for item in command], text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            timeout=300)
+                            timeout=1800)
     if result.returncode != expected:
         raise RuntimeError(f"{command}: exit {result.returncode}, expected {expected}\n"
                            f"{result.stdout}\n{result.stderr}")
@@ -58,17 +58,21 @@ def main():
                           ["build", "--syntax-only", "one", "--out-dir", "out"],
                           ["check", "--project", "one", "--project", "two"],
                           ["build", "--project", "one", "--out-dir", "out", "--opt", "3"],
-                          ["lsp"], ["capabilities", "--format", "json"]):
+                          ["capabilities", "--format", "json"]):
             expected = run([stage0, *arguments], expected=1 if arguments and
-                           arguments[0] in ("lsp", "capabilities") else 2)
+                           arguments[0] == "capabilities" else 2)
             actual = run([cli, *arguments], expected=expected.returncode)
             assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr), arguments
+        editor = run([sys.executable, ROOT / "tests/tooling/editor_cli_test.py", "--cli", cli])
+        semantics = run([sys.executable, ROOT / "tests/tooling/editor_semantics_test.py", "--cli", cli])
         run([cli, "check", "--syntax-only"], expected=2)
         missing = json.loads(run([cli, "check", "--syntax-only", "--format", "json",
                                   work / "missing.wz"], expected=2).stdout)
         assert missing["diagnostics"][0]["code"] == "E_INPUT_IO", missing
         syntax = run([sys.executable, ROOT / "tests/syntax/run_cases.py", cli])
         print(f"O{opt}: lexer, JSON rendering, CLI arguments/I/O and syntax cases passed")
+        print(editor.stdout.strip())
+        print(semantics.stdout.strip())
         print(syntax.stdout.strip())
         if sys.platform.startswith("linux"):
             elf = run(["readelf", "-l", "-d", cli]).stdout

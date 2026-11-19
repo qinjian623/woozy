@@ -1,0 +1,726 @@
+// Resolved-project lookups for semantic completion.
+//
+// The current file's lexical scope is always rebuilt from the fresh snapshot by
+// scan.wz.  The last successful ResolvedProject is used for package symbols,
+// file aliases and declarations in other files; the current file is accepted
+// by path and is never assumed to have the same snapshot id.
+package editorcomplete;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct Alias {
+    pub name string;
+    pub has_target bool;
+    pub target usize;
+}
+
+pub struct FreshImport {
+    pub path string;
+    pub alias string;
+}
+
+pub struct ModuleFile {
+    pub module usize;
+    pub file usize;
+}
+
+pub struct Lookup {
+    pub resolved model.ResolvedProject;
+    pub has_resolved bool;
+    pub current_module usize;
+    pub file_local usize;
+    pub found_file bool;
+    pub stale bool;
+    pub path string;
+    pub snapshot_id u64;
+    pub fresh_tokens Vec[model.Token];
+    pub aliases Vec[Alias];
+}
+
+pub struct TypeInfo {
+    pub found bool;
+    pub module usize;
+    pub file_local usize;
+    pub kind u32;
+    pub generic bool;
+    pub members Vec[MemberDecl];
+}
+
+pub const TARGET_NONE u32 = 0;
+pub const TARGET_MODULE u32 = 1;
+pub const TARGET_TYPE u32 = 2;
+pub const TARGET_VALUE u32 = 3;
+
+pub struct Target {
+    pub kind u32;
+    pub module usize;
+    pub symbol usize;
+    pub value_context bool;
+}
+
+pub func no_target() Target {
+    return Target(kind: TARGET_NONE, module: 0, symbol: 0,
+        value_context: false);
+}
+
+func find_project_file(project model.Project, path string)
+    option.Option[usize] {
+    var index usize = 0;
+    for index < vec.len(project.files) {
+        if project.files[index].lexed.source.path == path {
+            return option.Option[usize].Some(index);
+        }
+        index += 1;
+    }
+    return option.Option[usize].None;
+}
+
+func find_module_file(project model.Project, global_file usize)
+    option.Option[ModuleFile] {
+    var module usize = 0;
+    for module < vec.len(project.modules) {
+        var file usize = 0;
+        for file < vec.len(project.modules[module].files) {
+            if project.modules[module].files[file] == global_file {
+                return option.Option[ModuleFile].Some(ModuleFile(
+                    module: module, file: file));
+            }
+            file += 1;
+        }
+        module += 1;
+    }
+    return option.Option[ModuleFile].None;
+}
+
+func default_alias(path string) string {
+    let parts = text.split(path, "/");
+    if vec.len(parts) == 0 { return ""; }
+    return parts[vec.len(parts) - 1];
+}
+
+pub func fresh_imports(tokens Vec[model.Token]) Vec[FreshImport] {
+    var out = vec.empty[FreshImport]();
+    var index usize = 0;
+    for index < vec.len(tokens) {
+        if tokens[index].spelling != "import" {
+            index += 1;
+            continue;
+        }
+        let string_index = index + 1;
+        if string_index >= vec.len(tokens) ||
+           model.token_kind_id(tokens[string_index].kind) != 4 {
+            index += 1;
+            continue;
+        }
+        var path = tokens[string_index].spelling;
+        if tokens[string_index].has_string_value {
+            path = tokens[string_index].string_value;
+        }
+        var alias = default_alias(path);
+        if string_index + 2 < vec.len(tokens) &&
+           tokens[string_index + 1].spelling == "as" &&
+           model.token_kind_id(tokens[string_index + 2].kind) == 1 {
+            alias = tokens[string_index + 2].spelling;
+        }
+        if alias != "" && alias != "_" {
+            vec.push(out, FreshImport(path: path, alias: alias));
+        }
+        index += 1;
+    }
+    return out;
+}
+
+func find_module_by_path(project model.Project, path string)
+    option.Option[usize] {
+    var index usize = 0;
+    for index < vec.len(project.modules) {
+        if project.modules[index].logical_path == path {
+            return option.Option[usize].Some(index);
+        }
+        index += 1;
+    }
+    return option.Option[usize].None;
+}
+
+func alias_exists(values Vec[Alias], name string) bool {
+    for value in values {
+        if value.name == name { return true; }
+    }
+    return false;
+}
+
+func add_alias(state inout Vec[Alias], name string, has_target bool,
+               target usize) {
+    if name == "" || name == "_" { return; }
+    if alias_exists(state, name) { return; }
+    vec.push(state, Alias(name: name, has_target: has_target,
+        target: target));
+}
+
+func build_aliases(project model.Project, has_project bool,
+                   current_module usize, file_local usize, found_file bool,
+                   stale bool, tokens Vec[model.Token]) Vec[Alias] {
+    var out = vec.empty[Alias]();
+    if has_project && found_file && !stale &&
+       current_module < vec.len(project.modules) {
+        for import_value in project.modules[current_module].imports {
+            if import_value.file == file_local &&
+               import_value.alias != "_" {
+                add_alias(inout out, import_value.alias, true,
+                    import_value.target);
+            }
+        }
+    }
+    let imports = fresh_imports(tokens);
+    for value in imports {
+        if alias_exists(out, value.alias) { continue; }
+        var has_target = false;
+        var target usize = 0;
+        if has_project {
+            switch find_module_by_path(project, value.path) {
+                case option.Option.Some(module): {
+                    has_target = true;
+                    target = module;
+                }
+                case option.Option.None: {}
+            }
+        }
+        add_alias(inout out, value.alias, has_target, target);
+    }
+    return out;
+}
+
+pub func build_lookup(snapshot model.Source, tokens Vec[model.Token],
+                      has_resolved bool, project model.ResolvedProject)
+    Lookup {
+    var result = Lookup(resolved: project, has_resolved: has_resolved,
+        current_module: 0, file_local: 0, found_file: false, stale: false,
+        path: snapshot.path, snapshot_id: snapshot.id, fresh_tokens: tokens,
+        aliases: vec.empty[Alias]());
+    if has_resolved {
+        switch find_project_file(project.project, snapshot.path) {
+            case option.Option.Some(global_file): {
+                switch find_module_file(project.project, global_file) {
+                    case option.Option.Some(value): {
+                        result.found_file = true;
+                        result.current_module = value.module;
+                        result.file_local = value.file;
+                        let previous = project.project.files[global_file].lexed.source;
+                        result.stale = !same_source_bytes(previous.original, snapshot.original);
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    result.aliases = build_aliases(project.project, has_resolved,
+        result.current_module, result.file_local, result.found_file,
+        result.stale, tokens);
+    return result;
+}
+
+func same_source_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func in_current_module(lookup Lookup, module usize) bool {
+    return lookup.found_file && lookup.current_module == module;
+}
+
+func definition_node_kind(lookup Lookup, symbol model.Symbol) u32 {
+    switch symbol.definition {
+        case option.Option.Some(reference): {
+            let project = lookup.resolved.project;
+            if reference.module >= vec.len(project.modules) { return 0; }
+            let module = project.modules[reference.module];
+            if reference.file >= vec.len(module.files) { return 0; }
+            let parse_index = module.files[reference.file];
+            if parse_index >= vec.len(project.files) { return 0; }
+            let parsed = project.files[parse_index];
+            if reference.node >= vec.len(parsed.nodes) { return 0; }
+            return model.ast_kind_id(parsed.nodes[reference.node].kind);
+        }
+        case option.Option.None: return 0;
+    }
+}
+
+pub func is_package_symbol(lookup Lookup, symbol model.Symbol) bool {
+    switch symbol.definition {
+        case option.Option.Some(reference): {
+            if !lookup.has_resolved { return false; }
+            let project = lookup.resolved.project;
+            if reference.module >= vec.len(project.modules) { return false; }
+            let module = project.modules[reference.module];
+            if reference.file >= vec.len(module.files) { return false; }
+            let parse_index = module.files[reference.file];
+            if parse_index >= vec.len(project.files) { return false; }
+            let parsed = project.files[parse_index];
+            if parsed.root >= vec.len(parsed.nodes) { return false; }
+            if reference.node >= vec.len(parsed.nodes) { return false; }
+            for child in parsed.nodes[parsed.root].children {
+                if child == reference.node { return true; }
+            }
+            return false;
+        }
+        case option.Option.None: {
+            switch symbol.foreign {
+                case option.Option.Some(value): return true;
+                case option.Option.None: return false;
+            }
+        }
+    }
+}
+
+pub func defined_in_file(lookup Lookup, symbol model.Symbol,
+                         module usize, file_local usize) bool {
+    switch symbol.definition {
+        case option.Option.Some(reference): {
+            return reference.module == module &&
+                reference.file == file_local;
+        }
+        case option.Option.None: return false;
+    }
+}
+
+pub func symbol_lsp_kind(lookup Lookup, symbol model.Symbol) i32 {
+    switch symbol.kind {
+        case model.SymbolKind.Value: return LSP_VALUE;
+        case model.SymbolKind.Constant: return LSP_CONSTANT;
+        case model.SymbolKind.Function: return LSP_FUNCTION;
+        case model.SymbolKind.Type: {
+            let kind = definition_node_kind(lookup, symbol);
+            if kind == AST_STRUCT { return LSP_STRUCT; }
+            if kind == AST_ENUM { return LSP_ENUM; }
+            return LSP_CLASS;
+        }
+        case model.SymbolKind.Trait: return LSP_CLASS;
+        case model.SymbolKind.TypeParameter: return LSP_TYPE_PARAMETER;
+        case model.SymbolKind.Module: return LSP_MODULE;
+        case model.SymbolKind.Field: return LSP_FIELD;
+        case model.SymbolKind.Variant: return LSP_ENUM_MEMBER;
+        case model.SymbolKind.BuiltinType: return LSP_CLASS;
+        case model.SymbolKind.BuiltinFunction: return LSP_FUNCTION;
+    }
+}
+
+pub func find_package_symbol(lookup Lookup, module usize, name string,
+                             exported_only bool) option.Option[usize] {
+    if !lookup.has_resolved { return option.Option[usize].None; }
+    var index usize = 0;
+    for index < vec.len(lookup.resolved.symbols) {
+        let symbol = lookup.resolved.symbols[index];
+        if symbol.name != name || name == "" || name == "_" {
+            index += 1;
+            continue;
+        }
+        if symbol.module != module {
+            index += 1;
+            continue;
+        }
+        if !is_package_symbol(lookup, symbol) {
+            index += 1;
+            continue;
+        }
+        if exported_only && !symbol.exported {
+            index += 1;
+            continue;
+        }
+        return option.Option[usize].Some(index);
+    }
+    return option.Option[usize].None;
+}
+
+pub func alias_target(lookup Lookup, name string) option.Option[usize] {
+    for value in lookup.aliases {
+        if value.name == name && value.has_target {
+            return option.Option[usize].Some(value.target);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+pub func alias_for_owner_file(lookup Lookup, module usize,
+                              file_local usize, name string)
+    option.Option[usize] {
+    if in_current_module(lookup, module) && lookup.file_local == file_local {
+        return alias_target(lookup, name);
+    }
+    if !lookup.has_resolved { return option.Option[usize].None; }
+    if module >= vec.len(lookup.resolved.project.modules) {
+        return option.Option[usize].None;
+    }
+    for import_value in lookup.resolved.project.modules[module].imports {
+        if import_value.file == file_local &&
+           import_value.alias == name && name != "_" {
+            return option.Option[usize].Some(import_value.target);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func is_type_symbol(symbol model.Symbol) bool {
+    switch symbol.kind {
+        case model.SymbolKind.Type: return true;
+        case model.SymbolKind.Trait: return true;
+        case model.SymbolKind.BuiltinType: return true;
+        default: return false;
+    }
+}
+
+func merge_impl_methods(lookup Lookup, symbol_id usize,
+                         members Vec[MemberDecl]) Vec[MemberDecl] {
+    if !lookup.has_resolved { return members; }
+    let project = lookup.resolved.project;
+    var module_index usize = 0;
+    for module_index < vec.len(project.modules) {
+        let module = project.modules[module_index];
+        var file_index usize = 0;
+        for file_index < vec.len(module.files) {
+            var tokens = vec.empty[model.Token]();
+            if in_current_module(lookup, module_index) &&
+               lookup.file_local == file_index {
+                tokens = lookup.fresh_tokens;
+            } else {
+                let parse_index = module.files[file_index];
+                if parse_index < vec.len(project.files) {
+                    tokens = project.files[parse_index].lexed.tokens;
+                }
+            }
+            let data = token_data(tokens);
+            let implementations = scan_impls(data);
+            for implementation in implementations {
+                var matches = false;
+                switch resolve_type_parts(lookup, module_index, file_index,
+                                          implementation.self_parts) {
+                    case option.Option.Some(value): {
+                        if value == symbol_id { matches = true; }
+                    }
+                    case option.Option.None: {}
+                }
+                if !matches { continue; }
+                var trait_exported = false;
+                if implementation.has_trait {
+                    switch resolve_type_parts(lookup, module_index,
+                                              file_index,
+                                              implementation.trait_parts) {
+                        case option.Option.Some(value): {
+                            if value < vec.len(lookup.resolved.symbols) {
+                                trait_exported =
+                                    lookup.resolved.symbols[value].exported;
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                for method in implementation.methods {
+                    var exported = method.exported;
+                    if implementation.has_trait {
+                        exported = trait_exported;
+                    }
+                    vec.push(members, MemberDecl(name: method.name,
+                        kind: method.kind, exported: exported,
+                        has_type: method.has_type,
+                        type_parts: method.type_parts));
+                }
+            }
+            file_index += 1;
+        }
+        module_index += 1;
+    }
+    return members;
+}
+
+pub func type_info(lookup Lookup, symbol_id usize) TypeInfo {
+    var empty = TypeInfo(found: false, module: 0, file_local: 0, kind: 0, generic: false,
+        members: vec.empty[MemberDecl]());
+    if !lookup.has_resolved {
+        return empty;
+    }
+    if symbol_id >= vec.len(lookup.resolved.symbols) {
+        return empty;
+    }
+    let symbol = lookup.resolved.symbols[symbol_id];
+    switch symbol.definition {
+        case option.Option.Some(reference): {
+            let project = lookup.resolved.project;
+            if reference.module >= vec.len(project.modules) {
+                return empty;
+            }
+            let module = project.modules[reference.module];
+            if reference.file >= vec.len(module.files) {
+                return empty;
+            }
+            var tokens = vec.empty[model.Token]();
+            if in_current_module(lookup, reference.module) &&
+               lookup.file_local == reference.file {
+                tokens = lookup.fresh_tokens;
+            } else {
+                let parse_index = module.files[reference.file];
+                if parse_index >= vec.len(project.files) {
+                    return empty;
+                }
+                tokens = project.files[parse_index].lexed.tokens;
+            }
+            let data = token_data(tokens);
+            let declarations = scan_type_decls(data);
+            for declaration in declarations {
+                if declaration.name == symbol.name {
+                    let members = merge_impl_methods(lookup, symbol_id,
+                        extract_type_members(data, declaration));
+                    return TypeInfo(found: true,
+                        module: reference.module,
+                        file_local: reference.file, kind: declaration.kind, generic: declaration.generic,
+                        members: members);
+                }
+            }
+            return empty;
+        }
+        case option.Option.None: return empty;
+    }
+}
+
+pub func resolve_type_parts(lookup Lookup, owner_module usize,
+                            owner_file usize, parts Vec[string])
+    option.Option[usize] {
+    if vec.len(parts) == 0 { return option.Option[usize].None; }
+    if vec.len(parts) == 1 {
+        switch find_package_symbol(lookup, owner_module, parts[0], false) {
+            case option.Option.Some(symbol_id): {
+                if is_type_symbol(lookup.resolved.symbols[symbol_id]) {
+                    return option.Option[usize].Some(symbol_id);
+                }
+                return option.Option[usize].None;
+            }
+            case option.Option.None: return option.Option[usize].None;
+        }
+    }
+    if vec.len(parts) == 2 {
+        switch alias_for_owner_file(lookup, owner_module, owner_file,
+                                    parts[0]) {
+            case option.Option.Some(target_module): {
+                let exported_only = target_module != owner_module;
+                switch find_package_symbol(lookup, target_module, parts[1],
+                                           exported_only) {
+                    case option.Option.Some(symbol_id): {
+                        if is_type_symbol(
+                                lookup.resolved.symbols[symbol_id]) {
+                            return option.Option[usize].Some(symbol_id);
+                        }
+                        return option.Option[usize].None;
+                    }
+                    case option.Option.None:
+                        return option.Option[usize].None;
+                }
+            }
+            case option.Option.None: return option.Option[usize].None;
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func find_local(locals Vec[LocalHint], name string)
+    option.Option[LocalHint] {
+    for value in locals {
+        if value.name == name {
+            return option.Option[LocalHint].Some(value);
+        }
+    }
+    return option.Option[LocalHint].None;
+}
+
+func resolve_local_type(lookup Lookup, data TokenData, locals Vec[LocalHint], hint LocalHint)
+    option.Option[usize] {
+    if !hint.has_type || vec.len(hint.type_parts) == 0 {
+        return option.Option[usize].None;
+    }
+    var declaration_scope = locals;
+    if hint.visible_from > 0 {
+        declaration_scope = scan_locals(data, hint.visible_from - 1);
+    }
+    if option.is_some(find_local(declaration_scope, hint.type_parts[0])) {
+        return option.Option[usize].None;
+    }
+    return resolve_type_parts(lookup, lookup.current_module, lookup.file_local, hint.type_parts);
+}
+
+func type_target(lookup Lookup, symbol_id usize, value_context bool) Target {
+    if symbol_id >= vec.len(lookup.resolved.symbols) {
+        return no_target();
+    }
+    let symbol = lookup.resolved.symbols[symbol_id];
+    return Target(kind: TARGET_TYPE, module: symbol.module,
+        symbol: symbol_id, value_context: value_context);
+}
+
+func resolve_first(lookup Lookup, data TokenData, locals Vec[LocalHint], name string)
+    Target {
+    switch find_local(locals, name) {
+        case option.Option.Some(hint): {
+            switch resolve_local_type(lookup, data, locals, hint) {
+                case option.Option.Some(symbol_id):
+                    return type_target(lookup, symbol_id, true);
+                case option.Option.None: return no_target();
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch alias_target(lookup, name) {
+        case option.Option.Some(module):
+            return Target(kind: TARGET_MODULE, module: module, symbol: 0,
+                value_context: false);
+        case option.Option.None: {}
+    }
+    if lookup.found_file {
+        switch find_package_symbol(lookup, lookup.current_module, name,
+                                   false) {
+            case option.Option.Some(symbol_id): {
+                let symbol = lookup.resolved.symbols[symbol_id];
+                if is_type_symbol(symbol) {
+                    return type_target(lookup, symbol_id, false);
+                }
+                return Target(kind: TARGET_VALUE, module: symbol.module,
+                    symbol: symbol_id, value_context: false);
+            }
+            case option.Option.None: {}
+        }
+    }
+    return no_target();
+}
+
+func module_member(lookup Lookup, module usize, name string) Target {
+    switch find_package_symbol(lookup, module, name, true) {
+        case option.Option.Some(symbol_id): {
+            let symbol = lookup.resolved.symbols[symbol_id];
+            if is_type_symbol(symbol) {
+                return type_target(lookup, symbol_id, false);
+            }
+            return Target(kind: TARGET_VALUE, module: symbol.module,
+                symbol: symbol_id, value_context: false);
+        }
+        case option.Option.None: return no_target();
+    }
+}
+
+func type_member(lookup Lookup, target Target, name string) Target {
+    let info = type_info(lookup, target.symbol);
+    if !info.found { return no_target(); }
+    let same = in_current_module(lookup, info.module);
+    for member in info.members {
+        if member.name != name { continue; }
+        if !same && !member.exported { continue; }
+        if member.kind == LSP_METHOD {
+            return Target(kind: TARGET_VALUE, module: info.module,
+                symbol: target.symbol, value_context: false);
+        }
+        if member.has_type && !info.generic {
+            switch resolve_type_parts(lookup, info.module, info.file_local,
+                                      member.type_parts) {
+                case option.Option.Some(symbol_id):
+                    return type_target(lookup, symbol_id, true);
+                case option.Option.None:
+                    return Target(kind: TARGET_VALUE, module: info.module,
+                        symbol: target.symbol, value_context: true);
+            }
+        }
+        return Target(kind: TARGET_VALUE, module: info.module,
+            symbol: target.symbol, value_context: true);
+    }
+    return no_target();
+}
+
+pub func resolve_chain(lookup Lookup, data TokenData, locals Vec[LocalHint],
+                       parts Vec[string]) Target {
+    if vec.len(parts) == 0 { return no_target(); }
+    var target = resolve_first(lookup, data, locals, parts[0]);
+    if target.kind == TARGET_NONE || target.kind == TARGET_VALUE {
+        return target;
+    }
+    var index usize = 1;
+    for index < vec.len(parts) {
+        if target.kind == TARGET_MODULE {
+            target = module_member(lookup, target.module, parts[index]);
+        } else if target.kind == TARGET_TYPE {
+            target = type_member(lookup, target, parts[index]);
+        } else {
+            return no_target();
+        }
+        if target.kind == TARGET_NONE { return target; }
+        if target.kind == TARGET_VALUE && index + 1 < vec.len(parts) {
+            return no_target();
+        }
+        index += 1;
+    }
+    return target;
+}
+
+pub func add_label(state inout Vec[Item], seen inout Vec[string],
+                   label string, kind i32, prefix string) {
+    if vec.len(state) >= MAX_ITEMS { return; }
+    if label == "" || label == "_" { return; }
+    if prefix != "" && !text.starts_with(label, prefix) { return; }
+    for previous in seen {
+        if previous == label { return; }
+    }
+    vec.push(seen, label);
+    vec.push(state, Item(label: label, kind: kind));
+}
+
+func collect_module_items(lookup Lookup, module usize, prefix string,
+                          state inout Vec[Item],
+                          seen inout Vec[string]) {
+    if !lookup.has_resolved { return; }
+    var index usize = 0;
+    for index < vec.len(lookup.resolved.symbols) {
+        let symbol = lookup.resolved.symbols[index];
+        if symbol.module != module || symbol.name == "" || symbol.name == "_" {
+            index += 1;
+            continue;
+        }
+        if !is_package_symbol(lookup, symbol) || !symbol.exported {
+            index += 1;
+            continue;
+        }
+        add_label(inout state, inout seen, symbol.name,
+            symbol_lsp_kind(lookup, symbol), prefix);
+        index += 1;
+    }
+}
+
+func collect_type_items(lookup Lookup, target Target, prefix string,
+                        state inout Vec[Item],
+                        seen inout Vec[string]) {
+    let info = type_info(lookup, target.symbol);
+    if !info.found { return; }
+    let same = in_current_module(lookup, info.module);
+    for member in info.members {
+        if !same && !member.exported { continue; }
+        if target.value_context {
+            if member.kind == LSP_ENUM_MEMBER { continue; }
+        } else {
+            if info.kind != AST_ENUM ||
+               member.kind != LSP_ENUM_MEMBER {
+                continue;
+            }
+        }
+        add_label(inout state, inout seen, member.name, member.kind, prefix);
+    }
+}
+
+pub func collect_members(lookup Lookup, target Target, prefix string,
+                         state inout Vec[Item],
+                         seen inout Vec[string]) {
+    if target.kind == TARGET_MODULE {
+        collect_module_items(lookup, target.module, prefix, inout state,
+            inout seen);
+    } else if target.kind == TARGET_TYPE {
+        collect_type_items(lookup, target, prefix, inout state, inout seen);
+    }
+}

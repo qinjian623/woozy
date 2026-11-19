@@ -1,0 +1,127 @@
+package editorlsp;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/paths" as paths;
+import "std/fs" as fs;
+import "std/option" as option;
+import "std/os" as os;
+import "std/path" as path;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func hex_digit(byte u8) i32 {
+    if byte >= 48 && byte <= 57 { return i32(byte - 48); }
+    if byte >= 65 && byte <= 70 { return i32(byte - 65) + 10; }
+    if byte >= 97 && byte <= 102 { return i32(byte - 97) + 10; }
+    return -1;
+}
+
+func file_path(uri string) string {
+    if !text.starts_with(uri, "file://") { return ""; }
+    let bytes = text.bytes(uri);
+    let decoded = vec.empty[u8]();
+    var index usize = 7;
+    if text.starts_with(uri, "file://localhost/") { index = 16; }
+    if index >= vec.len(bytes) || bytes[index] != 47 { return ""; }
+    for index < vec.len(bytes) {
+        var byte = bytes[index];
+        if byte == 35 || byte == 63 { return ""; }
+        if byte == 37 {
+            if index + 2 >= vec.len(bytes) { return ""; }
+            let high = hex_digit(bytes[index + 1]);
+            let low = hex_digit(bytes[index + 2]);
+            if high < 0 || low < 0 { return ""; }
+            byte = u8(high * 16 + low);
+            index += 2;
+        }
+        if byte == 0 { return ""; }
+        vec.push(decoded, byte);
+        index += 1;
+    }
+    var filename = "";
+    try { filename = text.from_bytes(decoded); }
+    catch problem text.Error { return ""; }
+    try { return paths.canonical(filename); }
+    catch problem os.Error {
+        try { return path.join(paths.canonical(path.dir(filename)), path.base(filename)); }
+        catch parent os.Error { return path.clean(filename); }
+    }
+}
+
+func same_file_path(left string, right string) bool {
+    if left == right { return true; }
+    if !path.is_absolute(left) || !path.is_absolute(right) { return false; }
+    try { return paths.canonical(left) == paths.canonical(right); }
+    catch problem os.Error { return false; }
+}
+
+func file_uri(filename string) string {
+    if !path.is_absolute(filename) { return ""; }
+    let result = text.bytes("file://");
+    let digits = text.bytes("0123456789ABCDEF");
+    for byte in text.bytes(filename) {
+        if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+           (byte >= 48 && byte <= 57) || byte == 45 || byte == 46 ||
+           byte == 47 || byte == 95 || byte == 126 {
+            vec.push(result, byte);
+        } else {
+            vec.push(result, 37);
+            vec.push(result, digits[usize(byte >> 4)]);
+            vec.push(result, digits[usize(byte & 15)]);
+        }
+    }
+    try { return text.from_bytes(result); }
+    catch problem text.Error { return ""; }
+}
+
+func nearest_manifest(filename string) string {
+    if !path.is_absolute(filename) { return ""; }
+    var directory = path.dir(filename);
+    for true {
+        let candidate = path.join(directory, "lang.toml");
+        try {
+            if fs.is_file(os.stat(candidate)) { return candidate; }
+        } catch problem os.Error {}
+        if directory == "/" { break; }
+        directory = path.dir(directory);
+    }
+    return "";
+}
+
+func earlier(left model.Position, right model.Position) bool {
+    return left.line < right.line ||
+        (left.line == right.line && left.character < right.character);
+}
+
+func position_byte(snapshot model.Source, line u64, character u64) option.Option[u64] {
+    if !snapshot.valid || vec.len(snapshot.boundaries) == 0 {
+        return option.Option[u64].None;
+    }
+    var column = character;
+    if line == 0 && has_bom(snapshot.original) {
+        if column == 0 { return option.Option[u64].None; }
+        column -= 1;
+    }
+    let wanted = model.Position(line: line, character: column);
+    var low usize = 0;
+    var high = vec.len(snapshot.boundaries);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if earlier(snapshot.boundaries[middle].position, wanted) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if low < vec.len(snapshot.boundaries) {
+        let found = snapshot.boundaries[low];
+        if found.position.line == line && found.position.character == column {
+            return option.Option[u64].Some(found.byte);
+        }
+        if found.position.line == line { return option.Option[u64].None; }
+    }
+    if low > 0 && snapshot.boundaries[low - 1].position.line == line {
+        return option.Option[u64].Some(snapshot.boundaries[low - 1].byte);
+    }
+    return option.Option[u64].None;
+}

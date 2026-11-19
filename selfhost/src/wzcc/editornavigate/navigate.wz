@@ -1,0 +1,1450 @@
+// Editor navigation over an already resolved (and optionally checked) project.
+//
+// The public entry points never re-parse text and never run name resolution by
+// searching for a matching spelling.  They use the resolver's occurrence and
+// declaration identities, and use typed HIR member/call payloads for fields and
+// methods that the resolver deliberately leaves deferred.
+package editornavigate;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+pub struct Hover {
+    pub span model.Span;
+    pub text string;
+}
+
+// Frozen AstKind ordinals from app/wzcc/model.
+const AST_IMPORT u32 = 2;
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_FIELD u32 = 9;
+const AST_VARIANT u32 = 10;
+const AST_PARAMETER u32 = 12;
+const AST_BINDING u32 = 3;
+const AST_BLOCK u32 = 18;
+const AST_CALL u32 = 38;
+const AST_MEMBER u32 = 40;
+const AST_NEUTRAL_BRACKET u32 = 41;
+const AST_PARENTHESIZED u32 = 46;
+const AST_BIND_PATTERN u32 = 47;
+const AST_FORIN u32 = 23;
+const AST_CATCH u32 = 27;
+
+const TK_IDENTIFIER u32 = 1;
+const TK_INTEGER u32 = 2;
+const TK_FLOATING u32 = 3;
+const TK_STRING_LITERAL u32 = 4;
+
+struct Location {
+    module usize;
+    file usize;
+    parse usize;
+}
+
+struct Hit {
+    has_symbol bool;
+    symbol usize;
+    has_type bool;
+    type_id usize;
+}
+
+func symbol_hit(symbol usize) Hit {
+    return Hit(has_symbol: true, symbol: symbol, has_type: false, type_id: 0);
+}
+
+func typed_symbol_hit(symbol usize, type_id usize) Hit {
+    return Hit(has_symbol: true, symbol: symbol, has_type: true,
+        type_id: type_id);
+}
+
+func type_hit(type_id usize) Hit {
+    return Hit(has_symbol: false, symbol: 0, has_type: true,
+        type_id: type_id);
+}
+
+func kind_is(actual model.AstKind, expected u32) bool {
+    return model.ast_kind_id(actual) == expected;
+}
+
+func option_usize(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func symbol_is_module(kind model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == 6;
+}
+
+func same_span(left model.Span, right model.Span) bool {
+    return left.snapshot == right.snapshot &&
+        left.begin_byte == right.begin_byte &&
+        left.end_byte == right.end_byte;
+}
+
+func span_contains(outer model.Span, inner model.Span) bool {
+    return outer.snapshot == inner.snapshot &&
+        outer.begin_byte <= inner.begin_byte &&
+        inner.end_byte <= outer.end_byte;
+}
+
+func span_length(value model.Span) u64 {
+    if value.end_byte < value.begin_byte { return 0; }
+    return value.end_byte - value.begin_byte;
+}
+
+func empty_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func copy_project_files(left model.Project, right model.Project) bool {
+    if vec.len(left.files) != vec.len(right.files) ||
+       vec.len(left.modules) != vec.len(right.modules) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.files); index += 1 {
+        if left.files[index].lexed.source.id !=
+           right.files[index].lexed.source.id {
+            return false;
+        }
+    }
+    for var index usize = 0; index < vec.len(left.modules); index += 1 {
+        if left.modules[index].id != right.modules[index].id ||
+           left.modules[index].logical_path !=
+           right.modules[index].logical_path ||
+           vec.len(left.modules[index].files) !=
+           vec.len(right.modules[index].files) {
+            return false;
+        }
+        for var file usize = 0;
+            file < vec.len(left.modules[index].files); file += 1 {
+            if left.modules[index].files[file] !=
+               right.modules[index].files[file] {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Typed HIR is only used when it belongs to the same immutable project
+// analysis as the resolver result.  A newer snapshot from the parent must not
+// be silently paired with an older HIR.
+func typed_matches(resolved model.ResolvedProject,
+                   typed hir.HirModule) bool {
+    if !copy_project_files(resolved.project, typed.resolved.project) {
+        return false;
+    }
+    let original_count = vec.len(resolved.symbols);
+    if original_count > vec.len(typed.resolved.symbols) {
+        return false;
+    }
+    // Generic instances append symbols to the original resolver table.
+    for var index usize = 0; index < original_count; index += 1 {
+        let original = resolved.symbols[index];
+        let checked = typed.resolved.symbols[index];
+        if original.id != checked.id || original.name != checked.name ||
+           original.module != checked.module ||
+           model.symbol_kind_id(original.kind) != model.symbol_kind_id(checked.kind) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func find_location(resolved model.ResolvedProject,
+                   snapshot model.Source) option.Option[Location] {
+    let project = resolved.project;
+    for var module usize = 0; module < vec.len(project.modules);
+        module += 1 {
+        for var file usize = 0;
+            file < vec.len(project.modules[module].files); file += 1 {
+            let parse_index = project.modules[module].files[file];
+            if parse_index >= vec.len(project.files) { continue; }
+            let source = project.files[parse_index].lexed.source;
+            if source.id == snapshot.id &&
+               source.file_id == snapshot.file_id &&
+               source.revision_id == snapshot.revision_id {
+                return option.Option[Location].Some(Location(
+                    module: module, file: file, parse: parse_index));
+            }
+        }
+    }
+    return option.Option[Location].None;
+}
+
+func token_at(parsed model.ParseResult,
+              byte u64) option.Option[usize] {
+    for var index usize = 0; index < vec.len(parsed.lexed.tokens);
+        index += 1 {
+        let span = parsed.lexed.tokens[index].span;
+        if span.begin_byte <= byte && byte < span.end_byte {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func parse_of_ref(resolved model.ResolvedProject,
+                  reference model.NodeRef) option.Option[model.ParseResult] {
+    let project = resolved.project;
+    if reference.module >= vec.len(project.modules) {
+        return option.Option[model.ParseResult].None;
+    }
+    let module = project.modules[reference.module];
+    if reference.file >= vec.len(module.files) {
+        return option.Option[model.ParseResult].None;
+    }
+    let parse_index = module.files[reference.file];
+    if parse_index >= vec.len(project.files) {
+        return option.Option[model.ParseResult].None;
+    }
+    return option.Option[model.ParseResult].Some(project.files[parse_index]);
+}
+
+func parse_of_span(resolved model.ResolvedProject,
+                   span model.Span) option.Option[model.ParseResult] {
+    let project = resolved.project;
+    for parsed in project.files {
+        if parsed.lexed.source.id == span.snapshot {
+            return option.Option[model.ParseResult].Some(parsed);
+        }
+    }
+    return option.Option[model.ParseResult].None;
+}
+
+func span_in_project(resolved model.ResolvedProject,
+                     span model.Span) bool {
+    if span.end_byte < span.begin_byte { return false; }
+    let project = resolved.project;
+    for parsed in project.files {
+        let source = parsed.lexed.source;
+        if source.valid && source.id == span.snapshot &&
+           span.end_byte <= u64(vec.len(source.original)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func symbol_name(resolved model.ResolvedProject, symbol usize) string {
+    if symbol < vec.len(resolved.symbols) {
+        return resolved.symbols[symbol].name;
+    }
+    return "";
+}
+
+func declaration_symbol(resolved model.ResolvedProject,
+                        span model.Span) option.Option[usize] {
+    for symbol in resolved.symbols {
+        switch symbol.declaration {
+            case option.Option.Some(declaration): {
+                if same_span(declaration, span) {
+                    return option.Option[usize].Some(symbol.id);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func import_alias_symbol(resolved model.ResolvedProject,
+                         span model.Span,
+                         spelling string) option.Option[usize] {
+    for symbol in resolved.symbols {
+        if !symbol_is_module(symbol.kind) ||
+           symbol.name != spelling {
+            continue;
+        }
+        switch symbol.declaration {
+            case option.Option.Some(declaration): {
+                if declaration.snapshot == span.snapshot &&
+                   declaration.begin_byte <= span.begin_byte &&
+                   span.end_byte <= declaration.end_byte {
+                    return option.Option[usize].Some(symbol.id);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func occurrence_symbol(resolved model.ResolvedProject, location Location,
+                       span model.Span,
+                       spelling string) option.Option[usize] {
+    var exact = option.Option[usize].None;
+    var fallback = option.Option[usize].None;
+    for occurrence in resolved.occurrences {
+        if occurrence.source.module != location.module ||
+           occurrence.source.file != location.file ||
+           !same_span(occurrence.span, span) {
+            continue;
+        }
+        let name = symbol_name(resolved, occurrence.symbol);
+        if name == spelling {
+            exact = option.Option[usize].Some(occurrence.symbol);
+        } else {
+            fallback = option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    if option.is_some(exact) { return exact; }
+    return fallback;
+}
+
+func resolved_hit(resolved model.ResolvedProject, location Location,
+                  parsed model.ParseResult, token_index usize,
+                  span model.Span) option.Option[Hit] {
+    let spelling = parsed.lexed.tokens[token_index].spelling;
+    let declared = declaration_symbol(resolved, span);
+    if option.is_some(declared) {
+        return option.Option[Hit].Some(symbol_hit(option_usize(declared)));
+    }
+    let occurrence = occurrence_symbol(resolved, location, span, spelling);
+    if option.is_some(occurrence) {
+        return option.Option[Hit].Some(symbol_hit(option_usize(occurrence)));
+    }
+    let imported = import_alias_symbol(resolved, span, spelling);
+    if option.is_some(imported) {
+        return option.Option[Hit].Some(symbol_hit(option_usize(imported)));
+    }
+    return option.Option[Hit].None;
+}
+
+func member_node_at(parsed model.ParseResult,
+                    span model.Span) option.Option[usize] {
+    for var index usize = 0; index < vec.len(parsed.nodes); index += 1 {
+        let candidate = parsed.nodes[index];
+        if !kind_is(candidate.kind, AST_MEMBER) ||
+           candidate.token_end <= candidate.token_begin {
+            continue;
+        }
+        let last = parsed.lexed.tokens[candidate.token_end - 1];
+        if same_span(last.span, span) {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func member_hit(typed hir.HirModule, location Location, node usize,
+                span model.Span) option.Option[Hit] {
+    let reference = model.NodeRef(module: location.module, file: location.file,
+        node: node);
+    for hir_node in typed.nodes {
+        if hir_node.source.node.module != reference.module ||
+           hir_node.source.node.file != reference.file ||
+           hir_node.source.node.node != reference.node ||
+           hir_node.source.span.snapshot != span.snapshot {
+            continue;
+        }
+        switch hir_node.data {
+            case hir.NodeData.FieldRead(value): {
+                return option.Option[Hit].Some(typed_symbol_hit(
+                    value.field, hir_node.type_id));
+            }
+            case hir.NodeData.FieldPlace(value): {
+                return option.Option[Hit].Some(typed_symbol_hit(
+                    value.field, hir_node.type_id));
+            }
+            case hir.NodeData.FunctionValue(value): {
+                return option.Option[Hit].Some(typed_symbol_hit(
+                    value.symbol, hir_node.type_id));
+            }
+            case hir.NodeData.CFieldRead(value): {
+                return option.Option[Hit].Some(type_hit(hir_node.type_id));
+            }
+            case hir.NodeData.ForeignRead(value): {
+                return option.Option[Hit].Some(type_hit(hir_node.type_id));
+            }
+            default: {}
+        }
+    }
+    return option.Option[Hit].None;
+}
+
+func strip_callee(parsed model.ParseResult, node usize) usize {
+    var current = node;
+    for true {
+        let candidate = parsed.nodes[current];
+        if kind_is(candidate.kind, AST_PARENTHESIZED) &&
+           vec.len(candidate.children) != 0 {
+            current = candidate.children[0];
+            continue;
+        }
+        return current;
+    }
+}
+
+func callee_member_matches(parsed model.ParseResult, call_node usize,
+                           span model.Span) bool {
+    let call = parsed.nodes[call_node];
+    if vec.len(call.children) == 0 { return false; }
+    var callee = strip_callee(parsed, call.children[0]);
+    let first = parsed.nodes[callee];
+    if kind_is(first.kind, AST_NEUTRAL_BRACKET) &&
+       vec.len(first.children) != 0 {
+        callee = strip_callee(parsed, first.children[0]);
+    }
+    let member = parsed.nodes[callee];
+    if !kind_is(member.kind, AST_MEMBER) ||
+       member.token_end <= member.token_begin {
+        return false;
+    }
+    return same_span(parsed.lexed.tokens[member.token_end - 1].span, span);
+}
+
+func callee_symbol(typed hir.HirModule,
+                   node usize) option.Option[usize] {
+    if node >= vec.len(typed.nodes) {
+        return option.Option[usize].None;
+    }
+    switch typed.nodes[node].data {
+        case hir.NodeData.FunctionValue(value):
+            return option.Option[usize].Some(value.symbol);
+        case hir.NodeData.FieldRead(value):
+            return option.Option[usize].Some(value.field);
+        case hir.NodeData.FieldPlace(value):
+            return option.Option[usize].Some(value.field);
+        case hir.NodeData.Read(value):
+            return option.Option[usize].Some(value.symbol);
+        case hir.NodeData.Place(value):
+            return option.Option[usize].Some(value.symbol);
+        default: return option.Option[usize].None;
+    }
+}
+
+func call_payload_symbol(typed hir.HirModule,
+                         data hir.NodeData) option.Option[usize] {
+    switch data {
+        case hir.NodeData.Call(value): {
+            switch value.direct_symbol {
+                case option.Option.Some(symbol):
+                    return option.Option[usize].Some(symbol);
+                case option.Option.None: {
+                    switch value.callee {
+                        case option.Option.Some(callee):
+                            return callee_symbol(typed, callee);
+                        case option.Option.None:
+                            return option.Option[usize].None;
+                    }
+                }
+            }
+        }
+        case hir.NodeData.TraitDispatch(value):
+            return option.Option[usize].Some(value.method);
+        case hir.NodeData.ConstraintCall(value):
+            return option.Option[usize].Some(value.method);
+        case hir.NodeData.EnumInit(value):
+            return option.Option[usize].Some(value.variant);
+        default: return option.Option[usize].None;
+    }
+}
+
+func call_hit(typed hir.HirModule, location Location,
+              parsed model.ParseResult,
+              span model.Span) option.Option[Hit] {
+    for hir_node in typed.nodes {
+        if hir_node.source.span.snapshot != span.snapshot ||
+           !span_contains(hir_node.source.span, span) ||
+           hir_node.source.node.module != location.module ||
+           hir_node.source.node.file != location.file {
+            continue;
+        }
+        if hir_node.source.node.node >= vec.len(parsed.nodes) { continue; }
+        let syntax = parsed.nodes[hir_node.source.node.node];
+        if !kind_is(syntax.kind, AST_CALL) ||
+           !callee_member_matches(parsed, hir_node.source.node.node, span) {
+            continue;
+        }
+        let symbol = call_payload_symbol(typed, hir_node.data);
+        if option.is_some(symbol) {
+            return option.Option[Hit].Some(symbol_hit(
+                option_usize(symbol)));
+        }
+    }
+    return option.Option[Hit].None;
+}
+
+func typed_hit(typed hir.HirModule, location Location,
+               parsed model.ParseResult,
+               span model.Span) option.Option[Hit] {
+    switch member_node_at(parsed, span) {
+        case option.Option.Some(node): {
+            let found = member_hit(typed, location, node, span);
+            if option.is_some(found) { return found; }
+        }
+        case option.Option.None: {}
+    }
+    return call_hit(typed, location, parsed, span);
+}
+
+func nominal_field_type(typed hir.HirModule,
+                        symbol usize) option.Option[usize] {
+    for declaration in typed.nominals {
+        for field in declaration.fields {
+            if field.symbol == symbol {
+                return option.Option[usize].Some(field.type_id);
+            }
+        }
+        for variant in declaration.variants {
+            for field in variant.payload {
+                if field.symbol == symbol {
+                    return option.Option[usize].Some(field.type_id);
+                }
+            }
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func function_signature(typed hir.HirModule,
+                        symbol usize) option.Option[usize] {
+    for function in typed.functions {
+        if function.symbol == symbol {
+            return option.Option[usize].Some(function.signature);
+        }
+    }
+    for trait_decl in typed.traits {
+        for method in trait_decl.methods {
+            if method.symbol == symbol {
+                return option.Option[usize].Some(method.signature);
+            }
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func function_parameters(typed hir.HirModule,
+                         symbol usize) Vec[hir.Parameter] {
+    for function in typed.functions {
+        if function.symbol == symbol { return function.parameters; }
+    }
+    for trait_decl in typed.traits {
+        for method in trait_decl.methods {
+            if method.symbol == symbol { return method.parameters; }
+        }
+    }
+    return vec.empty[hir.Parameter]();
+}
+
+func parameter_type(typed hir.HirModule,
+                    symbol usize) option.Option[usize] {
+    for function in typed.functions {
+        for var index usize = 0;
+            index < vec.len(function.parameters); index += 1 {
+            if function.parameters[index].symbol != symbol { continue; }
+            switch types.find(typed.types, function.signature) {
+                case option.Option.Some(signature): {
+                    if index < vec.len(signature.parameters) {
+                        return option.Option[usize].Some(
+                            signature.parameters[index].type_id);
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    for trait_decl in typed.traits {
+        for method in trait_decl.methods {
+            for var index usize = 0;
+                index < vec.len(method.parameters); index += 1 {
+                if method.parameters[index].symbol != symbol { continue; }
+                switch types.find(typed.types, method.signature) {
+                    case option.Option.Some(signature): {
+                        if index < vec.len(signature.parameters) {
+                            return option.Option[usize].Some(
+                                signature.parameters[index].type_id);
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func definition_node_type(resolved model.ResolvedProject, typed hir.HirModule,
+                          symbol usize) option.Option[usize] {
+    if symbol >= vec.len(resolved.symbols) {
+        return option.Option[usize].None;
+    }
+    switch resolved.symbols[symbol].definition {
+        case option.Option.Some(reference): {
+            for node in typed.nodes {
+                if node.source.node.module != reference.module ||
+                   node.source.node.file != reference.file ||
+                   node.source.node.node != reference.node {
+                    continue;
+                }
+                switch node.data {
+                    case hir.NodeData.Binding(value): {
+                        if value.symbol == symbol {
+                            // A Binding node is Unit-valued; the initializer
+                            // child carries the inferred binding type.
+                            if vec.len(node.children) != 0 &&
+                               node.children[0] < vec.len(typed.nodes) {
+                                return option.Option[usize].Some(
+                                    typed.nodes[node.children[0]].type_id);
+                            }
+                            return option.Option[usize].Some(node.type_id);
+                        }
+                    }
+                    case hir.NodeData.ConstantLiteral(value): {
+                        return option.Option[usize].Some(node.type_id);
+                    }
+                    default: {}
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    return option.Option[usize].None;
+}
+
+func use_node_type(typed hir.HirModule,
+                   symbol usize) option.Option[usize] {
+    for node in typed.nodes {
+        switch node.data {
+            case hir.NodeData.Read(value): {
+                if value.symbol == symbol {
+                    return option.Option[usize].Some(node.type_id);
+                }
+            }
+            case hir.NodeData.Place(value): {
+                if value.symbol == symbol {
+                    return option.Option[usize].Some(node.type_id);
+                }
+            }
+            default: {}
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func symbol_type(resolved model.ResolvedProject, typed hir.HirModule,
+                 symbol usize) option.Option[usize] {
+    if symbol >= vec.len(resolved.symbols) {
+        return option.Option[usize].None;
+    }
+    switch resolved.symbols[symbol].kind {
+        case model.SymbolKind.Field: {
+            let field = nominal_field_type(typed, symbol);
+            if option.is_some(field) { return field; }
+        }
+        default: {}
+    }
+    let declared = definition_node_type(resolved, typed, symbol);
+    if option.is_some(declared) { return declared; }
+    let parameter = parameter_type(typed, symbol);
+    if option.is_some(parameter) { return parameter; }
+    return use_node_type(typed, symbol);
+}
+
+func join_strings(values Vec[string], separator string) string {
+    var result = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index != 0 { result += separator; }
+        result += values[index];
+    }
+    return result;
+}
+
+func mode_prefix(mode model.ParamMode) string {
+    switch mode {
+        case model.ParamMode.Inout: return "inout ";
+        case model.ParamMode.Move: return "move ";
+        case model.ParamMode.Ordinary: return "";
+    }
+}
+
+func declaration_name(resolved model.ResolvedProject, id usize) string {
+    return symbol_name(resolved, id);
+}
+
+func type_spelling_inner(typed hir.HirModule, type_id usize,
+                         depth usize) string {
+    if depth > 24 { return "..."; }
+    let found = types.find(typed.types, type_id);
+    if !option.is_some(found) { return ""; }
+    var value = model.empty_type(model.TypeKind.Error);
+    switch found {
+        case option.Option.Some(item): value = item;
+        case option.Option.None: {}
+    }
+    switch value.kind {
+        case model.TypeKind.Unit: return "Unit";
+        case model.TypeKind.Bool: return "bool";
+        case model.TypeKind.String: return "string";
+        case model.TypeKind.Isize: return "isize";
+        case model.TypeKind.Usize: return "usize";
+        case model.TypeKind.SignedInt: {
+            if value.bits == 0 { return "<integer>"; }
+            return "i" + strconv.format_u64(u64(value.bits));
+        }
+        case model.TypeKind.UnsignedInt: {
+            if value.bits == 0 { return "<integer>"; }
+            return "u" + strconv.format_u64(u64(value.bits));
+        }
+        case model.TypeKind.Float: {
+            if value.bits == 0 { return "<float>"; }
+            return "f" + strconv.format_u64(u64(value.bits));
+        }
+        case model.TypeKind.Vec: {
+            if vec.len(value.type_args) != 1 { return "Vec"; }
+            return "Vec[" + type_spelling_inner(typed, value.type_args[0],
+                depth + 1) + "]";
+        }
+        case model.TypeKind.Slice: {
+            if vec.len(value.type_args) != 1 { return "Slice"; }
+            return "Slice[" + type_spelling_inner(typed, value.type_args[0],
+                depth + 1) + "]";
+        }
+        case model.TypeKind.Weak: {
+            if vec.len(value.type_args) != 1 { return "Weak"; }
+            return "Weak[" + type_spelling_inner(typed, value.type_args[0],
+                depth + 1) + "]";
+        }
+        case model.TypeKind.Task: {
+            if vec.len(value.type_args) != 1 { return "Task"; }
+            return "Task[" + type_spelling_inner(typed, value.type_args[0],
+                depth + 1) + "]";
+        }
+        case model.TypeKind.NominalStruct: {
+            let args = vec.empty[string]();
+            for arg in value.type_args {
+                vec.push(args, type_spelling_inner(typed, arg, depth + 1));
+            }
+            var name = declaration_name(typed.resolved, value.declaration);
+            if name == "" { name = "<struct>"; }
+            if vec.len(args) != 0 {
+                return name + "[" + join_strings(args, ", ") + "]";
+            }
+            return name;
+        }
+        case model.TypeKind.NominalEnum: {
+            let args = vec.empty[string]();
+            for arg in value.type_args {
+                vec.push(args, type_spelling_inner(typed, arg, depth + 1));
+            }
+            var name = declaration_name(typed.resolved, value.declaration);
+            if name == "" { name = "<enum>"; }
+            if vec.len(args) != 0 {
+                return name + "[" + join_strings(args, ", ") + "]";
+            }
+            return name;
+        }
+        case model.TypeKind.TraitObject: {
+            let args = vec.empty[string]();
+            for arg in value.type_args {
+                vec.push(args, type_spelling_inner(typed, arg, depth + 1));
+            }
+            var name = declaration_name(typed.resolved, value.declaration);
+            if name == "" { name = "<trait>"; }
+            if vec.len(args) != 0 {
+                return "dyn " + name + "[" + join_strings(args, ", ") + "]";
+            }
+            return "dyn " + name;
+        }
+        case model.TypeKind.TypeParameter: {
+            let name = declaration_name(typed.resolved, value.declaration);
+            if name == "" { return "<type parameter>"; }
+            return name;
+        }
+        case model.TypeKind.Function: {
+            let parameters = vec.empty[string]();
+            for parameter in value.parameters {
+                vec.push(parameters, mode_prefix(parameter.mode) +
+                    type_spelling_inner(typed, parameter.type_id, depth + 1));
+            }
+            var text = "func(" + join_strings(parameters, ", ") + ") " +
+                type_spelling_inner(typed, value.result, depth + 1);
+            switch value.throws_type {
+                case option.Option.Some(error_type): {
+                    text += " throws " + type_spelling_inner(typed,
+                        error_type, depth + 1);
+                }
+                case option.Option.None: {}
+            }
+            return text;
+        }
+        case model.TypeKind.ForeignOpaque: {
+            let name = declaration_name(typed.resolved, value.declaration);
+            if name != "" { return name; }
+            return "<foreign opaque>";
+        }
+        case model.TypeKind.ForeignCallable: {
+            let name = declaration_name(typed.resolved, value.declaration);
+            if name != "" { return name; }
+            return "<foreign callable>";
+        }
+        case model.TypeKind.CForeignPointer: {
+            if vec.len(value.type_args) == 1 {
+                return "<C pointer to " +
+                    type_spelling_inner(typed, value.type_args[0], depth + 1) +
+                    ">";
+            }
+            return "<C pointer>";
+        }
+        case model.TypeKind.CForeignBuffer: {
+            if vec.len(value.type_args) == 1 {
+                return "<C buffer of " +
+                    type_spelling_inner(typed, value.type_args[0], depth + 1) +
+                    ">";
+            }
+            return "<C buffer>";
+        }
+        case model.TypeKind.CForeignRecord: return "<C record>";
+        case model.TypeKind.CForeignResource: return "<C resource>";
+        case model.TypeKind.CForeignCallback: return "<C callback>";
+        case model.TypeKind.CForeignOpaque: return "<C opaque>";
+        case model.TypeKind.ThreadHandle: return "ThreadHandle";
+        case model.TypeKind.MutexHandle: return "MutexHandle";
+        case model.TypeKind.CondvarHandle: return "CondvarHandle";
+        case model.TypeKind.AtomicI64Handle: return "AtomicI64Handle";
+        case model.TypeKind.IpcHandle: return "IpcHandle";
+        case model.TypeKind.Error: return "<error type>";
+    }
+}
+
+func type_spelling(typed hir.HirModule, type_id usize) string {
+    return type_spelling_inner(typed, type_id, 0);
+}
+
+func named_signature_text(name string, signature model.Type,
+                          typed hir.HirModule,
+                          parameters Vec[hir.Parameter]) string {
+    var text = "func " + name + "(";
+    for var index usize = 0; index < vec.len(signature.parameters);
+        index += 1 {
+        if index != 0 { text += ", "; }
+        let parameter = signature.parameters[index];
+        text += mode_prefix(parameter.mode);
+        if index < vec.len(parameters) {
+            let parameter_name = declaration_name(typed.resolved,
+                parameters[index].symbol);
+            if parameter_name != "" { text += parameter_name + " "; }
+        }
+        text += type_spelling_inner(typed, parameter.type_id, 1);
+    }
+    text += ") " + type_spelling_inner(typed, signature.result, 1);
+    switch signature.throws_type {
+        case option.Option.Some(error_type): {
+            text += " throws " + type_spelling_inner(typed, error_type, 1);
+        }
+        case option.Option.None: {}
+    }
+    return text;
+}
+
+func token_text(parsed model.ParseResult, index usize) string {
+    return parsed.lexed.tokens[index].spelling;
+}
+
+func no_space_before(text string) bool {
+    return text == ")" || text == "]" || text == "," || text == ";" ||
+        text == "." || text == ":" || text == "}";
+}
+
+func no_space_after(previous string) bool {
+    return previous == "(" || previous == "[" || previous == "." ||
+        previous == ":";
+}
+
+func header_text(parsed model.ParseResult, node_id usize) string {
+    let node = parsed.nodes[node_id];
+    if node.token_end <= node.token_begin { return ""; }
+    var parts = vec.empty[string]();
+    var parenthesis usize = 0;
+    var bracket usize = 0;
+    var limit = node.token_end;
+    if limit > node.token_begin + 96 { limit = node.token_begin + 96; }
+    for var position usize = node.token_begin; position < limit;
+        position += 1 {
+        let text = token_text(parsed, position);
+        if parenthesis == 0 && bracket == 0 &&
+           (text == "{" || text == ";" || text == "}") {
+            break;
+        }
+        if text == "(" { parenthesis += 1; }
+        if text == ")" && parenthesis != 0 { parenthesis -= 1; }
+        if text == "[" { bracket += 1; }
+        if text == "]" && bracket != 0 { bracket -= 1; }
+        vec.push(parts, text);
+    }
+    if vec.len(parts) == 0 { return ""; }
+    var result = parts[0];
+    for var index usize = 1; index < vec.len(parts); index += 1 {
+        let text = parts[index];
+        let previous = parts[index - 1];
+        if no_space_before(text) || no_space_after(previous) ||
+           text == "(" || text == "[" {
+            result += text;
+        } else {
+            result += " " + text;
+        }
+    }
+    return result;
+}
+
+func symbol_declaration_text(resolved model.ResolvedProject,
+                             symbol usize) string {
+    if symbol >= vec.len(resolved.symbols) { return ""; }
+    switch resolved.symbols[symbol].definition {
+        case option.Option.Some(reference): {
+            switch parse_of_ref(resolved, reference) {
+                case option.Option.Some(parsed): {
+                    if reference.node < vec.len(parsed.nodes) {
+                        return header_text(parsed, reference.node);
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch resolved.symbols[symbol].declaration {
+        case option.Option.Some(span): {
+            switch parse_of_span(resolved, span) {
+                case option.Option.Some(parsed): {
+                    var result = "";
+                    for token in parsed.lexed.tokens {
+                        if token.span.snapshot == span.snapshot &&
+                           span.begin_byte <= token.span.begin_byte &&
+                           token.span.end_byte <= span.end_byte {
+                            if result != "" { result += " "; }
+                            result += token.spelling;
+                        }
+                    }
+                    return result;
+                }
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    return "";
+}
+
+func binding_keyword(resolved model.ResolvedProject,
+                     symbol usize) string {
+    if symbol < vec.len(resolved.symbols) {
+        switch resolved.symbols[symbol].definition {
+            case option.Option.Some(reference): {
+                switch parse_of_ref(resolved, reference) {
+                    case option.Option.Some(parsed): {
+                        if reference.node < vec.len(parsed.nodes) {
+                            let node = parsed.nodes[reference.node];
+                            let kind = model.ast_kind_id(node.kind);
+                            if kind == AST_PARAMETER { return "param"; }
+                            if kind == AST_FORIN || kind == AST_CATCH ||
+                               kind == AST_BIND_PATTERN {
+                                return "let";
+                            }
+                            if kind == AST_BINDING {
+                                var position = node.token_begin;
+                                if position < vec.len(parsed.lexed.tokens) &&
+                                   token_text(parsed, position) == "pub" {
+                                    position += 1;
+                                }
+                                if position < vec.len(parsed.lexed.tokens) {
+                                    return token_text(parsed, position);
+                                }
+                            }
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            case option.Option.None: {}
+        }
+        switch resolved.symbols[symbol].kind {
+            case model.SymbolKind.Constant: return "const";
+            default: {}
+        }
+    }
+    return "value";
+}
+
+func hover_value(resolved model.ResolvedProject, typed hir.HirModule,
+                 has_typed bool, symbol usize, hit Hit) string {
+    let name = symbol_name(resolved, symbol);
+    let keyword = binding_keyword(resolved, symbol);
+    var type_id usize = 0;
+    var has_type = false;
+    if has_typed {
+        let found = symbol_type(resolved, typed, symbol);
+        if option.is_some(found) {
+            type_id = option_usize(found);
+            has_type = true;
+        }
+    }
+    if !has_type && hit.has_type {
+        type_id = hit.type_id;
+        has_type = true;
+    }
+    var text = keyword + " " + name;
+    if has_type {
+        let spelling = type_spelling(typed, type_id);
+        if spelling != "" { text += ": " + spelling; }
+    }
+    return text;
+}
+
+func hover_constant(resolved model.ResolvedProject, typed hir.HirModule,
+                    has_typed bool, symbol usize, hit Hit) string {
+    let name = symbol_name(resolved, symbol);
+    var type_id usize = 0;
+    var has_type = false;
+    if has_typed {
+        let found = symbol_type(resolved, typed, symbol);
+        if option.is_some(found) {
+            type_id = option_usize(found);
+            has_type = true;
+        }
+    }
+    if !has_type && hit.has_type {
+        type_id = hit.type_id;
+        has_type = true;
+    }
+    var text = "const " + name;
+    if has_type {
+        let spelling = type_spelling(typed, type_id);
+        if spelling != "" { text += ": " + spelling; }
+    }
+    return text;
+}
+
+func declaration_symbol_for(typed hir.HirModule, symbol usize) usize {
+    for instance in typed.instances {
+        if instance.symbol == symbol { return instance.origin; }
+    }
+    return symbol;
+}
+
+func hover_function(resolved model.ResolvedProject, typed hir.HirModule,
+                    has_typed bool, symbol usize, target usize) string {
+    let name = symbol_name(resolved, symbol);
+    if has_typed {
+        let signature_id = function_signature(typed, target);
+        if option.is_some(signature_id) {
+            let found = types.find(typed.types, option_usize(signature_id));
+            switch found {
+                case option.Option.Some(signature): {
+                    return named_signature_text(name, signature, typed,
+                        function_parameters(typed, target));
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    let declaration = symbol_declaration_text(resolved, symbol);
+    if declaration != "" { return declaration; }
+    return "func " + name;
+}
+
+func hover_field(resolved model.ResolvedProject, typed hir.HirModule,
+                 has_typed bool, symbol usize, hit Hit) string {
+    let name = symbol_name(resolved, symbol);
+    var type_id usize = 0;
+    var has_type = false;
+    if hit.has_type {
+        type_id = hit.type_id;
+        has_type = true;
+    } else if has_typed {
+        let found = nominal_field_type(typed, symbol);
+        if option.is_some(found) {
+            type_id = option_usize(found);
+            has_type = true;
+        }
+    }
+    var text = "field " + name;
+    if has_type {
+        let spelling = type_spelling(typed, type_id);
+        if spelling != "" { text += ": " + spelling; }
+    }
+    return text;
+}
+
+func hover_variant(resolved model.ResolvedProject, typed hir.HirModule,
+                   has_typed bool, symbol usize) string {
+    let name = symbol_name(resolved, symbol);
+    if has_typed {
+        for declaration in typed.nominals {
+            for variant in declaration.variants {
+                if variant.symbol != symbol { continue; }
+                if vec.len(variant.payload) == 0 {
+                    return "variant " + name;
+                }
+                let fields = vec.empty[string]();
+                for field in variant.payload {
+                    let field_name = symbol_name(resolved, field.symbol);
+                    let spelling = type_spelling(typed, field.type_id);
+                    if spelling == "" {
+                        vec.push(fields, field_name);
+                    } else if field_name == "" {
+                        vec.push(fields, spelling);
+                    } else {
+                        vec.push(fields, field_name + ": " + spelling);
+                    }
+                }
+                return "variant " + name + "(" +
+                    join_strings(fields, ", ") + ")";
+            }
+        }
+    }
+    return "variant " + name;
+}
+
+func hover_symbol(resolved model.ResolvedProject, typed hir.HirModule,
+                  has_typed bool, hit Hit) string {
+    if !hit.has_symbol { return ""; }
+    var symbol = hit.symbol;
+    if has_typed { symbol = declaration_symbol_for(typed, symbol); }
+    if symbol >= vec.len(resolved.symbols) { return ""; }
+    let declaration = resolved.symbols[symbol];
+    switch declaration.kind {
+        case model.SymbolKind.Value:
+            return hover_value(resolved, typed, has_typed, symbol, hit);
+        case model.SymbolKind.Constant:
+            return hover_constant(resolved, typed, has_typed, symbol, hit);
+        case model.SymbolKind.Function:
+            return hover_function(resolved, typed, has_typed, symbol, hit.symbol);
+        case model.SymbolKind.Type: {
+            let text = symbol_declaration_text(resolved, symbol);
+            if text != "" { return text; }
+            return "type " + declaration.name;
+        }
+        case model.SymbolKind.Trait: {
+            let text = symbol_declaration_text(resolved, symbol);
+            if text != "" { return text; }
+            return "trait " + declaration.name;
+        }
+        case model.SymbolKind.TypeParameter:
+            return "type parameter " + declaration.name;
+        case model.SymbolKind.Module: {
+            var path = "";
+            switch declaration.target {
+                case option.Option.Some(target): {
+                    if target < vec.len(resolved.project.modules) {
+                        path = resolved.project.modules[target].logical_path;
+                    }
+                }
+                case option.Option.None: {}
+            }
+            if path != "" {
+                return "module alias " + declaration.name + ": " + path;
+            }
+            return "module alias " + declaration.name;
+        }
+        case model.SymbolKind.Field:
+            return hover_field(resolved, typed, has_typed, symbol, hit);
+        case model.SymbolKind.Variant:
+            return hover_variant(resolved, typed, has_typed, symbol);
+        case model.SymbolKind.BuiltinType:
+            return "builtin type " + declaration.name;
+        case model.SymbolKind.BuiltinFunction:
+            return "builtin function " + declaration.name;
+    }
+}
+
+func alias_span_in(resolved model.ResolvedProject, declaration model.Span,
+                   name string) option.Option[model.Span] {
+    let project = resolved.project;
+    var found = option.Option[model.Span].None;
+    for parsed in project.files {
+        if parsed.lexed.source.id != declaration.snapshot { continue; }
+        for token in parsed.lexed.tokens {
+            if token.span.begin_byte < declaration.begin_byte ||
+               declaration.end_byte < token.span.end_byte {
+                continue;
+            }
+            if token.spelling == name {
+                found = option.Option[model.Span].Some(token.span);
+            }
+        }
+    }
+    return found;
+}
+
+func token_span_in_node(resolved model.ResolvedProject,
+                        reference model.NodeRef,
+                        name string) option.Option[model.Span] {
+    switch parse_of_ref(resolved, reference) {
+        case option.Option.Some(parsed): {
+            if reference.node >= vec.len(parsed.nodes) {
+                return option.Option[model.Span].None;
+            }
+            let node = parsed.nodes[reference.node];
+            for var index usize = node.token_begin; index < node.token_end;
+                index += 1 {
+                let token = parsed.lexed.tokens[index];
+                if token.spelling == name {
+                    return option.Option[model.Span].Some(token.span);
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    return option.Option[model.Span].None;
+}
+
+func definition_span(resolved model.ResolvedProject,
+                     symbol usize) option.Option[model.Span] {
+    if symbol >= vec.len(resolved.symbols) {
+        return option.Option[model.Span].None;
+    }
+    let declaration = resolved.symbols[symbol];
+    switch declaration.declaration {
+        case option.Option.Some(span): {
+            if symbol_is_module(declaration.kind) {
+                let alias = alias_span_in(resolved, span, declaration.name);
+                if option.is_some(alias) { return alias; }
+            }
+            if span_in_project(resolved, span) {
+                return option.Option[model.Span].Some(span);
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch declaration.definition {
+        case option.Option.Some(reference): {
+            let name = token_span_in_node(resolved, reference, declaration.name);
+            if option.is_some(name) {
+                let span = option_span_get(name);
+                if span_in_project(resolved, span) {
+                    return option.Option[model.Span].Some(span);
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    return option.Option[model.Span].None;
+}
+
+func option_span_get(value option.Option[model.Span]) model.Span {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return empty_span();
+    }
+}
+
+func token_is_type_candidate(kind model.TokenKind) bool {
+    let id = model.token_kind_id(kind);
+    return id == TK_IDENTIFIER || id == TK_INTEGER || id == TK_FLOATING ||
+        id == TK_STRING_LITERAL;
+}
+
+func hir_type_at(typed hir.HirModule, location Location,
+                 span model.Span) option.Option[usize] {
+    var exact = option.Option[usize].None;
+    var best = option.Option[usize].None;
+    var best_length u64 = 0;
+    for node in typed.nodes {
+        if node.source.span.snapshot != span.snapshot ||
+           node.source.node.module != location.module ||
+           node.source.node.file != location.file ||
+           !span_contains(node.source.span, span) ||
+           node.type_id == 0 {
+            continue;
+        }
+        if same_span(node.source.span, span) {
+            exact = option.Option[usize].Some(node.type_id);
+        } else if !option.is_some(best) ||
+                  span_length(node.source.span) < best_length {
+            best = option.Option[usize].Some(node.type_id);
+            best_length = span_length(node.source.span);
+        }
+    }
+    if option.is_some(exact) { return exact; }
+    return best;
+}
+
+func hover_resolved(snapshot model.Source, byte u64,
+                    resolved model.ResolvedProject,
+                    typed_value option.Option[hir.HirModule])
+    option.Option[Hover] {
+    let location_option = find_location(resolved, snapshot);
+    if !option.is_some(location_option) {
+        return option.Option[Hover].None;
+    }
+    var location = Location(module: 0, file: 0, parse: 0);
+    switch location_option {
+        case option.Option.Some(value): location = value;
+        case option.Option.None: {}
+    }
+    let parsed = resolved.project.files[location.parse];
+    let token_option = token_at(parsed, byte);
+    if !option.is_some(token_option) {
+        return option.Option[Hover].None;
+    }
+    let token = parsed.lexed.tokens[option_usize(token_option)];
+    var has_typed = false;
+    var typed = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    switch typed_value {
+        case option.Option.Some(value): {
+            if typed_matches(resolved, value) {
+                typed = value;
+                has_typed = true;
+            }
+        }
+        case option.Option.None: {}
+    }
+    let resolved_at = resolved_hit(resolved, location, parsed,
+        option_usize(token_option), token.span);
+    if option.is_some(resolved_at) {
+        var hit = Hit(has_symbol: false, symbol: 0, has_type: false,
+            type_id: 0);
+        switch resolved_at {
+            case option.Option.Some(value): hit = value;
+            case option.Option.None: {}
+        }
+        var text = "";
+        if hit.has_symbol {
+            text = hover_symbol(resolved, typed, has_typed, hit);
+        } else if hit.has_type && has_typed {
+            text = type_spelling(typed, hit.type_id);
+        }
+        if text == "" && hit.has_type && has_typed {
+            text = type_spelling(typed, hit.type_id);
+        }
+        if text != "" {
+            return option.Option[Hover].Some(Hover(span: token.span,
+                text: text));
+        }
+        return option.Option[Hover].None;
+    }
+    if !has_typed || !token_is_type_candidate(token.kind) {
+        return option.Option[Hover].None;
+    }
+    let typed_at = typed_hit(typed, location, parsed, token.span);
+    if option.is_some(typed_at) {
+        var hit = Hit(has_symbol: false, symbol: 0, has_type: false,
+            type_id: 0);
+        switch typed_at {
+            case option.Option.Some(value): hit = value;
+            case option.Option.None: {}
+        }
+        if hit.has_symbol {
+            let text = hover_symbol(resolved, typed, true, hit);
+            if text != "" {
+                return option.Option[Hover].Some(Hover(span: token.span,
+                    text: text));
+            }
+        }
+        if hit.has_type {
+            let text = type_spelling(typed, hit.type_id);
+            if text != "" {
+                return option.Option[Hover].Some(Hover(span: token.span,
+                    text: text));
+            }
+        }
+    }
+    let direct = hir_type_at(typed, location, token.span);
+    if option.is_some(direct) {
+        let text = type_spelling(typed, option_usize(direct));
+        if text != "" {
+            return option.Option[Hover].Some(Hover(span: token.span,
+                text: text));
+        }
+    }
+    return option.Option[Hover].None;
+}
+
+pub func hover(snapshot model.Source, byte u64,
+               resolved_value option.Option[model.ResolvedProject],
+               typed_value option.Option[hir.HirModule])
+    option.Option[Hover] {
+    if !snapshot.valid { return option.Option[Hover].None; }
+    switch resolved_value {
+        case option.Option.Some(value):
+            return hover_resolved(snapshot, byte, value, typed_value);
+        case option.Option.None: return option.Option[Hover].None;
+    }
+}
+
+func definition_resolved(snapshot model.Source, byte u64,
+                         resolved model.ResolvedProject,
+                         typed_value option.Option[hir.HirModule])
+    option.Option[model.Span] {
+    let location_option = find_location(resolved, snapshot);
+    if !option.is_some(location_option) {
+        return option.Option[model.Span].None;
+    }
+    var location = Location(module: 0, file: 0, parse: 0);
+    switch location_option {
+        case option.Option.Some(value): location = value;
+        case option.Option.None: {}
+    }
+    let parsed = resolved.project.files[location.parse];
+    let token_option = token_at(parsed, byte);
+    if !option.is_some(token_option) {
+        return option.Option[model.Span].None;
+    }
+    let token = parsed.lexed.tokens[option_usize(token_option)];
+    let resolved_at = resolved_hit(resolved, location, parsed,
+        option_usize(token_option), token.span);
+    if option.is_some(resolved_at) {
+        var hit = Hit(has_symbol: false, symbol: 0, has_type: false,
+            type_id: 0);
+        switch resolved_at {
+            case option.Option.Some(value): hit = value;
+            case option.Option.None: {}
+        }
+        if hit.has_symbol {
+            return definition_span(resolved, hit.symbol);
+        }
+        return option.Option[model.Span].None;
+    }
+    var has_typed = false;
+    var typed = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    switch typed_value {
+        case option.Option.Some(value): {
+            if typed_matches(resolved, value) {
+                typed = value;
+                has_typed = true;
+            }
+        }
+        case option.Option.None: {}
+    }
+    if !has_typed || !token_is_type_candidate(token.kind) {
+        return option.Option[model.Span].None;
+    }
+    let typed_member = typed_hit(typed, location, parsed, token.span);
+    if option.is_some(typed_member) {
+        var hit = Hit(has_symbol: false, symbol: 0, has_type: false,
+            type_id: 0);
+        switch typed_member {
+            case option.Option.Some(value): hit = value;
+            case option.Option.None: {}
+        }
+        if hit.has_symbol {
+            return definition_span(resolved, declaration_symbol_for(typed, hit.symbol));
+        }
+    }
+    return option.Option[model.Span].None;
+}
+
+pub func definition(snapshot model.Source, byte u64,
+                    resolved_value option.Option[model.ResolvedProject],
+                    typed_value option.Option[hir.HirModule])
+    option.Option[model.Span] {
+    if !snapshot.valid { return option.Option[model.Span].None; }
+    switch resolved_value {
+        case option.Option.Some(value):
+            return definition_resolved(snapshot, byte, value, typed_value);
+        case option.Option.None: return option.Option[model.Span].None;
+    }
+}

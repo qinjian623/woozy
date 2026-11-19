@@ -122,4 +122,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON)
     selfhost.bindings selfhost.project selfhost.nativebuild selfhost.constant
     selfhost.ownership
     PROPERTIES TIMEOUT 1200)
+  # smoke.py builds the full self-host compiler twice; the editor packages
+  # raised that build above the default per-test timeout.
+  set_tests_properties(selfhost.cli PROPERTIES TIMEOUT 3600)
 endif()

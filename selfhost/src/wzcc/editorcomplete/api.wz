@@ -1,0 +1,39 @@
+// Semantic completion records and LSP item kinds.
+//
+// This package only produces labels and LSP CompletionItemKind numbers.  The
+// caller owns JSON encoding, ranges, URIs and document snapshots.
+package editorcomplete;
+
+pub struct Item {
+    pub label string;
+    pub kind i32;
+}
+
+// Frozen CompletionItemKind values used by the editor protocol.
+pub const LSP_METHOD i32 = 2;
+pub const LSP_FUNCTION i32 = 3;
+pub const LSP_FIELD i32 = 5;
+pub const LSP_VARIABLE i32 = 6;
+pub const LSP_CLASS i32 = 7;
+pub const LSP_MODULE i32 = 9;
+pub const LSP_VALUE i32 = 12;
+pub const LSP_ENUM i32 = 13;
+pub const LSP_ENUM_MEMBER i32 = 20;
+pub const LSP_CONSTANT i32 = 21;
+pub const LSP_STRUCT i32 = 22;
+pub const LSP_TYPE_PARAMETER i32 = 25;
+
+// Frozen AstKind ordinals from app/wzcc/model.
+pub const AST_STRUCT u32 = 5;
+pub const AST_ENUM u32 = 6;
+pub const AST_TRAIT u32 = 7;
+
+// A response is bounded.  Locals and aliases are inserted before package-wide
+// declarations, so a very large package cannot push the useful local names out.
+pub const MAX_ITEMS usize = 512;
+
+pub func no_index() usize {
+    // Valid token indexes are always smaller than this value.  Keeping the
+    // sentinel separate from token counts makes out-of-range checks explicit.
+    return 1073741824;
+}

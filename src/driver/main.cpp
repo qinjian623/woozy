@@ -1,5 +1,7 @@
 #include "lang/version.hpp"
+#include "lang/driver/lsp.hpp"
 #include "lang/support/input.hpp"
+#include "lang/syntax/format.hpp"
 #include "lang/syntax/parser.hpp"
 #include "lang/sema/check.hpp"
 #include "lang/backend/python.hpp"
@@ -15,6 +17,7 @@
 #include <json-c/json.h>
 #include <limits>
 #include <iostream>
+#include <sstream>
 #include <string_view>
 #include <system_error>
 #include <unistd.h>
@@ -131,6 +134,58 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
     write("langrt.py", output.runtime);
     lang::publish_staged_files(stage, out, {"langrt.py", "program.py"});
 }
+void print_diagnostics(const lang::SourceManager& sources,
+                       const std::vector<lang::Diagnostic>& diagnostics) {
+    for (const auto& diagnostic : diagnostics) {
+        if (diagnostic.primary) {
+            const auto& span = *diagnostic.primary;
+            std::cerr << sources.get(span.snapshot)->path << ":bytes["
+                      << span.begin_byte << ',' << span.end_byte << "): ";
+        }
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+}
+
+int format_file(const char* path, bool check) {
+    lang::SourceManager sources;
+    try {
+        std::shared_ptr<const lang::SourceSnapshot> source;
+        if (std::string_view(path) == "-") {
+            std::ostringstream input;
+            input << std::cin.rdbuf();
+            if (input.bad() || std::cin.bad())
+                throw std::ios_base::failure("cannot read stdin");
+            source = sources.update(sources.add_file("<stdin>"), std::move(input).str());
+        } else {
+            auto input = lang::read_source(path, sources);
+            if (!input.success()) {
+                print_diagnostics(sources, input.diagnostics);
+                return static_cast<int>(input.exit_code());
+            }
+            source = *input.value;
+        }
+        auto result = lang::format_source(source);
+        if (!result.success()) {
+            print_diagnostics(sources, result.diagnostics);
+            return static_cast<int>(result.exit_code());
+        }
+        if (check) {
+            if (source->original == *result.value) return 0;
+            std::cerr << source->path << ": formatting differs\n";
+            return 1;
+        }
+        std::cout << *result.value << std::flush;
+        if (!std::cout) throw std::ios_base::failure("cannot write stdout");
+        return 0;
+    } catch (const std::ios_base::failure& error) {
+        std::cerr << "E_INPUT_IO: " << error.what() << '\n';
+        return 2;
+    } catch (const std::exception& error) {
+        std::cerr << "E_INTERNAL_ERROR: " << error.what() << '\n';
+        return 3;
+    }
+}
+
 int compile(const char* path, bool syntax, bool json, std::string_view backend,
             const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr,
             const char* std_binding = nullptr, bool package_objects = false, const char* cache_directory = nullptr,
@@ -145,14 +200,7 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
             std::cout << (out ? "build ok: " : syntax ? "syntax ok: " : "check ok: ")
                       << (out ? out : path) << '\n';
         } else {
-            for (const auto& diagnostic : result.diagnostics) {
-                if (diagnostic.primary) {
-                    const auto& span = *diagnostic.primary;
-                    std::cerr << sources.get(span.snapshot)->path << ":bytes["
-                              << span.begin_byte << ',' << span.end_byte << "): ";
-                }
-                std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
-            }
+            print_diagnostics(sources, result.diagnostics);
         }
         return static_cast<int>(result.exit_code());
     };
@@ -262,11 +310,13 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: woozyc --help | --version\n"
                      "       woozyc check --syntax-only [--format json] FILE\n"
+                     "       woozyc fmt [--check] FILE|-\n"
+                     "       woozyc lsp [--stdio]\n"
                      "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
                      "       woozyc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
                      "       woozyc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [-g] [--opt 0|2] [--target TRIPLE] [--format json]\n"
                      "Native package objects: --package-objects [--cache-dir DIR] (scalar frontend cache)\n"
-                     "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
+                     "Native build requires LANG_ENABLE_LLVM=ON; capabilities is not implemented\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
@@ -275,6 +325,25 @@ int main(int argc, char** argv) {
     }
     if (argc >= 2) {
         const std::string_view command(argv[1]);
+        if (command == "fmt") {
+            bool check = argc > 2 && std::string_view(argv[2]) == "--check";
+            int file = check ? 3 : 2;
+            const bool literal = argc > file && std::string_view(argv[file]) == "--";
+            if (literal) ++file;
+            if (argc == file + 1) {
+                const std::string_view path(argv[file]);
+                if (!path.empty() && (literal || path == "-" || !path.starts_with('-')))
+                    return format_file(argv[file], check);
+            }
+            std::cerr << "E_DRIVER_ARGUMENT: use fmt [--check] FILE|-\n";
+            return 2;
+        }
+        if (command == "lsp") {
+            if (argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--stdio"))
+                return lang::run_lsp(std::cin, std::cout);
+            std::cerr << "E_DRIVER_ARGUMENT: use lsp [--stdio]\n";
+            return 2;
+        }
         if (command == "check" || command == "build") {
             bool syntax = false, json = false, package_objects = false, debug_info = false;
             const char* path = nullptr;
@@ -338,8 +407,7 @@ int main(int argc, char** argv) {
             return compile(syntax ? path : project, syntax, json, backend, out, opt, target,
                            std_binding, package_objects, cache_directory, debug_info);
         }
-        if (command == "lsp" ||
-            command == "capabilities") {
+        if (command == "capabilities") {
             std::cerr << "E_CAPABILITY_UNAVAILABLE: " << command
                       << " is not implemented\n";
             return 1;

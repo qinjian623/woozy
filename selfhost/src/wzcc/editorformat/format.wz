@@ -1,0 +1,370 @@
+package editorformat;
+
+// Pure-Wz port of src/syntax/format.cpp.
+//
+// The formatter keeps every token and comment/literal byte from the original
+// snapshot, rewrites only inter-token whitespace, follows the source's BOM and
+// newline convention, and refuses a candidate whose token stream differs from
+// the parsed input. Invalid source returns the lexer/parser diagnostics and no
+// partial text.
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/source" as source;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const AST_FILE u32 = 0;
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_IMPL u32 = 8;
+const AST_FIELD u32 = 9;
+const AST_VARIANT u32 = 10;
+const AST_PARENTHESIZED_TYPE u32 = 17;
+const AST_BLOCK u32 = 18;
+const AST_SWITCH u32 = 24;
+const AST_CASE u32 = 25;
+const AST_UNARY u32 = 36;
+const AST_BRACKET_ITEM u32 = 42;
+const AST_SLICE u32 = 43;
+const AST_LIST u32 = 44;
+const AST_PARENTHESIZED u32 = 46;
+const AST_LITERAL_PATTERN u32 = 48;
+
+pub struct FormatResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub has_value bool;
+    pub text string;
+    pub diagnostics Vec[model.Diagnostic];
+}
+
+struct Layout {
+    new_line bool;
+    group bool;
+    prefix bool;
+    slice_colon bool;
+    branch_indent i32;
+}
+
+func empty_layout() Layout {
+    return Layout(new_line: false, group: false, prefix: false,
+        slice_colon: false, branch_indent: 0);
+}
+
+func phase_complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+// PhaseResult::success: complete, has a value and no error-severity diagnostic.
+func result_success(state model.PhaseState, has_value bool,
+                    diagnostics Vec[model.Diagnostic]) bool {
+    if !phase_complete(state) || !has_value { return false; }
+    for diagnostic in diagnostics {
+        if diagnostic.severity == "error" { return false; }
+    }
+    return true;
+}
+
+func internal_result(message string) FormatResult {
+    let diagnostic = model.Diagnostic(code: "E_INTERNAL_ERROR",
+        phase: "toolchain", severity: "error", message: message,
+        has_primary: false,
+        primary: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0),
+        related: [], fixits: [], notes: [],
+        has_expected_type: false, expected_type: "",
+        has_actual_type: false, actual_type: "");
+    return FormatResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, has_value: false, text: "",
+        diagnostics: [diagnostic]);
+}
+
+func layout_for(nodes Vec[model.AstNode],
+                tokens Vec[model.Token]) Vec[Layout] {
+    let layout = vec.make[Layout](vec.len(tokens), empty_layout());
+    for node in nodes {
+        let kind = model.ast_kind_id(node.kind);
+        let first = node.token_begin;
+        if first >= vec.len(layout) { continue; }
+        if kind == AST_PARENTHESIZED || kind == AST_PARENTHESIZED_TYPE ||
+           kind == AST_LIST {
+            layout[first].group = true;
+        } else if kind == AST_UNARY || kind == AST_LITERAL_PATTERN {
+            let spelling = tokens[first].spelling;
+            layout[first].prefix = spelling == "+" || spelling == "-" ||
+                spelling == "!" || spelling == "~";
+        } else if kind == AST_SLICE {
+            if vec.len(node.children) == 0 { continue; }
+            var colon = nodes[node.children[0]].token_end + 1;
+            for child in node.children {
+                if model.ast_kind_id(nodes[child].kind) == AST_BRACKET_ITEM {
+                    colon = nodes[child].token_end;
+                }
+            }
+            if colon < vec.len(layout) { layout[colon].slice_colon = true; }
+        } else if kind == AST_CASE {
+            var start usize = 0;
+            if tokens[node.token_begin].spelling == "case" { start = 1; }
+            if start == vec.len(node.children) { continue; }
+            let arm = nodes[node.children[start]].token_begin;
+            if arm < vec.len(layout) { layout[arm].branch_indent += 1; }
+            if node.token_end < vec.len(layout) {
+                layout[node.token_end].branch_indent -= 1;
+            }
+            for var index usize = start;
+                index < vec.len(node.children); index += 1 {
+                let child = nodes[node.children[index]].token_begin;
+                if child < vec.len(layout) { layout[child].new_line = true; }
+            }
+        } else if kind == AST_FILE || kind == AST_BLOCK ||
+                  kind == AST_STRUCT || kind == AST_ENUM ||
+                  kind == AST_TRAIT || kind == AST_IMPL ||
+                  kind == AST_SWITCH {
+            for child_id in node.children {
+                let child = nodes[child_id];
+                let child_kind = model.ast_kind_id(child.kind);
+                var include = true;
+                if kind == AST_STRUCT && child_kind != AST_FIELD {
+                    include = false;
+                } else if kind == AST_ENUM && child_kind != AST_VARIANT {
+                    include = false;
+                } else if (kind == AST_TRAIT || kind == AST_IMPL) &&
+                          child_kind != AST_FUNCTION {
+                    include = false;
+                } else if kind == AST_SWITCH && child_kind != AST_CASE {
+                    include = false;
+                }
+                if !include { continue; }
+                if child.token_begin < vec.len(layout) {
+                    layout[child.token_begin].new_line = true;
+                }
+                if kind != AST_FILE && node.token_end > 0 &&
+                   node.token_end - 1 < vec.len(layout) {
+                    layout[node.token_end - 1].new_line = true;
+                }
+            }
+        }
+    }
+    return layout;
+}
+
+func is_opening(spelling string) bool {
+    return spelling == "(" || spelling == "[" || spelling == "{";
+}
+
+func is_closing(spelling string) bool {
+    return spelling == ")" || spelling == "]" || spelling == "}";
+}
+
+func space_between(left string, previous Layout, right string,
+                   next Layout) bool {
+    if right == "." || right == "," || right == ";" || right == ":" ||
+       is_closing(right) || left == "." || left == "(" || left == "[" ||
+       previous.slice_colon {
+        return false;
+    }
+    if previous.prefix {
+        return (left == "+" || left == "-") && left == right;
+    }
+    if right == "(" || right == "[" { return next.group; }
+    return true;
+}
+
+func has_bom(bytes Vec[u8]) bool {
+    return vec.len(bytes) >= 3 && bytes[0] == 0xEF &&
+        bytes[1] == 0xBB && bytes[2] == 0xBF;
+}
+
+func choose_eol(original Vec[u8], first model.Token) bool {
+    // Leading whitespace is removed, so take the first retained line ending.
+    var start = usize(first.span.begin_byte);
+    for trivia in first.leading_trivia {
+        if model.trivia_kind_id(trivia.kind) != 0 {
+            start = usize(trivia.span.begin_byte);
+            break;
+        }
+    }
+    for var index = start; index < vec.len(original); index += 1 {
+        if original[index] == 10 {
+            return index > 0 && original[index - 1] == 13;
+        }
+    }
+    return false;
+}
+
+func append_byte(out Vec[u8], value u8) {
+    vec.push(out, value);
+}
+
+func append_eol(out Vec[u8], crlf bool) {
+    if crlf { append_byte(out, 13); }
+    append_byte(out, 10);
+}
+
+func append_spaces(out Vec[u8], indent i32) {
+    var remaining = indent;
+    for remaining > 0 {
+        append_byte(out, 32);
+        append_byte(out, 32);
+        append_byte(out, 32);
+        append_byte(out, 32);
+        remaining -= 1;
+    }
+}
+
+func append_span(out Vec[u8], original Vec[u8], span model.Span) {
+    var at = usize(span.begin_byte);
+    let end = usize(span.end_byte);
+    if at > end || end > vec.len(original) { return; }
+    for at < end {
+        append_byte(out, original[at]);
+        at += 1;
+    }
+}
+
+func count_newlines(original Vec[u8], span model.Span) usize {
+    var at = usize(span.begin_byte);
+    let end = usize(span.end_byte);
+    var count usize = 0;
+    if at > end || end > vec.len(original) { return 0; }
+    for at < end {
+        if original[at] == 10 { count += 1; }
+        at += 1;
+    }
+    return count;
+}
+
+func emit(out inout Vec[u8], original Vec[u8], span model.Span, space bool,
+          crlf bool, indent i32, breaks inout usize,
+          has_content inout bool) {
+    if has_content {
+        var remaining = breaks;
+        for remaining > 0 {
+            append_eol(out, crlf);
+            remaining -= 1;
+        }
+    }
+    if !has_content || breaks != 0 {
+        append_spaces(out, indent);
+    } else if space {
+        append_byte(out, 32);
+    }
+    append_span(out, original, span);
+    has_content = true;
+    breaks = 0;
+}
+
+func format_parsed(input model.Source,
+                   parsed model.ParseResult) Vec[u8] {
+    let tokens = parsed.lexed.tokens;
+    let layout = layout_for(parsed.nodes, tokens);
+    let original = input.original;
+    let crlf = choose_eol(original, tokens[0]);
+    var out = vec.empty[u8]();
+    if has_bom(original) {
+        append_byte(out, 0xEF);
+        append_byte(out, 0xBB);
+        append_byte(out, 0xBF);
+    }
+    var indent i32 = 0;
+    var breaks usize = 0;
+    var has_content = false;
+    var previous_comment = false;
+    for var index usize = 0; index < vec.len(tokens); index += 1 {
+        let token = tokens[index];
+        let style = layout[index];
+        if style.branch_indent > 0 { indent += style.branch_indent; }
+        for trivia in token.leading_trivia {
+            if model.trivia_kind_id(trivia.kind) == 0 {
+                breaks += count_newlines(original, trivia.span);
+            } else {
+                emit(inout out, original, trivia.span, true, crlf, indent,
+                    inout breaks, inout has_content);
+                previous_comment = true;
+            }
+        }
+        if model.token_kind_id(token.kind) == 0 { break; }
+        if style.branch_indent < 0 { indent += style.branch_indent; }
+        if model.token_kind_id(token.kind) == 6 &&
+           is_closing(token.spelling) {
+            indent -= 1;
+        }
+        if style.new_line && breaks == 0 { breaks = 1; }
+        var space = previous_comment;
+        if !space && index != 0 {
+            space = space_between(tokens[index - 1].spelling,
+                layout[index - 1], token.spelling, style);
+        }
+        emit(inout out, original, token.span, space, crlf, indent,
+            inout breaks, inout has_content);
+        previous_comment = false;
+        if model.token_kind_id(token.kind) == 6 && is_opening(token.spelling) {
+            indent += 1;
+        }
+    }
+    append_eol(out, crlf);
+    return out;
+}
+
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_tokens(before Vec[model.Token], after Vec[model.Token]) bool {
+    if vec.len(before) != vec.len(after) { return false; }
+    for var index usize = 0; index < vec.len(before); index += 1 {
+        if model.token_kind_id(before[index].kind) !=
+           model.token_kind_id(after[index].kind) {
+            return false;
+        }
+        if before[index].spelling != after[index].spelling { return false; }
+    }
+    return true;
+}
+
+func to_text(bytes Vec[u8]) string throws text.Error {
+    return text.from_bytes(bytes);
+}
+
+pub func format(input model.Source) FormatResult {
+    let lexed = lexer.lex(input);
+    if !result_success(lexed.state, lexed.has_value, lexed.diagnostics) {
+        return FormatResult(state: lexed.state, failure: lexed.failure,
+            has_value: false, text: "", diagnostics: lexed.diagnostics);
+    }
+    let parsed = parser.parse(lexed);
+    if !result_success(parsed.state, parsed.has_value, parsed.diagnostics) {
+        return FormatResult(state: parsed.state, failure: parsed.failure,
+            has_value: false, text: "", diagnostics: parsed.diagnostics);
+    }
+
+    let formatted = format_parsed(input, parsed);
+    if !same_bytes(formatted, input.original) {
+        let rewritten_source = source.snapshot(input.file_id, input.revision_id,
+            input.id, input.path, formatted);
+        let rewritten = lexer.lex(rewritten_source);
+        if !result_success(rewritten.state, rewritten.has_value,
+                           rewritten.diagnostics) ||
+           !same_tokens(lexed.tokens, rewritten.tokens) {
+            return internal_result("Formatting changed the source tokens");
+        }
+    }
+
+    var value = "";
+    try { value = to_text(formatted); }
+    catch error text.Error {
+        return internal_result("Formatting produced invalid UTF-8");
+    }
+    return FormatResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Source, has_value: true, text: value,
+        diagnostics: []);
+}

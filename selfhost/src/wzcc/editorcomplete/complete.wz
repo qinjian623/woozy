@@ -1,0 +1,262 @@
+// Semantic completion entry point.
+//
+// The byte cursor is an offset into model.Source.original and points at the
+// insertion position (the character at `byte` is not part of the typed prefix).
+// Incomplete edits are handled by the token scanner in scan.wz; when a member
+// receiver cannot be resolved, the result is empty rather than a name guess.
+package editorcomplete;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/lexer" as lexer;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct PrefixBounds {
+    pub valid bool;
+    pub text string;
+    pub start usize;
+    pub end usize;
+}
+
+pub struct Chain {
+    pub qualified bool;
+    pub valid bool;
+    pub parts Vec[string];
+}
+
+func no_chain() Chain {
+    return Chain(qualified: false, valid: false, parts: vec.empty[string]());
+}
+
+func invalid_prefix() PrefixBounds {
+    return PrefixBounds(valid: false, text: "", start: 0, end: 0);
+}
+
+func is_ident_start(byte u8) bool {
+    return (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+        byte == 95;
+}
+
+func is_ident_continue(byte u8) bool {
+    return is_ident_start(byte) || (byte >= 48 && byte <= 57);
+}
+
+func cursor_offset(source model.Source, byte u64) usize {
+    let size = vec.len(source.original);
+    if byte > u64(size) { return size; }
+    return usize(byte);
+}
+
+func bytes_to_text(bytes Vec[u8]) string {
+    try {
+        return text.from_bytes(bytes);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func prefix_bounds(source model.Source, cursor usize) PrefixBounds {
+    let original = source.original;
+    var start = cursor;
+    for start > 0 && is_ident_continue(original[start - 1]) {
+        start -= 1;
+    }
+    if start == cursor {
+        return PrefixBounds(valid: true, text: "", start: start,
+            end: cursor);
+    }
+    if !is_ident_start(original[start]) { return invalid_prefix(); }
+    var raw = vec.empty[u8]();
+    var index = start;
+    for index < cursor {
+        vec.push(raw, original[index]);
+        index += 1;
+    }
+    let value = bytes_to_text(raw);
+    if value == "" { return invalid_prefix(); }
+    return PrefixBounds(valid: true, text: value, start: start,
+        end: cursor);
+}
+
+func prefix_token(tokens Vec[model.Token], start usize, end usize)
+    usize {
+    if start >= end { return no_index(); }
+    var index usize = 0;
+    for index < vec.len(tokens) {
+        let span = tokens[index].span;
+        if span.begin_byte <= u64(start) && u64(start) < span.end_byte {
+            if model.token_kind_id(tokens[index].kind) == 1 {
+                return index;
+            }
+            return no_index();
+        }
+        index += 1;
+    }
+    return no_index();
+}
+
+func prev_index(tokens Vec[model.Token], start usize) usize {
+    var index = vec.len(tokens);
+    for index > 0 {
+        index -= 1;
+        if model.token_kind_id(tokens[index].kind) == 0 { continue; }
+        if tokens[index].span.end_byte <= u64(start) {
+            return index;
+        }
+    }
+    return no_index();
+}
+
+func insertion_index(tokens Vec[model.Token], cursor usize) usize {
+    var index usize = 0;
+    for index < vec.len(tokens) {
+        if tokens[index].span.begin_byte >= u64(cursor) {
+            return index;
+        }
+        index += 1;
+    }
+    return vec.len(tokens);
+}
+
+func build_chain(tokens Vec[model.Token], dot_index usize) Chain {
+    if dot_index == 0 {
+        return Chain(qualified: true, valid: false,
+            parts: vec.empty[string]());
+    }
+    var reversed = vec.empty[string]();
+    var index = dot_index - 1;
+    for true {
+        if index >= vec.len(tokens) ||
+           model.token_kind_id(tokens[index].kind) != 1 {
+            return Chain(qualified: true, valid: false,
+                parts: vec.empty[string]());
+        }
+        vec.push(reversed, tokens[index].spelling);
+        if vec.len(reversed) > 16 {
+            return Chain(qualified: true, valid: false,
+                parts: vec.empty[string]());
+        }
+        if index >= 2 && tokens[index - 1].spelling == "." {
+            index -= 2;
+        } else {
+            break;
+        }
+    }
+    var parts = vec.empty[string]();
+    var position = vec.len(reversed);
+    for position > 0 {
+        position -= 1;
+        vec.push(parts, reversed[position]);
+    }
+    return Chain(qualified: true, valid: true, parts: parts);
+}
+
+func completion_chain(tokens Vec[model.Token], prefix PrefixBounds) Chain {
+    var before = no_index();
+    if prefix.start < prefix.end {
+        before = prev_index(tokens, prefix.start);
+    } else {
+        before = prev_index(tokens, prefix.end);
+    }
+    if before != no_index() && tokens[before].spelling == "." {
+        return build_chain(tokens, before);
+    }
+    return Chain(qualified: false, valid: true, parts: vec.empty[string]());
+}
+
+func add_locals(state inout Vec[Item], seen inout Vec[string],
+                locals Vec[LocalHint], prefix string) {
+    for hint in locals {
+        add_label(inout state, inout seen, hint.name, hint.kind, prefix);
+    }
+}
+
+func add_aliases(state inout Vec[Item], seen inout Vec[string],
+                 lookup Lookup, prefix string) {
+    for value in lookup.aliases {
+        add_label(inout state, inout seen, value.name, LSP_MODULE, prefix);
+    }
+}
+
+func add_package(state inout Vec[Item], seen inout Vec[string],
+                 lookup Lookup, data TokenData, prefix string) {
+    let top = scan_top_symbols(data);
+    for value in top {
+        add_label(inout state, inout seen, value.name, value.kind, prefix);
+    }
+    if !lookup.has_resolved || !lookup.found_file { return; }
+    var index usize = 0;
+    for index < vec.len(lookup.resolved.symbols) {
+        let symbol = lookup.resolved.symbols[index];
+        if symbol.name == "" || symbol.name == "_" ||
+           symbol.module != lookup.current_module {
+            index += 1;
+            continue;
+        }
+        if !is_package_symbol(lookup, symbol) {
+            index += 1;
+            continue;
+        }
+        if lookup.stale &&
+           defined_in_file(lookup, symbol, lookup.current_module,
+                           lookup.file_local) {
+            index += 1;
+            continue;
+        }
+        add_label(inout state, inout seen, symbol.name,
+            symbol_lsp_kind(lookup, symbol), prefix);
+        index += 1;
+    }
+}
+
+pub func complete(snapshot model.Source, byte u64,
+                  resolved option.Option[model.ResolvedProject],
+                  typed option.Option[hir.HirModule]) Vec[Item] {
+    // Completion does not need typed data yet.  Direct field/method completion
+    // uses explicit or simple constructor-inferred local types in scan.wz.
+    let typed_available = option.is_some(typed);
+    if !snapshot.valid { return vec.empty[Item](); }
+    let lexed = lexer.lex(snapshot);
+    if !lexed.has_value { return vec.empty[Item](); }
+    let tokens = lexed.tokens;
+    let data = token_data(tokens);
+    let cursor = cursor_offset(snapshot, byte);
+    let prefix = prefix_bounds(snapshot, cursor);
+    if !prefix.valid { return vec.empty[Item](); }
+    if prefix.start < prefix.end {
+        if prefix_token(tokens, prefix.start, prefix.end) == no_index() {
+            return vec.empty[Item]();
+        }
+    }
+    var project = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    var has_project = false;
+    switch resolved {
+        case option.Option.Some(value): {
+            project = value;
+            has_project = true;
+        }
+        case option.Option.None: {}
+    }
+    let lookup = build_lookup(snapshot, tokens, has_project, project);
+    let insert = insertion_index(tokens, cursor);
+    let locals = scan_locals(data, insert);
+    let chain = completion_chain(tokens, prefix);
+    var out = vec.empty[Item]();
+    var seen = vec.empty[string]();
+    if chain.qualified {
+        if chain.valid {
+            let target = resolve_chain(lookup, data, locals, chain.parts);
+            collect_members(lookup, target, prefix.text, inout out,
+                inout seen);
+        }
+        return out;
+    }
+    add_locals(inout out, inout seen, locals, prefix.text);
+    add_aliases(inout out, inout seen, lookup, prefix.text);
+    add_package(inout out, inout seen, lookup, data, prefix.text);
+    return out;
+}

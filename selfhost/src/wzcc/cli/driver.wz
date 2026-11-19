@@ -3,12 +3,15 @@ import "app/wzcc/model" as model;
 import "app/wzcc/render" as render;
 import "app/wzcc/source" as source;
 import "app/wzcc/input" as input;
+import "app/wzcc/editorformat" as editorformat;
+import "app/wzcc/editorlsp" as editorlsp;
 import "app/wzcc/lexer" as lexer;
 import "app/wzcc/parser" as parser;
 import "std/io" as io;
 import "std/os" as os;
 import "std/strconv" as strconv;
 import "std/text" as text;
+import "std/vec" as vec;
 
 func finish(options Options, sources Vec[model.Source], state model.PhaseState,
             failure model.FailureKind, has_value bool, diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
@@ -61,6 +64,8 @@ func os_text(problem os.Error) string {
 func help_text() string {
     return "Usage: woozyc --help | --version\n" +
         "       woozyc check --syntax-only [--format json] FILE\n" +
+        "       woozyc fmt [--check] FILE|-\n" +
+        "       woozyc lsp [--stdio]\n" +
         "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       woozyc build --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       Native build also accepts -g (DWARF), --opt 0|2, --target TRIPLE and --package-objects\n" +
@@ -78,16 +83,64 @@ func syntax_command(options Options, manager inout source.Manager) i32 throws os
     let parsed = parser.parse(lexed);
     return finish(options, manager.snapshots, parsed.state, parsed.failure, parsed.has_value, parsed.diagnostics);
 }
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    var index usize = 0;
+    for index < vec.len(left) {
+        if left[index] != right[index] { return false; }
+        index += 1;
+    }
+    return true;
+}
+// Format one accepted snapshot. The formatter owns the output text; formatting
+// failures print their diagnostics and keep the source untouched.
+func format_snapshot(options Options, value model.Source, sources Vec[model.Source]) i32 throws os.Error {
+    let formatted = editorformat.format(value);
+    if !render.succeeded(formatted.state, formatted.has_value, formatted.diagnostics) {
+        return finish(options, sources, formatted.state, formatted.failure, formatted.has_value, formatted.diagnostics);
+    }
+    if options.format_check {
+        if same_bytes(value.original, text.bytes(formatted.text)) { return 0; }
+        io.eprintln(value.path + ": formatting differs");
+        return 1;
+    }
+    try { io.print(formatted.text); }
+    catch error os.Error {
+        io.eprintln("E_INPUT_IO: cannot write stdout");
+        return 2;
+    }
+    return 0;
+}
+func format_command(options Options, manager inout source.Manager) i32 throws os.Error {
+    if options.path == "-" {
+        var bytes = vec.empty[u8]();
+        try { bytes = io.read_all(os.stdin()); }
+        catch error os.Error {
+            io.eprintln("E_INPUT_IO: cannot read stdin");
+            return 2;
+        }
+        let file_id = source.add_file(inout manager, "<stdin>");
+        let value = source.update(inout manager, file_id, bytes);
+        return format_snapshot(options, value, manager.snapshots);
+    }
+    let loaded = input.read(options.path, inout manager);
+    if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
+        return finish(options, manager.snapshots, loaded.state, loaded.failure, loaded.has_value, loaded.diagnostics);
+    }
+    return format_snapshot(options, loaded.value, manager.snapshots);
+}
 pub func run(args Vec[string]) i32 throws os.Error {
     let options = arguments(args);
     if !options.valid { io.eprintln(options.error); return 2; }
-    if options.command == "lsp" || options.command == "capabilities" {
-        io.eprintln("E_CAPABILITY_UNAVAILABLE: " + options.command + " is not implemented");
-        return 1;
-    }
     if options.command == "--version" { io.println("woozyc 0.1.0-selfhost (compiler-dev/1)"); return 0; }
     if options.command == "--help" { io.println(help_text()); return 0; }
     var manager = source.manager();
+    if options.command == "lsp" { return editorlsp.run(); }
+    if options.command == "capabilities" {
+        io.eprintln("E_CAPABILITY_UNAVAILABLE: " + options.command + " is not implemented");
+        return 1;
+    }
+    if options.command == "fmt" { return format_command(options, inout manager); }
     if options.command == "__source_make_worker" {
         return source_make_worker(options, inout manager);
     }

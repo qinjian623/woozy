@@ -32,7 +32,7 @@ T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.w
 
 ## 3 CLI 目标接口
 
-`woozyc` 已支持单文件词法/语法检查、项目类型/效果/所有权检查、Linux x86_64 原生构建，以及 Python 3.12 代码生成。泛型、方法和值操作的具体支持范围见 [GENERICS.md](GENERICS.md) 与 [SEMANTICS.md](../../docs/SEMANTICS.md)；尚未实现的合法语法报告 `E_CAPABILITY_UNAVAILABLE`。`capabilities` 与 `lsp` 仍未实现。以下命令中，这两项是目标接口，其余按已支持的目标和类型执行：
+`woozyc` 已支持单文件词法/语法检查、项目类型/效果/所有权检查、Linux x86_64 原生构建，以及 Python 3.12 代码生成。泛型、方法和值操作的具体支持范围见 [GENERICS.md](GENERICS.md) 与 [SEMANTICS.md](../../docs/SEMANTICS.md)；尚未实现的合法语法报告 `E_CAPABILITY_UNAVAILABLE`。C++ 版和 Woozy 自举版都提供 `lsp` 和 `fmt`。以下按已支持的目标和类型执行，`capabilities` 为目标接口：
 
 ```bash
 woozyc check --syntax-only examples/core.wz
@@ -45,6 +45,7 @@ woozyc check --project lang.toml --backend python --std-binding BUNDLE --format 
 woozyc build --project lang.toml --backend python --std-binding BUNDLE --out-dir build/python
 woozyc capabilities --format json
 woozyc lsp
+woozyc fmt [--check] FILE
 ```
 
 `check --syntax-only` 不要求依赖安装或链接器；全量 check 读取项目、绑定、目标能力并检查语义，但不运行代码、不启动 Python、不加载 LLVM 后端。build 才进行代码生成和链接；build 默认不执行产物。生成 Python 之后的运行是显式独立步骤。
@@ -77,9 +78,9 @@ JSON 顶层包含 schema_version、compiler_version、source_revision、status �
 
 ## 5 LSP 与快速检查
 
-LSP 使用不可变文档快照和请求 revision。新编辑到达后取消过期分析，发布诊断时核对 revision，不能把旧错误覆盖新文件。第一阶段允许整文件重新解析并缓存未变模块，不要求字符级增量 parser。
+两版 LSP 都从标准输入输出收发消息，按版本接收整份缓冲区文本，以 UTF-16 位置发布诊断，并提供整文件格式化。Woozy 自举版另支持补全、类型悬停、定义跳转和后台项目检查。项目检查按上级目录中最近的 `lang.toml` 加载项目，优先使用已打开文档的未保存文本。编辑器用法见 [编辑器配置](EDITOR.md)。
 
-提供的首批功能：诊断、导入路径补全、名称补全、定义跳转、类型悬停。语义重命名、格式化和完整引用索引后续实施。Tree-sitter 作为可选编辑器语法工具，不成为另一套互相矛盾的语义判断来源。
+导入路径补全、引用索引和语义重命名属于后续工作。项目语义检查由自举版 LSP 的后台线程和 `woozyc check --project` 提供。
 
 ## 6 缓存和确定性
 

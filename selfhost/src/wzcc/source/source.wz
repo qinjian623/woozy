@@ -85,13 +85,18 @@ func invalid_source(file_id u64, revision_id u64, id u64, path string,
         error_byte: byte, error_length: length, error_message: message);
 }
 
-pub func has_boundary(source model.Source, byte u64) bool {
+func boundary_index(source model.Source, byte u64) usize {
     var low usize = 0; var high = vec.len(source.boundaries);
     for low < high {
         let middle = low + (high - low) / 2;
         if source.boundaries[middle].byte < byte { low = middle + 1; } else { high = middle; }
     }
-    return low < vec.len(source.boundaries) && source.boundaries[low].byte == byte;
+    return low;
+}
+
+pub func has_boundary(source model.Source, byte u64) bool {
+    let index = boundary_index(source, byte);
+    return index < vec.len(source.boundaries) && source.boundaries[index].byte == byte;
 }
 
 // Vec handles are shared, but a snapshot owns its original bytes. Copy the
@@ -198,10 +203,9 @@ pub func position(source model.Source, byte u64) model.Position {
         let ignored = internal_error();
         return model.Position(line: 0, character: 0);
     }
-    for boundary in source.boundaries {
-        if boundary.byte == byte {
-            return boundary.position;
-        }
+    let index = boundary_index(source, byte);
+    if index < vec.len(source.boundaries) && source.boundaries[index].byte == byte {
+        return source.boundaries[index].position;
     }
     let ignored = internal_error();
     return model.Position(line: 0, character: 0);

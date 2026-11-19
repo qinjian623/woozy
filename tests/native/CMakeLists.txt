@@ -277,7 +277,7 @@ add_executable(lang_native_unreachable_try_test unreachable_try_test.cpp)
 add_executable(lang_native_exit2_helper fake_exit2_helper.cpp)
 add_executable(langc_native_invalid_json_probe ${LANG_SOURCE_ROOT}/src/driver/main.cpp)
 target_link_libraries(langc_native_invalid_json_probe PRIVATE
-  lang_sema lang_backend_python lang_driver_process json-c::json-c)
+  lang_sema lang_backend_python lang_driver_process lang_editor json-c::json-c)
 target_compile_definitions(langc_native_invalid_json_probe PRIVATE
   LANG_NATIVE_HELPER="$<TARGET_FILE:lang_native_exit2_helper>")
 add_dependencies(langc_native_invalid_json_probe lang_native_exit2_helper)

@@ -10,7 +10,8 @@ add_library(lang_frontend STATIC
   src/support/diagnostic.cpp
   src/support/input.cpp
   src/syntax/lexer.cpp
-  src/syntax/parser.cpp)
+  src/syntax/parser.cpp
+  src/syntax/format.cpp)
 target_include_directories(lang_frontend PUBLIC include)
 target_compile_features(lang_frontend PUBLIC cxx_std_20)
 add_library(lang_driver_process STATIC src/support/process.cpp src/support/publish.cpp
@@ -42,8 +43,10 @@ target_link_libraries(lang_hir PUBLIC PkgConfig::GMPXX)
 add_library(lang_sema STATIC src/sema/check.cpp src/sema/front_cache.cpp)
 target_link_libraries(lang_sema PUBLIC lang_hir PRIVATE PkgConfig::GMPXX)
 add_subdirectory(src/backend/python)
+add_library(lang_editor STATIC src/driver/lsp.cpp)
+target_link_libraries(lang_editor PUBLIC lang_frontend PRIVATE json-c::json-c)
 add_executable(woozyc src/driver/main.cpp)
-target_link_libraries(woozyc PRIVATE lang_sema lang_backend_python lang_driver_process json-c::json-c)
+target_link_libraries(woozyc PRIVATE lang_sema lang_backend_python lang_driver_process lang_editor json-c::json-c)
 if(LANG_ENABLE_LLVM)
   include(cmake/LLVM.cmake)
   add_subdirectory(src/backend/native "${CMAKE_BINARY_DIR}/native")
@@ -53,6 +56,12 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   find_program(LANG_TEST_PYTHON NAMES python3.12 python3)
+  if(LANG_TEST_PYTHON)
+    add_test(NAME tooling.editor_cli COMMAND ${LANG_TEST_PYTHON} -B
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/editor_cli_test.py
+      --cli $<TARGET_FILE:woozyc>)
+    set_tests_properties(tooling.editor_cli PROPERTIES TIMEOUT 60)
+  endif()
   add_executable(lang_file_digest_probe tests/incremental/file_digest_probe.cpp)
   target_link_libraries(lang_file_digest_probe PRIVATE lang_frontend lang_driver_process)
   if(LANG_TEST_PYTHON)
