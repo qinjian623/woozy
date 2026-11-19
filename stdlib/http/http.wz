@@ -51,6 +51,7 @@ const RS_STATE_COUNT usize = 9;
 pub enum Error {
     Io(value os.Error);
     ReaderBusy;
+    ReadOrder;
     UnexpectedEof;
     TrailingBytes;
     HeadTooLarge;
@@ -298,11 +299,14 @@ func ascii_fold(byte u8) u8 {
 }
 
 func name_equal(left string, right string) bool {
-    if text.byte_len(left) != text.byte_len(right) { return false; }
-    let left_bytes = text.bytes(left);
-    let right_bytes = text.bytes(right);
-    for var index usize = 0; index < vec.len(left_bytes); index += 1 {
-        if ascii_fold(left_bytes[index]) != ascii_fold(right_bytes[index]) { return false; }
+    let length = text.len(left);
+    if length != text.len(right) { return false; }
+    for var index usize = 0; index < length; index += 1 {
+        var a = left[index];
+        var b = right[index];
+        if a >= 65 && a <= 90 { a += 32; }
+        if b >= 65 && b <= 90 { b += 32; }
+        if a != b { return false; }
     }
     return true;
 }
@@ -1292,44 +1296,53 @@ func read_chunk_state(reader Reader) RawMessage throws Error {
     return finish_message(reader,state_get(reader,RS_ACTIVE));
 }
 
-func read_raw(reader Reader, kind u64, request_method string) RawMessage throws Error {
+// Parse only the start line and initial header section, leaving the message
+// body in progress. Callers that need Expect handling or separate header and
+// body deadlines use this and then read_*_body.
+func read_head(reader Reader, kind u64, request_method string) throws Error {
     begin_message(reader,kind);
-    if state_get(reader,RS_STAGE) == STAGE_HEAD {
-        let head_end = ensure_head_stateful(reader);
-        if kind == ACTIVE_REQUEST {
-            let parsed = parse_request_head(reader.buffer,head_end,reader.limits);
-            let framing = parse_framing(parsed.headers,reader.limits,false,0,"");
-            vec.push(reader.parts,parsed.method);
-            vec.push(reader.parts,parsed.target);
-            vec.push(reader.parts,parsed.version);
-            for item in parsed.headers { vec.push(reader.headers,item); }
-            state_set(reader,RS_BODY,u64(framing.kind));
-            state_set(reader,RS_REMAINING,u64(framing.length));
-            state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
-            state_set(reader,RS_CHUNK_CURSOR,0);
-            state_set(reader,RS_CHUNK_TRAILER_START,0);
-            consume(reader,head_end);
-        } else {
-            let parsed = parse_response_head(reader.buffer,head_end,reader.limits);
-            let framing = parse_framing(
-                parsed.headers,
-                reader.limits,
-                true,
-                parsed.status,
-                request_method);
-            vec.push(reader.parts,parsed.version);
-            for byte in parsed.reason { vec.push(reader.reason,byte); }
-            for item in parsed.headers { vec.push(reader.headers,item); }
-            state_set(reader,RS_STATUS,u64(parsed.status));
-            state_set(reader,RS_BODY,u64(framing.kind));
-            state_set(reader,RS_REMAINING,u64(framing.length));
-            state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
-            state_set(reader,RS_CHUNK_CURSOR,0);
-            state_set(reader,RS_CHUNK_TRAILER_START,0);
-            consume(reader,head_end);
-        }
-        state_set(reader,RS_STAGE,STAGE_BODY);
-        state_set(reader,RS_HEAD_SCAN,0);
+    if state_get(reader,RS_STAGE) != STAGE_HEAD { return; }
+    let head_end = ensure_head_stateful(reader);
+    if kind == ACTIVE_REQUEST {
+        let parsed = parse_request_head(reader.buffer,head_end,reader.limits);
+        let framing = parse_framing(parsed.headers,reader.limits,false,0,"");
+        vec.push(reader.parts,parsed.method);
+        vec.push(reader.parts,parsed.target);
+        vec.push(reader.parts,parsed.version);
+        for item in parsed.headers { vec.push(reader.headers,item); }
+        state_set(reader,RS_BODY,u64(framing.kind));
+        state_set(reader,RS_REMAINING,u64(framing.length));
+        state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
+        state_set(reader,RS_CHUNK_CURSOR,0);
+        state_set(reader,RS_CHUNK_TRAILER_START,0);
+        consume(reader,head_end);
+    } else {
+        let parsed = parse_response_head(reader.buffer,head_end,reader.limits);
+        let framing = parse_framing(
+            parsed.headers,
+            reader.limits,
+            true,
+            parsed.status,
+            request_method);
+        vec.push(reader.parts,parsed.version);
+        for byte in parsed.reason { vec.push(reader.reason,byte); }
+        for item in parsed.headers { vec.push(reader.headers,item); }
+        state_set(reader,RS_STATUS,u64(parsed.status));
+        state_set(reader,RS_BODY,u64(framing.kind));
+        state_set(reader,RS_REMAINING,u64(framing.length));
+        state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
+        state_set(reader,RS_CHUNK_CURSOR,0);
+        state_set(reader,RS_CHUNK_TRAILER_START,0);
+        consume(reader,head_end);
+    }
+    state_set(reader,RS_STAGE,STAGE_BODY);
+    state_set(reader,RS_HEAD_SCAN,0);
+}
+
+func read_rest(reader Reader) RawMessage throws Error {
+    let kind = state_get(reader,RS_ACTIVE);
+    if kind == ACTIVE_NONE || state_get(reader,RS_STAGE) != STAGE_BODY {
+        throw Error.ReadOrder;
     }
     let body_kind = i32(state_get(reader,RS_BODY));
     if body_kind == FRAMING_NONE { return finish_message(reader,kind); }
@@ -1339,8 +1352,70 @@ func read_raw(reader Reader, kind u64, request_method string) RawMessage throws 
     throw Error.UnexpectedFraming;
 }
 
+func read_raw(reader Reader, kind u64, request_method string) RawMessage throws Error {
+    read_head(reader,kind,request_method);
+    return read_rest(reader);
+}
+
+func head_request(reader Reader) Request {
+    var method = "";
+    var target = "";
+    var version = "HTTP/1.1";
+    if vec.len(reader.parts) >= 3 {
+        method = reader.parts[0];
+        target = reader.parts[1];
+        version = reader.parts[2];
+    }
+    return Request(
+        method:method,
+        target:target,
+        version:version,
+        headers:copy_headers(reader.headers),
+        body:vec.empty[u8](),
+        trailers:vec.empty[Header]());
+}
+
+func head_response(reader Reader) Response {
+    var version = "HTTP/1.1";
+    if vec.len(reader.parts) != 0 { version = reader.parts[0]; }
+    return Response(
+        version:version,
+        status:i32(state_get(reader,RS_STATUS)),
+        reason:copy_bytes(reader.reason),
+        headers:copy_headers(reader.headers),
+        body:vec.empty[u8](),
+        trailers:vec.empty[Header]());
+}
+
 pub func read_request(reader Reader) Request throws Error {
     let raw = read_raw(reader,ACTIVE_REQUEST,"");
+    return Request(
+        method:raw.method,
+        target:raw.target,
+        version:raw.version,
+        headers:raw.headers,
+        body:raw.body,
+        trailers:raw.trailers);
+}
+
+// Read one request head. The returned Request has headers but empty body and
+// trailers. Call read_request_body to finish the same message; read_request
+// also finishes it if called after this function.
+pub func read_request_head(reader Reader) Request throws Error {
+    read_head(reader,ACTIVE_REQUEST,"");
+    if state_get(reader,RS_ACTIVE) != ACTIVE_REQUEST { throw Error.ReadOrder; }
+    return head_request(reader);
+}
+
+// Finish the request head selected by read_request_head. Calling this without
+// an in-progress request head, or while a response is in progress, throws
+// ReadOrder.
+pub func read_request_body(reader Reader) Request throws Error {
+    if state_get(reader,RS_ACTIVE) != ACTIVE_REQUEST ||
+       state_get(reader,RS_STAGE) != STAGE_BODY {
+        throw Error.ReadOrder;
+    }
+    let raw = read_rest(reader);
     return Request(
         method:raw.method,
         target:raw.target,
@@ -1361,7 +1436,38 @@ pub func read_response(reader Reader, request_method string) Response throws Err
         trailers:raw.trailers);
 }
 
+// Read one response head. The returned Response has headers, status and reason
+// but empty body and trailers. Request framing rules still come from
+// request_method; read_response_body does not need it again.
+pub func read_response_head(reader Reader, request_method string) Response throws Error {
+    read_head(reader,ACTIVE_RESPONSE,request_method);
+    if state_get(reader,RS_ACTIVE) != ACTIVE_RESPONSE { throw Error.ReadOrder; }
+    return head_response(reader);
+}
+
+pub func read_response_body(reader Reader) Response throws Error {
+    if state_get(reader,RS_ACTIVE) != ACTIVE_RESPONSE ||
+       state_get(reader,RS_STAGE) != STAGE_BODY {
+        throw Error.ReadOrder;
+    }
+    let raw = read_rest(reader);
+    return Response(
+        version:raw.version,
+        status:raw.status,
+        reason:raw.reason,
+        headers:raw.headers,
+        body:raw.body,
+        trailers:raw.trailers);
+}
+
 func append_text(out Vec[u8], value string) {
+    let length = text.len(value);
+    if text.byte_len(value) == length {
+        for var index usize = 0; index < length; index += 1 {
+            vec.push(out,u8(value[index]));
+        }
+        return;
+    }
     let bytes = text.bytes(value);
     for byte in bytes { vec.push(out,byte); }
 }
@@ -1381,7 +1487,8 @@ func append_headers(
            (name_equal(item.name,"Content-Length") || name_equal(item.name,"Transfer-Encoding")) {
             continue;
         }
-        append_text(out,item.name+": ");
+        append_text(out,item.name);
+        append_text(out,": ");
         append_header_bytes(out,item.value);
         append_text(out,"\r\n");
     }
@@ -1397,32 +1504,44 @@ pub func encode_request(request Request) Vec[u8] throws Error {
     if !valid_target(request.target) { throw Error.InvalidTarget; }
     if vec.len(request.trailers) != 0 { throw Error.UnsupportedTrailers; }
     validate_host(request.headers,request.version);
-    let transfer = header_values(request.headers,"Transfer-Encoding");
-    if vec.len(transfer) != 0 { throw Error.UnsupportedTransferEncoding; }
+    if has_header(request.headers,"Transfer-Encoding") {
+        throw Error.UnsupportedTransferEncoding;
+    }
     let lengths = header_values(request.headers,"Content-Length");
     if vec.len(lengths) != 0 {
         let supplied = parse_content_length(lengths,U64_MAX);
         if supplied != u64(vec.len(request.body)) { throw Error.InvalidContentLength; }
     }
     let out = vec.empty[u8]();
-    append_text(out,request.method+" "+request.target+" "+request.version+"\r\n");
+    append_text(out,request.method);
+    append_text(out," ");
+    append_text(out,request.target);
+    append_text(out," ");
+    append_text(out,request.version);
+    append_text(out,"\r\n");
     append_headers(out,request.headers,true);
-    append_text(out,"Content-Length: "+strconv.format_u64(u64(vec.len(request.body)))+"\r\n");
+    append_text(out,"Content-Length: ");
+    append_text(out,strconv.format_u64(u64(vec.len(request.body))));
+    append_text(out,"\r\n");
     append_text(out,"\r\n");
     for byte in request.body { vec.push(out,byte); }
     return out;
 }
 
-pub func encode_response(response Response, request_method string) Vec[u8] throws Error {
+struct ResponseFraming {
+    pub emit bool;
+    pub length u64;
+}
+
+func response_framing(response Response, request_method string) ResponseFraming throws Error {
     validate_version(response.version);
     if response.status < 100 || response.status > 599 { throw Error.InvalidStatus; }
     if !valid_field_bytes(response.reason) { throw Error.InvalidReason; }
     if vec.len(response.trailers) != 0 { throw Error.UnsupportedTrailers; }
     let no_body = !body_permitted(response.status,request_method);
     if no_body && vec.len(response.body) != 0 { throw Error.UnexpectedBody; }
-    let transfer = header_values(response.headers,"Transfer-Encoding");
+    let has_transfer = has_header(response.headers,"Transfer-Encoding");
     let lengths = header_values(response.headers,"Content-Length");
-    let has_transfer = vec.len(transfer) != 0;
     let has_length = vec.len(lengths) != 0;
     if response.status >= 100 && response.status < 200 || response.status == 204 {
         if has_transfer || has_length { throw Error.UnexpectedFraming; }
@@ -1439,22 +1558,41 @@ pub func encode_response(response Response, request_method string) Vec[u8] throw
     } else {
         if has_length {
             content_length = parse_content_length(lengths,U64_MAX);
-            if content_length != u64(vec.len(response.body)) { throw Error.InvalidContentLength; }
+            if content_length != u64(vec.len(response.body)) {
+                throw Error.InvalidContentLength;
+            }
         } else {
             content_length = u64(vec.len(response.body));
         }
         emit_length = true;
     }
+    return ResponseFraming(emit:emit_length,length:content_length);
+}
+
+// Encode only the status line and header section. The caller is responsible
+// for sending exactly response.body bytes after this head. This lets a server
+// send a large body without copying it into the encoded buffer.
+pub func encode_response_head(response Response, request_method string) Vec[u8] throws Error {
+    let framing = response_framing(response,request_method);
     let out = vec.empty[u8]();
-    append_text(out,response.version+" "+
-        strconv.format_i64(i64(response.status))+" ");
+    append_text(out,response.version);
+    append_text(out," ");
+    append_text(out,strconv.format_i64(i64(response.status)));
+    append_text(out," ");
     append_header_bytes(out,response.reason);
     append_text(out,"\r\n");
     append_headers(out,response.headers,true);
-    if emit_length {
-        append_text(out,"Content-Length: "+strconv.format_u64(content_length)+"\r\n");
+    if framing.emit {
+        append_text(out,"Content-Length: ");
+        append_text(out,strconv.format_u64(framing.length));
+        append_text(out,"\r\n");
     }
     append_text(out,"\r\n");
+    return out;
+}
+
+pub func encode_response(response Response, request_method string) Vec[u8] throws Error {
+    let out = encode_response_head(response,request_method);
     for byte in response.body { vec.push(out,byte); }
     return out;
 }

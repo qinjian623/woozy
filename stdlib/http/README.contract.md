@@ -214,12 +214,43 @@ Trailer fields whose names are `Content-Length`, `Transfer-Encoding`, `Host`,
 Trailers are returned in `Request.trailers` / `Response.trailers` and are not
 appended to `headers`.
 
+## Incremental head and body reads
+
+```woozy
+pub func read_request_head(reader Reader) Request throws Error
+pub func read_request_body(reader Reader) Request throws Error
+pub func read_response_head(reader Reader, request_method string) Response throws Error
+pub func read_response_body(reader Reader) Response throws Error
+```
+
+`read_request_head` and `read_response_head` parse only the start line and
+initial header section. The returned value has populated headers, method,
+target, version, status and reason, but empty body and trailers. The reader
+remains in the body stage. `read_request_body`/`read_response_body` finish the
+same message and return the complete value. `read_request`/`read_response`
+also finish a head-only message if called after `read_*_head`.
+
+A body read requires an in-progress head of the matching kind. Calling it with
+no active message, after a complete message, while the other message kind is
+active, or before the head has been parsed throws `ReadOrder`. Retrying a
+WouldBlock body read after `poll` is safe and resumes the saved body state.
+
+`read_response_head` uses `request_method` only for framing rules (HEAD and
+status-specific body rules); `read_response_body` does not need it again.
+
 ## Encoding
 
 ```woozy
 pub func encode_request(request Request) Vec[u8] throws Error
 pub func encode_response(response Response, request_method string) Vec[u8] throws Error
+pub func encode_response_head(response Response, request_method string) Vec[u8] throws Error
 ```
+
+`encode_response_head` validates the same fields and emits the status line,
+headers and canonical `Content-Length`, but not the body. A caller that sends
+exactly `response.body` bytes after this head avoids copying a large body into
+one encoded buffer. `encode_response` is equivalent to
+`encode_response_head` followed by appending the body.
 
 Encoding validates all names, values, versions, methods, targets, statuses,
 reason bytes and Host fields using the same rules as parsing. It emits strict
@@ -286,7 +317,10 @@ without loss. `pending(reader)` returns the retained byte count.
 All I/O failures are `Error.Io(os.Error)`. The reader retries
 `os.Error.Interrupted`; `WouldBlock` is surfaced through `Error.Io` so
 nonblocking callers can decide when to poll. `write_*` uses `net.send_all` and
-surfaces short-write/real errors as `Error.Io`.
+surfaces short-write/real errors as `Error.Io`. `read_request_head` and
+`read_response_head` do not consume a body; a caller must finish it with the
+matching body function, use the combined read function, or close the
+connection.
 
 ## Errors
 
@@ -294,6 +328,7 @@ surfaces short-write/real errors as `Error.Io`.
 pub enum Error {
     Io(value os.Error);
     ReaderBusy;
+    ReadOrder;
     UnexpectedEof;
     TrailingBytes;
     HeadTooLarge;

@@ -26,6 +26,9 @@ Covered:
   chunked body after the first chunk does not reinterpret the final zero chunk
   as a new request.
 - Incremental fixed-length request bodies and fragmented responses.
+- Head-only request/response reads followed by the matching body read, the
+  `ReadOrder` error for a body read without an in-progress head, and
+  `encode_response_head` matching the prefix of `encode_response`.
 - `TE` + `CL`, malformed headers, obs-fold, control injection, header/body
   limits, decimal and hexadecimal length overflow, truncated chunks and EOF.
 - HEAD, 1xx, 204, 304 rules and close-delimited HTTP/1.0 responses.

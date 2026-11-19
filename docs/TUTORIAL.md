@@ -757,6 +757,10 @@ A thread entry point is a function without captures, and it receives its data th
 
 Passing a Vec to a thread shares the same container. When multiple threads access shared mutable data, protect it with a Mutex from `std/sync`. Use Condvar to wait for a shared condition and AtomicI64 for an atomic counter. Atomic reference counting protects the reference count itself. See [threads and synchronization](CONCURRENCY.md) for full examples and APIs.
 
+### Async functions
+
+An `async func` returns `Task[R,E]` instead of its declared result, and calling it does not run the body. Inside another async function, `await task` starts the task if it was never spawned and returns its result; a task can be awaited more than once. `async func main` is a valid entry point. `std/async` provides `sleep`, descriptor waits, `spawn`/`run`, cancellation, and `shutdown`. The executor runs on one thread, and async is currently available only on the Native backend for Linux x86_64. See [threads and async](CONCURRENCY.md#async-与-await) for the full rules.
+
 ## 16. Common standard library modules
 
 Import standard library modules using `std/...`. This complete program splits input with `std/text`, parses integers with `std/strconv`, and prints their sum with `std/io`.

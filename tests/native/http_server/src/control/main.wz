@@ -1,0 +1,76 @@
+// Control fixture for graceful stop, drain and stats.
+//
+// The handler sets a shared flag on /stop. The stopper task observes it,
+// starts graceful drain, prints the final counters, and lets main exit only
+// after the serve task has returned.
+package control;
+
+import "std/async" as tasks;
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func route(request http.Request, signal Vec[u64]) http.Response throws http.Error {
+    if request.target == "/stop" {
+        signal[0] = 1;
+        let response = server.text_response(200,"stopping");
+        vec.push(response.headers,http.text_header("Connection","close"));
+        return response;
+    }
+    if request.target == "/hello" {
+        return server.text_response(200,"hello");
+    }
+    if request.target == "/error" {
+        throw http.Error.InvalidTarget;
+    }
+    return server.text_response(404,"not found");
+}
+
+func bool_text(value bool) string {
+    if value { return "true"; }
+    return "false";
+}
+
+async func stopper(handle server.Server, signal Vec[u64]) i32 throws os.Error {
+    for signal[0] == 0 {
+        await tasks.sleep(10);
+    }
+    server.stop(handle);
+    let drained = await server.drain(handle,5000);
+    let value = server.stats(handle);
+    io.println("DRAINED "+bool_text(drained));
+    io.println(
+        "STATS active="+strconv.format_u64(u64(value.active_connections))+
+        " accepted="+strconv.format_u64(value.accepted_connections)+
+        " requests="+strconv.format_u64(value.requests)+
+        " bytes="+strconv.format_u64(value.bytes_sent)+
+        " errors="+strconv.format_u64(value.errors)+
+        " timeouts="+strconv.format_u64(value.timeouts)+
+        " rejected="+strconv.format_u64(value.rejected)+
+        " stopping="+bool_text(value.stopping));
+    return 0;
+}
+
+async func main() i32 throws os.Error {
+    let signal = vec.make[u64](1,0);
+    let handler = func(request http.Request) http.Response throws http.Error {
+        return route(request,signal);
+    };
+    var settings = server.default_config();
+    settings.drain_timeout_ms = 500;
+    settings.timer_tick_ms = 25;
+    let listener = server.listen_with(net.any4(0),handler,settings);
+    let address = server.local_address(listener);
+    io.println("LISTENING "+strconv.format_i64(i64(address.port)));
+    let serving = server.serve(listener);
+    tasks.spawn(serving);
+    let stopping = stopper(listener,signal);
+    await stopping;
+    await serving;
+    return 0;
+}

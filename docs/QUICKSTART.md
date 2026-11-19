@@ -329,6 +329,10 @@ Linux x86_64 Native 程序可以使用 `std/thread` 的 `spawn[A](func(A) i64, A
 
 `std/sync` 提供非递归 Mutex、Condvar 和顺序一致的 AtomicI64。正常锁操作不抛错，错误解锁等误用 Panic。允许在线程间共享 Vec 等对象，由程序员同步读写；原子 ARC 只保证计数安全。示例见 [线程与同步](CONCURRENCY.md)。
 
+## 异步函数
+
+`async func` 调用返回 `Task[R,E]`，函数体在 `await` 或执行器运行时才执行。`await` 只能写在 async 函数里，用来等待 Task 并传播声明的错误；未 spawn 的任务会被直接启动，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、`readable`/`writable`、`spawn`/`run`、`cancel`、`shutdown`、`finished` 和 `join`/`join_all`。执行器是单线程的，目前只在 Linux x86_64 的 Native 后端可用。规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
+
 ## 包与导入
 
 每个文件声明 `package`，同一个包中的顶层声明互相可见。`pub` 控制跨包访问，导入别名只在当前文件有效。下面两个文件组成一个小项目，`app` 表示项目源码根。

@@ -122,6 +122,11 @@ if(LANG_TEST_PYTHON)
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/generic-results)
   set_tests_properties(native.generics PROPERTIES TIMEOUT 180)
+  add_test(NAME native.http_server COMMAND ${LANG_TEST_PYTHON} -B
+    ${CMAKE_CURRENT_LIST_DIR}/http_server/run_http_server.py
+    --cli $<TARGET_FILE:woozyc>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/http-server-results)
+  set_tests_properties(native.http_server PROPERTIES TIMEOUT 900)
 else()
   message(STATUS "native.cli: not_run (test Python not found)")
 endif()

@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/slice`、`std/box`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/slice`、`std/box`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -35,7 +35,7 @@ func main() throws os.Error {
 
 ## 错误和资源
 
-各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`timezone`、`option`、`cancel`、`channel`、`task` 和 `http` 另有自己的错误枚举。`math` 和 `unicode` 不抛错。`sync`、`rwlock` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
+各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`timezone`、`option`、`cancel`、`channel`、`task` 和 `http` 另有自己的错误枚举；`http_server` 沿用 `os.Error`。`math` 和 `unicode` 不抛错。`sync`、`rwlock` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
 
 `os.File` 和 `net.Socket` 只是描述符包装。复制 `File` 或 `Socket` 不会调用 `dup`，副本指向同一个描述符；离开作用域不会自动关闭。显式 `close` 一次后，其他副本也不能继续使用。需要独立描述符时用 `os.dup`。`net.file(socket)` 取得同一个描述符的 `os.File`，不要把它和 `Socket` 分别当成两个资源关闭。
 
@@ -268,7 +268,7 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 
 ## std/async
 
-异步函数返回 Task；`spawn` 提交，`run` 或 `run_until` 推进执行器，`await` 取得结果。`sleep`、`readable` 和 `writable` 返回可等待任务。完整示例与取消、清理规则见[async 与 await](CONCURRENCY.md#async-与-await)。当前仅支持 Linux x86_64 Native。
+异步函数返回 `Task[R,E]`，调用时不执行函数体。`spawn` 把任务加入就绪队列，`run`/`run_until` 推进执行器；`await` 只能写在 async 函数里，等待并驱动目标任务，未 spawn 的任务会直接启动，同一个 Task 可重复等待。`sleep`、`readable` 和 `writable` 返回可等待任务，`cancel`、`shutdown`、`finished`、`join` 和 `join_all` 控制等待与取消。完整规则见[async 与 await](CONCURRENCY.md#async-与-await)。当前仅支持 Linux x86_64 Native。
 
 ## std/option 和 std/result
 
@@ -520,6 +520,9 @@ HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读�
 | `reader(socket net.Socket, limits Limits) Reader` | 建立共享读取状态，保留未处理的字节；复制 Reader 共享状态 |
 | `read_request(reader Reader) Request throws Error` | 读取一个请求，保留后续消息的字节 |
 | `read_response(reader Reader, request_method string) Response throws Error` | 读取一个响应；须传对应请求方法，例如 `"GET"` 或 `"HEAD"` |
+| `read_request_head(reader)`、`read_request_body(reader)` | 只读请求头，再完成同一请求正文；顺序错误报 `ReadOrder` |
+| `read_response_head(reader, request_method)`、`read_response_body(reader)` | 只读响应头，再完成同一响应正文 |
+| `encode_response_head(response, request_method)` | 只编码状态行、头和 Content-Length；调用方随后发送正好 `response.body` 字节 |
 | `parse_request(data Vec[u8]) Request throws Error`、`parse_response(data, request_method)` | 解析完整消息，多余字节报 `TrailingBytes`；另有带 Limits 的 `_limited` 版本 |
 | `encode_request(request Request) Vec[u8] throws Error`、`encode_response(response, request_method)` | 编码为字节，正文使用 Content-Length 定长发送 |
 | `write_request(socket, request) throws Error`、`write_response(socket, response, request_method)` | 编码后完整写出，系统错误包装为 `Error.Io(os.Error)` |
@@ -528,7 +531,7 @@ HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读�
 
 `Header` 包含 `name string`、`value Vec[u8]`；`Response.reason`、请求和响应的 `body` 也都是字节。用 `text_header(name, value)` 从文本创建头字段；`header`/`header_values` 按不区分 ASCII 大小写的名称取字节值，`header_text`/`header_text_values` 和 `value_text` 才进行 UTF-8 解码，失败报 `InvalidUtf8`。
 
-解码支持定长和 chunked 正文；响应也支持读到连接关闭。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
+解码支持定长和 chunked 正文；响应也支持读到连接关闭。`read_*_head` 返回的对象正文和 trailers 为空，Reader 保持正文阶段；必须用对应 `read_*_body` 完成、改用合并读取，或关闭连接。`encode_response_head` 适合大正文的分段发送，避免把正文复制进编码缓冲区。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
 
 以下只有导入和普通函数声明，接收已连接的阻塞 Socket，处理一个请求后关闭。函数负责关闭，调用方不要再次关闭同一描述符：
 
@@ -556,6 +559,49 @@ func serve_once(socket net.Socket) throws http.Error {
 非阻塞读取遇到 `Error.Io(os.Error.WouldBlock(...))` 时，保留同一个 Reader，等 `net.poll` 报告可读后重试同一种 read 操作；read_response 还须保留相同的 request_method。不要重新建立 Reader，否则会丢掉已读取的消息部分。消息进行中切换请求/响应读取会报 `ReaderBusy`。协议错误后应关闭连接，不继续使用该 Reader；消息尚未完成即结束报 `UnexpectedEof`。
 
 非阻塞写出遇到 WouldBlock 后，不能直接从头重调 write_request/write_response；若需恢复，应先 encode 并保留字节与已写偏移，结合错误中的 completed、`net.poll` 可写事件继续发送。TLS 连接使用下面的 `std/https`；它通过 `reader_external`、`write_request_on` 和 `write_response_on` 使用同一个 HTTP 解析器和读取状态。
+
+## std/http_server
+
+基于 `std/http`、`std/net` 和 Native 异步执行器的 HTTP/1.1 服务器。仅用于 Linux x86_64 Native；Python 后端不支持 async。TLS 不在此模块内。
+
+| 接口 | 说明 |
+| --- | --- |
+| `default_config() Config` | 默认限制、backlog、连接数、keep-alive、TCP_NODELAY、超时和大正文阈值 |
+| `listen(address, handler) Server throws os.Error` | 用默认配置监听 |
+| `listen_with(address, handler, config) Server throws os.Error` | 指定限制、backlog、连接数、每连接请求数、超时和时间片 |
+| `local_address(server) net.Address throws os.Error` | 查询监听地址 |
+| `active_connections(server) usize`、`accepted_connections(server) u64`、`stats(server) Stats` | 当前/累计连接、成功响应请求数、成功响应字节数（含 100 Continue）、错误、超时和 503 拒绝计数 |
+| `config(server) Config` | 读取配置 |
+| `serve(server) Unit throws os.Error` | async 接受循环；每个连接一个任务 |
+| `stop(server)` | 优雅停止接受；空闲连接立即关闭，在途请求继续到 drain 截止时间 |
+| `abort(server)`、`close(server)` | 立即关闭监听和所有活动连接 |
+| `drain(server, timeout_ms) bool` | 停止并等待所有连接任务退出；正超时到期返回 false |
+| `text_response(status, body)`、`bytes_response(status, body)` | 构造带默认 reason 的响应 |
+
+`Server` 复制共享监听 Socket 和计数；任一副本 `stop`/`abort`/`close` 都影响所有副本。服务器状态和连接表不做同步，只能在拥有它的执行器线程使用。每个 Server 只应调用一次 `serve`。`handler` 的类型是 `func(http.Request) http.Response throws http.Error`，在连接任务中同步执行，抛错时返回 500 并关闭连接。应用自有错误应在 handler 内捕获并返回响应。
+
+监听 Socket 和接受的连接都是非阻塞、close-on-exec；读写遇到 `WouldBlock` 时任务挂起到执行器的可读/可写等待，不阻塞线程。单个 watchdog 任务按 `timer_tick_ms` 扫描连接表，执行 header/body/idle/write 超时和 graceful drain 截止时间；超时用 `CLOCK_MONOTONIC`，只对连接 `shutdown`，由连接任务负责关闭描述符。超时是绝对截止时间，不是每次活动重置。`Expect: 100-continue` 在读取正文前返回 100；不支持的 expectation 返回 417。
+
+响应统一使用 `Content-Length`。服务器移除 handler 的 `Connection`，按请求版本和连接令牌决定 keep-alive 或 close；handler 明确要求 close 时关闭。HEAD、1xx、204 和 304 不发送正文；HEAD/304 缺少 `Content-Length` 时用 handler 正文长度补齐。普通响应的 handler `Content-Length` 会被实际正文长度替换。handler 设置 `Transfer-Encoding`、非空 trailers 或非法状态码时，编码失败，连接返回 500。协议错误返回 400、408、413、417、431、501 或 505 并关闭；EOF 和 I/O 失败直接关闭。连接数超过 `max_connections` 时新连接收到 503 后关闭；`max_requests` 到达上限后发送 close。大正文超过 `large_body_threshold` 时用 `encode_response_head` 加单独正文写入，避免一次完整正文复制。
+
+执行器是单线程，handler 中的长时间 CPU 计算、阻塞文件 I/O 或阻塞 C 调用会停顿所有连接。接受 32 个连接或处理 1024 个 keep-alive 响应后，任务让出 1 毫秒，避免繁忙监听循环或流水线饿死其他描述符。handler 返回完整的 Response；请求正文按 `Config.limits` 全量缓冲，不提供流式/chunked 响应、`Date`/`Server` 头、HTTP/2 或 TLS。完整契约见 [stdlib/http_server/README.md](../stdlib/http_server/README.md)。
+
+```wz
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/net" as net;
+import "std/os" as os;
+
+func route(request http.Request) http.Response throws http.Error {
+    return server.text_response(200,"hello");
+}
+
+async func main() i32 throws os.Error {
+    let listener = server.listen(net.any4(8080), route);
+    await server.serve(listener);
+    return 0;
+}
+```
 
 ## std/tls 和 std/https
 

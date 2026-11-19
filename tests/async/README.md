@@ -14,6 +14,12 @@ this mode.
 
 ## Public-object mode
 
+The public-object checks are tied to the frozen 37-file stdlib snapshot used by
+the reference and candidate roles. A newer stdlib tree (for example one that
+adds `std/http_server`) must be supplied as a frozen snapshot through
+`--stdlib-root`; the runner intentionally rejects a different file count so a
+mixed frozen/current input set is never accepted.
+
 `--public-object` migrates only the observation source of the object:
 
 1. The selected role CLI performs all 44 public Source builds: 19 positive

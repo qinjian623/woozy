@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="http_server_control"
+source_root="src"
+entry="app/control"
+[build]
+backend="native"
+word_bits=64

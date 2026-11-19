@@ -30,7 +30,7 @@ Most of the guides below are in Chinese.
 - Read [processes and signals](docs/PROCESSES.md) for process creation, redirection, waiting, arguments, environment variables, signals, and fork rules.
 - See [shared memory and IPC](docs/IPC.md) for shared mappings, process-shared mutexes, condition variables, and semaphores.
 - See [calling C libraries](docs/FFI.md) for typed C bindings, pointers, buffers, resources, and callbacks.
-- Browse the [examples](examples/) for functions, numbers, errors, and argument passing, or try the [TCP chat server and client](examples/chat/README.md).
+- Browse the [examples](examples/) for functions, numbers, errors, and argument passing, or try the [TCP chat server and client](examples/chat/README.md) and the [async HTTP server](examples/http_server/README.md).
 
 ## Language basics
 
@@ -54,7 +54,7 @@ Woozy supports integers and floating-point numbers, strings, function values and
 
 The [standard library](docs/STDLIB.md) covers I/O, filesystems, text and collections, JSON, math, time, random numbers, networking, processes, and concurrency. The system interfaces target native Linux x86_64 programs. Their names and argument order follow C conventions. Calls throw declared errors on failure, and incorrect lock operations panic. Woozy has no raw syscall API.
 
-`std/http` supports HTTP/1.1. `std/unicode` provides Unicode 18 normalization, case folding, and grapheme clusters. `std/timezone` supports named time zones, daylight saving time, and local-time conversion.
+`std/http` supports HTTP/1.1. `std/http_server` provides an async HTTP/1.1 server with keep-alive, pipelining, nonblocking backpressure, request/body/idle/write timeouts, `Expect: 100-continue`, and graceful stop/drain/abort. `std/unicode` provides Unicode 18 normalization, case folding, and grapheme clusters. `std/timezone` supports named time zones, daylight saving time, and local-time conversion.
 
 Use `std/thread` to start threads with capture-free functions and explicit arguments and to join them. `std/sync` provides mutexes, condition variables, and atomic integers. Shared mutable data requires synchronization by the program. Atomic ARC protects reference counts only.
 

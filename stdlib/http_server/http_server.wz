@@ -1,0 +1,1127 @@
+// Async HTTP/1.1 server built on the std/http codec and the native executor.
+//
+// One task owns each accepted connection. Reads and writes are nonblocking;
+// WouldBlock parks the task on the executor's descriptor wait instead of
+// blocking a thread. The listener and every accepted socket are close-on-exec
+// and nonblocking. The executor is single-threaded by language design, so
+// handlers must not perform long blocking work themselves.
+//
+// A single watchdog task enforces header, body, idle and write deadlines. It
+// only calls shutdown(2) on the owning descriptor; the connection task remains
+// the sole owner that closes it. Stop is graceful: the listener closes, idle
+// connections close, in-flight requests may finish, and a drain deadline
+// aborts the rest. Abort closes everything immediately.
+//
+// Server-owned framing policy:
+// - Response version follows the request version (HTTP/1.0 or HTTP/1.1).
+// - Content-Length framing is always used; Transfer-Encoding responses are
+//   rejected by the codec and become 500 responses.
+// - The server replaces every Connection header with its own keep-alive or
+//   close decision.
+// - HEAD, 1xx, 204 and 304 responses are sent without a message body.
+//   For HEAD/304 a missing Content-Length is filled from the handler body.
+// - Responses larger than Config.large_body_threshold use encode_response_head
+//   plus a separate body write, avoiding one full-body copy.
+//
+// Expect: 100-continue is answered before reading the body. Unsupported
+// expectations receive 417. TLS is provided by std/https, not this module.
+package http_server;
+
+import "std/async" as tasks;
+import "std/http" as http;
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const U64_MAX u64 = 18446744073709551615;
+
+const SERVER_CLOSED usize = 0;
+const SERVER_ACTIVE usize = 1;
+const SERVER_ACCEPTED usize = 2;
+const SERVER_REQUESTS usize = 3;
+const SERVER_BYTES_SENT usize = 4;
+const SERVER_ERRORS usize = 5;
+const SERVER_TIMEOUTS usize = 6;
+const SERVER_REJECTED usize = 7;
+const SERVER_STOPPING usize = 8;
+const SERVER_DRAIN_DEADLINE usize = 9;
+const SERVER_SERVING usize = 10;
+const SERVER_STATE_COUNT usize = 11;
+
+const PHASE_NONE u64 = 0;
+const PHASE_IDLE u64 = 1;
+const PHASE_HEADER u64 = 2;
+const PHASE_BODY u64 = 3;
+const PHASE_WRITE u64 = 4;
+
+const EXPECT_NONE i32 = 0;
+const EXPECT_CONTINUE i32 = 1;
+const EXPECT_UNSUPPORTED i32 = 2;
+
+const DEFAULT_BACKLOG i32 = 128;
+const DEFAULT_MAX_CONNECTIONS usize = 1024;
+const DEFAULT_HEADER_TIMEOUT_MS i64 = 10000;
+const DEFAULT_BODY_TIMEOUT_MS i64 = 30000;
+const DEFAULT_IDLE_TIMEOUT_MS i64 = 60000;
+const DEFAULT_WRITE_TIMEOUT_MS i64 = 30000;
+const DEFAULT_DRAIN_TIMEOUT_MS i64 = 10000;
+const DEFAULT_TIMER_TICK_MS i64 = 100;
+const DEFAULT_LARGE_BODY_THRESHOLD usize = 16384;
+const ACCEPT_BATCH usize = 32;
+const YIELD_BATCH u64 = 1024;
+const FAIRNESS_YIELD_MS i64 = 1;
+const WRITE_SLICE usize = 1048576;
+
+pub struct Config {
+    pub limits http.Limits;
+    pub backlog i32;
+    // 0 means unlimited.
+    pub max_connections usize;
+    // Maximum requests served on one connection; 0 means unlimited.
+    pub max_requests usize;
+    pub keep_alive bool;
+    pub tcp_nodelay bool;
+    pub reuse_address bool;
+    // Non-positive values disable the corresponding deadline.
+    pub header_timeout_ms i64;
+    pub body_timeout_ms i64;
+    pub idle_timeout_ms i64;
+    pub write_timeout_ms i64;
+    // Overall deadline for graceful stop; 0 or negative waits indefinitely.
+    pub drain_timeout_ms i64;
+    pub timer_tick_ms i64;
+    // Responses at or below this size use one encode+send buffer. Larger
+    // responses send the head and the handler body separately.
+    pub large_body_threshold usize;
+}
+
+pub struct Stats {
+    pub active_connections usize;
+    pub accepted_connections u64;
+    pub requests u64;
+    pub bytes_sent u64;
+    pub errors u64;
+    pub timeouts u64;
+    pub rejected u64;
+    pub stopping bool;
+}
+
+struct Connection {
+    active bool;
+    token u64;
+    fd i32;
+    phase u64;
+    deadline u64;
+    timed_out bool;
+}
+
+struct Slot {
+    pub index usize;
+    pub token u64;
+}
+
+struct ReadOutcome {
+    pub wait bool;
+    pub request option.Option[http.Request];
+    pub failure http.Error;
+}
+
+pub struct Server {
+    listener net.Socket;
+    handler func(http.Request) http.Response throws http.Error;
+    config Config;
+    state Vec[u64];
+    connections Vec[Connection];
+    free_slots Vec[usize];
+}
+
+pub func default_config() Config {
+    return Config(
+        limits:http.default_limits(),
+        backlog:DEFAULT_BACKLOG,
+        max_connections:DEFAULT_MAX_CONNECTIONS,
+        max_requests:0,
+        keep_alive:true,
+        tcp_nodelay:true,
+        reuse_address:true,
+        header_timeout_ms:DEFAULT_HEADER_TIMEOUT_MS,
+        body_timeout_ms:DEFAULT_BODY_TIMEOUT_MS,
+        idle_timeout_ms:DEFAULT_IDLE_TIMEOUT_MS,
+        write_timeout_ms:DEFAULT_WRITE_TIMEOUT_MS,
+        drain_timeout_ms:DEFAULT_DRAIN_TIMEOUT_MS,
+        timer_tick_ms:DEFAULT_TIMER_TICK_MS,
+        large_body_threshold:DEFAULT_LARGE_BODY_THRESHOLD);
+}
+
+pub func listen(
+    address net.Address,
+    handler func(http.Request) http.Response throws http.Error) Server throws os.Error {
+    return listen_with(address,handler,default_config());
+}
+
+pub func listen_with(
+    address net.Address,
+    handler func(http.Request) http.Response throws http.Error,
+    config Config) Server throws os.Error {
+    let socket = net.socket(
+        address.family,
+        net.SOCK_STREAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,
+        0);
+    var ready = false;
+    defer {
+        if !ready {
+            try { net.close(socket); }
+            catch error os.Error {}
+        }
+    }
+    if config.reuse_address {
+        net.setsockopt_int(socket,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+    }
+    var backlog = config.backlog;
+    if backlog <= 0 { backlog = DEFAULT_BACKLOG; }
+    net.bind(socket,address);
+    net.listen(socket,backlog);
+    ready = true;
+    return Server(
+        listener:socket,
+        handler:handler,
+        config:config,
+        state:vec.make[u64](SERVER_STATE_COUNT,0),
+        connections:vec.empty[Connection](),
+        free_slots:vec.empty[usize]());
+}
+
+// Stop accepting and start graceful drain. Idle keep-alive connections are
+// shut down immediately; in-flight requests may finish until the configured
+// drain deadline. The watchdog aborts anything still active at that deadline.
+pub func stop(server Server) {
+    if server.state[SERVER_CLOSED] != 0 { return; }
+    if server.state[SERVER_STOPPING] != 0 { return; }
+    server.state[SERVER_STOPPING] = 1;
+    server.state[SERVER_DRAIN_DEADLINE] =
+        deadline_after(server.config.drain_timeout_ms);
+    close_listener(server);
+    for var index usize = 0; index < vec.len(server.connections); index += 1 {
+        if !server.connections[index].active { continue; }
+        let phase = server.connections[index].phase;
+        if phase == PHASE_IDLE || phase == PHASE_NONE {
+            shutdown_fd(server.connections[index].fd,net.SHUT_RD);
+        } else {
+            server.connections[index].deadline = min_deadline(
+                server.connections[index].deadline,
+                server.state[SERVER_DRAIN_DEADLINE]);
+        }
+    }
+}
+
+// Close the listener and every active connection immediately.
+pub func abort(server Server) {
+    if server.state[SERVER_CLOSED] != 0 { return; }
+    server.state[SERVER_STOPPING] = 1;
+    server.state[SERVER_CLOSED] = 1;
+    close_listener(server);
+    for var index usize = 0; index < vec.len(server.connections); index += 1 {
+        if server.connections[index].active {
+            shutdown_fd(server.connections[index].fd,net.SHUT_RDWR);
+        }
+    }
+}
+
+pub func close(server Server) {
+    abort(server);
+}
+
+// Graceful stop plus wait until every connection task has exited. Returns
+// false if timeout_ms is positive and the drain did not finish in time.
+pub async func drain(server Server, timeout_ms i64) bool {
+    stop(server);
+    let deadline = deadline_after(timeout_ms);
+    let interval = watchdog_interval(server);
+    for server.state[SERVER_ACTIVE] != 0 {
+        let now = now_ns();
+        if deadline != U64_MAX && now != 0 && now >= deadline { return false; }
+        var wait = interval;
+        if deadline != U64_MAX && now != 0 && deadline > now {
+            let remaining = (deadline - now + 999999) / 1000000;
+            if remaining < u64(wait) { wait = i64(remaining); }
+        }
+        if wait <= 0 { wait = 1; }
+        await tasks.sleep(wait);
+    }
+    return true;
+}
+
+pub func local_address(server Server) net.Address throws os.Error {
+    return net.getsockname(server.listener);
+}
+
+pub func active_connections(server Server) usize {
+    return usize(server.state[SERVER_ACTIVE]);
+}
+
+pub func accepted_connections(server Server) u64 {
+    return server.state[SERVER_ACCEPTED];
+}
+
+pub func stats(server Server) Stats {
+    return Stats(
+        active_connections:usize(server.state[SERVER_ACTIVE]),
+        accepted_connections:server.state[SERVER_ACCEPTED],
+        requests:server.state[SERVER_REQUESTS],
+        bytes_sent:server.state[SERVER_BYTES_SENT],
+        errors:server.state[SERVER_ERRORS],
+        timeouts:server.state[SERVER_TIMEOUTS],
+        rejected:server.state[SERVER_REJECTED],
+        stopping:server.state[SERVER_STOPPING] != 0);
+}
+
+pub func config(server Server) Config {
+    return server.config;
+}
+
+// Run the accept loop until stopped/aborted or the task is cancelled. Call
+// this once per Server. Dropping the returned Task handle does not stop the
+// server. Returning closes the listener and starts graceful drain.
+pub async func serve(server Server) Unit throws os.Error {
+    defer {
+        if server.state[SERVER_CLOSED] == 0 { stop(server); }
+        server.state[SERVER_SERVING] = 0;
+        try { net.close(server.listener); }
+        catch error os.Error {}
+    }
+    if server.state[SERVER_CLOSED] != 0 || server.state[SERVER_STOPPING] != 0 {
+        return;
+    }
+    server.state[SERVER_SERVING] = 1;
+    tasks.spawn(watchdog(server));
+    var batch usize = 0;
+    for true {
+        if server.state[SERVER_CLOSED] != 0 || server.state[SERVER_STOPPING] != 0 {
+            return;
+        }
+        var peer = net.from_fd(-1);
+        var have_peer = false;
+        var wait = false;
+        try {
+            let accepted = net.accept(
+                server.listener,
+                u32(net.SOCK_NONBLOCK|net.SOCK_CLOEXEC));
+            peer = accepted.socket;
+            have_peer = true;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): wait = true;
+                case os.Error.Interrupted(code,completed): {}
+                default: {
+                    if server.state[SERVER_CLOSED] != 0 ||
+                       server.state[SERVER_STOPPING] != 0 {
+                        return;
+                    }
+                    throw error;
+                }
+            }
+        }
+        if !have_peer {
+            if wait {
+                await tasks.readable(net.fd(server.listener));
+            }
+            continue;
+        }
+        server.state[SERVER_ACCEPTED] += 1;
+        if server.config.tcp_nodelay {
+            try { net.setsockopt_int(peer,net.IPPROTO_TCP,net.TCP_NODELAY,1); }
+            catch error os.Error {}
+        }
+        let maximum = server.config.max_connections;
+        if maximum != 0 && server.state[SERVER_ACTIVE] >= u64(maximum) {
+            server.state[SERVER_REJECTED] += 1;
+            reject_busy(peer);
+            continue;
+        }
+        let slot = register_connection(server,net.fd(peer));
+        server.state[SERVER_ACTIVE] += 1;
+        tasks.spawn(connection(server,peer,slot));
+        batch += 1;
+        if batch >= ACCEPT_BATCH {
+            batch = 0;
+            await tasks.sleep(FAIRNESS_YIELD_MS);
+        }
+    }
+    return;
+}
+
+// A running serve task owns the listener close: shutdown wakes its fd wait,
+// then serve closes the descriptor after it returns. Otherwise stop/abort
+// close it directly.
+func close_listener(server Server) {
+    try { net.shutdown(server.listener,net.SHUT_RDWR); }
+    catch error os.Error {}
+    if server.state[SERVER_SERVING] == 0 {
+        try { net.close(server.listener); }
+        catch error os.Error {}
+    }
+}
+
+func reject_busy(socket net.Socket) {
+    defer {
+        try { net.close(socket); }
+        catch error os.Error {}
+    }
+    let response = http.Response(
+        version:"HTTP/1.1",
+        status:503,
+        reason:text.bytes("Service Unavailable"),
+        headers:[http.text_header("Connection","close")],
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    try {
+        let bytes = http.encode_response(response,"GET");
+        net.send(socket,bytes,vec.len(bytes),0);
+    } catch error http.Error {
+        let ignored = error;
+    } catch error os.Error {
+        let ignored = error;
+    }
+}
+
+func register_connection(server Server, fd i32) Slot {
+    switch vec.pop(server.free_slots) {
+        case option.Option.Some(index): {
+            let token = server.connections[index].token + 1;
+            server.connections[index] = Connection(
+                active:true,
+                token:token,
+                fd:fd,
+                phase:PHASE_NONE,
+                deadline:U64_MAX,
+                timed_out:false);
+            return Slot(index:index,token:token);
+        }
+        case option.Option.None: {
+            let token = u64(vec.len(server.connections)) + 1;
+            vec.push(server.connections,Connection(
+                active:true,
+                token:token,
+                fd:fd,
+                phase:PHASE_NONE,
+                deadline:U64_MAX,
+                timed_out:false));
+            return Slot(index:vec.len(server.connections)-1,token:token);
+        }
+    }
+    return Slot(index:0,token:0);
+}
+
+func release_connection(server Server, slot Slot) {
+    if slot.index >= vec.len(server.connections) { return; }
+    if server.connections[slot.index].token != slot.token { return; }
+    if !server.connections[slot.index].active { return; }
+    server.connections[slot.index].active = false;
+    server.connections[slot.index].fd = -1;
+    server.connections[slot.index].phase = PHASE_NONE;
+    server.connections[slot.index].deadline = U64_MAX;
+    server.connections[slot.index].timed_out = false;
+    vec.push(server.free_slots,slot.index);
+}
+
+func valid_slot(server Server, slot Slot) bool {
+    if slot.index >= vec.len(server.connections) { return false; }
+    return server.connections[slot.index].active &&
+        server.connections[slot.index].token == slot.token;
+}
+
+func touch(server Server, slot Slot, phase u64, timeout_ms i64) {
+    if !valid_slot(server,slot) { return; }
+    server.connections[slot.index].phase = phase;
+    if server.state[SERVER_STOPPING] != 0 && phase != PHASE_IDLE {
+        server.connections[slot.index].deadline = min_deadline(
+            server.connections[slot.index].deadline,
+            server.state[SERVER_DRAIN_DEADLINE]);
+    } else {
+        server.connections[slot.index].deadline = deadline_after(timeout_ms);
+    }
+}
+
+func min_deadline(left u64, right u64) u64 {
+    if left < right { return left; }
+    return right;
+}
+
+func timed_out(server Server, slot Slot) bool {
+    if !valid_slot(server,slot) { return false; }
+    return server.connections[slot.index].timed_out;
+}
+
+func shutdown_fd(fd i32, how i32) {
+    if fd < 0 { return; }
+    try { net.shutdown(net.from_fd(fd),how); }
+    catch error os.Error {}
+}
+
+func watchdog_interval(server Server) i64 {
+    var interval = server.config.timer_tick_ms;
+    if interval <= 0 { return DEFAULT_TIMER_TICK_MS; }
+    if interval > 60000 { return 60000; }
+    return interval;
+}
+
+func now_ns() u64 {
+    try {
+        let value = os.clock_gettime(os.CLOCK_MONOTONIC);
+        if value.seconds < 0 || value.nanoseconds < 0 { return 0; }
+        return u64(value.seconds)*1000000000 + u64(value.nanoseconds);
+    } catch error os.Error {
+        return 0;
+    }
+}
+
+func deadline_after(milliseconds i64) u64 {
+    if milliseconds <= 0 { return U64_MAX; }
+    let now = now_ns();
+    if now == 0 { return U64_MAX; }
+    let million = u64(1000000);
+    if u64(milliseconds) > U64_MAX / million { return U64_MAX; }
+    let delta = u64(milliseconds)*million;
+    if now > U64_MAX - delta { return U64_MAX; }
+    return now + delta;
+}
+
+async func watchdog(server Server) Unit {
+    let interval = watchdog_interval(server);
+    for true {
+        if server.state[SERVER_CLOSED] != 0 { return; }
+        if server.state[SERVER_STOPPING] != 0 && server.state[SERVER_ACTIVE] == 0 {
+            return;
+        }
+        await tasks.sleep(interval);
+        if server.state[SERVER_CLOSED] != 0 { return; }
+        reap_timeouts(server);
+    }
+    return;
+}
+
+func reap_timeouts(server Server) {
+    let now = now_ns();
+    if now == 0 { return; }
+    for var index usize = 0; index < vec.len(server.connections); index += 1 {
+        if !server.connections[index].active { continue; }
+        if server.connections[index].timed_out { continue; }
+        let deadline = server.connections[index].deadline;
+        if deadline == U64_MAX || deadline > now { continue; }
+        server.connections[index].timed_out = true;
+        server.state[SERVER_TIMEOUTS] += 1;
+        let phase = server.connections[index].phase;
+        if phase == PHASE_WRITE {
+            shutdown_fd(server.connections[index].fd,net.SHUT_RDWR);
+        } else {
+            shutdown_fd(server.connections[index].fd,net.SHUT_RD);
+        }
+    }
+}
+
+async func connection(server Server, socket net.Socket, slot Slot) Unit {
+    defer {
+        release_connection(server,slot);
+        server.state[SERVER_ACTIVE] -= 1;
+        try { net.close(socket); }
+        catch error os.Error {}
+    }
+    let input = http.reader(socket,server.config.limits);
+    var handled u64 = 0;
+    for true {
+        if server.state[SERVER_STOPPING] != 0 { return; }
+        if http.pending(input) == 0 {
+            var idle_timeout = server.config.idle_timeout_ms;
+            if handled == 0 { idle_timeout = server.config.header_timeout_ms; }
+            touch(server,slot,PHASE_IDLE,idle_timeout);
+            await tasks.readable(net.fd(socket));
+            if timed_out(server,slot) {
+                if handled == 0 { send_failure(socket,408); }
+                return;
+            }
+            if server.state[SERVER_STOPPING] != 0 { return; }
+        }
+
+        touch(server,slot,PHASE_HEADER,server.config.header_timeout_ms);
+        var head = empty_request();
+        var head_failed = false;
+        var head_ready = false;
+        var failure = http.Error.ReaderBusy;
+        for !head_ready && !head_failed {
+            let outcome = try_read_head(input);
+            switch outcome.request {
+                case option.Option.Some(value): {
+                    head = value;
+                    head_ready = true;
+                }
+                case option.Option.None: {
+                    if outcome.wait {
+                        await tasks.readable(net.fd(socket));
+                        if timed_out(server,slot) { head_failed = true; }
+                    } else {
+                        failure = outcome.failure;
+                        head_failed = true;
+                    }
+                }
+            }
+        }
+        if head_failed {
+            handle_read_failure(server,socket,slot,failure);
+            return;
+        }
+
+        let expectation = expectation_kind(head.headers);
+        if expectation == EXPECT_UNSUPPORTED {
+            server.state[SERVER_ERRORS] += 1;
+            send_failure(socket,417);
+            return;
+        }
+        let has_body = request_has_body(head);
+        if expectation == EXPECT_CONTINUE && has_body {
+            touch(server,slot,PHASE_WRITE,server.config.write_timeout_ms);
+            let cont = text.bytes("HTTP/1.1 100 Continue\r\n\r\n");
+            var continue_failed = false;
+            var continue_sent usize = 0;
+            try { continue_sent = await write_bytes(socket,cont); }
+            catch error os.Error { continue_failed = true; }
+            if continue_failed { return; }
+            server.state[SERVER_BYTES_SENT] += u64(continue_sent);
+        }
+
+        touch(server,slot,PHASE_BODY,server.config.body_timeout_ms);
+        var request = head;
+        var body_failed = false;
+        var body_ready = false;
+        for !body_ready && !body_failed {
+            let outcome = try_read_body(input);
+            switch outcome.request {
+                case option.Option.Some(value): {
+                    request = value;
+                    body_ready = true;
+                }
+                case option.Option.None: {
+                    if outcome.wait {
+                        await tasks.readable(net.fd(socket));
+                        if timed_out(server,slot) { body_failed = true; }
+                    } else {
+                        failure = outcome.failure;
+                        body_failed = true;
+                    }
+                }
+            }
+        }
+        if body_failed {
+            handle_read_failure(server,socket,slot,failure);
+            return;
+        }
+        if timed_out(server,slot) {
+            send_failure(socket,408);
+            return;
+        }
+
+        var response = empty_response();
+        var handler_failed = false;
+        try {
+            response = server.handler(request);
+        } catch error http.Error {
+            handler_failed = true;
+            server.state[SERVER_ERRORS] += 1;
+        }
+        var keep = false;
+        if handler_failed {
+            response = status_response(500,"Internal Server Error");
+        } else {
+            keep = wants_keep_alive(request,server.config,handled);
+            if response_requests_close(response.headers) { keep = false; }
+            if response.status == 101 { keep = false; }
+        }
+        if server.state[SERVER_STOPPING] != 0 { keep = false; }
+
+        let prepared = prepare_response(request,response,keep);
+        let threshold = server.config.large_body_threshold;
+        var use_parts = vec.len(prepared.body) > threshold;
+        var encoded = vec.empty[u8]();
+        var encode_failed = false;
+        try {
+            if use_parts {
+                encoded = http.encode_response_head(prepared,request.method);
+            } else {
+                encoded = http.encode_response(prepared,request.method);
+            }
+        } catch error http.Error {
+            encode_failed = true;
+        }
+        if encode_failed {
+            server.state[SERVER_ERRORS] += 1;
+            keep = false;
+            use_parts = false;
+            let fallback = prepare_response(
+                request,
+                status_response(500,"Internal Server Error"),
+                false);
+            try {
+                encoded = http.encode_response(fallback,request.method);
+            } catch error http.Error {
+                return;
+            }
+        }
+
+        touch(server,slot,PHASE_WRITE,server.config.write_timeout_ms);
+        var sent usize = 0;
+        var write_failed = false;
+        try {
+            sent += await write_bytes(socket,encoded);
+            if use_parts {
+                sent += await write_bytes(socket,prepared.body);
+            }
+        } catch error os.Error {
+            write_failed = true;
+        }
+        if write_failed {
+            if !timed_out(server,slot) {
+                server.state[SERVER_ERRORS] += 1;
+            }
+            return;
+        }
+        server.state[SERVER_REQUESTS] += 1;
+        server.state[SERVER_BYTES_SENT] += u64(sent);
+        handled += 1;
+        if !keep { return; }
+        if handled % YIELD_BATCH == 0 {
+            await tasks.sleep(FAIRNESS_YIELD_MS);
+        }
+    }
+    return;
+}
+
+func empty_request() http.Request {
+    return http.Request(
+        method:"",
+        target:"",
+        version:"HTTP/1.1",
+        headers:vec.empty[http.Header](),
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+}
+
+func empty_response() http.Response {
+    return http.Response(
+        version:"HTTP/1.1",
+        status:200,
+        reason:vec.empty[u8](),
+        headers:vec.empty[http.Header](),
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+}
+
+func handle_read_failure(server Server, socket net.Socket, slot Slot, failure http.Error) {
+    if timed_out(server,slot) {
+        send_failure(socket,408);
+        return;
+    }
+    let status = failure_status(failure);
+    if status == 0 { return; }
+    server.state[SERVER_ERRORS] += 1;
+    send_failure(socket,status);
+}
+
+func try_read_head(input http.Reader) ReadOutcome {
+    try {
+        return ReadOutcome(
+            wait:false,
+            request:option.Option[http.Request].Some(http.read_request_head(input)),
+            failure:http.Error.ReaderBusy);
+    } catch error http.Error {
+        if is_would_block(error) {
+            return ReadOutcome(wait:true,request:option.Option[http.Request].None,
+                failure:http.Error.ReaderBusy);
+        }
+        return ReadOutcome(wait:false,request:option.Option[http.Request].None,failure:error);
+    }
+    return ReadOutcome(wait:false,request:option.Option[http.Request].None,
+        failure:http.Error.ReaderBusy);
+}
+
+func try_read_body(input http.Reader) ReadOutcome {
+    try {
+        return ReadOutcome(
+            wait:false,
+            request:option.Option[http.Request].Some(http.read_request_body(input)),
+            failure:http.Error.ReaderBusy);
+    } catch error http.Error {
+        if is_would_block(error) {
+            return ReadOutcome(wait:true,request:option.Option[http.Request].None,
+                failure:http.Error.ReaderBusy);
+        }
+        return ReadOutcome(wait:false,request:option.Option[http.Request].None,failure:error);
+    }
+    return ReadOutcome(wait:false,request:option.Option[http.Request].None,
+        failure:http.Error.ReaderBusy);
+}
+
+func is_would_block(error http.Error) bool {
+    switch error {
+        case http.Error.Io(inner):
+            switch inner {
+                case os.Error.WouldBlock(code,completed): return true;
+                default: return false;
+            }
+        default: return false;
+    }
+}
+
+func min_usize(left usize, right usize) usize {
+    if left < right { return left; }
+    return right;
+}
+
+// First send uses the whole buffer without copying. After a short write,
+// resume at the exact offset with a bounded slice so a stuck client cannot
+// force repeated copies of an arbitrarily large suffix.
+async func write_bytes(socket net.Socket, data Vec[u8]) usize throws os.Error {
+    var offset usize = 0;
+    let length = vec.len(data);
+    for offset < length {
+        var wait = false;
+        try {
+            var count usize = 0;
+            if offset == 0 {
+                count = net.send(socket,data,length,0);
+            } else {
+                let size = min_usize(length-offset,WRITE_SLICE);
+                let part = data[offset:offset+size];
+                count = net.send(socket,part,size,0);
+            }
+            if count == 0 { throw os.Error.NoProgress(offset); }
+            offset += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): wait = true;
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if wait {
+            await tasks.writable(net.fd(socket));
+        }
+    }
+    return offset;
+}
+
+func wants_keep_alive(request http.Request, settings Config, handled u64) bool {
+    if !settings.keep_alive { return false; }
+    if settings.max_requests != 0 && handled + 1 >= u64(settings.max_requests) {
+        return false;
+    }
+    if header_has_token(request.headers,"Connection","close") { return false; }
+    if request.version == "HTTP/1.1" { return true; }
+    if request.version == "HTTP/1.0" {
+        return header_has_token(request.headers,"Connection","keep-alive");
+    }
+    return false;
+}
+
+func response_requests_close(headers Vec[http.Header]) bool {
+    return header_has_token(headers,"Connection","close");
+}
+
+func prepare_response(
+    request http.Request,
+    response http.Response,
+    keep bool) http.Response {
+    var version = request.version;
+    if version != "HTTP/1.1" && version != "HTTP/1.0" {
+        version = "HTTP/1.1";
+    }
+    var reason = response.reason;
+    if vec.len(reason) == 0 {
+        reason = text.bytes(default_reason(response.status));
+    }
+    let no_body_status = response.status == 204 ||
+                         (response.status >= 100 && response.status < 200);
+    let head_like = body_may_describe_representation(
+        request.method,response.status);
+    let can_emit_length = may_emit_response_length(
+        request.method,response.status);
+    var headers = filter_headers(
+        response.headers,
+        true,
+        !can_emit_length,
+        head_like || no_body_status,
+        head_like || no_body_status);
+    var body = response.body;
+    var trailers = response.trailers;
+    let no_body = head_like || no_body_status;
+
+    // Ordinary responses always use the body length. HEAD and 304 keep an
+    // explicit length because it describes the selected representation.
+    if can_emit_length && !has_header(headers,"Content-Length") &&
+       vec.len(body) != 0 {
+        vec.push(headers,content_length_header(vec.len(body)));
+    }
+    if no_body {
+        body = vec.empty[u8]();
+    }
+    if head_like || no_body_status {
+        trailers = vec.empty[http.Header]();
+    }
+
+    if keep {
+        vec.push(headers,http.text_header("Connection","keep-alive"));
+    } else {
+        vec.push(headers,http.text_header("Connection","close"));
+    }
+    return http.Response(
+        version:version,
+        status:response.status,
+        reason:reason,
+        headers:headers,
+        body:body,
+        trailers:trailers);
+}
+
+func body_may_describe_representation(method string, status i32) bool {
+    return method == "HEAD" || status == 304;
+}
+
+func may_emit_response_length(method string, status i32) bool {
+    if status == 304 { return true; }
+    if method != "HEAD" { return false; }
+    return !(status == 204 || (status >= 100 && status < 200));
+}
+
+func content_length_header(length usize) http.Header {
+    return http.text_header("Content-Length",strconv.format_u64(u64(length)));
+}
+
+func status_response(status i32, reason string) http.Response {
+    return http.Response(
+        version:"HTTP/1.1",
+        status:status,
+        reason:text.bytes(reason),
+        headers:vec.empty[http.Header](),
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+}
+
+// A failure response is attempted with one nonblocking send. If the peer is
+// not reading, the connection is closed rather than parked on writability.
+func send_failure(socket net.Socket, status i32) {
+    if status == 0 { return; }
+    var response = status_response(status,default_reason(status));
+    vec.push(response.headers,http.text_header("Connection","close"));
+    try {
+        let bytes = http.encode_response(response,"GET");
+        net.send(socket,bytes,vec.len(bytes),0);
+    } catch error http.Error {
+        let ignored = error;
+    } catch error os.Error {
+        let ignored = error;
+    }
+}
+
+func failure_status(failure http.Error) i32 {
+    switch failure {
+        case http.Error.HeadTooLarge: return 431;
+        case http.Error.TooManyHeaders: return 431;
+        case http.Error.BodyTooLarge: return 413;
+        case http.Error.UnsupportedVersion: return 505;
+        case http.Error.UnsupportedTransferEncoding: return 501;
+        case http.Error.UnexpectedEof: return 0;
+        case http.Error.Io(inner): return 0;
+        case http.Error.ReaderBusy: return 500;
+        case http.Error.ReadOrder: return 500;
+        default: return 400;
+    }
+}
+
+func default_reason(status i32) string {
+    switch status {
+        case 100: return "Continue";
+        case 101: return "Switching Protocols";
+        case 200: return "OK";
+        case 201: return "Created";
+        case 202: return "Accepted";
+        case 204: return "No Content";
+        case 206: return "Partial Content";
+        case 301: return "Moved Permanently";
+        case 302: return "Found";
+        case 304: return "Not Modified";
+        case 307: return "Temporary Redirect";
+        case 308: return "Permanent Redirect";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 405: return "Method Not Allowed";
+        case 408: return "Request Timeout";
+        case 409: return "Conflict";
+        case 411: return "Length Required";
+        case 413: return "Payload Too Large";
+        case 414: return "URI Too Long";
+        case 417: return "Expectation Failed";
+        case 426: return "Upgrade Required";
+        case 429: return "Too Many Requests";
+        case 431: return "Request Header Fields Too Large";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 502: return "Bad Gateway";
+        case 503: return "Service Unavailable";
+        case 504: return "Gateway Timeout";
+        case 505: return "HTTP Version Not Supported";
+        default: return "";
+    }
+}
+
+func request_has_body(request http.Request) bool {
+    var has_length = false;
+    var length u64 = 0;
+    for item in request.headers {
+        if header_name_is(item.name,"Transfer-Encoding") { return true; }
+        if !has_length && header_name_is(item.name,"Content-Length") {
+            has_length = true;
+            length = content_length_value(item.value);
+        }
+    }
+    return has_length && length != 0;
+}
+
+func content_length_value(value Vec[u8]) u64 {
+    var number u64 = 0;
+    for byte in value {
+        if byte >= 48 && byte <= 57 {
+            if number > (U64_MAX - 9) / 10 { return U64_MAX; }
+            number = number * 10 + u64(byte - 48);
+        }
+    }
+    return number;
+}
+
+func expectation_kind(headers Vec[http.Header]) i32 {
+    var kind = EXPECT_NONE;
+    for item in headers {
+        if !header_name_is(item.name,"Expect") { continue; }
+        let value = item.value;
+        var start usize = 0;
+        for var index usize = 0; index <= vec.len(value); index += 1 {
+            if index == vec.len(value) || value[index] == 44 {
+                if token_span_equal(value,start,index,"100-continue") {
+                    kind = EXPECT_CONTINUE;
+                } else if span_has_text(value,start,index) {
+                    return EXPECT_UNSUPPORTED;
+                }
+                start = index + 1;
+            }
+        }
+    }
+    return kind;
+}
+
+func span_has_text(value Vec[u8], start usize, end usize) bool {
+    var left = start;
+    var right = end;
+    for left < right && (value[left] == 32 || value[left] == 9) { left += 1; }
+    for right > left && (value[right-1] == 32 || value[right-1] == 9) { right -= 1; }
+    return left < right;
+}
+
+func filter_headers(
+    headers Vec[http.Header],
+    drop_connection bool,
+    drop_length bool,
+    drop_transfer bool,
+    drop_trailer bool) Vec[http.Header] {
+    let out = vec.empty[http.Header]();
+    for item in headers {
+        if drop_connection && header_name_is(item.name,"Connection") { continue; }
+        if drop_length && header_name_is(item.name,"Content-Length") { continue; }
+        if drop_transfer && header_name_is(item.name,"Transfer-Encoding") { continue; }
+        if drop_trailer && header_name_is(item.name,"Trailer") { continue; }
+        vec.push(out,item);
+    }
+    return out;
+}
+
+func header_name_is(value string, expected string) bool {
+    let length = text.len(value);
+    if length != text.len(expected) { return false; }
+    for var index usize = 0; index < length; index += 1 {
+        if ascii_fold_u32(value[index]) != ascii_fold_u32(expected[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func header_has_token(headers Vec[http.Header], name string, token string) bool {
+    for item in headers {
+        if header_name_is(item.name,name) && value_has_token(item.value,token) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func has_header(headers Vec[http.Header], name string) bool {
+    for item in headers {
+        if header_name_is(item.name,name) { return true; }
+    }
+    return false;
+}
+
+func value_has_token(value Vec[u8], token string) bool {
+    var start usize = 0;
+    for var index usize = 0; index <= vec.len(value); index += 1 {
+        if index == vec.len(value) || value[index] == 44 {
+            if token_span_equal(value,start,index,token) { return true; }
+            start = index + 1;
+        }
+    }
+    return false;
+}
+
+func token_span_equal(value Vec[u8], start usize, end usize, token string) bool {
+    var left = start;
+    var right = end;
+    for left < right && (value[left] == 32 || value[left] == 9) { left += 1; }
+    for right > left && (value[right-1] == 32 || value[right-1] == 9) { right -= 1; }
+    if right - left != text.byte_len(token) { return false; }
+    let target = text.bytes(token);
+    for var index usize = 0; index < right - left; index += 1 {
+        if ascii_fold_u8(value[left+index]) != ascii_fold_u8(target[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func ascii_fold_u8(value u8) u8 {
+    if value >= 65 && value <= 90 { return value + 32; }
+    return value;
+}
+
+func ascii_fold_u32(value u32) u32 {
+    if value >= 65 && value <= 90 { return value + 32; }
+    return value;
+}
+
+pub func text_response(status i32, body string) http.Response {
+    return status_body_response(status,text.bytes(body));
+}
+
+pub func bytes_response(status i32, body Vec[u8]) http.Response {
+    return status_body_response(status,body);
+}
+
+func status_body_response(status i32, body Vec[u8]) http.Response {
+    return http.Response(
+        version:"HTTP/1.1",
+        status:status,
+        reason:text.bytes(default_reason(status)),
+        headers:vec.empty[http.Header](),
+        body:body,
+        trailers:vec.empty[http.Header]());
+}

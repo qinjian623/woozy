@@ -1,0 +1,190 @@
+// Real async HTTP/1.1 server used by run_http_server.py.
+//
+// The process prints one LISTENING line with the selected port, then serves
+// until it is killed or a request cancels/wakes the accept loop.
+package app;
+
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub const HELLO_BODY string = "hello world";
+pub const BIG_LIMIT usize = 16777216;
+
+func response(status i32, body Vec[u8]) http.Response {
+    return http.Response(
+        version:"HTTP/1.1",
+        status:status,
+        reason:vec.empty[u8](),
+        headers:vec.empty[http.Header](),
+        body:body,
+        trailers:vec.empty[http.Header]());
+}
+
+func response_with(status i32, headers Vec[http.Header], body Vec[u8]) http.Response {
+    return http.Response(
+        version:"HTTP/1.1",
+        status:status,
+        reason:vec.empty[u8](),
+        headers:headers,
+        body:body,
+        trailers:vec.empty[http.Header]());
+}
+
+func route(request http.Request) http.Response throws http.Error {
+    if request.target == "/hello" {
+        return response(200,text.bytes(HELLO_BODY));
+    }
+    if request.target == "/head" {
+        return response(200,text.bytes("head-body-12345"));
+    }
+    if request.target == "/echo" {
+        return response_with(
+            200,
+            [http.text_header("X-Method",request.method)],
+            request.body);
+    }
+    if request.target == "/header" {
+        switch http.header_text(request.headers,"X-Test") {
+            case option.Option.Some(value): {
+                return response(200,text.bytes(value));
+            }
+            case option.Option.None: {
+                return response(400,text.bytes("missing X-Test"));
+            }
+        }
+    }
+    if request.target == "/close" {
+        return response_with(
+            200,
+            [http.text_header("Connection","close")],
+            text.bytes("closing"));
+    }
+    if request.target == "/nocontent" {
+        return response(204,vec.empty[u8]());
+    }
+    if request.target == "/notmodified" {
+        return response_with(
+            304,
+            [http.text_header("Content-Length",strconv.format_u64(u64(text.byte_len(HELLO_BODY))))],
+            vec.empty[u8]());
+    }
+    if request.target == "/handler-error" {
+        throw http.Error.InvalidTarget;
+    }
+    if request.target == "/bad-cl" {
+        return response_with(
+            200,
+            [http.text_header("Content-Length","999")],
+            text.bytes("abc"));
+    }
+    if request.target == "/bad-te" {
+        return response_with(
+            200,
+            [http.text_header("Transfer-Encoding","chunked")],
+            text.bytes("abc"));
+    }
+    if request.target == "/bad-status" {
+        return response(700,text.bytes("bad"));
+    }
+    if request.target == "/trailers" {
+        return http.Response(
+            version:"HTTP/1.1",
+            status:200,
+            reason:vec.empty[u8](),
+            headers:vec.empty[http.Header](),
+            body:text.bytes("trail"),
+            trailers:[http.text_header("X-Trailer","yes")]);
+    }
+    if request.target == "/switch" {
+        return response(101,vec.empty[u8]());
+    }
+    if text.starts_with(request.target,"/big/") {
+        var size usize = 0;
+        try { size = usize(strconv.parse_u64(request.target[5:])); }
+        catch error strconv.Error { return response(400,text.bytes("bad size")); }
+        if size > BIG_LIMIT { return response(413,text.bytes("too big")); }
+        return response(200,vec.make[u8](size,120));
+    }
+    if request.target == "/chunked" {
+        return response_with(
+            200,
+            [http.text_header("X-Trailers",strconv.format_u64(u64(vec.len(request.trailers))))],
+            request.body);
+    }
+    return response(404,text.bytes("not found"));
+}
+
+func port_from(value string) u16 throws strconv.Error {
+    let parsed = strconv.parse_u64(value);
+    if parsed > 65535 { throw strconv.Error.OutOfRange; }
+    return u16(parsed);
+}
+
+async func main() i32 throws os.Error {
+    var port u16 = 0;
+    var config = server.default_config();
+    var arguments = vec.empty[string]();
+    try { arguments = process.args(); }
+    catch error os.Error { return 2; }
+    if vec.len(arguments) > 1 {
+        try { port = port_from(arguments[1]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 2 {
+        try { config.max_connections = usize(strconv.parse_u64(arguments[2])); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 3 {
+        try { config.max_requests = usize(strconv.parse_u64(arguments[3])); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 4 {
+        try { config.header_timeout_ms = strconv.parse_i64(arguments[4]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 5 {
+        try { config.body_timeout_ms = strconv.parse_i64(arguments[5]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 6 {
+        try { config.idle_timeout_ms = strconv.parse_i64(arguments[6]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 7 {
+        try { config.write_timeout_ms = strconv.parse_i64(arguments[7]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 8 {
+        try { config.drain_timeout_ms = strconv.parse_i64(arguments[8]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 9 {
+        try { config.timer_tick_ms = strconv.parse_i64(arguments[9]); }
+        catch error strconv.Error { return 2; }
+    }
+    if vec.len(arguments) > 10 {
+        try { config.large_body_threshold = usize(strconv.parse_u64(arguments[10])); }
+        catch error strconv.Error { return 2; }
+    }
+    let requests = vec.make[u64](1,0);
+    let handler = func(request http.Request) http.Response throws http.Error {
+        requests[0] += 1;
+        if request.target == "/count" {
+            return response(200,text.bytes(strconv.format_u64(requests[0])));
+        }
+        return route(request);
+    };
+    let listener = server.listen_with(net.any4(port),handler,config);
+    let address = server.local_address(listener);
+    io.println("LISTENING "+strconv.format_i64(i64(address.port)));
+    await server.serve(listener);
+    return 0;
+}

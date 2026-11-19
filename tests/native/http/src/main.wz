@@ -131,6 +131,7 @@ func error_name(value http.Error) string {
     switch value {
         case http.Error.Io(error): return "Io";
         case http.Error.ReaderBusy: return "ReaderBusy";
+        case http.Error.ReadOrder: return "ReadOrder";
         case http.Error.UnexpectedEof: return "UnexpectedEof";
         case http.Error.TrailingBytes: return "TrailingBytes";
         case http.Error.HeadTooLarge: return "HeadTooLarge";
@@ -752,6 +753,86 @@ func codec_bytes() bool throws http.Error {
     return true;
 }
 
+func read_order_error(reader http.Reader, expected string) bool {
+    try {
+        let request = http.read_request_body(reader);
+        say("unexpected body success: "+request.target);
+    } catch error http.Error {
+        return check("read order "+expected,error_name(error) == expected);
+    }
+    return check("read order "+expected,false);
+}
+
+func socketpair_blocking() net.Pair throws http.Error {
+    try {
+        return net.socketpair(
+            net.AF_UNIX,
+            net.SOCK_STREAM | net.SOCK_CLOEXEC,
+            0);
+    } catch error os.Error { throw http.Error.Io(error); }
+}
+
+func codec_split() bool throws http.Error {
+    let pair = socketpair_blocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    let reader = http.reader(pair.second,http.default_limits());
+    send_text(pair.first,
+        "POST /first HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nX-Split: yes\r\n\r\n"+
+        "abcdeGET /second HTTP/1.1\r\nHost: x\r\n\r\n");
+    let head = http.read_request_head(reader);
+    if !check("split head method",head.method == "POST") { return false; }
+    if !check("split head target",head.target == "/first") { return false; }
+    if !check("split head body empty",vec.len(head.body) == 0) { return false; }
+    if !header_is(head.headers,"X-Split","yes") { return false; }
+    let first = http.read_request_body(reader);
+    if !check("split body target",first.target == "/first") { return false; }
+    if !check("split body",bytes_text(first.body,"abcde")) { return false; }
+    if !header_is(first.headers,"X-Split","yes") { return false; }
+    let second = http.read_request(reader);
+    if !check("split second target",second.target == "/second") { return false; }
+    if !read_order_error(reader,"ReadOrder") { return false; }
+
+    let response_pair = socketpair_blocking();
+    defer { close_quiet(response_pair.first); close_quiet(response_pair.second); }
+    let response_reader = http.reader(response_pair.second,http.default_limits());
+    send_text(response_pair.first,
+        "HTTP/1.1 201 Created\r\nX-Split: yes\r\nContent-Length: 3\r\n\r\nxyz"+
+        "HTTP/1.1 204 No Content\r\n\r\n");
+    let response_head = http.read_response_head(response_reader,"GET");
+    if !check("split response status",response_head.status == 201) { return false; }
+    if !check("split response body empty",vec.len(response_head.body) == 0) { return false; }
+    if !header_is(response_head.headers,"X-Split","yes") { return false; }
+    let response_body = http.read_response_body(response_reader);
+    if !check("split response body",bytes_text(response_body.body,"xyz")) { return false; }
+    let no_content = http.read_response(response_reader,"GET");
+    if !check("split second response",no_content.status == 204) { return false; }
+
+    let normal = new_response(
+        version:"HTTP/1.1",status:200,reason:"OK",
+        headers:[http.text_header("X-Head","yes")],
+        body:text.bytes("abc"));
+    let head_bytes = http.encode_response_head(normal,"GET");
+    let full_bytes = http.encode_response(normal,"GET");
+    if !check("head prefix",bytes_equal(head_bytes,full_bytes[:vec.len(head_bytes)])) {
+        return false;
+    }
+    if !check("head leaves body",bytes_text(full_bytes[vec.len(head_bytes):],"abc")) {
+        return false;
+    }
+    if !contains_bytes(head_bytes,"Content-Length: 3\r\n") { return false; }
+    let head_only = new_response(
+        version:"HTTP/1.1",status:200,reason:"OK",
+        headers:[http.text_header("Content-Length","123")],
+        body:vec.empty[u8]());
+    let head_only_bytes = http.encode_response_head(head_only,"HEAD");
+    let head_only_full = http.encode_response(head_only,"HEAD");
+    if !contains_bytes(head_only_bytes,"Content-Length: 123\r\n") { return false; }
+    if !check("HEAD head equals full",bytes_equal(head_only_bytes,head_only_full)) {
+        return false;
+    }
+    return true;
+}
+
 func is_would_block(value http.Error) bool {
     switch value {
         case http.Error.Io(inner):
@@ -874,6 +955,7 @@ func selftest() i32 throws http.Error {
     if !codec_host() { return 5; }
     if !codec_bytes() { return 6; }
     if !codec_nonblocking() { return 7; }
+    if !codec_split() { return 8; }
     say("http-selftest: ok");
     return 0;
 }

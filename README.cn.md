@@ -28,7 +28,7 @@ func main() throws os.Error {
 - [进程与信号](docs/PROCESSES.md)：启动程序、重定向、等待、参数环境、信号与 fork 规则。
 - [共享内存与 IPC](docs/IPC.md)：共享映射、跨进程互斥锁、条件变量和信号量。
 - [调用 C 库](docs/FFI.md)：有类型的 C 绑定、指针、缓冲区、资源和回调。
-- [示例](examples/)：函数、数值、错误处理和参数传递；另有可运行的 [TCP 聊天 server/client](examples/chat/README.md)。
+- [示例](examples/)：函数、数值、错误处理和参数传递；另有可运行的 [TCP 聊天 server/client](examples/chat/README.md) 和 [异步 HTTP server](examples/http_server/README.md)。
 
 ## 主要规则
 
@@ -52,7 +52,7 @@ func main() throws os.Error {
 
 标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口面向 Linux x86_64 Native 程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
 
-`std/http` 支持 HTTP/1.1；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
+`std/http` 支持 HTTP/1.1；`std/http_server` 提供支持 keep-alive、流水线、非阻塞背压、请求/正文/空闲/写超时、`Expect: 100-continue` 和优雅 stop/drain/abort 的异步 HTTP/1.1 服务器；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
 
 `std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
 

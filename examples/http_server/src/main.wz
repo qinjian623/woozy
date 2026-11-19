@@ -1,0 +1,85 @@
+// Small production-shaped HTTP/1.1 server.
+//
+//   woozyc build --project examples/http_server/lang.toml --backend native \
+//     --opt 2 --out-dir build/http-server
+//   build/http-server/program [HOST] [PORT]
+//
+// Defaults: 127.0.0.1:8080. Port 0 lets the kernel choose and the program
+// prints the actual port on the LISTENING line.
+package app;
+
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func route(request http.Request) http.Response throws http.Error {
+    if request.target == "/" {
+        return server.text_response(200,"Woozy HTTP server\n");
+    }
+    if request.target == "/hello" {
+        return server.text_response(200,"hello world");
+    }
+    if request.target == "/health" {
+        return server.text_response(200,"ok");
+    }
+    if request.target == "/echo" {
+        var headers = vec.empty[http.Header]();
+        vec.push(headers,http.text_header("X-Method",request.method));
+        return http.Response(
+            version:"HTTP/1.1",
+            status:200,
+            reason:text.bytes("OK"),
+            headers:headers,
+            body:request.body,
+            trailers:vec.empty[http.Header]());
+    }
+    return server.text_response(404,"not found\n");
+}
+
+func parse_port(value string) u16 throws os.Error {
+    try {
+        let parsed = strconv.parse_u64(value);
+        if parsed > 65535 { throw os.Error.System(22,0); }
+        return u16(parsed);
+    } catch error strconv.Error {
+        throw os.Error.System(22,0);
+    }
+}
+
+async func main() i32 throws os.Error {
+    var host = "127.0.0.1";
+    var port u16 = 8080;
+    var arguments = vec.empty[string]();
+    try { arguments = process.args(); }
+    catch error os.Error { return 2; }
+    if vec.len(arguments) > 1 { host = arguments[1]; }
+    if vec.len(arguments) > 2 { port = parse_port(arguments[2]); }
+    var address = net.any4(port);
+    if host == "0.0.0.0" {
+        address = net.any4(port);
+    } else if host == "::" {
+        address = net.any6(port);
+    } else {
+        address = net.ip(host,port);
+    }
+
+    var config = server.default_config();
+    config.max_connections = 4096;
+    config.max_requests = 0;
+    config.header_timeout_ms = 10000;
+    config.body_timeout_ms = 30000;
+    config.idle_timeout_ms = 60000;
+    config.write_timeout_ms = 30000;
+
+    let listener = server.listen_with(address,route,config);
+    let local = server.local_address(listener);
+    io.println("LISTENING "+host+" "+strconv.format_i64(i64(local.port)));
+    await server.serve(listener);
+    return 0;
+}

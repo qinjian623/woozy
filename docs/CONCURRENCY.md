@@ -267,7 +267,7 @@ func main() i32 throws os.Error {
 
 ## async 与 await
 
-异步函数调用返回 `Task[R,E]`，创建时不执行函数体。`await` 取得结果并传播该函数声明的错误；异步 main 由执行器运行。下面的程序输出 42：
+异步函数调用返回 `Task[R,E]`，创建时不执行函数体。`await` 取得结果并传播该函数声明的错误；直接等待一个尚未 `spawn` 的任务会启动并驱动它。异步 main 由执行器运行。下面的程序输出 42：
 
 ```wz
 package app;
@@ -300,8 +300,14 @@ async func main() i32 throws os.Error {
 | `readable(fd)`、`writable(fd)` | 等待描述符可读或可写，不执行读写，也不取得描述符所有权 |
 | `join(task)`、`join_all(tasks)` | 在异步函数中等待一个任务或依次等待一组任务，并传播声明的错误 |
 
+`await` 只能写在 async 函数里，操作数必须是 `Task`；否则分别报 `E_AWAIT_CONTEXT` 和 `E_AWAIT_NOT_TASK`。async 只支持自由函数：方法不能声明 async，取 async 函数值也会报 `E_CAPABILITY_UNAVAILABLE`。同一个 Task 可以重复 await，每次都读到同一个结果，函数体只执行一次。
+
 执行器属于首次使用它的线程；run、spawn、cancel 等操作只能在该线程调用。等待读写时使用非阻塞描述符，准备就绪后仍要处理实际读写的返回结果。普通拥有参数在创建 Task 时复制，Vec 等引用字段继续共享对象；未启动任务的最后句柄被释放时，不执行函数体。
 
+`cancel` 请求取消。未启动或排队中的任务立即标记为取消，函数体不运行；已开始的任务在挂起点恢复，或在下一次 await 观察取消标志，执行完 defer 和拥有值清理后才标记为取消，`finished` 在此之前仍返回 false。等待已取消的任务会让等待者走同样的取消路径，取消因此沿 await 链向上传播；到达 async main 时进程以退出码 1 结束。
+
 未启动或已完成 Task 中的纯 Woozy 强引用循环会自动回收。仍由执行器执行或等待事件的任务保持存活，清理句柄不会自动取消它；需要停止时调用 cancel 或 shutdown。异线程拥有执行器时 fork 抛出 os.Error，同线程 fork 的规则见[进程文档](PROCESSES.md)。
+
+`std/http_server` 使用同一执行器实现 HTTP/1.1 服务器：每个连接一个任务，非阻塞读写，`WouldBlock` 后等待描述符，支持 keep-alive、流水线、`Expect: 100-continue`、header/body/idle/write 超时、`max_connections`/`max_requests` 上限，以及 stop/drain/abort 生命周期。单个 watchdog 任务扫描连接表并只对描述符 `shutdown`，连接任务仍负责关闭。handler 在单线程执行器中同步运行。示例见[标准库](STDLIB.md#stdhttp_server)。
 
 目前 async 只支持 Linux x86_64 Native，inout 参数会在编译时拒绝。async 的参数、局部值、结果或错误不能包含外部 C 资源句柄。对函数值和 dyn 的资源检查目前按程序中出现的类型保守处理，因此含同类值、但实际没有保存 C 资源的 async 函数也可能被拒绝。Python 后端暂不支持 async。
