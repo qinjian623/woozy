@@ -1,0 +1,222 @@
+package app;
+
+import "std/option" as option;
+import "std/regex" as regex;
+import "std/text" as text;
+
+func matches(pattern string, value string, start usize, end usize) bool throws regex.Error {
+    let compiled = regex.compile(pattern);
+    switch regex.find(compiled,value) {
+        case option.Option.Some(found):
+            return found.start == start && found.end == end;
+        case option.Option.None:
+            return false;
+    }
+}
+
+func no_match(pattern string, value string) bool throws regex.Error {
+    let compiled = regex.compile(pattern);
+    switch regex.find(compiled,value) {
+        case option.Option.Some(found): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func accepted(pattern string) bool {
+    try {
+        let compiled = regex.compile(pattern);
+        return true;
+    } catch error regex.Error {
+        return false;
+    }
+}
+
+func rejects_syntax(pattern string, offset usize) bool {
+    try {
+        let compiled = regex.compile(pattern);
+    } catch error regex.Error {
+        switch error {
+            case regex.Error.Syntax(actual): return actual == offset;
+            case regex.Error.PatternTooLarge(actual): return false;
+            case regex.Error.NestingTooDeep(actual): return false;
+        }
+    }
+    return false;
+}
+
+func rejects_nesting(pattern string, offset usize) bool {
+    try {
+        let compiled = regex.compile(pattern);
+    } catch error regex.Error {
+        switch error {
+            case regex.Error.Syntax(actual): return false;
+            case regex.Error.PatternTooLarge(actual): return false;
+            case regex.Error.NestingTooDeep(actual): return actual == offset;
+        }
+    }
+    return false;
+}
+
+func rejects_large(pattern string) bool {
+    try {
+        let compiled = regex.compile(pattern);
+    } catch error regex.Error {
+        switch error {
+            case regex.Error.Syntax(actual): return false;
+            case regex.Error.PatternTooLarge(actual): return true;
+            case regex.Error.NestingTooDeep(actual): return false;
+        }
+    }
+    return false;
+}
+
+func literals_and_dot() bool throws regex.Error {
+    if !matches("中😀","x中😀y",1,3) { return false; }
+    if !matches("😀+","😀😀",0,2) { return false; }
+    if !matches("中😀|😀中","x😀中y",1,3) { return false; }
+    if !matches("a😀","xxa😀yy",2,4) { return false; }
+    if !matches(".","a\nb",0,1) || !no_match(".","\n") { return false; }
+    if !matches(".","\r",0,1) { return false; }
+    if !matches(".*","a\nb",0,1) || !matches(".*","\n",0,0) { return false; }
+    if !matches(".+","😀\n",0,1) { return false; }
+    if !matches("[中-龥]+","a中文字b",1,4) { return false; }
+    if !matches("[^😀]+","😀ab😀",1,3) { return false; }
+    return true;
+}
+
+func anchors() bool throws regex.Error {
+    if !matches("^abc$","abc",0,3) { return false; }
+    if !no_match("^abc$","xabc") || !no_match("^abc$","abcx") { return false; }
+    if !no_match("^abc$","abc\n") || !no_match("^😀$","😀\n") { return false; }
+    if !matches("^$","",0,0) || !no_match("^$","x") { return false; }
+    if !matches("$","abc",3,3) || !matches("$","a\n",2,2) { return false; }
+    if !matches("^","abc",0,0) || !matches("^😀$","😀",0,1) { return false; }
+    if !no_match("a^","a") || !no_match("$a","a") { return false; }
+    if !matches("^a|b$","ab",0,1) || !matches("a$|ab","ab",0,2) { return false; }
+    if !matches("a\nb","a\nb",0,3) { return false; }
+    return true;
+}
+
+func alternation_and_groups() bool throws regex.Error {
+    if !matches("a|ab","ab",0,2) || !matches("ab|a","ab",0,2) { return false; }
+    if !matches("ab|cd","xcd",1,3) || !matches("abc|ab","ab",0,2) { return false; }
+    if !matches("a|ab|abc","zabc",1,4) { return false; }
+    if !matches("(a|ab)c","abc",0,3) || !matches("a(b|c)d","acd",0,3) { return false; }
+    if !matches("a(bc)?d","ad",0,2) || !matches("a(bc)?d","abcd",0,4) { return false; }
+    if !matches("(a*)*","aaa",0,3) || !matches("(a?)*","aaa",0,3) { return false; }
+    if !matches("(a|aa)*b","aaaaab",0,6) || !no_match("(a*)*b","aaaa") { return false; }
+    if !matches("(a*)*b","b",0,1) || !matches("(a|)*","aaa",0,3) { return false; }
+    if !matches("()*","x",0,0) { return false; }
+    if !matches("a|","a",0,1) || !matches("|a","b",0,0) { return false; }
+    if !matches("a*|b","bbb",0,1) { return false; }
+    return true;
+}
+
+func quantifiers_and_empty() bool throws regex.Error {
+    if !matches("a*","",0,0) || !no_match("a+","") || !matches("a?","b",0,0) { return false; }
+    if !matches("ab?c","ac",0,2) || !matches("ab?c","abc",0,3) { return false; }
+    if !no_match("^ab?c$","abbc") || !matches("a?","aaa",0,1) ||
+       !matches("(ab)?","abab",0,2) { return false; }
+    if !matches("a*b","aaab",0,4) || !matches("a*a","aaa",0,3) { return false; }
+    if !no_match("a+","bbb") || !matches("a+b*","aaabb",0,5) { return false; }
+    if !matches("(ab)+","xabab",1,5) || !no_match("(ab)+","xaa") { return false; }
+    if !matches("", "",0,0) || !matches("()","",0,0) { return false; }
+    return true;
+}
+
+func leftmost_longest() bool throws regex.Error {
+    if !matches("b|abc","abc",0,3) { return false; }
+    if !matches(".*a","baaa",0,4) || !matches(".*a","aaab",0,3) { return false; }
+    if !matches("a.*a","aXaYa",0,5) { return false; }
+    if !matches("a*","aaab",0,3) || !matches("a*","baaa",0,0) { return false; }
+    return true;
+}
+
+func classes() bool throws regex.Error {
+    if !matches("[a-z]+","xxABCyy",0,2) { return false; }
+    if !matches("[^x]+","xxabcx",2,5) { return false; }
+    if !matches("[a-z0-9]+","--a9Z",2,4) { return false; }
+    if !matches("[abc]","zab",1,2) || !no_match("[a-z]","中") { return false; }
+    if !matches("[^a]","\n",0,1) || !matches("[\\]]","]",0,1) { return false; }
+    if !matches("[a-]","-",0,1) || !matches("[-a]","-",0,1) { return false; }
+    if !matches("[\\n\\t]+","\n\t",0,2) { return false; }
+    if !matches("[^a-c]+","abXYZcd",2,5) { return false; }
+    if !matches("[😀中]","a中b",1,2) || !matches("[^😀]","😀a",1,2) { return false; }
+    return true;
+}
+
+func escapes() bool throws regex.Error {
+    if !matches("\\.",".",0,1) || !no_match("\\.","a") { return false; }
+    if !matches("\\\\","\\",0,1) || !matches("\\*\\+","*+",0,2) { return false; }
+    if !matches("\\n","\n",0,1) || !matches("\\r","\r",0,1) { return false; }
+    if !matches("\\t","\t",0,1) { return false; }
+    if !matches("\\{x\\}","{x}",0,3) || !matches("\\[a\\]","[a]",0,3) { return false; }
+    if !matches("\\|","|",0,1) || !matches("\\-","-",0,1) { return false; }
+    if !matches("\\^\\$","^$",0,2) { return false; }
+    return true;
+}
+
+func invalid_syntax() bool {
+    if !rejects_syntax("[]",1) || !rejects_syntax("[^]",2) { return false; }
+    if !rejects_syntax("[z-a]",2) || !rejects_syntax("[a",2) { return false; }
+    if !rejects_syntax("[a-",3) { return false; }
+    if !rejects_syntax("(",1) || !rejects_syntax(")",0) || !rejects_syntax("a)",1) { return false; }
+    if !rejects_syntax("a|*",2) || !rejects_syntax("(?i)a",1) { return false; }
+    if !rejects_syntax("(?=a)",1) || !rejects_syntax("a{2}",1) { return false; }
+    if !rejects_syntax("a\\q",2) || !rejects_syntax("\\d",1) { return false; }
+    if !rejects_syntax("^*",1) || !rejects_syntax("$+",1) { return false; }
+    if !rejects_syntax("a*?",2) || !rejects_syntax("a**",2) || !rejects_syntax("a?+",2) { return false; }
+    if !rejects_syntax("\\",0) || !rejects_syntax("[\\q]",2) { return false; }
+    if !rejects_syntax("}",0) || !rejects_syntax("a{",1) || !rejects_syntax("]",0) { return false; }
+    return true;
+}
+
+func limits() bool {
+    let deep_ok = text.repeat("(",128) + "a" + text.repeat(")",128);
+    let deep_bad = text.repeat("(",129) + "a" + text.repeat(")",129);
+    if !accepted(deep_ok) || !rejects_nesting(deep_bad,128) { return false; }
+    if !accepted(text.repeat("a",4096)) { return false; }
+    if !rejects_large(text.repeat("a",4097)) { return false; }
+    if !rejects_large(text.repeat("😀",20000)) { return false; }
+    return true;
+}
+
+func pathological() bool throws regex.Error {
+    let many = text.repeat("a",2000);
+    if !no_match("(a*)*b",many) || !no_match("(a+)+b",many) { return false; }
+    if !no_match("(a|aa)+b",many) || !no_match("(a?)*b",many) { return false; }
+    if !no_match("((a*)*)*b",many) { return false; }
+    if !matches("(a*)*",many,0,2000) { return false; }
+    let wide = text.repeat("😀",1000) + "a😀";
+    if !matches("a😀",wide,1000,1002) || !matches(".*😀",wide,0,1002) { return false; }
+    if !no_match("(😀|a)*b",text.repeat("😀",1000)) { return false; }
+    return true;
+}
+
+func public_api() bool throws regex.Error {
+    let compiled = regex.compile("^a+$");
+    if !regex.is_match(compiled,"aaa") || regex.is_match(compiled,"aaab") { return false; }
+    switch regex.find(compiled,"bbb") {
+        case option.Option.Some(found): return false;
+        case option.Option.None: {}
+    }
+    switch regex.find(regex.compile("a"),"ba") {
+        case option.Option.Some(found): return found.start == 1 && found.end == 2;
+        case option.Option.None: return false;
+    }
+}
+
+func main() i32 throws regex.Error {
+    if !literals_and_dot() { return 1; }
+    if !anchors() { return 2; }
+    if !alternation_and_groups() { return 3; }
+    if !quantifiers_and_empty() { return 4; }
+    if !leftmost_longest() { return 5; }
+    if !classes() { return 6; }
+    if !escapes() { return 7; }
+    if !invalid_syntax() { return 8; }
+    if !limits() { return 9; }
+    if !pathological() { return 10; }
+    if !public_api() { return 11; }
+    return 0;
+}

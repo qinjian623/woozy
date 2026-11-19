@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/slice`、`std/box`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/unicode`、`std/vec`、`std/sort`、`std/slice`、`std/box`、`std/weak`、`std/iter`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 在 Native 和 Python 后端都可以使用。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -175,17 +175,36 @@ func main() throws os.Error {
 | `starts_with`、`ends_with`、`contains` | 前缀、后缀、包含判断 |
 | `find(value string, needle string) option.Option[usize]` | 第一次出现的位置，按码点计 |
 | `find_from(value string, needle string, start usize)` | 从指定码点位置开始查找 |
+| `find_last(value string, needle string) option.Option[usize]` | 最后一次出现的码点位置，允许重叠。空子串返回字符串长度 |
+| `count(value string, needle string) usize` | 统计不重叠的匹配。空子串匹配所有码点边界，返回长度加一 |
 | `split(value string, separator string) Vec[string]` | 拆分；空分隔符按每个码点拆 |
+| `split_n(value string, separator string, limit usize) Vec[string]` | 最多返回 `limit` 段，最后一段保留剩余内容。限制为 0 时返回空 Vec，为 1 时返回包含原文的 Vec。空分隔符按码点拆 |
+| `split_lines(value string) Vec[string]` | 识别 LF、CRLF 和 CR，保留空行，结尾的换行符不额外产生一行。空串返回空 Vec |
 | `join(values Vec[string], separator string) string` | 用分隔符连接 |
 | `replace(value string, old string, replacement string) string` | 替换 |
 | `repeat(value string, count usize) string` | 重复 |
-| `trim(value string) string` | 去掉两端空白 |
+| `trim`、`trim_start`、`trim_end` | 分别去掉两端、开头、结尾的空白 |
+| `strip_prefix`、`strip_suffix` | 匹配时去掉一次前缀或后缀，返回 `Option[string]` |
 | `is_space(rune u32) bool` | 判断空白码点 |
 | `ascii_lower(value string) string`、`ascii_upper` | 只转换 ASCII 字母 |
 
 `Error` 有两个变体：`InvalidUtf8` 和 `InvalidScalar(value u32)`。`from_bytes` 遇到不完整或非法的 UTF-8 时抛出 `InvalidUtf8`；`from_rune` 遇到代理区或超出 Unicode 范围的码点时抛出 `InvalidScalar`。
 
 字符串本身可以用 `len`、索引和切片；这些操作都按码点计算，索引结果是 `u32`。字符串不自动做 Unicode 正规化，例如组合字符和预组合字符是不同的字节序列。需要按字节处理时先用 `bytes`，再显式转换回来。
+
+## std/regex
+
+正则表达式在 Native 和 Python 后端使用同一实现。可先编译一个模式，再搜索多段文本。
+
+| 接口 | 说明 |
+| --- | --- |
+| `compile(pattern string) Pattern throws Error` | 编译模式，语法错误报告码点位置 |
+| `find(compiled Pattern, value string) option.Option[Match]` | 返回开始位置最早的匹配，同一起点取最长结果。字段 `start`、`end` 是左闭右开的码点下标 |
+| `is_match(compiled Pattern, value string) bool` | 是否存在匹配 |
+
+支持字面字符、`.`、`^`、`$`、分组 `(...)`、分支 `|`、重复 `* + ?`、字符类 `[a-z]` 和反向字符类 `[^x]`。可转义元字符，也可用 `\n`、`\r`、`\t`。锚点匹配整个字符串的首尾，点号跳过 LF。`regex.find(regex.compile("中+"), "a中中b")` 的匹配区间是 `[1, 3)`。
+
+匹配器逐码点推进状态集合，不做指数级回溯。模式最多 4096 个码点，分组最多嵌套 128 层。当前范围为查找和判定，捕获组、反向引用、环视、`{m,n}` 和模式标志尚未提供。
 
 ## std/unicode
 
@@ -232,6 +251,19 @@ Vec 的长度、容量和可变操作。
 Vec 赋值共享同一个容器；`push`、`pop`、`resize` 和 `clear` 会改变所有别名。切片建立新的 Vec，复制选中的元素。`pop` 在空 Vec 上返回 `option.Option.None`。
 
 遍历 Vec 时只能修改已有元素，不能改变长度或存储。循环里不要调用 `push`、`pop`、`resize`、`clear` 或 `reserve`。
+
+## std/sort
+
+给 `Vec[T]` 传入比较函数 `less func(T,T) bool`。比较函数须满足严格弱序，例如整数用 `left < right`，并且不能修改正在排序或查找的 Vec。
+
+| 接口 | 说明 |
+| --- | --- |
+| `sort_by(values, less)` | 原地稳定归并排序。相等元素保持原顺序，其他 Vec 别名也会看到变更。最坏耗时 O(n log n)，额外空间 O(n) |
+| `is_sorted_by(values, less) bool` | 检查是否已按同一比较规则排序 |
+| `lower_bound_by(values, value, less) usize` | 在已排序的 Vec 中找第一个不小于目标的位置，没有则返回长度 |
+| `binary_search_by(values, value, less) option.Option[usize]` | 找到第一个与目标等价的位置，没有则返回 `None` |
+
+例如，导入 `std/sort` 后，`sort.sort_by(values, func(a i32, b i32) bool { return a < b; });` 会将 `Vec[i32]` 升序排列。
 
 ## std/slice
 
