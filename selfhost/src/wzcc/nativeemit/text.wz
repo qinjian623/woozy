@@ -151,7 +151,8 @@ pub func new_function(name string, signature Signature, linkage string, attribut
     }
     let index = vec.len(state.functions);
     vec.push(state.functions, FunctionText(name: name, signature: copy_signature(signature), linkage: linkage,
-        attributes: attributes, blocks: [], next_value: 0, next_label: 0));
+        attributes: attributes, blocks: [], next_value: 0, next_label: 0,
+        debug_scope: "", debug_location: "", has_source_debug: false));
     return index;
 }
 pub func function_reference(state Emitter, function_index usize) Value throws Error {
@@ -220,7 +221,9 @@ pub func append(line string, state inout Emitter) throws Error {
     let function_index = current_function(state);
     let block_index = current_block(state);
     if state.functions[function_index].blocks[block_index].terminated { throw invalid("instruction after LLVM terminator"); }
-    vec.push(state.functions[function_index].blocks[block_index].lines, line);
+    var rendered = line;
+    if state.options.debug_info { rendered = debug_line(line, function_index, inout state); }
+    vec.push(state.functions[function_index].blocks[block_index].lines, rendered);
 }
 pub func result(type_name string, expression string, state inout Emitter) Value throws Error {
     let value = fresh_value(type_name, inout state);
@@ -285,6 +288,7 @@ pub func sections(state Emitter) Vec[string] throws Error {
         if function.linkage != "" { header += function.linkage + " "; }
         header += function.signature.result + " " + global_reference(function.name) + "(" + text.join(parameters, ", ") + ")";
         if function.attributes != "" { header += " " + function.attributes; }
+        if function.debug_scope != "" { header += " !dbg " + function.debug_scope; }
         vec.push(out, "\n" + header + " {\n");
         for block in function.blocks {
             if !block.terminated { throw invalid("LLVM block has no terminator: " + function.name + ":" + block.label); }
@@ -296,6 +300,10 @@ pub func sections(state Emitter) Vec[string] throws Error {
             for line in block.lines { vec.push(out, "  " + line + "\n"); }
         }
         vec.push(out, "}\n");
+    }
+    switch state.debug {
+        case option.Option.Some(debug): { for line in debug.named { vec.push(out, line + "\n"); } }
+        case option.Option.None: {}
     }
     for var index usize = 0; index < vec.len(state.metadata); index += 1 {
         vec.push(out, "!" + number(index) + " = " + state.metadata[index].body + "\n");

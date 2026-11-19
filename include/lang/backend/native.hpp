@@ -15,6 +15,7 @@ struct Options {
   std::shared_ptr<hir::IdentityKeys> identities;
   std::shared_ptr<const std::vector<size_t>> source_order; // read-only CFG function indices
   bool llvm_only = false; // verified assembly for the package build driver
+  bool debug_info = false; // source DWARF; independent of optimization
 };
 struct Output {
   std::vector<uint8_t> object;

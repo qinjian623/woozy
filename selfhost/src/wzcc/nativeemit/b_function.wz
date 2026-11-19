@@ -84,7 +84,7 @@ func b_incoming_has(state Emitter, block usize) bool {
 // ---- declaration ------------------------------------------------------------
 
 func worker_instance(state Emitter, symbol usize) bool {
-    if state.worker_instance_linkage == "" { return false; }
+    if !state.emit_worker_instances { return false; }
     for instance in state.input.hir.instances {
         if instance.symbol == symbol { return true; }
     }
@@ -92,7 +92,7 @@ func worker_instance(state Emitter, symbol usize) bool {
 }
 
 func owns_function(state Emitter, symbol usize) bool {
-    if state.worker_instance_linkage != "" { return option.is_some(b_hir_index(state, symbol)); }
+    if state.emit_worker_instances { return option.is_some(b_hir_index(state, symbol)); }
     switch state.package_selection {
         case option.Option.Some(package_id): {
             switch state.identities { case option.Option.Some(keys): return interface.indexed_owner(keys, symbol) == package_id; case option.Option.None: return false; }
@@ -133,7 +133,7 @@ func declare_source_functions(state inout Emitter) throws Error {
         if owns_function(state, function.symbol) {
             var linkage = "internal";
             if option.is_some(state.package_selection) { linkage = ""; }
-            if worker_instance(state, function.symbol) { linkage = state.worker_instance_linkage; }
+            if worker_instance(state, function.symbol) { linkage = "linkonce_odr"; }
             text_index = new_function(name, sig, linkage, "", inout state);
             code = function_reference(state, text_index);
         } else { code = declare_function(name, sig, inout state); }
@@ -255,6 +255,7 @@ func b_load_captures(function nativeir.Function, captures Vec[hir.CaptureBinding
             address.reference, inout state);
         let destination = state.frame.slots[slot_index].address;
         append(b_store_line(loaded, destination), inout state);
+        if state.options.debug_info { debug_capture(slot_index, inout state); }
     }
 }
 
@@ -434,6 +435,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     let function = b_native_function(state, native_index);
     let source = b_source_by_native(state, native_index);
     b_reset_frame(native_index, inout state);
+    if state.options.debug_info { debug_function(function, source, inout state); }
     let sig = type_of(state, function.signature);
     let hf = find_hir_function(state, function.symbol);
     var capturing = false;
@@ -503,6 +505,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     if is_async {
         copy_async_ordinary_parameters(native_index, inout state);
     }
+    if state.options.debug_info { debug_parameters(inout state); }
     b_declare_iterations(function, inout state);
     b_declare_incoming(function, inout state);
     if is_async {
@@ -514,6 +517,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     for block_index in order {
         let reference = state.frame.blocks[block_index];
         position(reference, inout state);
+        if state.options.debug_info { debug_location(model.Span(snapshot: 0, begin_byte: 0, end_byte: 0), inout state); }
         var end_address = option.Option[Value].None;
         for parameter_value in function.blocks[block_index].parameters {
             let found = b_incoming(state, block_index);
@@ -555,6 +559,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
         if gc_entry && b_contains(points.exits, block_index) {
             gc_collect_loop_exit(inout state);
         }
+        if state.options.debug_info { debug_block(block_index, inout state); }
         for instruction in function.blocks[block_index].instructions {
             emit_instruction(instruction, inout state);
         }
@@ -562,6 +567,7 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
         emit_terminator(terminator, block_index, inout state);
     }
     if is_async {
+        if state.options.debug_info { debug_location(model.Span(snapshot: 0, begin_byte: 0, end_byte: 0), inout state); }
         async_finish(native_index, inout state);
     }
 }

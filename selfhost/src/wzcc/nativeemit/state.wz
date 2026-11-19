@@ -24,6 +24,7 @@ pub struct Options {
     pub cpu string;
     pub features string;
     pub optimization u32;
+    pub debug_info bool;
 }
 pub struct Output {
     // Pre-optimization text only; the Root driver owns tools and object bytes.
@@ -42,7 +43,7 @@ pub struct EmitResult {
 
 pub func default_options() Options {
     return Options(triple: "x86_64-unknown-linux-gnu", cpu: "generic",
-        features: "", optimization: 0);
+        features: "", optimization: 0, debug_info: false);
 }
 
 pub enum Error {
@@ -71,6 +72,9 @@ pub struct FunctionText {
     pub blocks Vec[BlockText];
     pub next_value usize;
     pub next_label usize;
+    pub debug_scope string;
+    pub debug_location string;
+    pub has_source_debug bool;
 }
 pub struct BlockRef {
     pub function_index usize;
@@ -249,6 +253,9 @@ pub struct FunctionFrame {
     pub blocks Vec[BlockRef];
     pub try_outputs Vec[TryOutput];
     pub incoming Vec[IncomingValue];
+    pub debug_slots Vec[DebugSlot];
+    pub debug_scopes Vec[DebugScope];
+    pub debug_frame option.Option[DebugFrame];
     pub async_state option.Option[AsyncState];
 }
 pub struct Emitter {
@@ -262,6 +269,7 @@ pub struct Emitter {
     pub declarations Vec[Declaration];
     pub globals Vec[NamedText];
     pub metadata Vec[MetadataText];
+    pub debug option.Option[DebugState];
     pub functions Vec[FunctionText];
     pub cursor Cursor;
     pub frame FunctionFrame;
@@ -271,7 +279,7 @@ pub struct Emitter {
     pub e EState;
     pub gc_entry_symbol option.Option[usize];
     pub package_selection option.Option[usize];
-    pub worker_instance_linkage string;
+    pub emit_worker_instances bool;
     pub identities option.Option[interface.Keys];
     pub source_order Vec[usize];
 }
@@ -279,7 +287,8 @@ pub struct Emitter {
 pub func empty_frame() FunctionFrame {
     return FunctionFrame(native_index: option.Option[usize].None,
         values: [], constants: [], function_values: [], slots: [], blocks: [],
-        try_outputs: [], incoming: [], async_state: option.Option[AsyncState].None);
+        try_outputs: [], incoming: [], debug_slots: [], debug_scopes: [],
+        debug_frame: option.Option[DebugFrame].None, async_state: option.Option[AsyncState].None);
 }
 
 pub func new_emitter(input nativeir.Module, options Options) Emitter throws Error {
@@ -291,7 +300,7 @@ pub func new_emitter(input nativeir.Module, options Options) Emitter throws Erro
     let source_order = vec.empty[usize]();
     for var index usize = 0; index < vec.len(input.functions); index += 1 { vec.push(source_order, index); }
     return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: DATA_LAYOUT,
-        type_definitions: [], declarations: [], globals: [], metadata: [], functions: [],
+        type_definitions: [], declarations: [], globals: [], metadata: [], debug: option.Option[DebugState].None, functions: [],
         cursor: Cursor(function_index: option.Option[usize].None, block_index: option.Option[usize].None),
         frame: empty_frame(),
         b: BState(layouts: [], source_functions: [], vec_header_tag: option.Option[string].None,
@@ -304,5 +313,5 @@ pub func new_emitter(input nativeir.Module, options Options) Emitter throws Erro
             gc_program_required: false, closure_owns_c_resource: false, trait_box_owns_c_resource: false),
         e: EState(c_records: [], callback_bridges: [], registration_dispatchers: [],
             used_callables: [], used_resources: [], used_callbacks: [], adapter_source: ""),
-        gc_entry_symbol: option.Option[usize].None, package_selection: option.Option[usize].None, worker_instance_linkage: "", identities: option.Option[interface.Keys].None, source_order: source_order);
+        gc_entry_symbol: option.Option[usize].None, package_selection: option.Option[usize].None, emit_worker_instances: false, identities: option.Option[interface.Keys].None, source_order: source_order);
 }

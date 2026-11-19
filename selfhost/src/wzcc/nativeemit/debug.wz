@@ -1,0 +1,657 @@
+// LLVM 22 debug records. No source reads: all positions use the checked AST's
+// immutable Source snapshot. Metadata numbering belongs to each Emitter, so
+// package objects and monolithic emission never share metadata IDs.
+//
+// Source scopes and live storage are separate: a binding becomes visible only
+// after its initializer, and each lowered copy of a defer uses its own slot.
+// Generated helpers keep their artificial, line-zero compile unit.
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/map" as map;
+import "std/option" as option;
+import "std/path" as paths;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct DebugSource {
+    pub source model.Source;
+    pub file string;
+    pub lines Vec[u64];
+}
+pub struct DebugState {
+    pub sources Vec[DebugSource];
+    pub snapshots map.Map[u64, usize];
+    pub locations map.Map[string, string];
+    pub types map.Map[usize, string];
+    pub scope_ids map.Map[usize, Vec[usize]];
+    pub bindings map.Map[usize, usize];
+    pub visible map.Map[usize, u64];
+    pub unit string;
+    pub generated_file string;
+    pub generated_unit string;
+    pub named Vec[string];
+}
+pub struct DebugSlot {
+    pub slot usize;
+    pub variable string;
+    pub location string;
+    pub parameter bool;
+    pub declared bool;
+    pub binding usize;
+    pub hir_scope usize;
+    pub visible u64;
+    pub visibility_scope string;
+    pub capture bool;
+    pub dynamic_storage bool;
+}
+pub struct DebugScope {
+    pub hir_scope usize;
+    pub span model.Span;
+    pub scope string;
+    pub slots Vec[usize];
+}
+
+pub struct DebugFrame {
+    pub scope_indices map.Map[usize, usize];
+    pub slot_indices map.Map[usize, usize];
+    pub variables map.Map[usize, string];
+    pub visibility map.Map[usize, string];
+}
+func debug_frame_context(state Emitter) DebugFrame throws Error {
+    switch state.frame.debug_frame {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("debug function not initialized");
+    }
+}
+
+// Unlike define_metadata's small structural cache, debug nodes are unique or
+// cached by maps. Do not linearly search all existing locations for each node.
+func debug_node(body string, state inout Emitter) string {
+    let id = "!" + number(vec.len(state.metadata));
+    vec.push(state.metadata, MetadataText(key: "debug." + id, body: body));
+    return id;
+}
+func debug_context(state Emitter) DebugState throws Error {
+    switch state.debug {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("debug state not initialized");
+    }
+}
+func debug_quote(value string) string throws Error {
+    return "\"" + escape_bytes(text.bytes(value)) + "\"";
+}
+func debug_file_path(source string, root string, module_value model.Module) string {
+    let name = paths.clean(source);
+    if !paths.is_absolute(name) { return name; }
+    if text.starts_with(name, root) && text.len(name) > text.len(root) {
+        return name[text.len(root):];
+    }
+    let logical = module_value.logical_path;
+    if logical == "std" || text.starts_with(logical, "std/") {
+        var directory = "stdlib";
+        if text.len(logical) > 3 { directory = paths.join(directory, logical[4:]); }
+        return paths.join(directory, paths.base(name));
+    }
+    return "dependencies/" + number(module_value.id) + "/" + logical + "/" + paths.base(name);
+}
+func debug_init(state inout Emitter) throws Error {
+    let sources = vec.empty[DebugSource]();
+    let snapshots = map.new[u64, usize]();
+    let project = state.input.hir.resolved.project;
+    var root = paths.clean(project.root);
+    if root != "/" { root += "/"; }
+    for module_value in project.modules {
+        for file_id in module_value.files {
+            let source = project.files[file_id].lexed.source;
+            if !source.valid || source.id == 0 || source.path == "" ||
+               vec.len(source.boundaries) == 0 { continue; }
+            let lines = vec.empty[u64]();
+            // Offset zero can follow a UTF-8 BOM. LF offsets remain raw bytes.
+            vec.push(lines, source.boundaries[0].byte);
+            for var at usize = 0; at < vec.len(source.original); at += 1 {
+                if source.original[at] == 10 { vec.push(lines, u64(at + 1)); }
+            }
+            let filename = debug_file_path(source.path, root, module_value);
+            let file = debug_node("!DIFile(filename: " + debug_quote(filename) +
+                ", directory: \"\")", inout state);
+            let ignored = map.insert(snapshots, source.id, vec.len(sources));
+            vec.push(sources, DebugSource(source: source, file: file, lines: lines));
+        }
+    }
+    if vec.len(sources) == 0 { return; }
+    var optimized = "false";
+    if state.options.optimization != 0 { optimized = "true"; }
+    // DWARF has no Woozy language code. Use the C scalar representation that
+    // GDB understands, retaining Woozy names and the actual .wz file paths.
+    let unit = debug_node("distinct !DICompileUnit(language: DW_LANG_C11, file: " +
+        sources[0].file + ", producer: \"Woozy\", isOptimized: " + optimized +
+        ", runtimeVersion: 0, emissionKind: FullDebug, nameTableKind: None)", inout state);
+    let generated = debug_node("!DIFile(filename: \"<woozy-generated>\", directory: \"\")", inout state);
+    // A separate compile unit keeps GDB from assigning the previous .wz line
+    // to a generated frame whose instructions have only line-zero locations.
+    let generated_unit = debug_node("distinct !DICompileUnit(language: DW_LANG_C11, file: " +
+        generated + ", producer: \"Woozy\", isOptimized: " + optimized +
+        ", runtimeVersion: 0, emissionKind: FullDebug, nameTableKind: None)", inout state);
+    let dwarf = debug_node("!{i32 7, !\"Dwarf Version\", i32 5}", inout state);
+    let version = debug_node("!{i32 2, !\"Debug Info Version\", i32 3}", inout state);
+    let scope_ids = map.new[usize, Vec[usize]]();
+    for var id usize = 0; id < vec.len(state.input.hir.scopes); id += 1 {
+        let function = state.input.hir.scopes[id].function;
+        var ids = vec.empty[usize]();
+        switch map.get(scope_ids, function) { case option.Option.Some(found): ids = found; case option.Option.None: {} }
+        vec.push(ids, id);
+        let ignored = map.insert(scope_ids, function, ids);
+    }
+    // Index source bindings once for the entire checked module.
+    let bindings = map.new[usize, usize]();
+    let visible = map.new[usize, u64]();
+    for node in state.input.hir.nodes {
+        switch node.data {
+            case hir.NodeData.Binding(value): {
+                let ignored = map.insert(bindings, value.symbol, node.scope);
+                let ignored_end = map.insert(visible, value.symbol, node.source.span.end_byte);
+            }
+            case hir.NodeData.Switch(value): {
+                for arm in value.arms {
+                    debug_pattern_bindings(arm.pattern, arm.scope, state.input.hir.nodes[arm.body].source.span.begin_byte,
+                        bindings, visible);
+                }
+            }
+            case hir.NodeData.Try(value): {
+                for clause in value.catches {
+                    let ignored = map.insert(bindings, clause.binding, clause.scope);
+                    let ignored_end = map.insert(visible, clause.binding, state.input.hir.nodes[clause.body].source.span.begin_byte);
+                }
+            }
+            case hir.NodeData.ForIn(value): {
+                let ignored = map.insert(bindings, value.element, value.body_scope);
+                let ignored_end = map.insert(visible, value.element, state.input.hir.nodes[value.body].source.span.begin_byte);
+            }
+            default: {}
+        }
+    }
+    state.debug = option.Option[DebugState].Some(DebugState(sources: sources,
+        snapshots: snapshots, locations: map.new[string, string](),
+        types: map.new[usize, string](), scope_ids: scope_ids, bindings: bindings, visible: visible, unit: unit, generated_file: generated, generated_unit: generated_unit,
+        named: ["!llvm.dbg.cu = !{" + unit + ", " + generated_unit + "}",
+            "!llvm.module.flags = !{" + dwarf + ", " + version + "}"]));
+}
+func debug_source(span model.Span, state Emitter) option.Option[usize] throws Error {
+    switch state.debug {
+        case option.Option.None: return option.Option[usize].None;
+        case option.Option.Some(debug): {
+            switch map.get(debug.snapshots, span.snapshot) {
+                case option.Option.None: return option.Option[usize].None;
+                case option.Option.Some(index): {
+                    let source = debug.sources[index].source;
+                    if span.begin_byte > span.end_byte || span.end_byte > u64(vec.len(source.original)) {
+                        return option.Option[usize].None;
+                    }
+                    // A real source boundary is required, never guess a line
+                    // from an absent/synthetic or malformed span.
+                    var low usize = 0; var high = vec.len(source.boundaries);
+                    for low < high {
+                        let middle = low + (high - low) / 2;
+                        if source.boundaries[middle].byte < span.begin_byte { low = middle + 1; }
+                        else { high = middle; }
+                    }
+                    if low == vec.len(source.boundaries) || source.boundaries[low].byte != span.begin_byte {
+                        return option.Option[usize].None;
+                    }
+                    return option.Option[usize].Some(index);
+                }
+            }
+        }
+    }
+}
+func debug_line_number(source DebugSource, byte u64) usize {
+    var low usize = 0; var high = vec.len(source.lines);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if source.lines[middle] <= byte { low = middle + 1; } else { high = middle; }
+    }
+    return low;
+}
+func debug_position(span model.Span, scope string, state inout Emitter) string throws Error {
+    if scope == "" { return ""; }
+    switch debug_source(span, state) {
+        case option.Option.None: return "";
+        case option.Option.Some(index): {
+            let debug = debug_context(state);
+            let file = debug.sources[index].file;
+            let line = number(debug_line_number(debug.sources[index], span.begin_byte));
+            let key = scope + ":" + number(index) + ":" + line;
+            switch map.get(debug.locations, key) {
+                case option.Option.Some(found): return found;
+                case option.Option.None: {}
+            }
+            // Column zero deliberately means unknown. Source line is exact;
+            // UTF-16 columns from the editor API are not DWARF byte columns.
+            // DILexicalBlockFile also handles a copied source location whose
+            // file differs from the function definition (e.g. instantiated HIR).
+            let file_scope = debug_node("!DILexicalBlockFile(scope: " + scope +
+                ", file: " + file + ", discriminator: 0)", inout state);
+            let location = debug_node("!DILocation(line: " + line +
+                ", scope: " + file_scope + ")", inout state);
+            let ignored = map.insert(debug.locations, key, location);
+            return location;
+        }
+    }
+}
+// HIR scopes preserve loop initializers, arm/catch bindings and deferred bodies.
+// The extra nested blocks start at the END of each initializer. This keeps an
+// inner name out of the debugger while its initializer still reads the outer.
+func debug_scope_index(id usize, state Emitter) option.Option[usize] {
+    switch state.frame.debug_frame {
+        case option.Option.Some(frame): return map.get(frame.scope_indices, id);
+        case option.Option.None: return option.Option[usize].None;
+    }
+}
+func debug_scope_at(id usize, byte u64, state inout Emitter) string throws Error {
+    var index usize = 0;
+    switch debug_scope_index(id, state) {
+        case option.Option.Some(found): index = found;
+        case option.Option.None: return "";
+    }
+    var scope = state.frame.debug_scopes[index].scope;
+    let span = state.frame.debug_scopes[index].span;
+    if scope == "" {
+        let parent = state.input.hir.scopes[id].parent;
+        var enclosing = "";
+        switch parent {
+            case option.Option.Some(value): enclosing = debug_scope_at(value, span.begin_byte, inout state);
+            case option.Option.None: return "";
+        }
+        if enclosing == "" { return ""; }
+        var file_index usize = 0;
+        switch debug_source(span, state) {
+            case option.Option.Some(found): file_index = found;
+            case option.Option.None: return "";
+        }
+        let file = debug_context(state).sources[file_index];
+        scope = debug_node("distinct !DILexicalBlock(scope: " + enclosing +
+            ", file: " + file.file + ", line: " + number(debug_line_number(file, span.begin_byte)) + ")", inout state);
+        state.frame.debug_scopes[index].scope = scope;
+    }
+    // debug_slots are sorted by visibility offset. Duplicate slots from defer
+    // expansion share this metadata, but never share their storage address.
+    for at in state.frame.debug_scopes[index].slots {
+        let entry = state.frame.debug_slots[at];
+        if entry.visible > byte { break; }
+        if entry.visibility_scope != "" { scope = entry.visibility_scope; continue; }
+        var existing = "";
+        switch map.get(debug_frame_context(state).visibility, entry.binding) {
+            case option.Option.Some(found): existing = found;
+            case option.Option.None: {}
+        }
+        if existing == "" {
+            let live = model.Span(snapshot: span.snapshot, begin_byte: entry.visible, end_byte: entry.visible);
+            switch debug_source(live, state) {
+                case option.Option.Some(found): {
+                    let file = debug_context(state).sources[found];
+                    existing = debug_node("distinct !DILexicalBlock(scope: " + scope +
+                        ", file: " + file.file + ", line: " + number(debug_line_number(file, entry.visible)) + ")", inout state);
+                }
+                case option.Option.None: return "";
+            }
+        }
+        state.frame.debug_slots[at].visibility_scope = existing;
+        let ignored = map.insert(debug_frame_context(state).visibility, entry.binding, existing);
+        scope = existing;
+    }
+    return scope;
+}
+func debug_contains(outer model.Span, inner model.Span) bool {
+    return outer.snapshot == inner.snapshot && outer.begin_byte <= inner.begin_byte && inner.end_byte <= outer.end_byte;
+}
+func debug_origin_location(span model.Span, origin option.Option[usize], state inout Emitter) throws Error {
+    let function = current_function(state);
+    var location = "";
+    if state.functions[function].has_source_debug && option.is_some(debug_source(span, state)) {
+        var selected = option.Option[usize].None;
+        // NativeIR origins are precise even when two scopes have equal spans.
+        switch origin {
+            case option.Option.Some(id): {
+                if id < vec.len(state.input.hir.nodes) {
+                    let scope = state.input.hir.nodes[id].scope;
+                    if option.is_some(debug_scope_index(scope, state)) { selected = option.Option[usize].Some(scope); }
+                }
+            }
+            case option.Option.None: {}
+        }
+        if !option.is_some(selected) {
+            var size u64 = 18446744073709551615;
+            for entry in state.frame.debug_scopes {
+                if debug_contains(entry.span, span) && entry.span.end_byte - entry.span.begin_byte < size {
+                    selected = option.Option[usize].Some(entry.hir_scope);
+                    size = entry.span.end_byte - entry.span.begin_byte;
+                }
+            }
+        }
+        switch selected {
+            case option.Option.Some(id): {
+                let scope = debug_scope_at(id, span.begin_byte, inout state);
+                location = debug_position(span, scope, inout state);
+            }
+            case option.Option.None: {}
+        }
+    }
+    state.functions[function].debug_location = location;
+}
+func debug_location(span model.Span, state inout Emitter) throws Error {
+    debug_origin_location(span, option.Option[usize].None, inout state);
+}
+func debug_unknown_location(function usize, state inout Emitter) string throws Error {
+    if !option.is_some(state.debug) { return ""; }
+    let debug = debug_context(state);
+    var scope = state.functions[function].debug_scope;
+    if scope == "" {
+        let file = debug.generated_file;
+        let signature = debug_node("!DISubroutineType(types: !{})", inout state);
+        var display_name = state.functions[function].name;
+        if display_name == "main" { display_name = "__woozy_native_entry"; }
+        let name = debug_quote(display_name);
+        scope = debug_node("distinct !DISubprogram(name: " + name +
+            ", scope: " + file + ", file: " + file + ", type: " + signature +
+            ", flags: DIFlagArtificial, spFlags: DISPFlagDefinition, unit: " + debug.generated_unit + ")", inout state);
+        state.functions[function].debug_scope = scope;
+    }
+    let key = scope + ":unknown";
+    switch map.get(debug.locations, key) {
+        case option.Option.Some(found): return found;
+        case option.Option.None: {}
+    }
+    // An inline site needs a valid scope, even when no source line exists.
+    let location = debug_node("!DILocation(line: 0, scope: " + scope + ")", inout state);
+    let ignored = map.insert(debug.locations, key, location);
+    return location;
+}
+func debug_line(line string, function usize, state inout Emitter) string throws Error {
+    if text.starts_with(line, "#dbg_") { return line; }
+    var location = state.functions[function].debug_location;
+    if location == "" { location = debug_unknown_location(function, inout state); }
+    if location == "" { return line; }
+    return line + ", !dbg " + location;
+}
+func debug_scalar(type_id usize, state inout Emitter) string throws Error {
+    let debug = debug_context(state);
+    switch map.get(debug.types, type_id) {
+        case option.Option.Some(found): return found;
+        case option.Option.None: {}
+    }
+    let type = type_of(state, type_id);
+    var name = ""; var encoding = ""; var bits = usize(type.bits);
+    switch type.kind {
+        case model.TypeKind.Bool: { name = "bool"; encoding = "DW_ATE_boolean"; bits = 8; }
+        case model.TypeKind.SignedInt: { name = "i" + number(bits); encoding = "DW_ATE_signed"; }
+        case model.TypeKind.UnsignedInt: { name = "u" + number(bits); encoding = "DW_ATE_unsigned"; }
+        case model.TypeKind.Isize: { name = "isize"; encoding = "DW_ATE_signed"; bits = 64; }
+        case model.TypeKind.Usize: { name = "usize"; encoding = "DW_ATE_unsigned"; bits = 64; }
+        case model.TypeKind.Float: { name = "f" + number(bits); encoding = "DW_ATE_float"; }
+        default: return "";
+    }
+    let result = debug_node("!DIBasicType(name: " + debug_quote(name) +
+        ", size: " + number(bits) + ", encoding: " + encoding + ")", inout state);
+    let ignored = map.insert(debug.types, type_id, result);
+    return result;
+}
+func debug_symbol_span(symbol model.Symbol) option.Option[model.Span] {
+    return symbol.declaration;
+}
+func debug_function(function nativeir.Function, source SourceFunction, state inout Emitter) throws Error {
+    if !option.is_some(state.debug) { return; }
+    var hf_index usize = 0;
+    switch source.hir_index { case option.Option.Some(index): hf_index = index; case option.Option.None: return; }
+    let hf = state.input.hir.functions[hf_index];
+    let reference = hf.source.node;
+    let project = state.input.hir.resolved.project;
+    let owner = project.modules[reference.module];
+    let parsed = project.files[owner.files[reference.file]];
+    switch parsed.nodes[reference.node].kind { case model.AstKind.Function: {} case model.AstKind.FunctionLiteral: {} default: return; }
+    var file_index usize = 0;
+    switch debug_source(function.source, state) { case option.Option.Some(index): file_index = index; case option.Option.None: return; }
+    let debug = debug_context(state);
+    let file = debug.sources[file_index];
+    var symbol = function.symbol;
+    for instance in state.input.hir.instances { if instance.symbol == symbol { symbol = instance.origin; break; } }
+    var name = state.input.hir.resolved.symbols[symbol].name;
+    switch parsed.nodes[reference.node].kind {
+        case model.AstKind.FunctionLiteral: name = "<closure>";
+        default: {}
+    }
+    let signature = type_of(state, function.signature);
+    let signature_types = vec.empty[string]();
+    vec.push(signature_types, debug_type(signature.result, inout state));
+    for parameter in signature.parameters {
+        vec.push(signature_types, debug_type(parameter.type_id, inout state));
+    }
+    let type_list = debug_node("!{" + text.join(signature_types, ", ") + "}", inout state);
+    let subroutine = debug_node("!DISubroutineType(types: " + type_list + ")", inout state);
+    var flags = "DISPFlagDefinition";
+    if state.options.optimization != 0 { flags += " | DISPFlagOptimized"; }
+    if state.functions[source.text_index].linkage == "internal" { flags += " | DISPFlagLocalToUnit"; }
+    let line = number(debug_line_number(file, function.source.begin_byte));
+    let scope = debug_node("distinct !DISubprogram(name: " + debug_quote(name) +
+        ", scope: " + file.file + ", file: " + file.file + ", line: " +
+        line + ", scopeLine: " + line +
+        ", type: " + subroutine + ", spFlags: " + flags + ", unit: " + debug.unit + ")", inout state);
+    state.functions[source.text_index].debug_scope = scope;
+    state.functions[source.text_index].has_source_debug = true;
+    // Allocate these maps only for source functions built with -g.
+    state.frame.debug_frame = option.Option[DebugFrame].Some(DebugFrame(
+        scope_indices: map.new[usize, usize](), slot_indices: map.new[usize, usize](),
+        variables: map.new[usize, string](), visibility: map.new[usize, string]()));
+    // LLVM uses scopeLine to skip the prologue at function-name breakpoints.
+    switch map.get(debug.scope_ids, function.symbol) {
+        case option.Option.Some(ids): {
+            for id in ids {
+                let item = state.input.hir.scopes[id];
+                var scope_node = "";
+                if id == hf.scope { scope_node = scope; }
+                let ignored = map.insert(debug_frame_context(state).scope_indices, id, vec.len(state.frame.debug_scopes));
+                vec.push(state.frame.debug_scopes, DebugScope(hir_scope: id, span: item.source.span, scope: scope_node, slots: []));
+            }
+        }
+        case option.Option.None: {}
+    }
+    let bindings = debug.bindings;
+    let visible = debug.visible;
+    for var slot_index usize = 0; slot_index < vec.len(function.slots); slot_index += 1 {
+        let slot = function.slots[slot_index]; var binding usize = 0;
+        switch slot.binding { case option.Option.Some(value): binding = value; case option.Option.None: continue; }
+        var declaration = binding;
+        var capture = false;
+        for entry in hf.captures {
+            if entry.local == binding { declaration = entry.origin; capture = true; break; }
+        }
+        let local = state.input.hir.resolved.symbols[declaration];
+        var span = function.source;
+        switch debug_symbol_span(local) { case option.Option.Some(value): span = value; case option.Option.None: continue; }
+        if !option.is_some(debug_source(span, state)) { continue; }
+        var owner_scope = hf.scope;
+        var start = function.source.begin_byte;
+        if !option.is_some(slot.parameter) && !capture {
+            switch map.get(bindings, binding) {
+                case option.Option.Some(value): owner_scope = value;
+                case option.Option.None: continue;
+            }
+            switch map.get(visible, binding) { case option.Option.Some(value): start = value; case option.Option.None: continue; }
+        }
+        let entry = DebugSlot(slot: slot_index, variable: "", location: "",
+            parameter: option.is_some(slot.parameter), declared: false, binding: binding,
+            hir_scope: owner_scope, visible: start, visibility_scope: "", capture: capture, dynamic_storage: false);
+        // Stable order matters for sequential bindings within one lexical block.
+        var at = vec.len(state.frame.debug_slots);
+        vec.push(state.frame.debug_slots, entry);
+        for at > 0 && state.frame.debug_slots[at - 1].visible > start {
+            state.frame.debug_slots[at] = state.frame.debug_slots[at - 1]; at -= 1;
+        }
+        state.frame.debug_slots[at] = entry;
+    }
+    let copies = map.new[usize, usize]();
+    for entry in state.frame.debug_slots {
+        var count usize = 0;
+        switch map.get(copies, entry.binding) { case option.Option.Some(value): count = value; case option.Option.None: {} }
+        let ignored = map.insert(copies, entry.binding, count + 1);
+    }
+    let end_locations = map.new[usize, bool]();
+    for block in function.blocks {
+        for instruction in block.instructions {
+            let op = nativeir.op_id(instruction.op);
+            if op == nativeir.op_id(nativeir.Op.Move) || op == nativeir.op_id(nativeir.Op.Take) ||
+               op == nativeir.op_id(nativeir.Op.Destroy) {
+                let ignored = map.insert(end_locations, instruction.slot, true);
+            }
+        }
+    }
+    for var at usize = 0; at < vec.len(state.frame.debug_slots); at += 1 {
+        let entry = state.frame.debug_slots[at];
+        var dynamic = function.is_async || option.is_some(map.get(end_locations, entry.slot));
+        switch map.get(copies, entry.binding) {
+            case option.Option.Some(count): dynamic = dynamic || count > 1;
+            case option.Option.None: {}
+        }
+        state.frame.debug_slots[at].dynamic_storage = dynamic;
+        let ignored = map.insert(debug_frame_context(state).slot_indices, entry.slot, at);
+        if entry.parameter || entry.capture { continue; }
+        switch debug_scope_index(entry.hir_scope, state) {
+            case option.Option.Some(id): vec.push(state.frame.debug_scopes[id].slots, at);
+            case option.Option.None: {}
+        }
+    }
+    for var at usize = 0; at < vec.len(state.frame.debug_slots); at += 1 {
+        let entry = state.frame.debug_slots[at];
+        let local = state.input.hir.resolved.symbols[entry.binding];
+        var declaration = entry.binding;
+        for capture in hf.captures { if capture.local == entry.binding { declaration = capture.origin; break; } }
+        var span = function.source;
+        switch debug_symbol_span(state.input.hir.resolved.symbols[declaration]) {
+            case option.Option.Some(value): span = value;
+            case option.Option.None: continue;
+        }
+        let local_scope = debug_scope_at(entry.hir_scope, entry.visible, inout state);
+        if local_scope == "" { continue; }
+        let type = debug_type(function.slots[entry.slot].type_id, inout state);
+        if type == "null" { continue; }
+        var file_id usize = 0;
+        switch debug_source(span, state) { case option.Option.Some(value): file_id = value; case option.Option.None: continue; }
+        var argument = "";
+        switch function.slots[entry.slot].parameter {
+            case option.Option.Some(index): argument = ", arg: " + number(usize(index) + 1);
+            case option.Option.None: {}
+        }
+        var variable = "";
+        switch map.get(debug_frame_context(state).variables, entry.binding) {
+            case option.Option.Some(found): variable = found;
+            case option.Option.None: {}
+        }
+        if variable == "" {
+            variable = debug_node("!DILocalVariable(name: " + debug_quote(local.name) + argument +
+                ", scope: " + local_scope + ", file: " + debug.sources[file_id].file + ", line: " +
+                number(debug_line_number(debug.sources[file_id], span.begin_byte)) + ", type: " + type + ")", inout state);
+        }
+        state.frame.debug_slots[at].variable = variable;
+        let ignored = map.insert(debug_frame_context(state).variables, entry.binding, variable);
+        // A capture's declaration can belong to the enclosing function/file;
+        // its executable position belongs to this lambda, in this frame.
+        if entry.capture { span = function.source; }
+        state.frame.debug_slots[at].location = debug_position(span, local_scope, inout state);
+    }
+}
+func debug_pattern_bindings(pattern hir.Pattern, scope usize, start u64,
+    bindings map.Map[usize, usize], visible map.Map[usize, u64]) {
+    switch pattern.binding {
+        case option.Option.Some(value): {
+            let ignored = map.insert(bindings, value, scope);
+            let ignored_end = map.insert(visible, value, start);
+        }
+        case option.Option.None: {}
+    }
+    for child in pattern.payload { debug_pattern_bindings(child, scope, start, bindings, visible); }
+}
+
+func debug_declare(index usize, state inout Emitter) throws Error {
+    let slot = state.frame.debug_slots[index];
+    if slot.variable == "" || slot.location == "" { return; }
+    let address = state.frame.slots[slot.slot].address;
+    if slot.dynamic_storage {
+        // An address-valued record can end at a move or be reissued after
+        // suspension. A fixed declaration cannot describe either change.
+        append("#dbg_value(ptr " + address.reference + ", " + slot.variable +
+            ", !DIExpression(DW_OP_deref), " + slot.location + ")", inout state);
+    } else if !slot.declared {
+        append("#dbg_declare(ptr " + address.reference + ", " + slot.variable +
+            ", !DIExpression(), " + slot.location + ")", inout state);
+    }
+    state.frame.debug_slots[index].declared = true;
+}
+func debug_parameters(state inout Emitter) throws Error {
+    for var index usize = 0; index < vec.len(state.frame.debug_slots); index += 1 {
+        if state.frame.debug_slots[index].parameter { debug_declare(index, inout state); }
+    }
+}
+func debug_local(slot usize, state inout Emitter) throws Error {
+    if !option.is_some(state.frame.debug_frame) { return; }
+    // A Store may occur in several CFG predecessors or loop entries. Emit a
+    // record on each write, including writes after a move made it unavailable.
+    switch map.get(debug_frame_context(state).slot_indices, slot) {
+        case option.Option.Some(index): debug_declare(index, inout state);
+        case option.Option.None: {}
+    }
+}
+
+func debug_capture(slot usize, state inout Emitter) throws Error {
+    debug_local(slot, inout state);
+}
+func debug_read(instruction nativeir.Instruction, state inout Emitter) throws Error {
+    if !option.is_some(state.frame.debug_frame) { return; }
+    switch map.get(debug_frame_context(state).slot_indices, instruction.slot) {
+        case option.Option.Some(index): {
+            let slot = state.frame.debug_slots[index];
+            if !slot.dynamic_storage || slot.visible > instruction.source.begin_byte { return; }
+            switch debug_scope_index(slot.hir_scope, state) {
+                case option.Option.Some(scope): {
+                    if debug_contains(state.frame.debug_scopes[scope].span, instruction.source) {
+                        debug_declare(index, inout state);
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+}
+func debug_block(block usize, state inout Emitter) throws Error {
+    switch state.frame.native_index {
+        case option.Option.Some(id): {
+            for handler in state.input.functions[id].handlers {
+                if handler.block == block { debug_local(handler.slot, inout state); }
+            }
+        }
+        case option.Option.None: {}
+    }
+}
+func debug_store(slot usize, state inout Emitter) throws Error {
+    switch state.frame.native_index {
+        case option.Option.Some(id): {
+            for handler in state.input.functions[id].handlers { if handler.slot == slot { return; } }
+        }
+        case option.Option.None: {}
+    }
+    debug_local(slot, inout state);
+}
+func debug_unavailable(slot usize, state inout Emitter) throws Error {
+    if !option.is_some(state.frame.debug_frame) { return; }
+    switch map.get(debug_frame_context(state).slot_indices, slot) {
+        case option.Option.Some(index): {
+            let entry = state.frame.debug_slots[index];
+            if entry.variable != "" && entry.location != "" {
+                append("#dbg_value(i1 poison, " + entry.variable + ", !DIExpression(), " + entry.location + ")", inout state);
+            }
+        }
+        case option.Option.None: {}
+    }
+}

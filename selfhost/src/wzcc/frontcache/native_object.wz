@@ -36,17 +36,22 @@ pub func configure_source_make(directory string, optimization string,
         tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.make()] {
         put_string(bytes, file_digest(cache, path));
     }
-    if optimization == "2" {
-        for path in resources.source_partition_tools(root) {
-            put_string(bytes, file_digest(cache, path));
-        }
-    }
     cache.fingerprint = hash_bytes(bytes); return cache;
 }
 pub func source_object_key(cache Context, package_key string) string {
     let bytes = vec.empty[u8](); put_string(bytes, "wz-source-package-object/1");
     put_string(bytes, cache.fingerprint); put_string(bytes, package_key);
     return hash_bytes(bytes) + ".obj";
+}
+pub func debug_source_fingerprint(cache Context, project model.Project) string {
+    let bytes = vec.empty[u8](); put_string(bytes, "wz-source-make-debug/1");
+    put_string(bytes, cache.fingerprint);
+    // A package object can contain a generic specialization defined in another file.
+    for file in project.files {
+        let source = file.lexed.source;
+        put_string(bytes, source.path); put_string(bytes, hash_bytes(source.original));
+    }
+    return hash_bytes(bytes);
 }
 pub func object_key(cache Context, package_identity string, llvm_digest string) string {
     let bytes = vec.empty[u8](); put_string(bytes, "wz-native-llvm-object/1");

@@ -1,0 +1,20 @@
+// TEST-ONLY fixture for selfhost/tests/nativeemit_text/run.py.
+//
+// The text harness stages the real production state.wz, text.wz and (when
+// those files use it) debug.wz, but not B's b_type.wz.  debug.wz's
+// debug_scalar calls B's private type_of, so this file keeps the exact
+// production body of that single function from src/wzcc/nativeemit/b_type.wz.
+// It is copied only into the temporary test project; it never replaces a
+// production file and does not simulate the type table.
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+
+func type_of(state Emitter, type_id usize) model.Type throws Error {
+    switch types.find(state.storage_types, type_id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("invalid type reference");
+    }
+}

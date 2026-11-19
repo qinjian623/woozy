@@ -1,6 +1,7 @@
 package app;
 
 import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/hirverify/flow" as hirflow;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "std/option" as option;
@@ -14,9 +15,9 @@ func check_effect_negative(parsed model.ParseResult) i32 throws os.Error {
         case option.Option.Some(value): bad = value;
         case option.Option.None: return 1;
     }
-    let valid_source_effect = hirverify.test_source_effect(bad, false);
+    let valid_source_effect = hirflow.test_source_effect(bad, false);
     bad.nodes[1].data = hir.NodeData.Block(hir.Block());
-    let rejects_erased_throw = hirverify.test_source_effect(bad, true);
+    let rejects_erased_throw = hirflow.test_source_effect(bad, true);
     let source_failure = check(valid_source_effect && rejects_erased_throw,
         "source-effect-negative-throw");
     switch copy_fixture(built.module) {

@@ -1,23 +1,22 @@
 // Method-source reconstruction and direct-call selection checks.
-package hirverify;
+package calls;
 
+import "app/wzcc/hirverify/core" as hircore;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/signature" as signature;
 import "app/wzcc/system" as system;
-import "app/wzcc/types" as types;
 import "std/option" as option;
-import "std/text" as text;
 import "std/vec" as vec;
 
-func source_method_member(state Verifier, reference model.NodeRef)
-    option.Option[SourceMethodCall] throws Invalid {
-    let file = verifier_file(state, reference.module, reference.file);
-    var ref = unwrapped(state, reference);
+pub func source_method_member(state hircore.Verifier, reference model.NodeRef)
+    option.Option[hircore.SourceMethodCall] throws hircore.Invalid {
+    let file = hircore.verifier_file(state, reference.module, reference.file);
+    var ref = hircore.unwrapped(state, reference);
     var explicit_arguments = vec.empty[model.NodeRef]();
     var explicit = false;
-    if ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) {
-        need(vec.len(file.nodes[ref.node].children) > 0,
+    if hircore.ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) {
+        hircore.need(vec.len(file.nodes[ref.node].children) > 0,
             "method type suffix has no target");
         explicit = true;
         for var index usize = 1;
@@ -27,29 +26,29 @@ func source_method_member(state Verifier, reference model.NodeRef)
             vec.push(explicit_arguments, argument);
         }
         ref.node = file.nodes[ref.node].children[0];
-        ref = unwrapped(state, ref);
+        ref = hircore.unwrapped(state, ref);
     }
     let member = file.nodes[ref.node];
-    if !ast_is(member.kind, model.AstKind.Member) ||
-       option.is_some(resolved_source(state, ref)) {
-        return option.Option[SourceMethodCall].None;
+    if !hircore.ast_is(member.kind, model.AstKind.Member) ||
+       option.is_some(hircore.resolved_source(state, ref)) {
+        return option.Option[hircore.SourceMethodCall].None;
     }
-    need(vec.len(member.children) > 0, "method member has no base");
+    hircore.need(vec.len(member.children) > 0, "method member has no base");
     var base = ref;
     base.node = member.children[0];
     var symbolized = base;
     for true {
-        symbolized = unwrapped(state, symbolized);
+        symbolized = hircore.unwrapped(state, symbolized);
         let value = file.nodes[symbolized.node];
-        if !ast_is(value.kind, model.AstKind.NeutralBracket) {
+        if !hircore.ast_is(value.kind, model.AstKind.NeutralBracket) {
             break;
         }
-        need(vec.len(value.children) > 0, "type qualifier has no base");
+        hircore.need(vec.len(value.children) > 0, "type qualifier has no base");
         symbolized.node = value.children[0];
     }
-    let base_symbol = resolved_source(state, symbolized);
-    need(member.token_end > member.token_begin, "method member token range");
-    need(member.token_end <= vec.len(file.lexed.tokens),
+    let base_symbol = hircore.resolved_source(state, symbolized);
+    hircore.need(member.token_end > member.token_begin, "method member token range");
+    hircore.need(member.token_end <= vec.len(file.lexed.tokens),
         "method member token range");
     var has_base_symbol = false;
     var symbol_value usize = 0;
@@ -60,112 +59,112 @@ func source_method_member(state Verifier, reference model.NodeRef)
         }
         case option.Option.None: {}
     }
-    return option.Option[SourceMethodCall].Some(SourceMethodCall(base: base,
+    return option.Option[hircore.SourceMethodCall].Some(hircore.SourceMethodCall(base: base,
         has_base_symbol: has_base_symbol, base_symbol: symbol_value,
         name: file.lexed.tokens[member.token_end - 1].spelling,
         explicit_type_arguments: explicit,
         explicit_arguments: explicit_arguments));
 }
 
-func source_method_call(state Verifier, node hir.HirNode)
-    option.Option[SourceMethodCall] throws Invalid {
-    let file = verifier_file(state, node.source.node.module,
+pub func source_method_call(state hircore.Verifier, node hir.HirNode)
+    option.Option[hircore.SourceMethodCall] throws hircore.Invalid {
+    let file = hircore.verifier_file(state, node.source.node.module,
         node.source.node.file);
     var ref = node.source.node;
     let call = file.nodes[ref.node];
-    if !ast_is(call.kind, model.AstKind.Call) ||
+    if !hircore.ast_is(call.kind, model.AstKind.Call) ||
        vec.len(call.children) == 0 {
-        return option.Option[SourceMethodCall].None;
+        return option.Option[hircore.SourceMethodCall].None;
     }
     ref.node = call.children[0];
     return source_method_member(state, ref);
 }
 
-func source_method_call_value(value option.Option[SourceMethodCall])
-    SourceMethodCall {
+pub func source_method_call_value(value option.Option[hircore.SourceMethodCall])
+    hircore.SourceMethodCall {
     switch value {
         case option.Option.Some(item): return item;
-        case option.Option.None: return SourceMethodCall(
+        case option.Option.None: return hircore.SourceMethodCall(
             base: model.NodeRef(module: 0, file: 0, node: 0),
             has_base_symbol: false, base_symbol: 0, name: "",
             explicit_type_arguments: false, explicit_arguments: []);
     }
 }
 
-func receiver_input(state Verifier, base model.NodeRef) ReceiverInput
-    throws Invalid {
-    let file = verifier_file(state, base.module, base.file);
+func receiver_input(state hircore.Verifier, base model.NodeRef) ReceiverInput
+    throws hircore.Invalid {
+    let file = hircore.verifier_file(state, base.module, base.file);
     var value = base;
     for true {
         let syntax = file.nodes[value.node];
-        if !ast_is(syntax.kind, model.AstKind.Parenthesized) {
+        if !hircore.ast_is(syntax.kind, model.AstKind.Parenthesized) {
             break;
         }
-        need(vec.len(syntax.children) > 0, "receiver parentheses");
+        hircore.need(vec.len(syntax.children) > 0, "receiver parentheses");
         value.node = syntax.children[0];
     }
     let syntax = file.nodes[value.node];
     var mode = model.ParamMode.Ordinary;
-    if ast_is(syntax.kind, model.AstKind.Unary) {
+    if hircore.ast_is(syntax.kind, model.AstKind.Unary) {
         let marker = file.lexed.tokens[syntax.token_begin].spelling;
         if marker == "move" {
             mode = model.ParamMode.Move;
         }
         if marker == "inout" {
             mode = model.ParamMode.Inout;
-            need(vec.len(syntax.children) == 1, "inout receiver has no operand");
+            hircore.need(vec.len(syntax.children) == 1, "inout receiver has no operand");
             value.node = syntax.children[0];
             for true {
                 let inner = file.nodes[value.node];
-                if !ast_is(inner.kind, model.AstKind.Parenthesized) {
+                if !hircore.ast_is(inner.kind, model.AstKind.Parenthesized) {
                     break;
                 }
-                need(vec.len(inner.children) > 0, "inout receiver parentheses");
+                hircore.need(vec.len(inner.children) > 0, "inout receiver parentheses");
                 value.node = inner.children[0];
             }
         }
     }
-    if mode_is_id(mode, 0) {
-        value = unwrapped(state, value);
+    if hircore.mode_is_id(mode, 0) {
+        value = hircore.unwrapped(state, value);
     }
     return ReceiverInput(node: value, mode: mode);
 }
 
-func check_receiver_source(state inout Verifier, node hir.HirNode,
+pub func check_receiver_source(state inout hircore.Verifier, node hir.HirNode,
                            args Vec[hir.CallArg], base model.NodeRef,
-                           declared model.ParamMode) throws Invalid {
+                           declared model.ParamMode) throws hircore.Invalid {
     let input = receiver_input(state, base);
-    let file = verifier_file(state, base.module, base.file);
+    let file = hircore.verifier_file(state, base.module, base.file);
     let call = file.nodes[node.source.node.node];
-    need(vec.len(args) > 0 && vec.len(args) == vec.len(call.children),
+    hircore.need(vec.len(args) > 0 && vec.len(args) == vec.len(call.children),
         "value call receiver differs from source arguments (source arity)");
     let receiver = args[0];
-    let value = verifier_node(state, receiver.expression);
-    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+    let value = hircore.verifier_node(state, receiver.expression);
+    hircore.need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
          !option.is_some(receiver.label) &&
-         mode_is_id(receiver.mode, mode_id_value(input.mode)) &&
-         mode_is_id(input.mode, mode_id_value(declared)) &&
-         same_ref(unwrapped(state, value.source.node), input.node),
+         hircore.mode_is_id(receiver.mode, hircore.mode_id_value(input.mode)) &&
+         hircore.mode_is_id(input.mode, hircore.mode_id_value(declared)) &&
+         hircore.same_ref(hircore.unwrapped(state, value.source.node), input.node),
         "value call receiver source/mode differs from the real Member base");
-    if !mode_is_id(input.mode, 0) {
-        let actual_file = verifier_file(state, value.source.node.module,
+    if !hircore.mode_is_id(input.mode, 0) {
+        let actual_file = hircore.verifier_file(state, value.source.node.module,
             value.source.node.file);
-        need(same_span(value.source.span,
+        hircore.need(hircore.same_span(value.source.span,
                  actual_file.nodes[value.source.node.node].span),
             "explicit receiver source span differs from its complete AST node");
         let kind = hir.node_kind(value.data);
-        if mode_is_id(input.mode, 2) {
-            need(node_is(kind, hir.NodeKind.Move),
+        if hircore.mode_is_id(input.mode, 2) {
+            hircore.need(hircore.node_is(kind, hir.NodeKind.Move),
                 "explicit receiver must keep its Move or writable Place");
         } else {
-            need(inout_place(value),
+            hircore.need(inout_place(value),
                 "explicit receiver must keep its Move or writable Place");
         }
-        if mode_is_id(input.mode, 1) && node_is(kind, hir.NodeKind.Place) {
-            let binding = resolved_source(state, input.node);
-            need(option.is_some(binding), "inout receiver has no source binding");
-            var expected = option_usize(binding);
-            let owner = verifier_scope(state, node.scope).function;
+        if hircore.mode_is_id(input.mode, 1) && hircore.node_is(kind, hir.NodeKind.Place) {
+            let binding = hircore.resolved_source(state, input.node);
+            hircore.need(option.is_some(binding), "inout receiver has no source binding");
+            var expected = hircore.option_usize(binding);
+            let owner = hircore.verifier_scope(state, node.scope).function;
             for instance in state.m.instances {
                 if instance.symbol == owner {
                     for rename in instance.renamed {
@@ -181,40 +180,40 @@ func check_receiver_source(state inout Verifier, node hir.HirNode,
                 case hir.NodeData.Place(place): place_symbol = place.symbol;
                 default: {}
             }
-            need(place_symbol == expected,
+            hircore.need(place_symbol == expected,
                 "inout receiver Place differs from its real source binding");
         }
     }
 }
 
-func inherent_self_source(state Verifier, method usize, implementation hir.ImplDecl)
-    bool throws Invalid {
-    let source = verifier_function(state, method).source;
-    let file = verifier_file(state, source.node.module, source.node.file);
+func inherent_self_source(state hircore.Verifier, method usize, implementation hir.ImplDecl)
+    bool throws hircore.Invalid {
+    let source = hircore.verifier_function(state, method).source;
+    let file = hircore.verifier_file(state, source.node.module, source.node.file);
     let owner = file.nodes[source.node.node];
     for id in owner.children {
         let parameter = file.nodes[id];
-        if !ast_is(parameter.kind, model.AstKind.Parameter) {
+        if !hircore.ast_is(parameter.kind, model.AstKind.Parameter) {
             continue;
         }
-        need(vec.len(parameter.children) > 0,
+        hircore.need(vec.len(parameter.children) > 0,
             "method parameter has no source type");
         var reference = source.node;
         reference.node = parameter.children[0];
-        let found = resolved_source(state, reference);
+        let found = hircore.resolved_source(state, reference);
         return option.is_some(found) &&
-               option_usize(found) == implementation.self_parameter;
+               hircore.option_usize(found) == implementation.self_parameter;
     }
     return false;
 }
 
-func template_trait_parameter(state Verifier, source SourceMethodCall,
-                              owner usize) bool throws Invalid {
+pub func template_trait_parameter(state hircore.Verifier, source hircore.SourceMethodCall,
+                              owner usize) bool throws hircore.Invalid {
     if !source.has_base_symbol {
         return false;
     }
     let id = source.base_symbol;
-    if !symbol_is(verifier_symbol(state, id).kind,
+    if !hircore.symbol_is(hircore.verifier_symbol(state, id).kind,
                   model.SymbolKind.TypeParameter) {
         return false;
     }
@@ -225,7 +224,7 @@ func template_trait_parameter(state Verifier, source SourceMethodCall,
             break;
         }
     }
-    let found = template_index(state, origin);
+    let found = hircore.template_index(state, origin);
     if found < 0 {
         return false;
     }
@@ -237,19 +236,19 @@ func template_trait_parameter(state Verifier, source SourceMethodCall,
     return false;
 }
 
-func constraint_method_arguments(state inout Verifier, node hir.HirNode,
+pub func constraint_method_arguments(state inout hircore.Verifier, node hir.HirNode,
                                  call hir.ConstraintCall, trait_value hir.TraitDecl,
                                  prototype hir.MethodPrototype)
-    ConstraintMethodArguments throws Invalid {
+    ConstraintMethodArguments throws hircore.Invalid {
     let written = source_method_call(state, node);
-    need(option.is_some(written), "constraint call lost its source method");
+    hircore.need(option.is_some(written), "constraint call lost its source method");
     let source = source_method_call_value(written);
-    let parameters = source_parameters(inout state, prototype.source);
-    let owner = verifier_scope(state, node.scope).function;
+    let parameters = hircore.source_parameters(inout state, prototype.source);
+    let owner = hircore.verifier_scope(state, node.scope).function;
     let sub = vec.empty[model.Substitution]();
     vec.push(sub, model.Substitution(symbol: trait_value.self,
         type_id: call.receiver));
-    need(vec.len(call.trait_ref.args) == vec.len(trait_value.params),
+    hircore.need(vec.len(call.trait_ref.args) == vec.len(trait_value.params),
         "constraint call trait application arity");
     for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
         vec.push(sub, model.Substitution(symbol: trait_value.params[index].symbol,
@@ -257,56 +256,56 @@ func constraint_method_arguments(state inout Verifier, node hir.HirNode,
     }
     let values = vec.empty[usize]();
     if source.explicit_type_arguments {
-        need(vec.len(source.explicit_arguments) == vec.len(parameters),
+        hircore.need(vec.len(source.explicit_arguments) == vec.len(parameters),
             "constraint method type argument count");
-        let allowed_values = allowed_for(state, owner);
+        let allowed_values = hircore.allowed_for(state, owner);
         for var index usize = 0; index < vec.len(parameters); index += 1 {
-            let value = source_type_in_function(inout state,
+            let value = hircore.source_type_in_function(inout state,
                 source.explicit_arguments[index], owner);
-            valid_type(inout state, value, allowed_values);
+            hircore.valid_type(inout state, value, allowed_values);
             vec.push(values, value);
             vec.push(sub, model.Substitution(symbol: parameters[index].symbol,
                 type_id: value));
         }
-        need(call.signature == substitute_type(inout state,
+        hircore.need(call.signature == hircore.substitute_type(inout state,
                  prototype.signature, sub),
             "constraint method type arguments differ from signature");
     } else {
         let match_sub = sub;
-        need(matches(inout state, prototype.signature, call.signature,
+        hircore.need(hircore.matches(inout state, prototype.signature, call.signature,
                  match_sub),
             "constraint method signature does not determine type arguments");
         for parameter in parameters {
-            let found = substitution_index(match_sub, parameter.symbol);
-            need(found >= 0,
+            let found = hircore.substitution_index(match_sub, parameter.symbol);
+            hircore.need(found >= 0,
                 "constraint method type argument is missing from source");
             vec.push(values, match_sub[usize(found)].type_id);
         }
     }
-    constraints(inout state, parameters, values, sub);
+    hircore.constraints(inout state, parameters, values, sub);
     return ConstraintMethodArguments(parameters: parameters, values: values);
 }
 
-func check_qualified_method_source(state inout Verifier, node hir.HirNode,
-                                   call hir.Call) throws Invalid {
+func check_qualified_method_source(state inout hircore.Verifier, node hir.HirNode,
+                                   call hir.Call) throws hircore.Invalid {
     let written = source_method_call(state, node);
     if !option.is_some(written) {
         return;
     }
     let source = source_method_call_value(written);
     let template_qualifier = template_trait_parameter(state, source,
-        verifier_scope(state, node.scope).function);
+        hircore.verifier_scope(state, node.scope).function);
     var type_qualifier = false;
     if source.has_base_symbol {
-        let symbol = verifier_symbol(state, source.base_symbol);
+        let symbol = hircore.verifier_symbol(state, source.base_symbol);
         type_qualifier = template_qualifier ||
-            symbol_is(symbol.kind, model.SymbolKind.Type) ||
-            symbol_is(symbol.kind, model.SymbolKind.BuiltinType) ||
-            symbol_is(symbol.kind, model.SymbolKind.TypeParameter);
+            hircore.symbol_is(symbol.kind, model.SymbolKind.Type) ||
+            hircore.symbol_is(symbol.kind, model.SymbolKind.BuiltinType) ||
+            hircore.symbol_is(symbol.kind, model.SymbolKind.TypeParameter);
     }
-    need(callee_id(call.kind) == 0 && option.is_some(call.direct_symbol),
+    hircore.need(hircore.callee_id(call.kind) == 0 && option.is_some(call.direct_symbol),
         "type-qualified method source is not a direct call");
-    var origin = option_usize(call.direct_symbol);
+    var origin = hircore.option_usize(call.direct_symbol);
     var instance_found = -1;
     for var index usize = 0; index < vec.len(state.m.instances); index += 1 {
         if state.m.instances[index].symbol == origin {
@@ -315,16 +314,16 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
             break;
         }
     }
-    need(verifier_symbol(state, origin).name == source.name,
+    hircore.need(hircore.verifier_symbol(state, origin).name == source.name,
         "type-qualified call target name differs from source");
     var impl_index i64 = -1;
     if origin < vec.len(state.impl_method_map) {
-        impl_index = impl_method_lookup(state, origin);
-        need(impl_index != -2, "type-qualified call target belongs to two impls");
+        impl_index = hircore.impl_method_lookup(state, origin);
+        hircore.need(impl_index != -2, "type-qualified call target belongs to two impls");
     } else {
         for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
-                need(impl_index < 0,
+            if hircore.ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                hircore.need(impl_index < 0,
                     "type-qualified call target belongs to two impls");
                 impl_index = i64(index);
             }
@@ -336,44 +335,44 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
         impl_has_trait = option.is_some(state.m.impls[usize(impl_index)].trait_ref);
     }
     if !type_qualifier && (!has_impl || !impl_has_trait) {
-        if mode_is_id(receiver_input(state, source.base).mode, 0) {
+        if hircore.mode_is_id(receiver_input(state, source.base).mode, 0) {
             return;
         }
-        need(has_impl && inherent_self_source(state, origin,
+        hircore.need(has_impl && inherent_self_source(state, origin,
                  state.m.impls[usize(impl_index)]),
             "explicit receiver requires the real inherent first Self");
-        let signature = verifier_type(state, verifier_function(state, origin).signature);
-        need(vec.len(signature.parameters) > 0,
+        let signature = hircore.verifier_type(state, hircore.verifier_function(state, origin).signature);
+        hircore.need(vec.len(signature.parameters) > 0,
             "method receiver signature is empty");
         check_receiver_source(inout state, node, call.args, source.base,
             signature.parameters[0].mode);
         return;
     }
-    need(has_impl, "type-qualified call target is not an impl method");
+    hircore.need(has_impl, "type-qualified call target is not an impl method");
     let implementation = state.m.impls[usize(impl_index)];
     if option.is_some(implementation.trait_ref) {
-        let application = option_trait_ref(implementation.trait_ref);
-        let trait_index = trait_declaration(state, application.declaration);
-        need(trait_index >= 0, "type-qualified call impl has no real trait");
+        let application = hircore.option_trait_ref(implementation.trait_ref);
+        let trait_index = hircore.trait_declaration(state, application.declaration);
+        hircore.need(trait_index >= 0, "type-qualified call impl has no real trait");
         let trait_value = state.m.traits[usize(trait_index)];
         var prototype_index i64 = -1;
         for var index usize = 0; index < vec.len(trait_value.methods); index += 1 {
-            if verifier_symbol(state, trait_value.methods[index].symbol).name ==
+            if hircore.verifier_symbol(state, trait_value.methods[index].symbol).name ==
                source.name {
-                need(prototype_index < 0,
+                hircore.need(prototype_index < 0,
                     "type-qualified call has duplicate trait prototype");
                 prototype_index = i64(index);
             }
         }
-        need(prototype_index >= 0,
+        hircore.need(prototype_index >= 0,
             "type-qualified call has no source trait prototype");
         if !type_qualifier {
-            let raw = verifier_type(state,
+            let raw = hircore.verifier_type(state,
                 trait_value.methods[usize(prototype_index)].signature);
-            need(vec.len(raw.parameters) > 0,
+            hircore.need(vec.len(raw.parameters) > 0,
                 "value call requires a trait Self parameter");
-            let first = verifier_type(state, raw.parameters[0].type_id);
-            need(kind_is(first.kind, model.TypeKind.TypeParameter) &&
+            let first = hircore.verifier_type(state, raw.parameters[0].type_id);
+            hircore.need(hircore.kind_is(first.kind, model.TypeKind.TypeParameter) &&
                  first.declaration == trait_value.self,
                 "value call first parameter must be the real trait Self");
             check_receiver_source(inout state, node, call.args, source.base,
@@ -384,46 +383,46 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
     var args = vec.empty[usize]();
     if instance_found >= 0 {
         args = state.m.instances[usize(instance_found)].type_args;
-    } else if template_index(state, origin) >= 0 {
+    } else if hircore.template_index(state, origin) >= 0 {
         args = call.type_args;
     }
-    need(vec.len(implementation.params) <= vec.len(args),
+    hircore.need(vec.len(implementation.params) <= vec.len(args),
         "type-qualified call lost impl type arguments");
     let sub = vec.empty[model.Substitution]();
     for var index usize = 0; index < vec.len(implementation.params); index += 1 {
         vec.push(sub, model.Substitution(
             symbol: implementation.params[index].symbol, type_id: args[index]));
     }
-    let qualified_owner = verifier_scope(state, node.scope).function;
-    let source_value = source_type_in_function(inout state, source.base,
+    let qualified_owner = hircore.verifier_scope(state, node.scope).function;
+    let source_value = hircore.source_type_in_function(inout state, source.base,
         qualified_owner);
-    need(substitute_type(inout state, implementation.self_type, sub) ==
+    hircore.need(hircore.substitute_type(inout state, implementation.self_type, sub) ==
              source_value,
         "type-qualified call source type differs from impl Self");
     if template_qualifier {
-        need(option.is_some(implementation.trait_ref),
+        hircore.need(option.is_some(implementation.trait_ref),
             "T-qualified call selected an inherent method");
-        let application = option_trait_ref(implementation.trait_ref);
-        let trait_index = trait_declaration(state, application.declaration);
-        need(trait_index >= 0, "T-qualified call impl has no real trait");
+        let application = hircore.option_trait_ref(implementation.trait_ref);
+        let trait_index = hircore.trait_declaration(state, application.declaration);
+        hircore.need(trait_index >= 0, "T-qualified call impl has no real trait");
         let trait_value = state.m.traits[usize(trait_index)];
         var declared = false;
         for method in trait_value.methods {
             declared = declared ||
-                verifier_symbol(state, method.symbol).name == source.name;
+                hircore.verifier_symbol(state, method.symbol).name == source.name;
         }
-        need(declared, "T-qualified call has no source trait prototype");
+        hircore.need(declared, "T-qualified call has no source trait prototype");
     } else {
         var candidates usize = 0;
         for implementation_option in state.m.impls {
             let match_sub = vec.empty[model.Substitution]();
-            if !matches(inout state, implementation_option.self_type,
+            if !hircore.matches(inout state, implementation_option.self_type,
                         source_value, match_sub) {
                 continue;
             }
             var valid = true;
             for parameter in implementation_option.params {
-                let found = substitution_index(match_sub, parameter.symbol);
+                let found = hircore.substitution_index(match_sub, parameter.symbol);
                 if found < 0 {
                     valid = false;
                     break;
@@ -433,10 +432,10 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
                         let concrete = hir.TraitRef(declaration: bound.declaration,
                             args: vec.empty[usize]());
                         for argument in bound.args {
-                            vec.push(concrete.args, substitute_type(inout state,
+                            vec.push(concrete.args, hircore.substitute_type(inout state,
                                 argument, match_sub));
                         }
-                        if !satisfies(inout state,
+                        if !hircore.satisfies(inout state,
                             match_sub[usize(found)].type_id, concrete, 0) {
                             valid = false;
                             break;
@@ -449,25 +448,18 @@ func check_qualified_method_source(state inout Verifier, node hir.HirNode,
                 continue;
             }
             for method in implementation_option.methods {
-                if verifier_symbol(state, method).name == source.name {
+                if hircore.verifier_symbol(state, method).name == source.name {
                     candidates += 1;
                 }
             }
         }
-        need(candidates == 1,
+        hircore.need(candidates == 1,
             "type-qualified method source selection is not unique");
     }
 }
 
-func option_trait_ref(value option.Option[hir.TraitRef]) hir.TraitRef {
-    switch value {
-        case option.Option.Some(item): return item;
-        case option.Option.None: return hir.TraitRef(declaration: 0, args: []);
-    }
-}
-
-func check_explicit_method_arguments(state inout Verifier, node hir.HirNode,
-                                     call hir.Call) throws Invalid {
+func check_explicit_method_arguments(state inout hircore.Verifier, node hir.HirNode,
+                                     call hir.Call) throws hircore.Invalid {
     let written = source_method_call(state, node);
     if !option.is_some(written) {
         return;
@@ -476,79 +468,79 @@ func check_explicit_method_arguments(state inout Verifier, node hir.HirNode,
     if !source.explicit_type_arguments {
         return;
     }
-    need(callee_id(call.kind) == 0 && option.is_some(call.direct_symbol),
+    hircore.need(hircore.callee_id(call.kind) == 0 && option.is_some(call.direct_symbol),
         "explicit method type arguments require a direct call");
-    var origin = option_usize(call.direct_symbol);
-    let inst = instance_index(state, origin);
+    var origin = hircore.option_usize(call.direct_symbol);
+    let inst = hircore.instance_index(state, origin);
     if inst >= 0 {
         origin = state.m.instances[usize(inst)].origin;
     }
     var impl_index i64 = -1;
     if origin < vec.len(state.impl_method_map) {
-        impl_index = impl_method_lookup(state, origin);
-        need(impl_index != -2, "explicit method target belongs to two impls");
+        impl_index = hircore.impl_method_lookup(state, origin);
+        hircore.need(impl_index != -2, "explicit method target belongs to two impls");
     } else {
         for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
-                need(impl_index < 0, "explicit method target belongs to two impls");
+            if hircore.ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                hircore.need(impl_index < 0, "explicit method target belongs to two impls");
                 impl_index = i64(index);
             }
         }
     }
-    need(impl_index >= 0, "explicit method target is not an impl method");
+    hircore.need(impl_index >= 0, "explicit method target is not an impl method");
     let implementation = state.m.impls[usize(impl_index)];
-    let origin_source = verifier_function(state, origin).source;
-    let all = source_parameters(inout state, origin_source);
-    need(vec.len(all) >= vec.len(implementation.params),
+    let origin_source = hircore.verifier_function(state, origin).source;
+    let all = hircore.source_parameters(inout state, origin_source);
+    hircore.need(vec.len(all) >= vec.len(implementation.params),
         "explicit method source lost its impl prefix");
     for var index usize = 0; index < vec.len(implementation.params); index += 1 {
-        need(all[index].symbol == implementation.params[index].symbol,
+        hircore.need(all[index].symbol == implementation.params[index].symbol,
             "explicit method impl prefix differs from source");
     }
     let own = vec.len(all) - vec.len(implementation.params);
-    need(vec.len(source.explicit_arguments) == own,
+    hircore.need(vec.len(source.explicit_arguments) == own,
         "explicit method type argument count differs from declaration");
     var actual = call.type_args;
     if inst >= 0 {
         actual = state.m.instances[usize(inst)].type_args;
     }
-    need(vec.len(actual) == vec.len(all),
+    hircore.need(vec.len(actual) == vec.len(all),
         "explicit method call lost complete type arguments");
-    let owner = verifier_scope(state, node.scope).function;
-    let allowed_values = allowed_for(state, owner);
+    let owner = hircore.verifier_scope(state, node.scope).function;
+    let allowed_values = hircore.allowed_for(state, owner);
     for var index usize = 0; index < own; index += 1 {
-        let value = source_type_in_function(inout state,
+        let value = hircore.source_type_in_function(inout state,
             source.explicit_arguments[index], owner);
-        valid_type(inout state, value, allowed_values);
-        need(value == actual[vec.len(implementation.params) + index],
+        hircore.valid_type(inout state, value, allowed_values);
+        hircore.need(value == actual[vec.len(implementation.params) + index],
             "explicit method type argument differs from complete instance key");
     }
 }
 
-func source_template_bound(state inout Verifier, source SourceMethodCall,
-                           owner usize) TraitBoundResult throws Invalid {
+func source_template_bound(state inout hircore.Verifier, source hircore.SourceMethodCall,
+                           owner usize) TraitBoundResult throws hircore.Invalid {
     if !source.has_base_symbol {
         return TraitBoundResult(has: false, bound: hir.TraitRef(
             declaration: 0, args: []), parameter: 0);
     }
     let id = source.base_symbol;
-    if !symbol_is(verifier_symbol(state, id).kind,
+    if !hircore.symbol_is(hircore.verifier_symbol(state, id).kind,
                   model.SymbolKind.TypeParameter) {
         return TraitBoundResult(has: false, bound: hir.TraitRef(
             declaration: 0, args: []), parameter: 0);
     }
     var origin = owner;
-    let owner_inst = instance_index(state, owner);
+    let owner_inst = hircore.instance_index(state, owner);
     if owner_inst >= 0 {
         origin = state.m.instances[usize(owner_inst)].origin;
     }
-    let found = template_index(state, origin);
+    let found = hircore.template_index(state, origin);
     if found < 0 {
         return TraitBoundResult(has: false, bound: hir.TraitRef(
             declaration: 0, args: []), parameter: 0);
     }
     let template = state.m.templates[usize(found)];
-    let real = source_parameters(inout state, template.function.source);
+    let real = hircore.source_parameters(inout state, template.function.source);
     var declared = -1;
     for var index usize = 0; index < vec.len(real); index += 1 {
         if real[index].symbol == id {
@@ -559,10 +551,10 @@ func source_template_bound(state inout Verifier, source SourceMethodCall,
         return TraitBoundResult(has: false, bound: hir.TraitRef(
             declaration: 0, args: []), parameter: 0);
     }
-    var bound = option_trait_ref(real[usize(declared)].trait_ref);
+    var bound = hircore.option_trait_ref(real[usize(declared)].trait_ref);
     if owner_inst >= 0 {
         let instance = state.m.instances[usize(owner_inst)];
-        need(vec.len(real) == vec.len(instance.type_args),
+        hircore.need(vec.len(real) == vec.len(instance.type_args),
             "template instance parameter count");
         let sub = vec.empty[model.Substitution]();
         for var index usize = 0; index < vec.len(real); index += 1 {
@@ -570,7 +562,7 @@ func source_template_bound(state inout Verifier, source SourceMethodCall,
                 type_id: instance.type_args[index]));
         }
         for var index usize = 0; index < vec.len(bound.args); index += 1 {
-            bound.args[index] = substitute_type(inout state, bound.args[index],
+            bound.args[index] = hircore.substitute_type(inout state, bound.args[index],
                 sub);
         }
     }
@@ -588,21 +580,21 @@ struct UniqueMethod {
     args Vec[usize];
 }
 
-func method_value_target(state Verifier, node hir.HirNode,
+func method_value_target(state hircore.Verifier, node hir.HirNode,
                          value hir.FunctionValue) MethodValueTarget
-    throws Invalid {
+    throws hircore.Invalid {
     var target = MethodValueTarget(origin: value.symbol, has_instance: false,
         instance: 0, complete: vec.empty[usize](), signature: node.type_id);
-    if template_index(state, value.symbol) >= 0 {
-        need(template_index(state, verifier_scope(state, node.scope).function) >= 0,
+    if hircore.template_index(state, value.symbol) >= 0 {
+        hircore.need(hircore.template_index(state, hircore.verifier_scope(state, node.scope).function) >= 0,
             "template method value survived into concrete execution");
         target.origin = value.symbol;
         target.complete = value.type_args;
         return target;
     }
-    let found = instance_index(state, value.symbol);
+    let found = hircore.instance_index(state, value.symbol);
     if found >= 0 {
-        need(vec.len(value.type_args) == 0,
+        hircore.need(vec.len(value.type_args) == 0,
             "instance method value has a type suffix");
         let instance = state.m.instances[usize(found)];
         target.has_instance = true;
@@ -611,46 +603,46 @@ func method_value_target(state Verifier, node hir.HirNode,
         target.complete = instance.type_args;
         return target;
     }
-    need(vec.len(value.type_args) == 0,
+    hircore.need(vec.len(value.type_args) == 0,
         "concrete method value has a type suffix");
     target.origin = value.symbol;
     return target;
 }
 
-func method_impl_index(state Verifier, origin usize) i64 throws Invalid {
+pub func method_impl_index(state hircore.Verifier, origin usize) i64 throws hircore.Invalid {
     var result i64 = -1;
     if origin < vec.len(state.impl_method_map) {
-        result = impl_method_lookup(state, origin);
-        need(result != -2, "method value target belongs to two impls");
+        result = hircore.impl_method_lookup(state, origin);
+        hircore.need(result != -2, "method value target belongs to two impls");
     } else {
         for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
-            if ids_contains_unsorted(state.m.impls[index].methods, origin) {
-                need(result < 0, "method value target belongs to two impls");
+            if hircore.ids_contains_unsorted(state.m.impls[index].methods, origin) {
+                hircore.need(result < 0, "method value target belongs to two impls");
                 result = i64(index);
             }
         }
     }
-    need(result >= 0, "method value target is not an impl method");
+    hircore.need(result >= 0, "method value target is not an impl method");
     return result;
 }
 
-func impl_method_exists(state Verifier, method usize) bool {
+pub func impl_method_exists(state hircore.Verifier, method usize) bool {
     if method < vec.len(state.impl_method_map) {
         let slot = state.impl_method_map[method];
         return slot >= 0 || slot == -2;
     }
     for implementation in state.m.impls {
-        if ids_contains_unsorted(implementation.methods, method) {
+        if hircore.ids_contains_unsorted(implementation.methods, method) {
             return true;
         }
     }
     return false;
 }
 
-func method_value_is_impl(state Verifier, value hir.FunctionValue) bool {
+pub func method_value_is_impl(state hircore.Verifier, value hir.FunctionValue) bool {
     var origin = value.symbol;
-    if template_index(state, value.symbol) < 0 {
-        let found = instance_index(state, value.symbol);
+    if hircore.template_index(state, value.symbol) < 0 {
+        let found = hircore.instance_index(state, value.symbol);
         if found >= 0 {
             origin = state.m.instances[usize(found)].origin;
         }
@@ -658,49 +650,49 @@ func method_value_is_impl(state Verifier, value hir.FunctionValue) bool {
     return impl_method_exists(state, origin);
 }
 
-func constant_method_source(state Verifier, node hir.HirNode)
-    option.Option[SourceMethodCall] throws Invalid {
-    let initial = resolved_source(state, node.source.node);
+pub func constant_method_source(state hircore.Verifier, node hir.HirNode)
+    option.Option[hircore.SourceMethodCall] throws hircore.Invalid {
+    let initial = hircore.resolved_source(state, node.source.node);
     if !option.is_some(initial) ||
-       !symbol_is(verifier_symbol(state, option_usize(initial)).kind,
+       !hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(initial)).kind,
                   model.SymbolKind.Constant) {
-        return option.Option[SourceMethodCall].None;
+        return option.Option[hircore.SourceMethodCall].None;
     }
-    var constant_id = option_usize(initial);
+    var constant_id = hircore.option_usize(initial);
     let seen = vec.empty[usize]();
     for true {
-        need(ids_insert(seen, constant_id),
+        hircore.need(hircore.ids_insert(seen, constant_id),
             "constant method value alias cycle");
-        let symbol = verifier_symbol(state, constant_id);
-        need(option.is_some(symbol.definition),
+        let symbol = hircore.verifier_symbol(state, constant_id);
+        hircore.need(option.is_some(symbol.definition),
             "constant method value has no initializer");
-        let definition_ref = option_ref(symbol.definition);
-        let file = verifier_file(state, definition_ref.module,
+        let definition_ref = hircore.option_ref(symbol.definition);
+        let file = hircore.verifier_file(state, definition_ref.module,
             definition_ref.file);
         let binding = file.nodes[definition_ref.node];
-        need(ast_is(binding.kind, model.AstKind.Binding) &&
+        hircore.need(hircore.ast_is(binding.kind, model.AstKind.Binding) &&
              vec.len(binding.children) > 0,
             "constant method value source is not a binding");
         var initializer = definition_ref;
         initializer.node = binding.children[vec.len(binding.children) - 1];
-        let next = resolved_source(state, initializer);
+        let next = hircore.resolved_source(state, initializer);
         if option.is_some(next) &&
-           symbol_is(verifier_symbol(state, option_usize(next)).kind,
+           hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(next)).kind,
                      model.SymbolKind.Constant) {
-            constant_id = option_usize(next);
+            constant_id = hircore.option_usize(next);
             continue;
         }
         return source_method_member(state, initializer);
     }
-    return option.Option[SourceMethodCall].None;
+    return option.Option[hircore.SourceMethodCall].None;
 }
 
-func matched_impl_arguments(state inout Verifier, implementation hir.ImplDecl,
+func matched_impl_arguments(state inout hircore.Verifier, implementation hir.ImplDecl,
                             match Vec[model.Substitution]) MatchedArgs
-    throws Invalid {
+    throws hircore.Invalid {
     var args = vec.empty[usize]();
     for parameter in implementation.params {
-        let found = substitution_index(match, parameter.symbol);
+        let found = hircore.substitution_index(match, parameter.symbol);
         if found < 0 {
             return MatchedArgs(ok: false, args: []);
         }
@@ -709,10 +701,10 @@ func matched_impl_arguments(state inout Verifier, implementation hir.ImplDecl,
                 let concrete = hir.TraitRef(declaration: bound.declaration,
                     args: vec.empty[usize]());
                 for argument in bound.args {
-                    vec.push(concrete.args, substitute_type(inout state,
+                    vec.push(concrete.args, hircore.substitute_type(inout state,
                         argument, match));
                 }
-                if !satisfies(inout state, match[usize(found)].type_id,
+                if !hircore.satisfies(inout state, match[usize(found)].type_id,
                               concrete, 0) {
                     return MatchedArgs(ok: false, args: []);
                 }
@@ -724,9 +716,9 @@ func matched_impl_arguments(state inout Verifier, implementation hir.ImplDecl,
     return MatchedArgs(ok: true, args: args);
 }
 
-func unique_source_method(state inout Verifier, receiver usize, name string,
+func unique_source_method(state inout hircore.Verifier, receiver usize, name string,
                           required option.Option[hir.TraitRef])
-    UniqueMethod throws Invalid {
+    UniqueMethod throws hircore.Invalid {
     var selected i64 = -1;
     var selected_sub = vec.empty[model.Substitution]();
     var selected_args = vec.empty[usize]();
@@ -747,18 +739,18 @@ func unique_source_method(state inout Verifier, receiver usize, name string,
             case option.Option.None: {}
         }
         let match = vec.empty[model.Substitution]();
-        if !matches(inout state, implementation.self_type, receiver, match) {
+        if !hircore.matches(inout state, implementation.self_type, receiver, match) {
             continue;
         }
         switch required {
             case option.Option.Some(bound): {
-                let application = option_trait_ref(implementation.trait_ref);
+                let application = hircore.option_trait_ref(implementation.trait_ref);
                 if vec.len(application.args) != vec.len(bound.args) {
                     continue;
                 }
                 var matched = true;
                 for var a usize = 0; a < vec.len(bound.args); a += 1 {
-                    if !matches(inout state, application.args[a], bound.args[a],
+                    if !hircore.matches(inout state, application.args[a], bound.args[a],
                                 match) {
                         matched = false;
                         break;
@@ -772,7 +764,7 @@ func unique_source_method(state inout Verifier, receiver usize, name string,
         }
         var has_method = false;
         for method in implementation.methods {
-            if verifier_symbol(state, method).name == name {
+            if hircore.verifier_symbol(state, method).name == name {
                 has_method = true;
             }
         }
@@ -783,37 +775,37 @@ func unique_source_method(state inout Verifier, receiver usize, name string,
         if !args.ok {
             continue;
         }
-        need(selected < 0, "method value source selection is ambiguous");
+        hircore.need(selected < 0, "method value source selection is ambiguous");
         selected = i64(index);
         selected_sub = match;
         selected_args = args.args;
     }
-    need(selected >= 0, "method value source selection has no impl");
+    hircore.need(selected >= 0, "method value source selection has no impl");
     return UniqueMethod(found: selected, substitution: selected_sub,
         args: selected_args);
 }
 
-func check_method_visibility(state Verifier, method usize,
+func check_method_visibility(state hircore.Verifier, method usize,
                              implementation hir.ImplDecl, module usize)
-    throws Invalid {
-    if verifier_symbol(state, method).module == module {
+    throws hircore.Invalid {
+    if hircore.verifier_symbol(state, method).module == module {
         return;
     }
     var exported = false;
     switch implementation.trait_ref {
         case option.Option.Some(application):
-            exported = verifier_symbol(state, application.declaration).exported;
+            exported = hircore.verifier_symbol(state, application.declaration).exported;
         case option.Option.None:
-            exported = verifier_symbol(state, method).exported;
+            exported = hircore.verifier_symbol(state, method).exported;
     }
-    need(exported, "method value target is private");
+    hircore.need(exported, "method value target is private");
 }
 
-func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
-    value hir.FunctionValue, source SourceMethodCall, has_source_module bool,
+pub func check_concrete_method_value_source(state inout hircore.Verifier, node hir.HirNode,
+    value hir.FunctionValue, source hircore.SourceMethodCall, has_source_module bool,
     source_module usize, has_source_owner bool, source_owner usize)
-    throws Invalid {
-    var owner = verifier_scope(state, node.scope).function;
+    throws hircore.Invalid {
+    var owner = hircore.verifier_scope(state, node.scope).function;
     if has_source_owner {
         owner = source_owner;
     }
@@ -824,28 +816,28 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
     let bounded = source_template_bound(inout state, source, owner);
     var type_parameter = false;
     if source.has_base_symbol {
-        type_parameter = symbol_is(verifier_symbol(state, source.base_symbol).kind,
+        type_parameter = hircore.symbol_is(hircore.verifier_symbol(state, source.base_symbol).kind,
             model.SymbolKind.TypeParameter);
     }
-    need(source.has_base_symbol, "method value lost its base symbol");
+    hircore.need(source.has_base_symbol, "method value lost its base symbol");
     if type_parameter {
-        need(bounded.has, "method value source is not a concrete Type or bounded T");
+        hircore.need(bounded.has, "method value source is not a concrete Type or bounded T");
     } else {
-        let base_symbol = verifier_symbol(state, source.base_symbol);
-        need(symbol_is(base_symbol.kind, model.SymbolKind.Type) ||
-             symbol_is(base_symbol.kind, model.SymbolKind.BuiltinType),
+        let base_symbol = hircore.verifier_symbol(state, source.base_symbol);
+        hircore.need(hircore.symbol_is(base_symbol.kind, model.SymbolKind.Type) ||
+             hircore.symbol_is(base_symbol.kind, model.SymbolKind.BuiltinType),
             "method value source is not a concrete Type or bounded T");
     }
-    let receiver = source_type_in_function(inout state, source.base, owner);
+    let receiver = hircore.source_type_in_function(inout state, source.base, owner);
     if bounded.has {
-        let allowed_values = allowed_for(state, owner);
-        check_trait_application(inout state, bounded.bound, allowed_values);
-        check_trait_parameter_bounds(inout state, bounded.bound, receiver, 0);
+        let allowed_values = hircore.allowed_for(state, owner);
+        hircore.check_trait_application(inout state, bounded.bound, allowed_values);
+        hircore.check_trait_parameter_bounds(inout state, bounded.bound, receiver, 0);
     }
     let target = method_value_target(state, node, value);
     let impl_index = method_impl_index(state, target.origin);
     let implementation = state.m.impls[usize(impl_index)];
-    need(verifier_symbol(state, target.origin).name == source.name,
+    hircore.need(hircore.verifier_symbol(state, target.origin).name == source.name,
         "method value target name differs from source");
     check_method_visibility(state, target.origin, implementation, module);
     var required = option.Option[hir.TraitRef].None;
@@ -855,14 +847,14 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
     let unique = unique_source_method(inout state, receiver, source.name,
         required);
     let selected = state.m.impls[usize(unique.found)];
-    need(unique.found == impl_index,
+    hircore.need(unique.found == impl_index,
         "method value source selected another impl than its target");
-    let declaration_source = source_declaration(state, target.origin);
-    let declared = source_parameters(inout state, declaration_source);
-    need(vec.len(declared) >= vec.len(implementation.params),
+    let declaration_source = hircore.source_declaration(state, target.origin);
+    let declared = hircore.source_parameters(inout state, declaration_source);
+    hircore.need(vec.len(declared) >= vec.len(implementation.params),
         "method value source lost its impl generic prefix");
     for var index usize = 0; index < vec.len(implementation.params); index += 1 {
-        need(declared[index].symbol == implementation.params[index].symbol,
+        hircore.need(declared[index].symbol == implementation.params[index].symbol,
             "method value impl prefix differs from source");
     }
     let own = vec.empty[hir.GenericParam]();
@@ -870,17 +862,17 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
         index < vec.len(declared); index += 1 {
         vec.push(own, declared[index]);
     }
-    let has_type_arguments = template_index(state, value.symbol) >= 0 ||
+    let has_type_arguments = hircore.template_index(state, value.symbol) >= 0 ||
                              target.has_instance;
     if has_type_arguments {
-        need(vec.len(target.complete) == vec.len(declared),
+        hircore.need(vec.len(target.complete) == vec.len(declared),
             "method value complete type argument count");
         for var index usize = 0; index < vec.len(implementation.params); index += 1 {
-            need(target.complete[index] == unique.args[index],
+            hircore.need(target.complete[index] == unique.args[index],
                 "method value impl type argument differs from qualifier");
         }
     } else {
-        need(vec.len(implementation.params) == 0 && vec.len(own) == 0 &&
+        hircore.need(vec.len(implementation.params) == 0 && vec.len(own) == 0 &&
              vec.len(target.complete) == 0,
             "generic method value has no instance target");
     }
@@ -891,17 +883,17 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
             vec.push(own_args, target.complete[index]);
         }
     }
-    need(vec.len(own_args) == vec.len(own),
+    hircore.need(vec.len(own_args) == vec.len(own),
         "method value method-own argument count");
     if source.explicit_type_arguments {
-        need(vec.len(source.explicit_arguments) == vec.len(own),
+        hircore.need(vec.len(source.explicit_arguments) == vec.len(own),
             "method value explicit type argument count");
-        let allowed_values = allowed_for(state, owner);
+        let allowed_values = hircore.allowed_for(state, owner);
         for var index usize = 0; index < vec.len(own); index += 1 {
-            let value_type = source_type_in_function(inout state,
+            let value_type = hircore.source_type_in_function(inout state,
                 source.explicit_arguments[index], owner);
-            valid_type(inout state, value_type, allowed_values);
-            need(value_type == own_args[index],
+            hircore.valid_type(inout state, value_type, allowed_values);
+            hircore.need(value_type == own_args[index],
                 "method value explicit type argument differs from target");
         }
     } else {
@@ -911,16 +903,16 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
                 symbol: implementation.params[index].symbol,
                 type_id: unique.args[index]));
         }
-        let declaration_signature = source_declaration_signature(state,
+        let declaration_signature = hircore.source_declaration_signature(state,
             target.origin);
-        need(matches(inout state, declaration_signature, target.signature,
+        hircore.need(hircore.matches(inout state, declaration_signature, target.signature,
                  match),
             "method value signature does not determine its own arguments");
         for var index usize = 0; index < vec.len(own); index += 1 {
-            let found = substitution_index(match, own[index].symbol);
-            need(found >= 0,
+            let found = hircore.substitution_index(match, own[index].symbol);
+            hircore.need(found >= 0,
                 "method value phantom argument requires an explicit suffix");
-            need(match[usize(found)].type_id == own_args[index],
+            hircore.need(match[usize(found)].type_id == own_args[index],
                 "method value inferred own argument differs from target");
         }
     }
@@ -930,35 +922,35 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
             symbol: implementation.params[index].symbol,
             type_id: unique.args[index]));
     }
-    constraints(inout state, own, own_args, outer);
+    hircore.constraints(inout state, own, own_args, outer);
     switch implementation.trait_ref {
         case option.Option.Some(application): {
-            let trait_index = trait_declaration(state, application.declaration);
-            need(trait_index >= 0, "method value impl has no real trait");
+            let trait_index = hircore.trait_declaration(state, application.declaration);
+            hircore.need(trait_index >= 0, "method value impl has no real trait");
             let trait_value = state.m.traits[usize(trait_index)];
             var prototype_index i64 = -1;
             for var index usize = 0; index < vec.len(trait_value.methods); index += 1 {
-                if verifier_symbol(state, trait_value.methods[index].symbol).name ==
+                if hircore.verifier_symbol(state, trait_value.methods[index].symbol).name ==
                    source.name {
-                    need(prototype_index < 0,
+                    hircore.need(prototype_index < 0,
                         "method value has duplicate trait prototype");
                     prototype_index = i64(index);
                 }
             }
-            need(prototype_index >= 0, "method value has no trait prototype");
+            hircore.need(prototype_index >= 0, "method value has no trait prototype");
             let prototype = trait_value.methods[usize(prototype_index)];
             let concrete = hir.TraitRef(declaration: application.declaration,
-                args: ids_copy(application.args));
+                args: hircore.ids_copy(application.args));
             for var index usize = 0; index < vec.len(concrete.args); index += 1 {
-                concrete.args[index] = substitute_type(inout state,
+                concrete.args[index] = hircore.substitute_type(inout state,
                     concrete.args[index], unique.substitution);
             }
             if bounded.has {
-                need(same_trait_ref(concrete, bounded.bound),
+                hircore.need(hircore.same_trait_ref(concrete, bounded.bound),
                     "method value full trait application differs from its bound");
             }
-            let prototype_own = source_parameters(inout state, prototype.source);
-            need(vec.len(prototype_own) == vec.len(own),
+            let prototype_own = hircore.source_parameters(inout state, prototype.source);
+            hircore.need(vec.len(prototype_own) == vec.len(own),
                 "method value prototype own count");
             let alpha = vec.empty[model.Substitution]();
             vec.push(alpha, model.Substitution(symbol: trait_value.self,
@@ -973,53 +965,53 @@ func check_concrete_method_value_source(state inout Verifier, node hir.HirNode,
                     symbol: prototype_own[index].symbol,
                     type_id: own_args[index]));
             }
-            need(substitute_type(inout state, prototype.signature, alpha) ==
+            hircore.need(hircore.substitute_type(inout state, prototype.signature, alpha) ==
                      target.signature,
                 "method value prototype signature differs from target");
         }
         case option.Option.None:
-            need(!bounded.has,
+            hircore.need(!bounded.has,
                 "bounded T method value selected an inherent method");
     }
-    need(node.type_id == target.signature, "method value type mismatch");
+    hircore.need(node.type_id == target.signature, "method value type mismatch");
 }
 
-func check_template_method_value_source(state inout Verifier, node hir.HirNode,
+pub func check_template_method_value_source(state inout hircore.Verifier, node hir.HirNode,
     value hir.FunctionValue, trait_value hir.TraitDecl, prototype hir.MethodPrototype,
-    source SourceMethodCall) throws Invalid {
-    let owner = verifier_scope(state, node.scope).function;
-    need(template_index(state, owner) >= 0,
+    source hircore.SourceMethodCall) throws hircore.Invalid {
+    let owner = hircore.verifier_scope(state, node.scope).function;
+    hircore.need(hircore.template_index(state, owner) >= 0,
         "trait prototype method value is outside a template");
     let bounded = source_template_bound(inout state, source, owner);
-    need(bounded.has, "trait prototype method value has no bound");
-    need(source.has_base_symbol && source.base_symbol == bounded.parameter,
+    hircore.need(bounded.has, "trait prototype method value has no bound");
+    hircore.need(source.has_base_symbol && source.base_symbol == bounded.parameter,
         "trait prototype method value base differs from its parameter");
-    need(trait_value.symbol == bounded.bound.declaration,
+    hircore.need(trait_value.symbol == bounded.bound.declaration,
         "trait prototype belongs to another bound");
-    need(value.symbol == prototype.symbol,
+    hircore.need(value.symbol == prototype.symbol,
         "trait prototype method value target differs from source");
-    need(verifier_symbol(state, prototype.symbol).name == source.name,
+    hircore.need(hircore.verifier_symbol(state, prototype.symbol).name == source.name,
         "trait prototype method value name differs from source");
-    let qualifier = source_type_in_function(inout state, source.base, owner);
-    let qualifier_type = verifier_type(state, qualifier);
-    need(kind_is(qualifier_type.kind, model.TypeKind.TypeParameter) &&
+    let qualifier = hircore.source_type_in_function(inout state, source.base, owner);
+    let qualifier_type = hircore.verifier_type(state, qualifier);
+    hircore.need(hircore.kind_is(qualifier_type.kind, model.TypeKind.TypeParameter) &&
          qualifier_type.declaration == bounded.parameter,
         "trait prototype qualifier is not the bounded T");
-    let allowed_values = allowed_for(state, owner);
-    check_trait_application(inout state, bounded.bound, allowed_values);
-    check_trait_parameter_bounds(inout state, bounded.bound, qualifier, 0);
-    let own = source_parameters(inout state, prototype.source);
-    need(vec.len(value.type_args) == vec.len(own),
+    let allowed_values = hircore.allowed_for(state, owner);
+    hircore.check_trait_application(inout state, bounded.bound, allowed_values);
+    hircore.check_trait_parameter_bounds(inout state, bounded.bound, qualifier, 0);
+    let own = hircore.source_parameters(inout state, prototype.source);
+    hircore.need(vec.len(value.type_args) == vec.len(own),
         "trait prototype method-own argument count");
     if source.explicit_type_arguments {
-        need(vec.len(source.explicit_arguments) == vec.len(own),
+        hircore.need(vec.len(source.explicit_arguments) == vec.len(own),
             "trait prototype explicit type argument count");
-        let allowed_values = allowed_for(state, owner);
+        let allowed_values = hircore.allowed_for(state, owner);
         for var index usize = 0; index < vec.len(own); index += 1 {
-            let value_type = source_type_in_function(inout state,
+            let value_type = hircore.source_type_in_function(inout state,
                 source.explicit_arguments[index], owner);
-            valid_type(inout state, value_type, allowed_values);
-            need(value_type == value.type_args[index],
+            hircore.valid_type(inout state, value_type, allowed_values);
+            hircore.need(value_type == value.type_args[index],
                 "trait prototype explicit type argument differs from target");
         }
     } else {
@@ -1031,13 +1023,13 @@ func check_template_method_value_source(state inout Verifier, node hir.HirNode,
                 symbol: trait_value.params[index].symbol,
                 type_id: bounded.bound.args[index]));
         }
-        need(matches(inout state, prototype.signature, node.type_id, match),
+        hircore.need(hircore.matches(inout state, prototype.signature, node.type_id, match),
             "trait prototype signature does not determine its own arguments");
         for var index usize = 0; index < vec.len(own); index += 1 {
-            let found = substitution_index(match, own[index].symbol);
-            need(found >= 0,
+            let found = hircore.substitution_index(match, own[index].symbol);
+            hircore.need(found >= 0,
                 "trait prototype phantom argument requires an explicit suffix");
-            need(match[usize(found)].type_id == value.type_args[index],
+            hircore.need(match[usize(found)].type_id == value.type_args[index],
                 "trait prototype inferred argument differs from target");
         }
     }
@@ -1053,25 +1045,25 @@ func check_template_method_value_source(state inout Verifier, node hir.HirNode,
         vec.push(alpha, model.Substitution(symbol: own[index].symbol,
             type_id: value.type_args[index]));
     }
-    constraints(inout state, own, value.type_args, alpha);
-    need(node.type_id == substitute_type(inout state, prototype.signature,
+    hircore.constraints(inout state, own, value.type_args, alpha);
+    hircore.need(node.type_id == hircore.substitute_type(inout state, prototype.signature,
              alpha),
         "trait prototype method value signature mismatch");
-    need(function_entry_index(state, value.symbol) < 0 &&
-         template_index(state, value.symbol) < 0,
+    hircore.need(hircore.function_entry_index(state, value.symbol) < 0 &&
+         hircore.template_index(state, value.symbol) < 0,
         "trait prototype method value has a fake executable body");
 }
 
-struct SystemSpec {
-    has bool;
+pub struct SystemSpec {
+    pub has bool;
     operation u32;
-    name string;
-    owner string;
+    pub name string;
+    pub owner string;
     type_arity u32;
-    count usize;
+    pub count usize;
 }
 
-func system_spec(operation u32) SystemSpec {
+pub func system_spec(operation u32) SystemSpec {
     for spec in system.operations() {
         if spec.operation == operation {
             return SystemSpec(has: true, operation: spec.operation,
@@ -1090,8 +1082,8 @@ func is_weak_operation(operation u32) bool {
         spec.name == "__woozy_weak_upgrade");
 }
 
-func private_template_call(state Verifier, node hir.HirNode, symbol usize)
-    bool throws Invalid {
+func private_template_call(state hircore.Verifier, node hir.HirNode, symbol usize)
+    bool throws hircore.Invalid {
     if symbol >= vec.len(state.m.resolved.symbols) ||
        node.scope >= vec.len(state.m.scopes) { return false; }
     let target = state.m.resolved.symbols[symbol];
@@ -1110,27 +1102,27 @@ func private_template_call(state Verifier, node hir.HirNode, symbol usize)
         if origin.module == target.module { defining_template = true; }
     }
     if !defining_template { return false; }
-    let file = verifier_file(state, node.source.node.module, node.source.node.file);
+    let file = hircore.verifier_file(state, node.source.node.module, node.source.node.file);
     if node.source.node.node >= vec.len(file.nodes) { return false; }
     let syntax = file.nodes[node.source.node.node];
-    if !ast_is(syntax.kind, model.AstKind.Call) || vec.len(syntax.children) == 0 { return false; }
+    if !hircore.ast_is(syntax.kind, model.AstKind.Call) || vec.len(syntax.children) == 0 { return false; }
     var callee = node.source.node;
     callee.node = syntax.children[0];
-    callee = unwrapped(state, callee);
-    if ast_is(file.nodes[callee.node].kind, model.AstKind.NeutralBracket) {
+    callee = hircore.unwrapped(state, callee);
+    if hircore.ast_is(file.nodes[callee.node].kind, model.AstKind.NeutralBracket) {
         if vec.len(file.nodes[callee.node].children) == 0 { return false; }
         callee.node = file.nodes[callee.node].children[0];
     }
-    return same_option_symbol(resolved_source(state, callee),
+    return same_option_symbol(hircore.resolved_source(state, callee),
         option.Option[usize].Some(symbol));
 }
 
-func private_template_external(state Verifier, symbol usize) bool throws Invalid {
+pub func private_template_external(state hircore.Verifier, symbol usize) bool throws hircore.Invalid {
     for node in state.m.nodes {
         switch node.data {
             case hir.NodeData.Call(value): {
                 if option.is_some(value.direct_symbol) &&
-                   option_usize(value.direct_symbol) == symbol &&
+                   hircore.option_usize(value.direct_symbol) == symbol &&
                    private_template_call(state, node, symbol) { return true; }
             }
             default: {}
@@ -1139,222 +1131,222 @@ func private_template_external(state Verifier, symbol usize) bool throws Invalid
     return false;
 }
 
-func check_call(state inout Verifier, node hir.HirNode, call hir.Call)
-    throws Invalid {
-    need((callee_id(call.kind) == 3) == option.is_some(call.system),
+pub func check_call(state inout hircore.Verifier, node hir.HirNode, call hir.Call)
+    throws hircore.Invalid {
+    hircore.need((hircore.callee_id(call.kind) == 3) == option.is_some(call.system),
         "system operation metadata on wrong call kind");
-    if callee_id(call.kind) == 2 {
+    if hircore.callee_id(call.kind) == 2 {
         foreign_call(inout state, node, call);
         return;
     }
-    if callee_id(call.kind) == 4 {
+    if hircore.callee_id(call.kind) == 4 {
         c_foreign_call(inout state, node, call);
         return;
     }
-    need(!option.is_some(call.binding) && !option.is_some(call.c_callable) &&
+    hircore.need(!option.is_some(call.binding) && !option.is_some(call.c_callable) &&
          vec.len(call.omitted) == 0, "foreign metadata on ordinary call");
-    let call_owner = verifier_scope(state, node.scope).function;
-    let call_allowed = allowed_for(state, call_owner);
+    let call_owner = hircore.verifier_scope(state, node.scope).function;
+    let call_allowed = hircore.allowed_for(state, call_owner);
     for argument in call.type_args {
-        valid_type(inout state, argument, call_allowed);
+        hircore.valid_type(inout state, argument, call_allowed);
     }
-    let signature = verifier_type(state, call.signature);
-    need(kind_is(signature.kind, model.TypeKind.Function),
+    let signature = hircore.verifier_type(state, call.signature);
+    hircore.need(hircore.kind_is(signature.kind, model.TypeKind.Function),
         "call signature kind");
-    need(node.type_id == signature.result, "call result mismatch");
+    hircore.need(node.type_id == signature.result, "call result mismatch");
     var direct_found = false;
     var direct_index usize = 0;
     var offset usize = 0;
-    if callee_id(call.kind) == 0 {
-        need(option.is_some(call.direct_symbol) && !option.is_some(call.callee),
+    if hircore.callee_id(call.kind) == 0 {
+        hircore.need(option.is_some(call.direct_symbol) && !option.is_some(call.callee),
             "direct callee metadata");
-        let owner = verifier_scope(state, node.scope).function;
-        if template_index(state, owner) < 0 {
-            need(template_index(state, option_usize(call.direct_symbol)) < 0 &&
+        let owner = hircore.verifier_scope(state, node.scope).function;
+        if hircore.template_index(state, owner) < 0 {
+            hircore.need(hircore.template_index(state, hircore.option_usize(call.direct_symbol)) < 0 &&
                  vec.len(call.type_args) == 0,
                 "template call survived into concrete execution");
         }
-        let found = function_entry_index(state,
-            option_usize(call.direct_symbol));
+        let found = hircore.function_entry_index(state,
+            hircore.option_usize(call.direct_symbol));
         if found < 0 {
-            let external = external_entry_index(state,
-                option_usize(call.direct_symbol));
-            need(external >= 0, "function identity has no HIR definition");
+            let external = hircore.external_entry_index(state,
+                hircore.option_usize(call.direct_symbol));
+            hircore.need(external >= 0, "function identity has no HIR definition");
             let declaration = state.external_functions[usize(external)];
-            let target = verifier_symbol(state, declaration.symbol);
-            if !target.exported && !external_trait_method(state.m, declaration.symbol) {
-                need(private_template_call(state, node, declaration.symbol),
+            let target = hircore.verifier_symbol(state, declaration.symbol);
+            if !target.exported && !hircore.external_trait_method(state.m, declaration.symbol) {
+                hircore.need(private_template_call(state, node, declaration.symbol),
                     "private external call is not from its defining template");
             }
-            need(source_signature(inout state, declaration.source.node) ==
+            hircore.need(hircore.source_signature(inout state, declaration.source.node) ==
                      call.signature,
                  "external call signature differs from its source declaration");
         } else {
             direct_index = usize(found);
         }
         direct_found = true;
-        need(instantiated_signature(inout state,
-                 option_usize(call.direct_symbol), call.type_args) ==
+        hircore.need(hircore.instantiated_signature(inout state,
+                 hircore.option_usize(call.direct_symbol), call.type_args) ==
              call.signature,
             "direct signature mismatch");
-    } else if callee_id(call.kind) == 1 {
-        need(vec.len(call.type_args) == 0,
+    } else if hircore.callee_id(call.kind) == 1 {
+        hircore.need(vec.len(call.type_args) == 0,
             "type arguments on indirect call");
-        need(!option.is_some(call.direct_symbol) &&
+        hircore.need(!option.is_some(call.direct_symbol) &&
              option.is_some(call.callee),
             "function value callee metadata");
-        need(verifier_expr(state, option_usize(call.callee)).type_id ==
+        hircore.need(hircore.verifier_expr(state, hircore.option_usize(call.callee)).type_id ==
              call.signature, "function value signature mismatch");
         offset = 1;
-    } else if callee_id(call.kind) == 3 {
-        let operation = option_u32_value(call.system);
+    } else if hircore.callee_id(call.kind) == 3 {
+        let operation = hircore.option_u32_value(call.system);
         let spec = system_spec(operation);
-        need(spec.has && option.is_some(call.direct_symbol) &&
+        hircore.need(spec.has && option.is_some(call.direct_symbol) &&
              !option.is_some(call.callee),
             "system operation target metadata");
-        need(vec.len(call.type_args) == usize(spec.type_arity),
+        hircore.need(vec.len(call.type_args) == usize(spec.type_arity),
             "system operation type argument count");
-        let target = verifier_symbol(state, option_usize(call.direct_symbol));
-        need(symbol_is(target.kind, model.SymbolKind.BuiltinFunction) &&
+        let target = hircore.verifier_symbol(state, hircore.option_usize(call.direct_symbol));
+        hircore.need(hircore.symbol_is(target.kind, model.SymbolKind.BuiltinFunction) &&
              target.name == spec.name && !option.is_some(target.definition) &&
              !option.is_some(target.declaration) && !target.exported &&
              !option.is_some(target.target) && !option.is_some(target.foreign),
             "system operation target is not the real builtin");
         var builtins usize = 0;
         for symbol in state.m.resolved.symbols {
-            if symbol_is(symbol.kind, model.SymbolKind.BuiltinFunction) &&
+            if hircore.symbol_is(symbol.kind, model.SymbolKind.BuiltinFunction) &&
                symbol.name == spec.name {
                 builtins += 1;
             }
         }
-        need(builtins == 1,
+        hircore.need(builtins == 1,
             "system operation builtin identity is ambiguous");
-        let module = verifier_module(state, node.source.node.module);
-        need(module.logical_path == spec.owner &&
+        let module = hircore.verifier_module(state, node.source.node.module);
+        hircore.need(module.logical_path == spec.owner &&
              !option.is_some(module.binding),
             "system operation source is outside " + spec.owner);
         let actual_signature = system_operation_signature(inout state,
             operation, call.type_args);
-        need(call.signature == actual_signature,
+        hircore.need(call.signature == actual_signature,
             "system operation fixed signature mismatch");
-        let file = verifier_file(state, node.source.node.module,
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         let syntax = file.nodes[node.source.node.node];
-        need(ast_is(syntax.kind, model.AstKind.Call) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Call) &&
              vec.len(syntax.children) == spec_count(operation) + 1 &&
              vec.len(call.args) == spec_count(operation),
             "system operation source call/arity");
         var callee = node.source.node;
         callee.node = syntax.children[0];
         for true {
-            if !ast_is(file.nodes[callee.node].kind,
+            if !hircore.ast_is(file.nodes[callee.node].kind,
                        model.AstKind.Parenthesized) {
                 break;
             }
-            need(vec.len(file.nodes[callee.node].children) > 0,
+            hircore.need(vec.len(file.nodes[callee.node].children) > 0,
                 "system operation source callee");
             callee.node = file.nodes[callee.node].children[0];
         }
         let syntax_target = file.nodes[callee.node];
         if spec.type_arity > 0 {
-            need(ast_is(syntax_target.kind, model.AstKind.NeutralBracket) &&
+            hircore.need(hircore.ast_is(syntax_target.kind, model.AstKind.NeutralBracket) &&
                  vec.len(syntax_target.children) == usize(spec.type_arity) + 1,
                 "system operation source type argument shape");
             var base = callee;
             base.node = syntax_target.children[0];
             for true {
-                if !ast_is(file.nodes[base.node].kind,
+                if !hircore.ast_is(file.nodes[base.node].kind,
                            model.AstKind.Parenthesized) {
                     break;
                 }
-                need(vec.len(file.nodes[base.node].children) > 0,
+                hircore.need(vec.len(file.nodes[base.node].children) > 0,
                     "system operation source base");
                 base.node = file.nodes[base.node].children[0];
             }
             let syntax_base = file.nodes[base.node];
-            need(ast_is(syntax_base.kind, model.AstKind.Name) &&
+            hircore.need(hircore.ast_is(syntax_base.kind, model.AstKind.Name) &&
                  syntax_base.token_begin < vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[syntax_base.token_begin].spelling == spec.name &&
-                 same_option_symbol(resolved_source(state, base),
+                 same_option_symbol(hircore.resolved_source(state, base),
                      call.direct_symbol),
                 "system operation differs from resolved source builtin");
             for var index usize = 0; index < usize(spec.type_arity); index += 1 {
                 var source_argument = callee;
                 source_argument.node = syntax_target.children[index + 1];
-                let source_type_id = source_type_in_function(inout state,
+                let source_type_id = hircore.source_type_in_function(inout state,
                     source_argument, call_owner);
-                valid_type(inout state, source_type_id, call_allowed);
-                need(source_type_id == call.type_args[index],
+                hircore.valid_type(inout state, source_type_id, call_allowed);
+                hircore.need(source_type_id == call.type_args[index],
                     "system operation source type argument differs from Call");
             }
         } else {
-            need(ast_is(syntax_target.kind, model.AstKind.Name) &&
+            hircore.need(hircore.ast_is(syntax_target.kind, model.AstKind.Name) &&
                  syntax_target.token_begin < vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[syntax_target.token_begin].spelling == spec.name &&
-                 same_option_symbol(resolved_source(state, callee),
+                 same_option_symbol(hircore.resolved_source(state, callee),
                      call.direct_symbol),
                 "system operation differs from resolved source builtin");
         }
         if is_weak_operation(operation) {
-            need(vec.len(call.type_args) == 1 &&
-                 (type_contains_parameter(state.m, call.type_args[0]) ||
-                  weak_target(state.m, call.type_args[0])),
+            hircore.need(vec.len(call.type_args) == 1 &&
+                 (hircore.type_contains_parameter(state.m, call.type_args[0]) ||
+                  hircore.weak_target(state.m, call.type_args[0])),
                 "Weak operation target is not a canonical source declaration");
         }
         for var index usize = 0; index < vec.len(call.args); index += 1 {
             let argument = file.nodes[syntax.children[index + 1]];
-            need(ast_is(argument.kind, model.AstKind.Argument) &&
+            hircore.need(hircore.ast_is(argument.kind, model.AstKind.Argument) &&
                  vec.len(argument.children) == 1 &&
                  argument.token_begin + 1 < vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[argument.token_begin + 1].spelling != ":" &&
                  !option.is_some(call.args[index].label) &&
-                 mode_is_id(call.args[index].mode, 0),
+                 hircore.mode_is_id(call.args[index].mode, 0),
                 "system operation source argument label/mode");
             var reference = node.source.node;
             reference.node = argument.children[0];
-            reference = unwrapped(state, reference);
+            reference = hircore.unwrapped(state, reference);
             let value = file.nodes[reference.node];
-            need(!(ast_is(value.kind, model.AstKind.Unary) &&
+            hircore.need(!(hircore.ast_is(value.kind, model.AstKind.Unary) &&
                    (file.lexed.tokens[value.token_begin].spelling == "move" ||
                     file.lexed.tokens[value.token_begin].spelling == "inout")),
                 "system operation source argument marker");
-            let expression = verifier_expr(state, call.args[index].expression);
-            need(!node_is(hir.node_kind(expression.data), hir.NodeKind.Move) &&
-                 same_ref(unwrapped(state, expression.source.node), reference),
+            let expression = hircore.verifier_expr(state, call.args[index].expression);
+            hircore.need(!hircore.node_is(hir.node_kind(expression.data), hir.NodeKind.Move) &&
+                 hircore.same_ref(hircore.unwrapped(state, expression.source.node), reference),
                 "system operation argument differs from source");
         }
     } else {
-        fail("unsupported callee kind");
+        hircore.fail("unsupported callee kind");
     }
-    need(vec.len(call.args) == vec.len(signature.parameters) &&
+    hircore.need(vec.len(call.args) == vec.len(signature.parameters) &&
          vec.len(node.children) == vec.len(call.args) + offset,
         "call arity/children");
     if offset > 0 {
-        need(node.children[0] == option_usize(call.callee),
+        hircore.need(node.children[0] == hircore.option_usize(call.callee),
             "callee must be evaluated first");
     }
-    if callee_id(call.kind) == 1 {
-        let file = verifier_file(state, node.source.node.module,
+    if hircore.callee_id(call.kind) == 1 {
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         let syntax = file.nodes[node.source.node.node];
-        need(ast_is(syntax.kind, model.AstKind.Call) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Call) &&
              vec.len(syntax.children) > 0 &&
              vec.len(syntax.children) == vec.len(call.args) + 1,
             "function value call lost source call/arity");
         var target = node.source.node;
         target.node = syntax.children[0];
-        need(same_ref(unwrapped(state,
-                 verifier_node(state, option_usize(call.callee)).source.node),
-                 unwrapped(state, target)),
+        hircore.need(hircore.same_ref(hircore.unwrapped(state,
+                 hircore.verifier_node(state, hircore.option_usize(call.callee)).source.node),
+                 hircore.unwrapped(state, target)),
             "function value callee differs from source");
         for var index usize = 0; index < vec.len(call.args); index += 1 {
             let argument = file.nodes[syntax.children[index + 1]];
-            need(ast_is(argument.kind, model.AstKind.Argument) &&
+            hircore.need(hircore.ast_is(argument.kind, model.AstKind.Argument) &&
                  vec.len(argument.children) == 1,
                 "function value source argument kind");
             let original = file.nodes[argument.children[0]];
-            let value = verifier_node(state, call.args[index].expression).source;
-            need(value.node.module == node.source.node.module &&
+            let value = hircore.verifier_node(state, call.args[index].expression).source;
+            hircore.need(value.node.module == node.source.node.module &&
                  value.node.file == node.source.node.file &&
                  value.span.begin_byte >= original.span.begin_byte &&
                  value.span.end_byte <= original.span.end_byte,
@@ -1366,44 +1358,44 @@ func check_call(state inout Verifier, node hir.HirNode, call hir.Call)
     var named = false;
     for var index usize = 0; index < vec.len(call.args); index += 1 {
         let argument = call.args[index];
-        need(argument.source_index == u32(index) &&
+        hircore.need(argument.source_index == u32(index) &&
              usize(argument.parameter_index) < vec.len(seen),
             "call source/parameter index");
-        need(!seen[usize(argument.parameter_index)],
+        hircore.need(!seen[usize(argument.parameter_index)],
             "duplicate call parameter");
         seen[usize(argument.parameter_index)] = true;
-        need(node.children[index + offset] == argument.expression,
+        hircore.need(node.children[index + offset] == argument.expression,
             "call children must preserve source order");
         let parameter = signature.parameters[usize(argument.parameter_index)];
-        let value = verifier_node(state, argument.expression);
-        need(mode_is_id(argument.mode, mode_id_value(parameter.mode)) &&
+        let value = hircore.verifier_node(state, argument.expression);
+        hircore.need(hircore.mode_is_id(argument.mode, hircore.mode_id_value(parameter.mode)) &&
              value.type_id == parameter.type_id,
             "call argument mode/type");
-        if mode_is_id(parameter.mode, 1) {
-            need(inout_place(value) &&
-                 inout_slot_type(state.m, parameter.type_id, owner_allowed),
+        if hircore.mode_is_id(parameter.mode, 1) {
+            hircore.need(inout_place(value) &&
+                 hircore.inout_slot_type(state.m, parameter.type_id, owner_allowed),
                 "inout requires a whole Woozy value place");
         } else {
-            need(mode_is_id(parameter.mode, 0) ||
-                 mode_is_id(parameter.mode, 2),
+            hircore.need(hircore.mode_is_id(parameter.mode, 0) ||
+                 hircore.mode_is_id(parameter.mode, 2),
                 "unsupported argument mode");
-            let ignored = verifier_expr(state, argument.expression);
+            let ignored = hircore.verifier_expr(state, argument.expression);
         }
         if option.is_some(argument.label) {
             named = true;
-            need(direct_found && option_string_value(argument.label) != "" &&
-                 option_string_value(argument.label) ==
-                     verifier_function(state,
-                         option_usize(call.direct_symbol)).parameters[
+            hircore.need(direct_found && hircore.option_string_value(argument.label) != "" &&
+                 hircore.option_string_value(argument.label) ==
+                     hircore.verifier_function(state,
+                         hircore.option_usize(call.direct_symbol)).parameters[
                              usize(argument.parameter_index)].label,
                 "call label mismatch or label on function value");
         } else {
-            need(!named && usize(argument.parameter_index) == index,
+            hircore.need(!named && usize(argument.parameter_index) == index,
                 "positional argument index/order");
         }
     }
     check_call_aliases(inout state, call.args, option.is_some(call.callee));
-    if callee_id(call.kind) == 0 {
+    if hircore.callee_id(call.kind) == 0 {
         check_qualified_method_source(inout state, node, call);
         check_explicit_method_arguments(inout state, node, call);
     }
@@ -1418,7 +1410,7 @@ func spec_count(operation u32) usize {
     return 0;
 }
 
-func same_option_symbol(left option.Option[usize],
+pub func same_option_symbol(left option.Option[usize],
                         right option.Option[usize]) bool {
     if option.is_some(left) != option.is_some(right) {
         return false;
@@ -1426,18 +1418,18 @@ func same_option_symbol(left option.Option[usize],
     if !option.is_some(left) {
         return true;
     }
-    return option_usize(left) == option_usize(right);
+    return hircore.option_usize(left) == hircore.option_usize(right);
 }
 
-func system_operation_signature(state inout Verifier, operation u32,
-                                arguments Vec[usize]) usize throws Invalid {
+func system_operation_signature(state inout hircore.Verifier, operation u32,
+                                arguments Vec[usize]) usize throws hircore.Invalid {
     let module_value = state.m;
     try {
         return signature.system_operation_signature(inout state.substituted,
             option.Option[hir.HirModule].Some(module_value), operation,
             arguments);
     } catch error model.SupportError {
-        support_error(error);
+        hircore.support_error(error);
         return 0;
     }
 }

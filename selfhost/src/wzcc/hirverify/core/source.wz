@@ -2,9 +2,8 @@
 // producer-provided signature, instance, bound or resolved identity: every
 // value is rebuilt from the owning Source arena and the real declaration
 // records.
-package hirverify;
+package core;
 
-import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/types" as types;
@@ -17,32 +16,32 @@ struct NodeKey3 {
     node usize;
 }
 
-struct IteratorMatch {
-    found i64;
-    substitutions Vec[model.Substitution];
+pub struct IteratorMatch {
+    pub found i64;
+    pub substitutions Vec[model.Substitution];
 }
 
-struct SourceMethodCall {
-    base model.NodeRef;
-    has_base_symbol bool;
-    base_symbol usize;
-    name string;
-    explicit_type_arguments bool;
-    explicit_arguments Vec[model.NodeRef];
+pub struct SourceMethodCall {
+    pub base model.NodeRef;
+    pub has_base_symbol bool;
+    pub base_symbol usize;
+    pub name string;
+    pub explicit_type_arguments bool;
+    pub explicit_arguments Vec[model.NodeRef];
 }
 
-struct SplitSignature {
-    parameters Vec[usize];
+pub struct SplitSignature {
+    pub parameters Vec[usize];
     has_result bool;
-    result usize;
+    pub result usize;
     has_throws bool;
-    throws_type usize;
+    pub throws_type usize;
 }
 
-struct FunctionSource {
-    function usize;
-    type_args Vec[usize];
-    explicit_type_args bool;
+pub struct FunctionSource {
+    pub function usize;
+    pub type_args Vec[usize];
+    pub explicit_type_args bool;
 }
 
 func node_key3(reference model.NodeRef) NodeKey3 {
@@ -60,7 +59,7 @@ func key3_contains(values Vec[NodeKey3], key NodeKey3) bool {
     return false;
 }
 
-func unwrapped(state Verifier, reference model.NodeRef) model.NodeRef
+pub func unwrapped(state Verifier, reference model.NodeRef) model.NodeRef
     throws Invalid {
     let file = verifier_file(state, reference.module, reference.file);
     var result = reference;
@@ -95,7 +94,7 @@ func last_source_symbol(state Verifier, reference model.NodeRef)
     return found;
 }
 
-func resolved_source(state Verifier, reference model.NodeRef)
+pub func resolved_source(state Verifier, reference model.NodeRef)
     option.Option[usize] throws Invalid {
     let target = unwrapped(state, reference);
     for occurrence in state.m.resolved.occurrences {
@@ -106,7 +105,7 @@ func resolved_source(state Verifier, reference model.NodeRef)
     return option.Option[usize].None;
 }
 
-func source_string(state Verifier, reference model.NodeRef) string
+pub func source_string(state Verifier, reference model.NodeRef) string
     throws Invalid {
     var ref = reference;
     let visited = vec.empty[NodeKey3]();
@@ -167,7 +166,7 @@ func source_string(state Verifier, reference model.NodeRef) string
     return "";
 }
 
-func trait_declaration(state Verifier, symbol usize) i64 {
+pub func trait_declaration(state Verifier, symbol usize) i64 {
     for var index usize = 0; index < vec.len(state.m.traits); index += 1 {
         if state.m.traits[index].symbol == symbol {
             return i64(index);
@@ -186,7 +185,7 @@ func symbol_from_module(state Verifier, id usize, path string,
     return module.logical_path == path;
 }
 
-func std_iterator_trait(state Verifier) i64 throws Invalid {
+pub func std_iterator_trait(state Verifier) i64 throws Invalid {
     for var index usize = 0; index < vec.len(state.m.traits); index += 1 {
         let trait_value = state.m.traits[index];
         if symbol_from_module(state, trait_value.symbol, "std/iter", "Iterator") {
@@ -196,7 +195,7 @@ func std_iterator_trait(state Verifier) i64 throws Invalid {
     return -1;
 }
 
-func iterator_next_prototype(state Verifier, trait_index usize) i64
+pub func iterator_next_prototype(state Verifier, trait_index usize) i64
     throws Invalid {
     let trait_value = state.m.traits[trait_index];
     var result i64 = -1;
@@ -212,13 +211,13 @@ func iterator_next_prototype(state Verifier, trait_index usize) i64
     return result;
 }
 
-func std_option_type(state Verifier, id usize) bool throws Invalid {
+pub func std_option_type(state Verifier, id usize) bool throws Invalid {
     let value = verifier_type(state, id);
     return kind_is(value.kind, model.TypeKind.NominalEnum) &&
            symbol_from_module(state, value.declaration, "std/option", "Option");
 }
 
-func iterator_impl(state inout Verifier, self_type usize, element usize)
+pub func iterator_impl(state inout Verifier, self_type usize, element usize)
     IteratorMatch throws Invalid {
     let trait_index = std_iterator_trait(state);
     need(trait_index >= 0, "std/iter.Iterator declaration missing");
@@ -283,7 +282,7 @@ func mentions_self(state Verifier, id usize, self_symbol usize) bool
     return false;
 }
 
-func check_object_safe(state inout Verifier, trait_symbol usize,
+pub func check_object_safe(state inout Verifier, trait_symbol usize,
                        span model.Span) throws Invalid {
     let found = trait_declaration(state, trait_symbol);
     need(found >= 0, "dyn trait declaration is missing");
@@ -314,7 +313,7 @@ func check_object_safe(state inout Verifier, trait_symbol usize,
     }
 }
 
-func trait_prototype(state Verifier, method usize) option.Option[ProtoRef] {
+pub func trait_prototype(state Verifier, method usize) option.Option[ProtoRef] {
     for var trait_index usize = 0; trait_index < vec.len(state.m.traits);
         trait_index += 1 {
         let trait_value = state.m.traits[trait_index];
@@ -361,7 +360,7 @@ func source_trait_application(state inout Verifier, reference model.NodeRef)
     return hir.TraitRef(declaration: option_usize(declaration), args: args);
 }
 
-func parameter_type(state inout Verifier, symbol usize) usize
+pub func parameter_type(state inout Verifier, symbol usize) usize
     throws Invalid {
     var value = model.empty_type(model.TypeKind.TypeParameter);
     value.declaration = symbol;
@@ -377,7 +376,7 @@ func trait_self_application(state inout Verifier, trait_value hir.TraitDecl)
     return hir.TraitRef(declaration: trait_value.symbol, args: args);
 }
 
-func check_trait_application(state inout Verifier, reference hir.TraitRef,
+pub func check_trait_application(state inout Verifier, reference hir.TraitRef,
                              allowed Vec[usize]) throws Invalid {
     let symbol = verifier_symbol(state, reference.declaration);
     need(symbol_is(symbol.kind, model.SymbolKind.Trait),
@@ -396,7 +395,7 @@ func same_trait_application(left hir.TraitRef, right hir.TraitRef) bool {
     return same_trait_ref(left, right);
 }
 
-func check_trait_parameter_bounds(state inout Verifier, reference hir.TraitRef,
+pub func check_trait_parameter_bounds(state inout Verifier, reference hir.TraitRef,
                                   application usize, depth usize)
     throws Invalid {
     let found = trait_declaration(state, reference.declaration);
@@ -591,7 +590,7 @@ func allow_data_types(state inout Verifier, id usize, base Vec[usize],
     }
 }
 
-func option_usize_type(value option.Option[model.Type]) model.Type {
+pub func option_usize_type(value option.Option[model.Type]) model.Type {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return model.empty_type(model.TypeKind.Error);

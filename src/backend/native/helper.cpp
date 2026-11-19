@@ -280,6 +280,12 @@ PhaseResult<std::monostate> package_build(const hir::VerifiedHirModule &checked,
       " -filetype=obj -O=" + std::to_string(options.optimization) +
       " -mtriple=" + options.triple +
       " -mcpu=generic -relocation-model=pic -code-model=small $in -o $out\n";
+  // CoroSplit debug locations can reference distinct metadata that LLVM's
+  // textual round-trip cannot preserve. Keep optimized async debug input as bitcode.
+  plan += "rule opt_bitcode\n  command = " + ninja_escape(shell_quote(opt.string())) +
+      " -passes='verify,default<O" + std::to_string(options.optimization) +
+      ">,verify' -verify-each -mtriple=" + options.triple +
+      " -mcpu=generic $in -o $out\n";
   std::unique_ptr<json_object, decltype(&json_object_put)> package_metadata(json_object_new_array(), json_object_put);
   std::string objects;
   size_t object_hits = 0, object_misses = 0, compile_jobs = 0;
@@ -319,6 +325,7 @@ PhaseResult<std::monostate> package_build(const hir::VerifiedHirModule &checked,
       // dependency model. Warm builds deliberately emit LLVM again.
       cache::Writer key; key.string("wz-native-llvm-object/1");
       key.string(front_cache->fingerprint); key.string(package.identity); key.string(llvm_digest);
+      if (options.debug_info) key.string("-g");
       object_key = sha256(key.bytes) + ".obj";
       json_object_object_add(metadata, "object_key", json_object_new_string(object_key.c_str()));
       json_object_object_add(metadata, "frontend_key", json_object_new_string(front_cache->package_key(checked.module(), package.id).c_str()));
@@ -341,8 +348,14 @@ PhaseResult<std::monostate> package_build(const hir::VerifiedHirModule &checked,
     ++compile_jobs;
     if (front_cache) new_objects.emplace_back(object_key, name + ".o");
     write((stage.path() / (name + ".ll")).string(), output.value->llvm_before_optimization);
-    plan += "build " + name + ".verified.ll: opt " + name + ".ll\nbuild " + name +
-        ".o: object " + name + ".verified.ll\n";
+    bool async_package = false;
+    for (const auto &function : cfg.value->module().functions)
+      if (options.debug_info && function.async &&
+          identities->function_owner(function.symbol) == package.id)
+        async_package = true;
+    const auto verified = name + (async_package ? ".verified.bc" : ".verified.ll");
+    plan += "build " + verified + (async_package ? ": opt_bitcode " : ": opt ") +
+        name + ".ll\nbuild " + name + ".o: object " + verified + "\n";
     objects += " " + name + ".o";
   }
   plan += "rule combine\n  command = " + ninja_escape(shell_quote(lld.string())) +
@@ -415,8 +428,14 @@ int run(int argc, char **argv) {
     std::map<std::string, std::string> args;
     bool check_only = false;
     bool package_objects = false;
+    bool debug_info = false;
     for (int a = 1; a < argc; ++a) {
       std::string key = argv[a];
+      if (key == "-g") {
+        if (debug_info) throw std::runtime_error("duplicate option: -g");
+        debug_info = true;
+        continue;
+      }
       if (key == "--package-objects") { package_objects = true; continue; }
       if (key == "--check-only") {
         check_only = true;
@@ -425,7 +444,7 @@ int run(int argc, char **argv) {
       if (key == "--help") {
         std::cout << "lang_native_helper --project MANIFEST [--std-binding BUNDLE] "
                      "[--entry NAME | --entry-symbol ID]\n"
-                     "  [--check-only] [--opt 0|2] [--target "
+                     "  [--check-only] [-g] [--opt 0|2] [--target "
                      "x86_64-unknown-linux-gnu]\n"
                      "  --out-dir DIR | --out-object FILE [--out-llvm FILE] [--out-llvm-before "
                      "FILE]\n"
@@ -454,6 +473,8 @@ int run(int argc, char **argv) {
     if (args.contains("--std-binding") && args.at("--std-binding").empty())
       throw std::runtime_error("empty option: --std-binding");
     executable = args.contains("--out-dir");
+    if (debug_info && check_only)
+      throw std::runtime_error("-g requires native build; cannot combine with --check-only");
     if (!args.contains("--project") ||
         (!check_only && !executable && !args.contains("--out-object")))
       throw std::runtime_error(
@@ -480,6 +501,7 @@ int run(int argc, char **argv) {
           (args.contains("--driver-fingerprint") ? args.at("--driver-fingerprint") : "standalone-helper"));
       fingerprint.string(args.contains("--opt") ? args.at("--opt") : "0");
       fingerprint.string(args.contains("--target") ? args.at("--target") : "x86_64-unknown-linux-gnu");
+      if (debug_info) fingerprint.string("-g");
       const auto native_runtime = runtime_archive(false);
       const auto hosted_runtime = runtime_archive(true);
       const auto opt = llvm_tool("opt");
@@ -544,6 +566,7 @@ int run(int argc, char **argv) {
       entry = *selected;
     }
     backend::native::Options options;
+    options.debug_info = debug_info;
     if (args.contains("--opt")) {
       auto n = number(args.at("--opt"));
       if (n != 0 && n != 2)

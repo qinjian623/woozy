@@ -8,6 +8,7 @@ package nativeemit;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeadapter" as nativeadapter;
 import "std/option" as option;
 import "std/text" as text;
 import "std/vec" as vec;
@@ -31,17 +32,13 @@ func e_unsupported(message string) Error {
 }
 
 func e_c_type(project model.Project, id u32) model.CTypeDecl throws Error {
-    if id == 0 || usize(id) > vec.len(project.c_types) {
-        throw invalid("C type index out of range");
-    }
-    return project.c_types[usize(id) - 1];
+    try { return nativeadapter.e_c_type(project, id); }
+    catch error nativeadapter.Error { throw adapter_error(error); }
 }
 
 func e_c_callable(project model.Project, id u32) model.CCallableDecl throws Error {
-    if id == 0 || usize(id) > vec.len(project.c_callables) {
-        throw invalid("C callable index out of range");
-    }
-    return project.c_callables[usize(id) - 1];
+    try { return nativeadapter.e_c_callable(project, id); }
+    catch error nativeadapter.Error { throw adapter_error(error); }
 }
 
 func e_type_kind_is(kind model.TypeKind, expected model.TypeKind) bool {
@@ -49,61 +46,11 @@ func e_type_kind_is(kind model.TypeKind, expected model.TypeKind) bool {
 }
 
 func e_c_type_kind_is(kind model.CTypeKind, expected model.CTypeKind) bool {
-    switch kind {
-        case model.CTypeKind.Scalar: {
-            switch expected {
-                case model.CTypeKind.Scalar: return true;
-                default: return false;
-            }
-        }
-        case model.CTypeKind.Pointer: {
-            switch expected {
-                case model.CTypeKind.Pointer: return true;
-                default: return false;
-            }
-        }
-        case model.CTypeKind.Buffer: {
-            switch expected {
-                case model.CTypeKind.Buffer: return true;
-                default: return false;
-            }
-        }
-        case model.CTypeKind.Named: {
-            switch expected {
-                case model.CTypeKind.Named: return true;
-                default: return false;
-            }
-        }
-    }
+    return nativeadapter.e_c_type_kind_is(kind, expected);
 }
 
 func e_c_decl_kind_is(kind model.CDeclKind, expected model.CDeclKind) bool {
-    switch kind {
-        case model.CDeclKind.Record: {
-            switch expected {
-                case model.CDeclKind.Record: return true;
-                default: return false;
-            }
-        }
-        case model.CDeclKind.Resource: {
-            switch expected {
-                case model.CDeclKind.Resource: return true;
-                default: return false;
-            }
-        }
-        case model.CDeclKind.Callback: {
-            switch expected {
-                case model.CDeclKind.Callback: return true;
-                default: return false;
-            }
-        }
-        case model.CDeclKind.Opaque: {
-            switch expected {
-                case model.CDeclKind.Opaque: return true;
-                default: return false;
-            }
-        }
-    }
+    return nativeadapter.e_c_decl_kind_is(kind, expected);
 }
 
 func e_op_is(op nativeir.Op, expected nativeir.Op) bool {
@@ -277,23 +224,11 @@ func e_first_type_arg(state Emitter, type_id usize) usize throws Error {
 }
 
 func e_add_u32_sorted(values inout Vec[u32], value u32) {
-    var out Vec[u32] = [];
-    var inserted = false;
-    for item in values {
-        if item == value { return; }
-        if !inserted && value < item {
-            vec.push(out, value);
-            inserted = true;
-        }
-        vec.push(out, item);
-    }
-    if !inserted { vec.push(out, value); }
-    values = out;
+    nativeadapter.e_add_u32_sorted(inout values, value);
 }
 
 func e_has_u32(values Vec[u32], value u32) bool {
-    for item in values { if item == value { return true; } }
-    return false;
+    return nativeadapter.e_has_u32(values, value);
 }
 
 func e_add_callback_used(symbol usize, c_type u32, state inout Emitter) {

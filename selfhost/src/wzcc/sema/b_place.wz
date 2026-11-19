@@ -1,6 +1,8 @@
 // Writable places, alias paths and inout borrow checks (CPP 2454-2864).
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/types" as types;
@@ -13,21 +15,21 @@ func place_root(state inout Checker, id usize) option.Option[usize] throws Error
         throw internal_error("invalid place node");
     }
     let n = state.m.nodes[id];
-    switch b_node_read(n) {
+    switch effects.b_node_read(n) {
         case option.Option.Some(value):
             return option.Option[usize].Some(value.symbol);
         case option.Option.None: {}
     }
-    switch b_node_place(n) {
+    switch effects.b_node_place(n) {
         case option.Option.Some(value):
             return option.Option[usize].Some(value.symbol);
         case option.Option.None: {}
     }
     let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
         if vec.len(n.children) == 0 {
             throw internal_error("place has no receiver");
         }
@@ -57,14 +59,14 @@ func place_path(state inout Checker, id usize) Vec[PlacePath] throws Error { let
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let n = state.m.nodes[id];
     let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldRead) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
         if vec.len(n.children) == 0 {
             throw internal_error("field place has no receiver");
         }
         let path = place_path(inout state, n.children[0]);
         var field usize = 0;
-        if b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+        if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
             switch n.data {
                 case hir.NodeData.FieldPlace(value): field = value.field;
                 default: throw internal_error("field place payload mismatch");
@@ -78,8 +80,8 @@ func place_path(state inout Checker, id usize) Vec[PlacePath] throws Error { let
         vec.push(path, PlacePath(is_index: false, known: true, value: u64(field)));
         return path;
     }
-    if b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
         if vec.len(n.children) < 2 {
             throw internal_error("index place has no index");
         }
@@ -88,7 +90,7 @@ func place_path(state inout Checker, id usize) Vec[PlacePath] throws Error { let
         let index_kind = hir.node_kind(index.data);
         var known = false;
         var value = u64(n.children[1]);
-        if b_node_kind_is(index_kind, hir.NodeKind.IntegerLiteral) {
+        if effects.b_node_kind_is(index_kind, hir.NodeKind.IntegerLiteral) {
             known = true;
             switch index.data {
                 case hir.NodeData.IntegerLiteral(literal): value = literal.bits;
@@ -173,17 +175,17 @@ func b_may_hold_shared_visit(state inout Checker, scratch inout types.Context,
         case option.Option.None: return true;
     }
     let kind = value_type.kind;
-    if b_type_kind_is(kind, model.TypeKind.Vec) ||
-       b_type_kind_is(kind, model.TypeKind.Slice) ||
-       b_type_kind_is(kind, model.TypeKind.Weak) ||
-       b_type_kind_is(kind, model.TypeKind.TraitObject) ||
-       b_type_kind_is(kind, model.TypeKind.Function) ||
-       b_type_kind_is(kind, model.TypeKind.TypeParameter) ||
-       b_type_kind_is(kind, model.TypeKind.Task) {
+    if effects.b_type_kind_is(kind, model.TypeKind.Vec) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Slice) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Weak) ||
+       effects.b_type_kind_is(kind, model.TypeKind.TraitObject) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Function) ||
+       effects.b_type_kind_is(kind, model.TypeKind.TypeParameter) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Task) {
         return true;
     }
-    if !b_type_kind_is(kind, model.TypeKind.NominalStruct) &&
-       !b_type_kind_is(kind, model.TypeKind.NominalEnum) {
+    if !effects.b_type_kind_is(kind, model.TypeKind.NominalStruct) &&
+       !effects.b_type_kind_is(kind, model.TypeKind.NominalEnum) {
         return false;
     }
     var declaration = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Error,
@@ -211,8 +213,8 @@ func b_may_hold_shared_visit(state inout Checker, scratch inout types.Context,
     if !found || vec.len(value_type.type_args) != vec.len(declaration.params) {
         return true;
     }
-    if b_vec_contains(active, id) { return false; }
-    b_insert_sorted(active, id);
+    if effects.b_vec_contains(active, id) { return false; }
+    effects.b_insert_sorted(active, id);
     let substitutions = vec.empty[model.Substitution]();
     for var index usize = 0; index < vec.len(declaration.params); index += 1 {
         vec.push(substitutions, model.Substitution(
@@ -240,7 +242,7 @@ func b_may_hold_shared_visit(state inout Checker, scratch inout types.Context,
             }
         }
     }
-    b_remove_id(active, id);
+    effects.b_remove_id(active, id);
     return result;
 }
 
@@ -248,14 +250,14 @@ func collect_alias_risks(state inout Checker, id usize, out Vec[usize]) throws E
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let n = state.m.nodes[id];
     let kind = hir.node_kind(n.data);
-    let storage = b_node_kind_is(kind, hir.NodeKind.Read) ||
-        b_node_kind_is(kind, hir.NodeKind.Place) ||
-        b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-        b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-        b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-        b_node_kind_is(kind, hir.NodeKind.IndexPlace);
+    let storage = effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace);
     var move_binding = false;
-    switch b_node_move(n) {
+    switch effects.b_node_move(n) {
         case option.Option.Some(value):
             switch value.binding {
                 case option.Option.Some(binding): move_binding = true;
@@ -263,19 +265,19 @@ func collect_alias_risks(state inout Checker, id usize, out Vec[usize]) throws E
             }
         case option.Option.None: {}
     }
-    if (storage || b_node_kind_is(kind, hir.NodeKind.FunctionValue) ||
+    if (storage || effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) ||
         move_binding) && may_hold_shared(inout state, n.type_id) {
         vec.push(out, n.type_id);
     }
-    if b_node_kind_is(kind, hir.NodeKind.Read) ||
-       b_node_kind_is(kind, hir.NodeKind.Place) ||
-       b_node_kind_is(kind, hir.NodeKind.FunctionValue) || move_binding {
+    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) || move_binding {
         return;
     }
-    if b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
         switch place_root(inout state, id) {
             case option.Option.Some(root): {
                 collect_place_index_risks(inout state, id, out);
@@ -295,14 +297,14 @@ func collect_place_index_risks(state inout Checker, id usize,
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let n = state.m.nodes[id];
     let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
         if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
         collect_place_index_risks(inout state, n.children[0], out);
         return;
     }
-    if b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
         if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
         collect_place_index_risks(inout state, n.children[0], out);
         collect_alias_risks(inout state, n.children[1], out);
@@ -315,8 +317,8 @@ func collect_access_paths(state inout Checker, id usize,
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let n = state.m.nodes[id];
     let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.Read) ||
-       b_node_kind_is(kind, hir.NodeKind.Place) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.Place) {
         switch place_root(inout state, id) {
             case option.Option.Some(root):
                 vec.push(out, PlaceAccess(root: root, path: vec.empty[PlacePath]()));
@@ -324,8 +326,8 @@ func collect_access_paths(state inout Checker, id usize,
         }
         return;
     }
-    if b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
         switch place_root(inout state, id) {
             case option.Option.Some(root):
                 vec.push(out, PlaceAccess(root: root,
@@ -334,8 +336,8 @@ func collect_access_paths(state inout Checker, id usize,
         }
         return;
     }
-    if b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
         switch place_root(inout state, id) {
             case option.Option.Some(root):
                 vec.push(out, PlaceAccess(root: root,
@@ -347,7 +349,7 @@ func collect_access_paths(state inout Checker, id usize,
         }
         return;
     }
-    switch b_node_move(n) {
+    switch effects.b_node_move(n) {
         case option.Option.Some(value):
             switch value.binding {
                 case option.Option.Some(binding):
@@ -368,14 +370,14 @@ func collect_place_index_paths(state inout Checker, id usize,
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let n = state.m.nodes[id];
     let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.FieldRead) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
         if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
         collect_place_index_paths(inout state, n.children[0], out);
         return;
     }
-    if b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
         if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
         collect_place_index_paths(inout state, n.children[0], out);
         collect_access_paths(inout state, n.children[1], out);
@@ -392,7 +394,7 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
         let base = expression(inout state, b_child_m(b_module, r, 0),
             option.Option[usize].None);
         let receiver = lookup_type(inout state, base.value.type_id);
-        if b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
+        if effects.b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
             if inout_mode {
                 throw unavailable(inout state, r,
                     "external indexed inout is not supported");
@@ -431,8 +433,8 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
                            [base.id, index.id]),
                 value: b_empty_value(record.type_id));
         }
-        if b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
-           b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
+        if effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
+           effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
             if inout_mode {
                 throw unavailable(inout state, r,
                     "C pointer/buffer inout is not supported");
@@ -460,7 +462,7 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
                 throw internal_error("C pointer has no pointee");
             }
             let type_id = receiver.type_args[0];
-            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+            if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                               model.TypeKind.Unit) {
                 throw reject(inout state, r,
                     "void pointer cannot be indexed", "E_TYPE_MISMATCH");
@@ -470,8 +472,8 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
                            [base.id, index.id]),
                 value: b_empty_value(type_id));
         }
-        if !b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
-           !b_type_kind_is(receiver.kind, model.TypeKind.Slice) {
+        if !effects.b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
+           !effects.b_type_kind_is(receiver.kind, model.TypeKind.Slice) {
             throw reject(inout state, r,
                 "index receiver must be Vec or Slice", "E_TYPE_MISMATCH");
         }
@@ -509,7 +511,7 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
         }
         let base = expression(inout state, b_child_m(b_module, r, 0),
             option.Option[usize].None);
-        if !b_type_kind_is(lookup_type(inout state, base.value.type_id).kind,
+        if !effects.b_type_kind_is(lookup_type(inout state, base.value.type_id).kind,
                            model.TypeKind.ForeignOpaque) {
             throw unavailable(inout state, r,
                 "slice assignment requires a declared external slice");
@@ -573,7 +575,7 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
     if b_kind_is(n.kind, model.AstKind.Member) {
         switch peek_type(inout state, b_child_m(b_module, r, 0)) {
             case option.Option.Some(type_id): {
-                if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                                   model.TypeKind.ForeignOpaque) {
                     if inout_mode {
                         throw unavailable(inout state, r,

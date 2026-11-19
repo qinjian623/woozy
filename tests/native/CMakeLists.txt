@@ -37,6 +37,17 @@ add_test(NAME native.slice_forged COMMAND lang_slice_forged_test
   ${LANG_SOURCE_ROOT}/tests/native/slice_source/fixtures/core/lang.toml)
 set_tests_properties(native.slice_forged PROPERTIES TIMEOUT 60)
 if(LANG_TEST_PYTHON)
+  find_program(LANG_TEST_GDB NAMES gdb)
+  if(LANG_TEST_GDB AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/llvm-dwarfdump")
+    add_test(NAME native.debug_info COMMAND ${LANG_TEST_PYTHON} -B
+      ${CMAKE_CURRENT_LIST_DIR}/debug_info/run.py --cli $<TARGET_FILE:woozyc>
+      --gdb ${LANG_TEST_GDB} --dwarfdump ${LLVM_TOOLS_BINARY_DIR}/llvm-dwarfdump)
+    set_tests_properties(native.debug_info PROPERTIES TIMEOUT 300)
+    add_test(NAME native.debug_extended COMMAND ${LANG_TEST_PYTHON} -B
+      ${CMAKE_CURRENT_LIST_DIR}/debug_info/extended.py --cli $<TARGET_FILE:woozyc>
+      --gdb ${LANG_TEST_GDB} --dwarfdump ${LLVM_TOOLS_BINARY_DIR}/llvm-dwarfdump)
+    set_tests_properties(native.debug_extended PROPERTIES TIMEOUT 300)
+  endif()
   add_test(NAME native.tls_source COMMAND ${LANG_TEST_PYTHON}
     ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/tls-source-results
     ${LANG_SOURCE_ROOT}/tests/native/tls_source/run_tls_source.py

@@ -156,7 +156,7 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     let tools = llvm_tools(root);
     let capture = stage.path + "/tool-output";
     let source = stage.path + "/input.ll";
-    let optimized = stage.path + "/verified.ll";
+    var optimized = stage.path + "/verified.ll";
     let object = stage.path + "/program.o";
     let program = stage.path + "/program";
     let native_runtime = root + "/runtime/liblang_native_runtime.a";
@@ -168,8 +168,15 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     var passes = "verify";
     if optimization == 2 { passes = "verify,default<O2>,verify"; }
     else if output.has_async { passes = "verify,default<O0>,verify"; }
-    llvm_tool([tools + "/opt", "-S", "-passes=" + passes, "-verify-each",
-        "-mtriple=" + output.triple, "-mcpu=generic", source, "-o", optimized], capture, "opt");
+    let opt_command = [tools + "/opt"];
+    if output.has_async {
+        // LLVM 22 prints coroutine DILabels with an omitted zero line, which
+        // its text reader rejects. Bitcode preserves the same verified IR.
+        optimized = stage.path + "/verified.bc";
+    } else { vec.push(opt_command, "-S"); }
+    for argument in ["-passes=" + passes, "-verify-each", "-mtriple=" + output.triple,
+                     "-mcpu=generic", source, "-o", optimized] { vec.push(opt_command, argument); }
+    llvm_tool(opt_command, capture, "opt");
     llvm_tool([tools + "/llc", "-filetype=obj", "-O=" + strconv.format_u64(u64(optimization)),
         "-mtriple=" + output.triple, "-mcpu=generic", "-relocation-model=pic",
         "-code-model=small", optimized, "-o", object], capture, "llc");
@@ -217,9 +224,12 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
     var archive = root + "/runtime/liblang_native_runtime.a";
     if project.hosted { archive = root + "/runtime/liblang_hosted_runtime.a"; }
     require_runtime(archive);
-    var plan = "rule opt\n  command = " + ninja_escape(shell_quote(tools + "/opt")) +
-        " -S -passes='verify,default<O" + strconv.format_u64(u64(optimization)) +
+    let opt = ninja_escape(shell_quote(tools + "/opt"));
+    let opt_arguments = " -passes='verify,default<O" + strconv.format_u64(u64(optimization)) +
         ">,verify' -verify-each -mtriple=x86_64-unknown-linux-gnu -mcpu=generic $in -o $out\n";
+    var plan = "rule opt\n  command = " + opt + " -S" + opt_arguments;
+    // Like the whole-module build, preserve CoroSplit's zero-line debug labels in bitcode.
+    plan += "rule opt_bitcode\n  command = " + opt + opt_arguments;
     plan += "rule object\n  command = " + ninja_escape(shell_quote(tools + "/llc")) +
         " -filetype=obj -O=" + strconv.format_u64(u64(optimization)) +
         " -mtriple=x86_64-unknown-linux-gnu -mcpu=generic -relocation-model=pic -code-model=small $in -o $out\n";
@@ -231,12 +241,17 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
             case option.Option.Some(bytes): { fs.write_file(stage.path + "/" + name + ".o", bytes, 0o600); hit = true; }
             case option.Option.None: {
                 switch input.output {
-                    case option.Option.Some(output): write_sections(stage.path + "/" + name + ".ll", output.llvm_sections);
+                    case option.Option.Some(output): {
+                        write_sections(stage.path + "/" + name + ".ll", output.llvm_sections);
+                        var verified = name + ".verified.ll";
+                        var rule = "opt";
+                        if output.has_async { verified = name + ".verified.bc"; rule = "opt_bitcode"; }
+                        plan += "build " + verified + ": " + rule + " " + name +
+                            ".ll\nbuild " + name + ".o: object " + verified + "\n";
+                    }
                     case option.Option.None: throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal, "missing package emission", []);
                 }
                 misses += 1;
-                plan += "build " + name + ".verified.ll: opt " + name + ".ll\nbuild " + name +
-                    ".o: object " + name + ".verified.ll\n";
             }
         }
         objects += " " + name + ".o";

@@ -133,7 +133,8 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
 }
 int compile(const char* path, bool syntax, bool json, std::string_view backend,
             const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr,
-            const char* std_binding = nullptr, bool package_objects = false, const char* cache_directory = nullptr) {
+            const char* std_binding = nullptr, bool package_objects = false, const char* cache_directory = nullptr,
+            bool debug_info = false) {
     lang::SourceManager sources;
     auto finish = [&](const auto& result) {
         if (json) {
@@ -169,6 +170,7 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
                 std::vector<std::string> args{native_helper(), "--project", path,
                                               "--out-dir", out, "--opt", opt ? opt : "0"};
                 if (package_objects) args.push_back("--package-objects");
+                if (debug_info) args.push_back("-g");
                 if (cache_directory) {
                     // The helper fingerprints the actual still-running driver
                     // through procfs and accounts for its digest-cache work.
@@ -206,6 +208,8 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
             if (!project.success()) return finish(project);
             if (!backend.empty()) project.value->backend = backend;
             if (out && project.value->backend == "native") return native_build();
+            if (debug_info)
+                return fail("E_DRIVER_ARGUMENT", "-g requires native build", lang::FailureKind::environment);
             if (package_objects)
                 return fail("E_DRIVER_ARGUMENT", "--package-objects requires native build", lang::FailureKind::environment);
             if (out && (opt || target))
@@ -260,7 +264,7 @@ int main(int argc, char** argv) {
                      "       woozyc check --syntax-only [--format json] FILE\n"
                      "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
                      "       woozyc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
-                     "       woozyc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [--opt 0|2] [--target TRIPLE] [--format json]\n"
+                     "       woozyc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [-g] [--opt 0|2] [--target TRIPLE] [--format json]\n"
                      "Native package objects: --package-objects [--cache-dir DIR] (scalar frontend cache)\n"
                      "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
         return 0;
@@ -272,7 +276,7 @@ int main(int argc, char** argv) {
     if (argc >= 2) {
         const std::string_view command(argv[1]);
         if (command == "check" || command == "build") {
-            bool syntax = false, json = false, package_objects = false;
+            bool syntax = false, json = false, package_objects = false, debug_info = false;
             const char* path = nullptr;
             const char* project = nullptr;
             const char* out = nullptr;
@@ -283,6 +287,7 @@ int main(int argc, char** argv) {
             std::string_view backend;
             for (int i = 2; i < argc; ++i) {
                 const std::string_view argument(argv[i]);
+                if (argument == "-g" && !debug_info) { debug_info = true; continue; }
                 if (argument == "--package-objects" && command == "build" && !package_objects) { package_objects = true; continue; }
                 if (argument == "--syntax-only") { syntax = true; continue; }
                 if (argument == "--format" && i + 1 < argc &&
@@ -321,13 +326,17 @@ int main(int argc, char** argv) {
                     path = argv[i];
                 }
             }
+            if (debug_info && (command != "build" || backend == "python")) {
+                std::cerr << "E_DRIVER_ARGUMENT: -g requires native build\n";
+                return 2;
+            }
             if ((syntax && (!path || project || !backend.empty() || std_binding || command == "build")) ||
                 (!syntax && (!project || path)) || (command == "build" && !out) || (cache_directory && !package_objects)) {
                 std::cerr << "E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR\n";
                 return 2;
             }
             return compile(syntax ? path : project, syntax, json, backend, out, opt, target,
-                           std_binding, package_objects, cache_directory);
+                           std_binding, package_objects, cache_directory, debug_info);
         }
         if (command == "lsp" ||
             command == "capabilities") {

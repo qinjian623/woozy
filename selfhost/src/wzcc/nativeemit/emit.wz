@@ -19,14 +19,15 @@ func emit_failure(code string, kind model.FailureKind, message string) EmitResul
 func emit_assembly(input nativeir.Module, entry usize, options Options)
     Output throws Error {
     return emit_package_assembly(input, entry, options, option.Option[usize].None,
-        option.Option[interface.Keys].None, [], [], "");
+        option.Option[interface.Keys].None, [], [], false);
 }
 func emit_package_assembly(input nativeir.Module, entry usize, options Options,
     package_id option.Option[usize], keys option.Option[interface.Keys],
-    order Vec[usize], externals Vec[ExternalSource], worker_instance_linkage string) Output throws Error {
+    order Vec[usize], externals Vec[ExternalSource], worker_instances bool) Output throws Error {
     var state = new_emitter(input, options);
     state.package_selection = package_id; state.identities = keys;
-    state.worker_instance_linkage = worker_instance_linkage;
+    state.emit_worker_instances = worker_instances;
+    if options.debug_info { debug_init(inout state); }
     if option.is_some(package_id) { state.source_order = order; }
     declare_runtime_types(inout state);
     scan_c_resource_flags(inout state);
@@ -49,17 +50,12 @@ func emit_package_assembly(input nativeir.Module, entry usize, options Options,
 
 pub func emit(input nativeverify.VerifiedModule, entry usize,
               options Options) EmitResult {
-    return emit_selected(input, entry, options, option.Option[usize].None, "");
+    return emit_selected(input, entry, options, option.Option[usize].None, false);
 }
-pub func emit_package(input nativeverify.VerifiedModule, entry usize, options Options, package_id usize,
-                      partitioned bool) EmitResult {
-    var linkage = "linkonce_odr";
-    // O2 must retain definitions that are only used from other partitions.
-    if partitioned { linkage = "weak_odr"; }
-    return emit_selected(input, entry, options, option.Option[usize].Some(package_id), linkage);
+pub func emit_package(input nativeverify.VerifiedModule, entry usize, options Options, package_id usize) EmitResult {
+    return emit_selected(input, entry, options, option.Option[usize].Some(package_id), true);
 }
-func emit_selected(input nativeverify.VerifiedModule, entry usize, options Options, package_id option.Option[usize],
-                   worker_instance_linkage string) EmitResult {
+func emit_selected(input nativeverify.VerifiedModule, entry usize, options Options, package_id option.Option[usize], worker_instances bool) EmitResult {
     try {
         let module = nativeverify.snapshot(input);
         let capabilities = nativeverify.check_hir_capabilities(input);
@@ -98,7 +94,7 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
                     signature: external.signature));
             }
         }
-        let output = emit_package_assembly(module, entry, options, package_id, keys, order, externals, worker_instance_linkage);
+        let output = emit_package_assembly(module, entry, options, package_id, keys, order, externals, worker_instances);
         return EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source,
             diagnostics: [], value: option.Option[Output].Some(output));
     } catch error Error {
@@ -133,7 +129,7 @@ pub func emit_packages(input nativeverify.VerifiedModule, entry usize, options O
         for selected in packages {
             if selected >= vec.len(module.hir.resolved.project.modules) { throw invalid("package selection is not a project module"); }
             let output = emit_package_assembly(module, entry, options, option.Option[usize].Some(selected), option.Option[interface.Keys].Some(keys), order,
-                vec.empty[ExternalSource](), "");
+                vec.empty[ExternalSource](), false);
             vec.push(result, EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source, diagnostics: [], value: option.Option[Output].Some(output)));
         }
     } catch problem Error { switch problem { case Error.Failure(code, kind, message): vec.push(result, emit_failure(code, kind, message)); } }

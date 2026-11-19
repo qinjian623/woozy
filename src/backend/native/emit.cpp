@@ -4,6 +4,7 @@
 #include "lang/backend/native.hpp"
 #include "lang/hir/identity.hpp"
 #include "c_ffi.hpp"
+#include "debug_info.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <functional>
@@ -78,6 +79,7 @@ class Emitter {
   // Keep guards and dangerous operations in their actual blocks at O0, even
   // for literal operands. ConstantFolder would create poison in dead arms.
   llvm::IRBuilder<llvm::NoFolder> builder{context};
+  std::unique_ptr<NativeDebugInfo> debug;
   std::map<SymbolId, llvm::Function *> functions;
   std::map<SymbolId, TypeId> function_signatures;
   std::map<SymbolId, const hir::HirFunction *> hir_functions;
@@ -313,6 +315,7 @@ class Emitter {
     llvm::Function *clear = nullptr;
     {
       llvm::IRBuilderBase::InsertPointGuard guard(builder);
+      builder.SetCurrentDebugLocation({});
       if (plan.trace) {
         trace = llvm::Function::Create(
             gc_trace_type(), llvm::GlobalValue::InternalLinkage,
@@ -986,7 +989,8 @@ class Emitter {
             std::to_string(env_record_ops.size()),
         module);
     env_record_ops.emplace(key, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *address = fn->getArg(0);
     if (copy && std::any_of(fields.begin(), fields.end(), [&](TypeId field) {
@@ -997,7 +1001,6 @@ class Emitter {
               {builder.getInt32(10), builder.getInt64(0),
                builder.getInt64(0), builder.getInt64(0)});
       builder.CreateUnreachable();
-      builder.restoreIP(ip);
       return fn;
     }
     for (size_t n = 0; n < fields.size(); ++n) {
@@ -1007,7 +1010,6 @@ class Emitter {
                            {builder.CreateStructGEP(layout, address, p)});
     }
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   // Install already-owned child values as one Vec row. The children were
@@ -1055,13 +1057,13 @@ class Emitter {
         signature(signature_id, true), llvm::GlobalValue::InternalLinkage,
         "lang.thunk." + std::to_string(symbol.value), module);
     function_thunks.emplace(symbol, thunk);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", thunk));
     std::vector<llvm::Value *> actual;
     for (unsigned a = 1; a < thunk->arg_size(); ++a)
       actual.push_back(thunk->getArg(a));
     builder.CreateRet(builder.CreateCall(target, actual));
-    builder.restoreIP(ip);
     return thunk;
   }
   llvm::Function *bound_adapter(const hir::FunctionValue &value) {
@@ -1088,7 +1090,8 @@ class Emitter {
             std::to_string(bound.type.value),
         module);
     bound_adapters.emplace(key, adapter);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(
         llvm::BasicBlock::Create(context, "entry", adapter));
     auto *env = adapter->getArg(0);
@@ -1110,7 +1113,6 @@ class Emitter {
     for (unsigned a = method.parameters.size(); a < adapter->arg_size(); ++a)
       actual.push_back(adapter->getArg(a));
     builder.CreateRet(builder.CreateCall(functions.at(value.symbol), actual));
-    builder.restoreIP(ip);
     return adapter;
   }
   const hir::FunctionValue *function_value_schema(const ir::Instruction &i) {
@@ -1407,7 +1409,8 @@ class Emitter {
         cffi::callback_bridge_symbol(symbol.value, c_type), module);
     bridge->addFnAttr(llvm::Attribute::NoUnwind);
     callback_bridges.emplace(key, bridge);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", bridge));
     auto *target = functions.at(symbol);
     std::vector<llvm::Value *> call_args;
@@ -1455,7 +1458,6 @@ class Emitter {
       builder.CreateStore(result, bridge->getArg(0));
     }
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return bridge;
   }
   llvm::Function *callback_trampoline(SymbolId symbol, uint32_t c_type) {
@@ -1494,7 +1496,8 @@ class Emitter {
         cffi::registration_callback_dispatch_symbol(c_type, userdata), module);
     fn->addFnAttr(llvm::Attribute::NoUnwind);
     registration_dispatchers.emplace(key, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *context_arg = fn->getArg(0);
     auto *out = fn->getArg(1);
@@ -1572,7 +1575,6 @@ class Emitter {
                                 false));
     builder.CreateCall(leave, {token});
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   // A managed resource argument is leased for the whole foreign call. Null
@@ -2299,6 +2301,7 @@ class Emitter {
   std::map<size_t, llvm::Value *> iteration_lengths, iteration_indices;
   const ir::Function *current_function = nullptr;
   void function(const ir::Function &f) {
+    builder.SetCurrentDebugLocation({});
     current_function = &f;
     auto drop_async_parameters = [&] {
       for (size_t s = f.slots.size(); s > 0; --s) {
@@ -2316,6 +2319,7 @@ class Emitter {
     auto *fn = functions.at(f.symbol);
     const auto sig = type(f.signature);
     const auto hf = hir_functions.find(f.symbol);
+    if (debug && hf != hir_functions.end()) debug->begin(f, *hf->second, *fn);
     const bool capturing =
         hf != hir_functions.end() && !hf->second->captures.empty();
     const unsigned parameter_offset = capturing ? 1 : 0;
@@ -2437,6 +2441,7 @@ class Emitter {
             lower_type(capture.type),
             builder.CreateStructGEP(layout, row, c));
         builder.CreateStore(value, slots[*target]);
+        if (debug) debug->declare(*target, slots[*target], builder.GetInsertBlock(), f.source);
       }
     }
     for (size_t s = 0; s < f.slots.size(); ++s) {
@@ -2458,6 +2463,9 @@ class Emitter {
         builder.CreateStore(builder.getTrue(), active[s]);
       }
     }
+    if (debug)
+      for (size_t s = 0; s < f.slots.size(); ++s)
+        if (f.slots[s].parameter) debug->declare(s, slots[s], builder.GetInsertBlock());
     if (is_async) {
       // The coroutine publishes one typed record for this SymbolId. Only the
       // existing owning slot addresses, their active flags and the promise
@@ -2656,6 +2664,7 @@ class Emitter {
       }
     for (auto b : order) {
       builder.SetInsertPoint(blocks[b]);
+      builder.SetCurrentDebugLocation({});
       for (auto p : f.blocks[b].parameters) {
         auto *address = incoming.at(b);
         values.emplace(p.value,
@@ -2673,9 +2682,18 @@ class Emitter {
       // with neither pending it performs only atomic loads/branches.
       if (b == 0 || poll_headers.contains(b)) gc_poll();
       if (gc_entry && loop_exits.contains(b)) gc_collect_loop_exit();
-      for (const auto &i : f.blocks[b].instructions)
+      for (const auto &i : f.blocks[b].instructions) {
+        if (debug) builder.SetCurrentDebugLocation(debug->location(i.source));
+        if (debug && (i.op == ir::Op::load || i.op == ir::Op::address))
+          debug->read(i.slot.value, slots[i.slot.value], builder.GetInsertBlock(), i.source);
         instruction(i);
+        if (debug && i.op == ir::Op::store)
+          debug->declare(i.slot.value, slots[i.slot.value], builder.GetInsertBlock(), i.source);
+        if (debug && (i.op == ir::Op::move || i.op == ir::Op::take || i.op == ir::Op::destroy))
+          debug->unavailable(i.slot.value, builder.GetInsertBlock(), i.source);
+      }
       const auto &t = f.blocks[b].terminator;
+      if (debug) builder.SetCurrentDebugLocation(debug->location(t.source));
       switch (t.kind) {
       case ir::Exit::branch:
         builder.CreateBr(blocks[t.targets[0].value]);
@@ -2871,6 +2889,7 @@ class Emitter {
         fail("unverified terminator reached emitter");
       }
     }
+    builder.SetCurrentDebugLocation({});
     if (is_async) {
       auto *coro_save = llvm::Intrinsic::getOrInsertDeclaration(
           &module, llvm::Intrinsic::coro_save);
@@ -2908,6 +2927,7 @@ class Emitter {
           {memory});
       builder.CreateBr(async_suspend_return);
     }
+    if (debug) debug->end();
     std::string error;
     llvm::raw_string_ostream stream(error);
     if (llvm::verifyFunction(*fn, &stream))
@@ -2944,6 +2964,9 @@ public:
     module.setDataLayout(machine->createDataLayout());
     if (module.getDataLayout().getPointerSizeInBits() != 64)
       fail("x86_64 DataLayout is not 64-bit");
+    if (options.debug_info)
+      debug = std::make_unique<NativeDebugInfo>(module, m.hir.module(), options.optimization != 0,
+          aggregates, [this](TypeId id) { return lower_type(id); }, vec_type, handle_type);
   }
   Output run(SymbolId entry, const Options &options) {
     // Only concrete CFG functions and their used types reach LLVM. The shared
@@ -3309,6 +3332,7 @@ public:
       out_c_adapter_source = cffi::adapter_source(
           project, used_c_callables, used_c_resources, used_c_callbacks);
     }
+    if (debug) debug->finalize();
     verify_llvm(module);
     Output out;
     out.native_ir = ir::dump(input);

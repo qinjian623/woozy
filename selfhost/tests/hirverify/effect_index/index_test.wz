@@ -1,4 +1,5 @@
-package hirverify;
+package flow;
+import "app/wzcc/hirverify/core" as hircore;
 import "app/wzcc/model" as model;
 import "app/wzcc/hir" as hir;
 import "std/map" as map;
@@ -53,11 +54,11 @@ pub func test_node_type_index() bool {
 
 // Test-only entry point to the actual source/effect verifier.
 pub func test_source_effect(input hir.HirModule, expect_rejection bool) bool {
-    var state = make_verifier(input);
+    var state = hircore.make_verifier(input);
     build_function_node_index(inout state);
     try {
         source_effect_nodes(inout state, input.functions[0]);
-    } catch error Invalid {
+    } catch error hircore.Invalid {
         return expect_rejection && error.message == "source effect construct was erased or replaced";
     }
     return !expect_rejection;

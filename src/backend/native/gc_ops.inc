@@ -175,7 +175,8 @@
         gc_trace_type(), llvm::GlobalValue::InternalLinkage,
         "lang.gc.trace." + key, module);
     gc_trace_functions.emplace(key, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     auto *entry = llvm::BasicBlock::Create(context, "entry", fn);
     auto *check = llvm::BasicBlock::Create(context, "prefix.check", fn);
     auto *body = llvm::BasicBlock::Create(context, "prefix.body", fn);
@@ -205,7 +206,6 @@
     builder.CreateBr(check);
     builder.SetInsertPoint(done);
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   // A closure environment is a one-row LangVec holding an anonymous record.
@@ -218,7 +218,8 @@
         gc_trace_type(), llvm::GlobalValue::InternalLinkage,
         "lang.gc.trace." + key, module);
     gc_trace_functions.emplace(key, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     auto *entry = llvm::BasicBlock::Create(context, "entry", fn);
     auto *body = llvm::BasicBlock::Create(context, "row", fn);
     auto *done = llvm::BasicBlock::Create(context, "done", fn);
@@ -241,7 +242,6 @@
     builder.CreateBr(done);
     builder.SetInsertPoint(done);
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   llvm::Function *gc_invalidate() {
@@ -251,7 +251,8 @@
                                 false),
         llvm::GlobalValue::InternalLinkage, "lang.gc.invalidate_weak", module);
     gc_invalidate_callback = fn;
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *slot = builder.CreateStructGEP(vec_type, fn->getArg(0), 9);
     auto callee = module.getOrInsertFunction(
@@ -260,7 +261,6 @@
                                 false));
     builder.CreateCall(callee, {slot});
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   llvm::GlobalVariable *gc_ops(const std::string &key,

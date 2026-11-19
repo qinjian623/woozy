@@ -143,15 +143,29 @@ try:
         'schema_version=1\n[package]\nname="nativeemit_b_harness"\nsource_root="src"\n'
         'entry="app"\n[build]\nbackend="native"\nword_bits=64\n')
 
-    for package in ['model', 'types', 'hir', 'nativeir', 'interface', 'digest']:
+    for package in ['model', 'types', 'hir', 'nativeir', 'interface', 'digest',
+                    'nativeadapter']:
         copy_package(package)
 
-    # Production Root text/state plus every B file comes from the B owner.
+    # Production Root text/state/debug plus every B file comes from the B owner.
     nativeemit = PROJECT / 'src/wzcc/nativeemit'
     nativeemit.mkdir(exist_ok=True)
     b_dir = B_SOURCE_ROOT / 'nativeemit'
     b_files = [b_dir / 'state.wz', b_dir / 'text.wz'] + sorted(b_dir.glob('b_*.wz'))
+    # SH37 made state/text and b_function/b_ops reference nativeemit/debug.wz.
+    # It is a same-package dependency, so no package import edge exposes it;
+    # stage it when the selected B tree has it and fail early when a debug-using
+    # B tree lacks it.  Older debug-free trees keep their original selection.
+    debug = b_dir / 'debug.wz'
+    if debug.is_file():
+        b_files.append(debug)
+    debug_types = b_dir / 'debug_types.wz'
+    if debug_types.is_file():
+        b_files.append(debug_types)
     require_files('nativeemit/B', b_files)
+    if not debug.is_file() and any('debug_' in path.read_text() for path in b_files):
+        raise RuntimeError(f'missing required production dependency package '
+                           f'nativeemit/B: {debug}')
     for source in b_files:
         shutil.copyfile(source, nativeemit / source.name)
         record_input(source)
@@ -169,14 +183,17 @@ try:
         shutil.copyfile(source, nativeemit / source.name)
         record_input(source)
 
-    # Root-owned frozen state/text must be identical in both trees when the
-    # sibling tree contains a copy; a mismatch is a merge error, not a reason
-    # to silently pick one.
-    for name in ['state.wz', 'text.wz']:
+    # Root-owned frozen state/text/debug must be identical in both trees when
+    # the sibling tree contains a copy; a mismatch is a merge error, not a
+    # reason to silently pick one.
+    for name in ['state.wz', 'text.wz', 'debug.wz', 'debug_types.wz']:
+        owned = b_dir / name
         other = SOURCE_ROOT / 'nativeemit' / name
-        if other.is_file() and sha(other) != sha(b_dir / name):
+        if not owned.is_file():
+            continue
+        if other.is_file() and sha(other) != sha(owned):
             raise RuntimeError(f'Root-owned nativeemit/{name} differs between '
-                               f'B root {b_dir / name} and sibling root {other}')
+                               f'B root {owned} and sibling root {other}')
 
     copy_package('nativelayout')
     copy_package('valueops')

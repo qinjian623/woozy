@@ -1,8 +1,10 @@
 // Source effect/cleanup construct preservation.  This is the
 // Verifier::source_effect_nodes section of hir.cpp.
-package hirverify;
+package flow;
 
-import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hirverify/calls" as hircalls;
+import "app/wzcc/hirverify/core" as hircore;
+import "app/wzcc/hirverify/nodes" as hirnodes;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "std/hash" as hash;
@@ -82,14 +84,14 @@ func node_type_find(index NodeTypeIndex, source model.NodeRef) option.Option[usi
 func node_type_add(index NodeTypeIndex, source model.NodeRef, type_id usize) {
     switch node_type_find(index, source) {
         case option.Option.Some(position): {
-            ids_insert(index.entries[position].types, type_id);
+            hircore.ids_insert(index.entries[position].types, type_id);
             return;
         }
         case option.Option.None: {}
     }
     let key = node_type_hash(source);
     let types = vec.empty[usize]();
-    ids_insert(types, type_id);
+    hircore.ids_insert(types, type_id);
     let position = vec.len(index.entries);
     vec.push(index.entries, NodeTypeEntry(source: source, types: types,
         next: map.get(index.heads, key)));
@@ -99,7 +101,7 @@ func node_type_add(index NodeTypeIndex, source model.NodeRef, type_id usize) {
 // One index for the whole run.  The entries are sorted by function symbol and
 // each node list keeps the original module-node order, so source_effect_nodes
 // no longer rescans every function over the complete node table.
-func function_node_index_find(entries Vec[FunctionNodeIndex], symbol usize) i64 {
+func function_node_index_find(entries Vec[hircore.FunctionNodeIndex], symbol usize) i64 {
     var low usize = 0;
     var high = vec.len(entries);
     for low < high {
@@ -116,7 +118,7 @@ func function_node_index_find(entries Vec[FunctionNodeIndex], symbol usize) i64 
     return -1;
 }
 
-func function_node_index_add(entries Vec[FunctionNodeIndex], symbol usize,
+func function_node_index_add(entries Vec[hircore.FunctionNodeIndex], symbol usize,
                              node usize) {
     let found = function_node_index_find(entries, symbol);
     if found >= 0 {
@@ -129,21 +131,21 @@ func function_node_index_add(entries Vec[FunctionNodeIndex], symbol usize,
     }
     let nodes = vec.empty[usize]();
     vec.push(nodes, node);
-    vec.push(entries, FunctionNodeIndex(symbol: symbol, nodes: nodes));
+    vec.push(entries, hircore.FunctionNodeIndex(symbol: symbol, nodes: nodes));
     var index = vec.len(entries) - 1;
     for index > position {
         entries[index] = entries[index - 1];
         index -= 1;
     }
-    entries[position] = FunctionNodeIndex(symbol: symbol, nodes: nodes);
+    entries[position] = hircore.FunctionNodeIndex(symbol: symbol, nodes: nodes);
 }
 
-func sort_function_node_index(values Vec[FunctionNodeIndex]) {
+func sort_function_node_index(values Vec[hircore.FunctionNodeIndex]) {
     let n = vec.len(values);
     if n < 2 {
         return;
     }
-    let scratch = vec.empty[FunctionNodeIndex]();
+    let scratch = vec.empty[hircore.FunctionNodeIndex]();
     vec.reserve(scratch, n);
     for var index usize = 0; index < n; index += 1 {
         vec.push(scratch, values[index]);
@@ -192,11 +194,11 @@ func sort_function_node_index(values Vec[FunctionNodeIndex]) {
     }
 }
 
-func build_function_node_index(state inout Verifier) {
+pub func build_function_node_index(state inout hircore.Verifier) {
     let sym_count = vec.len(state.m.resolved.symbols);
     let slot_by_sym = vec.make[i64](sym_count, -1);
-    let entries = vec.empty[FunctionNodeIndex]();
-    let overflow = vec.empty[FunctionNodeIndex]();
+    let entries = vec.empty[hircore.FunctionNodeIndex]();
+    let overflow = vec.empty[hircore.FunctionNodeIndex]();
     for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
         let node = state.m.nodes[index];
         if node.scope < vec.len(state.m.scopes) {
@@ -207,7 +209,7 @@ func build_function_node_index(state inout Verifier) {
                     slot_by_sym[symbol] = i64(vec.len(entries));
                     let nodes = vec.empty[usize]();
                     vec.push(nodes, index);
-                    vec.push(entries, FunctionNodeIndex(symbol: symbol,
+                    vec.push(entries, hircore.FunctionNodeIndex(symbol: symbol,
                         nodes: nodes));
                 } else {
                     vec.push(entries[usize(slot)].nodes, index);
@@ -236,10 +238,10 @@ func node_type_unique(index NodeTypeIndex, source model.NodeRef)
     return option.Option[usize].None;
 }
 
-func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
-    throws Invalid {
+pub func source_effect_nodes(state inout hircore.Verifier, function_value hir.HirFunction)
+    throws hircore.Invalid {
     let reference = function_value.source.node;
-    let file = verifier_file(state, reference.module, reference.file);
+    let file = hircore.verifier_file(state, reference.module, reference.file);
     let expected = vec.empty[CountEntry]();
     let actual = vec.empty[CountEntry]();
     let expected_foreign_reads = vec.empty[usize]();
@@ -259,42 +261,42 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     let todo = vec.empty[usize]();
     vec.push(todo, reference.node);
     for vec.len(todo) > 0 {
-        let id = option_usize(vec.pop(todo));
+        let id = hircore.option_usize(vec.pop(todo));
         let syntax = file.nodes[id];
         if id != reference.node &&
-           (ast_is(syntax.kind, model.AstKind.Function) ||
-            ast_is(syntax.kind, model.AstKind.FunctionLiteral) ||
-            ast_is(syntax.kind, model.AstKind.FunctionType)) {
+           (hircore.ast_is(syntax.kind, model.AstKind.Function) ||
+            hircore.ast_is(syntax.kind, model.AstKind.FunctionLiteral) ||
+            hircore.ast_is(syntax.kind, model.AstKind.FunctionType)) {
             continue;
         }
-        if ast_is(syntax.kind, model.AstKind.Call) && vec.len(syntax.children) > 0 {
+        if hircore.ast_is(syntax.kind, model.AstKind.Call) && vec.len(syntax.children) > 0 {
             let callee_raw = syntax.children[0];
             let target = source_unwrap_ast(state, file, callee_raw);
             let target_node = file.nodes[target];
             var is_foreign = false;
             let symbol = source_ast_symbol(state, reference.module, reference.file, file, target);
             if option.is_some(symbol) {
-                let exported = foreign_export(state, option_usize(symbol));
+                let exported = hircore.foreign_export(state, hircore.option_usize(symbol));
                 if option.is_some(exported) &&
-                   vec.len(option_foreign_export(exported).candidates) > 0 {
-                    ids_insert(expected_foreign_reads, target);
+                   vec.len(hircore.option_foreign_export(exported).candidates) > 0 {
+                    hircore.ids_insert(expected_foreign_reads, target);
                     is_foreign = true;
                 }
             }
             var method = target;
-            if ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
+            if hircore.ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
                vec.len(target_node.children) > 0 {
                 method = source_unwrap_ast(state, file, target_node.children[0]);
             }
             let method_node = file.nodes[method];
-            if !is_foreign && ast_is(method_node.kind, model.AstKind.Member) &&
+            if !is_foreign && hircore.ast_is(method_node.kind, model.AstKind.Member) &&
                !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, method)) {
                 let base = source_ast_type(inout state, reference.module, reference.file, file, method_node.children[0],
                     0, node_types, function_value.symbol);
                 if option.is_some(base) &&
-                   kind_is(verifier_type(state, option_usize(base)).kind,
+                   hircore.kind_is(hircore.verifier_type(state, hircore.option_usize(base)).kind,
                        model.TypeKind.ForeignOpaque) {
-                    ids_insert(expected_foreign_reads,
+                    hircore.ids_insert(expected_foreign_reads,
                         source_unwrap_ast(state, file, method));
                     is_foreign = true;
                 }
@@ -303,54 +305,54 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
                 let callee_type = source_ast_type(inout state, reference.module, reference.file, file,
                     syntax.children[0], 0, node_types, function_value.symbol);
                 if option.is_some(callee_type) &&
-                   kind_is(verifier_type(state, option_usize(callee_type)).kind,
+                   hircore.kind_is(hircore.verifier_type(state, hircore.option_usize(callee_type)).kind,
                        model.TypeKind.ForeignOpaque) {
-                    ids_insert(expected_foreign_reads, target);
+                    hircore.ids_insert(expected_foreign_reads, target);
                     is_foreign = true;
                 }
             }
             if is_foreign {
-                ids_insert(expected_foreign_calls, id);
+                hircore.ids_insert(expected_foreign_calls, id);
             }
         }
-        if ast_is(syntax.kind, model.AstKind.Name) ||
-           ast_is(syntax.kind, model.AstKind.Member) {
+        if hircore.ast_is(syntax.kind, model.AstKind.Name) ||
+           hircore.ast_is(syntax.kind, model.AstKind.Member) {
             let key = source_unwrap_ast(state, file, id);
             let symbol = source_ast_symbol(state, reference.module, reference.file, file, id);
             if option.is_some(symbol) {
-                let exported = foreign_export(state, option_usize(symbol));
+                let exported = hircore.foreign_export(state, hircore.option_usize(symbol));
                 if option.is_some(exported) {
-                    let export_value = option_foreign_export(exported);
+                    let export_value = hircore.option_foreign_export(exported);
                     if !option.is_some(export_value.c_type) &&
                        !option.is_some(export_value.c_callable) &&
-                       (export_kind_is(export_value.kind,
+                       (hircore.export_kind_is(export_value.kind,
                             model.ForeignExportKind.Value) ||
-                        export_kind_is(export_value.kind,
+                        hircore.export_kind_is(export_value.kind,
                             model.ForeignExportKind.Function)) {
-                        ids_insert(expected_foreign_reads, key);
+                        hircore.ids_insert(expected_foreign_reads, key);
                     }
                 }
             }
-            if ast_is(syntax.kind, model.AstKind.Member) &&
+            if hircore.ast_is(syntax.kind, model.AstKind.Member) &&
                !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, id)) {
                 let base = source_ast_type(inout state, reference.module, reference.file, file, syntax.children[0], 0,
                     node_types, function_value.symbol);
                 if option.is_some(base) &&
-                   kind_is(verifier_type(state, option_usize(base)).kind,
+                   hircore.kind_is(hircore.verifier_type(state, hircore.option_usize(base)).kind,
                        model.TypeKind.ForeignOpaque) {
-                    ids_insert(expected_foreign_reads, key);
+                    hircore.ids_insert(expected_foreign_reads, key);
                 }
             }
         }
-        if ast_is(syntax.kind, model.AstKind.Try) ||
-           ast_is(syntax.kind, model.AstKind.Defer) ||
-           ast_is(syntax.kind, model.AstKind.Throw) ||
-           ast_is(syntax.kind, model.AstKind.Catch) ||
-           ast_is(syntax.kind, model.AstKind.List) ||
-           ast_is(syntax.kind, model.AstKind.Slice) ||
-           ast_is(syntax.kind, model.AstKind.ForIn) ||
+        if hircore.ast_is(syntax.kind, model.AstKind.Try) ||
+           hircore.ast_is(syntax.kind, model.AstKind.Defer) ||
+           hircore.ast_is(syntax.kind, model.AstKind.Throw) ||
+           hircore.ast_is(syntax.kind, model.AstKind.Catch) ||
+           hircore.ast_is(syntax.kind, model.AstKind.List) ||
+           hircore.ast_is(syntax.kind, model.AstKind.Slice) ||
+           hircore.ast_is(syntax.kind, model.AstKind.ForIn) ||
            source_index_syntax(state, reference.module, reference.file, file, syntax) ||
-           (ast_is(syntax.kind, model.AstKind.Unary) &&
+           (hircore.ast_is(syntax.kind, model.AstKind.Unary) &&
             file.lexed.tokens[syntax.token_begin].spelling == "move") {
             count_add(expected, id);
         }
@@ -362,15 +364,15 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     let scan = vec.empty[usize]();
     vec.push(scan, function_value.body);
     for vec.len(scan) > 0 {
-        let scan_id = option_usize(vec.pop(scan));
-        let scan_node = verifier_node(state, scan_id);
+        let scan_id = hircore.option_usize(vec.pop(scan));
+        let scan_node = hircore.verifier_node(state, scan_id);
         switch scan_node.data {
             case hir.NodeData.ForIn(value): {
                 if option.is_some(value.iterator) {
-                    let iterator = option_iterator(value.iterator);
-                    ids_insert(synthetic_iterator_nodes, iterator.next);
-                    for child in verifier_node(state, iterator.next).children {
-                        ids_insert(synthetic_iterator_nodes, child);
+                    let iterator = hirnodes.option_iterator(value.iterator);
+                    hircore.ids_insert(synthetic_iterator_nodes, iterator.next);
+                    for child in hircore.verifier_node(state, iterator.next).children {
+                        hircore.ids_insert(synthetic_iterator_nodes, child);
                     }
                 }
             }
@@ -383,87 +385,87 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     let pending = vec.empty[usize]();
     vec.push(pending, function_value.body);
     for vec.len(pending) > 0 {
-        let current_id = option_usize(vec.pop(pending));
-        let node = verifier_node(state, current_id);
+        let current_id = hircore.option_usize(vec.pop(pending));
+        let node = hircore.verifier_node(state, current_id);
         let syntax = file.nodes[node.source.node.node];
-        if node_is(hir.node_kind(node.data), hir.NodeKind.ForeignRead) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.ForeignRead) {
             var access = option.Option[hir.ForeignAccessKind].None;
             switch node.data {
                 case hir.NodeData.ForeignRead(value): access = value.access;
                 default: {}
             }
-            if !option.is_some(access) || foreign_access_id(
+            if !option.is_some(access) || hircore.foreign_access_id(
                     option_foreign_access(access)) == 0 ||
-               foreign_access_id(option_foreign_access(access)) == 1 {
-                ids_insert(actual_foreign_reads,
+               hircore.foreign_access_id(option_foreign_access(access)) == 1 {
+                hircore.ids_insert(actual_foreign_reads,
                     source_unwrap_ast(state, file, node.source.node.node));
             }
         }
-        if node_is(hir.node_kind(node.data), hir.NodeKind.Call) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.Call) {
             var is_foreign = false;
             switch node.data {
-                case hir.NodeData.Call(value): is_foreign = callee_id(value.kind) == 2;
+                case hir.NodeData.Call(value): is_foreign = hircore.callee_id(value.kind) == 2;
                 default: {}
             }
             if is_foreign {
-                ids_insert(actual_foreign_calls, node.source.node.node);
+                hircore.ids_insert(actual_foreign_calls, node.source.node.node);
             }
         }
-        if !ids_contains(synthetic_iterator_nodes, current_id) &&
-           (ast_is(syntax.kind, model.AstKind.Try) ||
-            ast_is(syntax.kind, model.AstKind.Defer) ||
-            ast_is(syntax.kind, model.AstKind.Throw) ||
-            ast_is(syntax.kind, model.AstKind.List) ||
-            ast_is(syntax.kind, model.AstKind.Slice) ||
-            ast_is(syntax.kind, model.AstKind.ForIn) ||
+        if !hircore.ids_contains(synthetic_iterator_nodes, current_id) &&
+           (hircore.ast_is(syntax.kind, model.AstKind.Try) ||
+            hircore.ast_is(syntax.kind, model.AstKind.Defer) ||
+            hircore.ast_is(syntax.kind, model.AstKind.Throw) ||
+            hircore.ast_is(syntax.kind, model.AstKind.List) ||
+            hircore.ast_is(syntax.kind, model.AstKind.Slice) ||
+            hircore.ast_is(syntax.kind, model.AstKind.ForIn) ||
             source_index_syntax(state, reference.module, reference.file, file, syntax) ||
-            (ast_is(syntax.kind, model.AstKind.Unary) &&
+            (hircore.ast_is(syntax.kind, model.AstKind.Unary) &&
              file.lexed.tokens[syntax.token_begin].spelling == "move")) {
             var matches = false;
             let node_kind = hir.node_kind(node.data);
-            if ast_is(syntax.kind, model.AstKind.Try) &&
-               node_is(node_kind, hir.NodeKind.Try) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Try) &&
+               hircore.node_is(node_kind, hir.NodeKind.Try) {
                 matches = true;
             }
-            if ast_is(syntax.kind, model.AstKind.Defer) &&
-               node_is(node_kind, hir.NodeKind.Defer) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Defer) &&
+               hircore.node_is(node_kind, hir.NodeKind.Defer) {
                 matches = true;
             }
-            if ast_is(syntax.kind, model.AstKind.Throw) &&
-               node_is(node_kind, hir.NodeKind.Throw) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Throw) &&
+               hircore.node_is(node_kind, hir.NodeKind.Throw) {
                 matches = true;
             }
-            if ast_is(syntax.kind, model.AstKind.List) &&
-               node_is(node_kind, hir.NodeKind.VecInit) {
+            if hircore.ast_is(syntax.kind, model.AstKind.List) &&
+               hircore.node_is(node_kind, hir.NodeKind.VecInit) {
                 matches = true;
             }
-            if ast_is(syntax.kind, model.AstKind.Slice) {
-                if node_is(node_kind, hir.NodeKind.VecSlice) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Slice) {
+                if hircore.node_is(node_kind, hir.NodeKind.VecSlice) {
                     matches = true;
                 }
-                if node_is(node_kind, hir.NodeKind.ForeignRead) {
+                if hircore.node_is(node_kind, hir.NodeKind.ForeignRead) {
                     var access = option.Option[hir.ForeignAccessKind].None;
                     switch node.data {
                         case hir.NodeData.ForeignRead(value): access = value.access;
                         default: {}
                     }
                     if option.is_some(access) &&
-                       (foreign_access_id(option_foreign_access(access)) == 4 ||
-                        foreign_access_id(option_foreign_access(access)) == 5) {
+                       (hircore.foreign_access_id(option_foreign_access(access)) == 4 ||
+                        hircore.foreign_access_id(option_foreign_access(access)) == 5) {
                         matches = true;
                     }
                 }
             }
-            if ast_is(syntax.kind, model.AstKind.ForIn) &&
-               node_is(node_kind, hir.NodeKind.ForIn) {
+            if hircore.ast_is(syntax.kind, model.AstKind.ForIn) &&
+               hircore.node_is(node_kind, hir.NodeKind.ForIn) {
                 matches = true;
             }
-            if ast_is(syntax.kind, model.AstKind.Unary) &&
+            if hircore.ast_is(syntax.kind, model.AstKind.Unary) &&
                file.lexed.tokens[syntax.token_begin].spelling == "move" {
-                if node_is(node_kind, hir.NodeKind.Move) {
+                if hircore.node_is(node_kind, hir.NodeKind.Move) {
                     matches = true;
                 }
-                if node_is(node_kind, hir.NodeKind.FunctionValue) {
+                if hircore.node_is(node_kind, hir.NodeKind.FunctionValue) {
                     var move_capture = false;
                     switch node.data {
                         case hir.NodeData.FunctionValue(value):
@@ -476,28 +478,28 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
                 }
             }
             if source_index_syntax(state, reference.module, reference.file, file, syntax) {
-                if node_is(node_kind, hir.NodeKind.IndexRead) ||
-                   node_is(node_kind, hir.NodeKind.IndexPlace) {
+                if hircore.node_is(node_kind, hir.NodeKind.IndexRead) ||
+                   hircore.node_is(node_kind, hir.NodeKind.IndexPlace) {
                     matches = true;
                 }
-                if node_is(node_kind, hir.NodeKind.ForeignRead) {
+                if hircore.node_is(node_kind, hir.NodeKind.ForeignRead) {
                     var access = option.Option[hir.ForeignAccessKind].None;
                     switch node.data {
                         case hir.NodeData.ForeignRead(value): access = value.access;
                         default: {}
                     }
                     if option.is_some(access) &&
-                       (foreign_access_id(option_foreign_access(access)) == 2 ||
-                        foreign_access_id(option_foreign_access(access)) == 3) {
+                       (hircore.foreign_access_id(option_foreign_access(access)) == 2 ||
+                        hircore.foreign_access_id(option_foreign_access(access)) == 3) {
                         matches = true;
                     }
                 }
             }
-            need(matches,
+            hircore.need(matches,
                 "source effect construct was erased or replaced");
             count_add(actual, node.source.node.node);
         }
-        if node_is(hir.node_kind(node.data), hir.NodeKind.Try) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.Try) {
             var try_value = hir.Try(catches: []);
             switch node.data {
                 case hir.NodeData.Try(value): try_value = value;
@@ -511,21 +513,21 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
             vec.push(pending, child);
         }
     }
-    need(ids_equal(actual_foreign_reads, expected_foreign_reads),
+    hircore.need(hircore.ids_equal(actual_foreign_reads, expected_foreign_reads),
         "HIR foreign reads differ from source operations");
-    need(ids_equal(actual_foreign_calls, expected_foreign_calls),
+    hircore.need(hircore.ids_equal(actual_foreign_calls, expected_foreign_calls),
         "HIR foreign calls differ from source operations");
-    need(count_equal(actual, expected),
+    hircore.need(count_equal(actual, expected),
         "HIR omits or duplicates source error/cleanup constructs");
     var owning = false;
     if function_nodes >= 0 {
         for node_id in state.function_node_index[usize(function_nodes)].nodes {
             let node = state.m.nodes[node_id];
             let kind = hir.node_kind(node.data);
-            if node_is(kind, hir.NodeKind.Move) ||
-               node_is(kind, hir.NodeKind.ForIn) ||
-               (!node_is(kind, hir.NodeKind.FunctionValue) &&
-                classify_needs_drop(inout state, node.type_id)) {
+            if hircore.node_is(kind, hir.NodeKind.Move) ||
+               hircore.node_is(kind, hir.NodeKind.ForIn) ||
+               (!hircore.node_is(kind, hir.NodeKind.FunctionValue) &&
+                hircore.classify_needs_drop(inout state, node.type_id)) {
                 owning = true;
             }
         }
@@ -534,24 +536,24 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
         return;
     }
     let syntax_function = file.nodes[reference.node];
-    need(vec.len(syntax_function.children) > 0, "function has no source body");
-    need(exact_source_child(state, function_value, function_value.body,
+    hircore.need(vec.len(syntax_function.children) > 0, "function has no source body");
+    hircore.need(exact_source_child(state, function_value, function_value.body,
              syntax_function.children[vec.len(syntax_function.children) - 1]),
         "HIR statement source order/control owner differs from AST");
     let statements = vec.empty[usize]();
     vec.push(statements, function_value.body);
     for vec.len(statements) > 0 {
-        let id = option_usize(vec.pop(statements));
-        let node = verifier_node(state, id);
+        let id = hircore.option_usize(vec.pop(statements));
+        let node = hircore.verifier_node(state, id);
         let syntax = file.nodes[node.source.node.node];
         let node_kind = hir.node_kind(node.data);
-        if node_is(node_kind, hir.NodeKind.Block) {
+        if hircore.node_is(node_kind, hir.NodeKind.Block) {
             let sequence = vec.empty[usize]();
-            if ast_is(syntax.kind, model.AstKind.Block) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Block) {
                 for child in syntax.children {
                     vec.push(sequence, child);
                 }
-            } else if ast_is(syntax.kind, model.AstKind.Case) {
+            } else if hircore.ast_is(syntax.kind, model.AstKind.Case) {
                 var start usize = 0;
                 if file.lexed.tokens[syntax.token_begin].spelling != "default" {
                     start = 1;
@@ -560,84 +562,84 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
                     index += 1 {
                     vec.push(sequence, syntax.children[index]);
                 }
-            } else if ast_is(syntax.kind, model.AstKind.If) {
+            } else if hircore.ast_is(syntax.kind, model.AstKind.If) {
                 vec.push(sequence, node.source.node.node);
             } else {
-                fail("lexical block has no supported AST statement sequence");
+                hircore.fail("lexical block has no supported AST statement sequence");
             }
-            need(vec.len(node.children) == vec.len(sequence),
+            hircore.need(vec.len(node.children) == vec.len(sequence),
                 "HIR omits or adds a source statement");
             for var index usize = 0; index < vec.len(sequence); index += 1 {
-                need(exact_source_child(state, function_value, node.children[index],
+                hircore.need(exact_source_child(state, function_value, node.children[index],
                          sequence[index]),
                     "HIR statement source order/control owner differs from AST");
             }
-        } else if node_is(node_kind, hir.NodeKind.If) {
-            need(ast_is(syntax.kind, model.AstKind.If), "statement kind differs from its AST source");
-            need(vec.len(node.children) == vec.len(syntax.children),
+        } else if hircore.node_is(node_kind, hir.NodeKind.If) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.If), "statement kind differs from its AST source");
+            hircore.need(vec.len(node.children) == vec.len(syntax.children),
                 "if source branch count");
             for var branch usize = 1; branch < vec.len(node.children); branch += 1 {
-                need(exact_source_child(state, function_value,
+                hircore.need(exact_source_child(state, function_value,
                          node.children[branch], syntax.children[branch]),
                     "HIR statement source order/control owner differs from AST");
             }
-        } else if node_is(node_kind, hir.NodeKind.ForIn) {
-            need(ast_is(syntax.kind, model.AstKind.ForIn),
+        } else if hircore.node_is(node_kind, hir.NodeKind.ForIn) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.ForIn),
                 "statement kind differs from its AST source");
-            need(exact_source_child(state, function_value, node.children[1],
+            hircore.need(exact_source_child(state, function_value, node.children[1],
                      syntax.children[vec.len(syntax.children) - 1]),
                 "HIR statement source order/control owner differs from AST");
-        } else if node_is(node_kind, hir.NodeKind.For) {
-            need(ast_is(syntax.kind, model.AstKind.For),
+        } else if hircore.node_is(node_kind, hir.NodeKind.For) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.For),
                 "statement kind differs from its AST source");
-            need(exact_source_child(state, function_value, node.children[3],
+            hircore.need(exact_source_child(state, function_value, node.children[3],
                      syntax.children[vec.len(syntax.children) - 1]),
                 "HIR statement source order/control owner differs from AST");
-        } else if node_is(node_kind, hir.NodeKind.Switch) {
-            need(ast_is(syntax.kind, model.AstKind.Switch),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Switch) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Switch),
                 "statement kind differs from its AST source");
             var switch_value = hir.Switch(arms: [], exhaustive: false);
             switch node.data {
                 case hir.NodeData.Switch(value): switch_value = value;
                 default: {}
             }
-            need(vec.len(syntax.children) == vec.len(switch_value.arms) + 1,
+            hircore.need(vec.len(syntax.children) == vec.len(switch_value.arms) + 1,
                 "switch source arm count");
             for var arm usize = 0; arm < vec.len(switch_value.arms); arm += 1 {
-                need(exact_source_child(state, function_value,
+                hircore.need(exact_source_child(state, function_value,
                          switch_value.arms[arm].body,
                          syntax.children[arm + 1]),
                     "HIR statement source order/control owner differs from AST");
             }
-        } else if node_is(node_kind, hir.NodeKind.Binding) {
-            need(ast_is(syntax.kind, model.AstKind.Binding),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Binding) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Binding),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Assign) {
-            need(ast_is(syntax.kind, model.AstKind.Assign),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Assign) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Assign),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.ExpressionStatement) {
-            need(ast_is(syntax.kind, model.AstKind.ExpressionStatement),
+        } else if hircore.node_is(node_kind, hir.NodeKind.ExpressionStatement) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.ExpressionStatement),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Return) {
-            need(ast_is(syntax.kind, model.AstKind.Return),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Return) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Return),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Break) {
-            need(ast_is(syntax.kind, model.AstKind.Break),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Break) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Break),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Continue) {
-            need(ast_is(syntax.kind, model.AstKind.Continue),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Continue) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Continue),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Noop) {
-            need(ast_is(syntax.kind, model.AstKind.For),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Noop) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.For),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Try) {
-            need(ast_is(syntax.kind, model.AstKind.Try),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Try) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Try),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Defer) {
-            need(ast_is(syntax.kind, model.AstKind.Defer),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Defer) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Defer),
                 "statement kind differs from its AST source");
-        } else if node_is(node_kind, hir.NodeKind.Throw) {
-            need(ast_is(syntax.kind, model.AstKind.Throw),
+        } else if hircore.node_is(node_kind, hir.NodeKind.Throw) {
+            hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Throw),
                 "statement kind differs from its AST source");
         }
         for child in node.children {
@@ -646,15 +648,15 @@ func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
     }
 }
 
-func exact_source_child(state Verifier, function_value hir.HirFunction,
-                        child usize, syntax usize) bool throws Invalid {
-    let file = verifier_file(state, function_value.source.node.module,
+func exact_source_child(state hircore.Verifier, function_value hir.HirFunction,
+                        child usize, syntax usize) bool throws hircore.Invalid {
+    let file = hircore.verifier_file(state, function_value.source.node.module,
         function_value.source.node.file);
     var expected = function_value.source.node;
     let syntax_node = file.nodes[syntax];
-    if ast_is(syntax_node.kind, model.AstKind.Unsafe) {
+    if hircore.ast_is(syntax_node.kind, model.AstKind.Unsafe) {
         if vec.len(syntax_node.children) != 1 ||
-           !ast_is(file.nodes[syntax_node.children[0]].kind,
+           !hircore.ast_is(file.nodes[syntax_node.children[0]].kind,
                model.AstKind.Block) {
             return false;
         }
@@ -662,17 +664,17 @@ func exact_source_child(state Verifier, function_value hir.HirFunction,
     } else {
         expected.node = syntax;
     }
-    return same_ref(verifier_node(state, child).source.node, expected);
+    return hircore.same_ref(hircore.verifier_node(state, child).source.node, expected);
 }
 
-func source_unwrap_ast(state Verifier, file model.ParseResult, id usize)
+func source_unwrap_ast(state hircore.Verifier, file model.ParseResult, id usize)
     usize {
     var value = id;
     for true {
         let node = file.nodes[value];
-        var transparent = ast_is(node.kind, model.AstKind.Parenthesized) ||
-                          ast_is(node.kind, model.AstKind.BracketItem);
-        if ast_is(node.kind, model.AstKind.Unary) {
+        var transparent = hircore.ast_is(node.kind, model.AstKind.Parenthesized) ||
+                          hircore.ast_is(node.kind, model.AstKind.BracketItem);
+        if hircore.ast_is(node.kind, model.AstKind.Unary) {
             transparent = node.token_begin < vec.len(file.lexed.tokens) &&
                 file.lexed.tokens[node.token_begin].spelling == "+";
         }
@@ -687,7 +689,7 @@ func source_unwrap_ast(state Verifier, file model.ParseResult, id usize)
     return value;
 }
 
-func source_ast_symbol(state Verifier, module usize, file_index usize,
+func source_ast_symbol(state hircore.Verifier, module usize, file_index usize,
                        file model.ParseResult, id usize)
     option.Option[usize] {
     let target = source_unwrap_ast(state, file, id);
@@ -701,10 +703,10 @@ func source_ast_symbol(state Verifier, module usize, file_index usize,
     return option.Option[usize].None;
 }
 
-func source_index_syntax(state Verifier, module usize, file_index usize,
+func source_index_syntax(state hircore.Verifier, module usize, file_index usize,
                          file model.ParseResult, syntax model.AstNode) bool
-    throws Invalid {
-    if !ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+    throws hircore.Invalid {
+    if !hircore.ast_is(syntax.kind, model.AstKind.NeutralBracket) {
         return false;
     }
     var types_only = vec.len(syntax.children) > 1;
@@ -721,38 +723,38 @@ func source_index_syntax(state Verifier, module usize, file_index usize,
     }
     let symbol = source_ast_symbol(state, module, file_index, file, syntax.children[0]);
     if option.is_some(symbol) {
-        let kind = verifier_symbol(state, option_usize(symbol)).kind;
-        return !symbol_is(kind, model.SymbolKind.Function) &&
-               !symbol_is(kind, model.SymbolKind.Type) &&
-               !symbol_is(kind, model.SymbolKind.BuiltinType) &&
-               !symbol_is(kind, model.SymbolKind.TypeParameter);
+        let kind = hircore.verifier_symbol(state, hircore.option_usize(symbol)).kind;
+        return !hircore.symbol_is(kind, model.SymbolKind.Function) &&
+               !hircore.symbol_is(kind, model.SymbolKind.Type) &&
+               !hircore.symbol_is(kind, model.SymbolKind.BuiltinType) &&
+               !hircore.symbol_is(kind, model.SymbolKind.TypeParameter);
     }
     return true;
 }
 
-func source_type_syntax(state Verifier, module usize, file_index usize,
-                        file model.ParseResult, id usize) bool throws Invalid {
+func source_type_syntax(state hircore.Verifier, module usize, file_index usize,
+                        file model.ParseResult, id usize) bool throws hircore.Invalid {
     let node = file.nodes[id];
-    if ast_is(node.kind, model.AstKind.FunctionType) ||
-       ast_is(node.kind, model.AstKind.NamedType) {
+    if hircore.ast_is(node.kind, model.AstKind.FunctionType) ||
+       hircore.ast_is(node.kind, model.AstKind.NamedType) {
         return true;
     }
-    if ast_is(node.kind, model.AstKind.BracketItem) ||
-       ast_is(node.kind, model.AstKind.Parenthesized) ||
-       ast_is(node.kind, model.AstKind.ParenthesizedType) {
+    if hircore.ast_is(node.kind, model.AstKind.BracketItem) ||
+       hircore.ast_is(node.kind, model.AstKind.Parenthesized) ||
+       hircore.ast_is(node.kind, model.AstKind.ParenthesizedType) {
         return vec.len(node.children) > 0 &&
             source_type_syntax(state, module, file_index, file, node.children[0]);
     }
-    if ast_is(node.kind, model.AstKind.NeutralBracket) {
+    if hircore.ast_is(node.kind, model.AstKind.NeutralBracket) {
         return vec.len(node.children) > 0 &&
             source_type_syntax(state, module, file_index, file, node.children[0]);
     }
     let symbol = source_ast_symbol(state, module, file_index, file, id);
     if option.is_some(symbol) {
-        let kind = verifier_symbol(state, option_usize(symbol)).kind;
-        return symbol_is(kind, model.SymbolKind.Type) ||
-               symbol_is(kind, model.SymbolKind.BuiltinType) ||
-               symbol_is(kind, model.SymbolKind.TypeParameter);
+        let kind = hircore.verifier_symbol(state, hircore.option_usize(symbol)).kind;
+        return hircore.symbol_is(kind, model.SymbolKind.Type) ||
+               hircore.symbol_is(kind, model.SymbolKind.BuiltinType) ||
+               hircore.symbol_is(kind, model.SymbolKind.TypeParameter);
     }
     return false;
 }
@@ -763,14 +765,14 @@ func source_type_syntax(state Verifier, module usize, file_index usize,
 // ForeignRead at the same source node, so the unique-node-type fallback cannot
 // recover the local's declared type.  Resolve the local first, including
 // instance renames, exactly like the C++ verifier's local_type lookup.
-func source_local_type(state Verifier, module usize, file_index usize,
+func source_local_type(state hircore.Verifier, module usize, file_index usize,
                        file model.ParseResult, id usize,
                        function_symbol usize) option.Option[usize] {
     let symbol = source_ast_symbol(state, module, file_index, file, id);
     if !option.is_some(symbol) {
         return option.Option[usize].None;
     }
-    var symbol_id = option_usize(symbol);
+    var symbol_id = hircore.option_usize(symbol);
     for instance in state.m.instances {
         if instance.symbol == function_symbol {
             for rename in instance.renamed {
@@ -781,7 +783,7 @@ func source_local_type(state Verifier, module usize, file_index usize,
             }
         }
     }
-    let found = local_index(state, symbol_id);
+    let found = hircore.local_index(state, symbol_id);
     if found < 0 {
         return option.Option[usize].None;
     }
@@ -792,17 +794,17 @@ func source_local_type(state Verifier, module usize, file_index usize,
     return option.Option[usize].Some(local.type_id);
 }
 
-func source_ast_type(state inout Verifier, module usize, file_index usize,
+func source_ast_type(state inout hircore.Verifier, module usize, file_index usize,
                      file model.ParseResult, id usize, depth usize,
                      node_types NodeTypeIndex, function_symbol usize)
-    option.Option[usize] throws Invalid {
+    option.Option[usize] throws hircore.Invalid {
     if depth > 64 {
         return option.Option[usize].None;
     }
     let unwrapped = source_unwrap_ast(state, file, id);
     let node = file.nodes[unwrapped];
-    if ast_is(node.kind, model.AstKind.Name) ||
-       ast_is(node.kind, model.AstKind.Member) {
+    if hircore.ast_is(node.kind, model.AstKind.Name) ||
+       hircore.ast_is(node.kind, model.AstKind.Member) {
         let local = source_local_type(state, module, file_index, file,
             unwrapped, function_symbol);
         if option.is_some(local) {
@@ -810,28 +812,28 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         }
         let symbol = source_ast_symbol(state, module, file_index, file, unwrapped);
         if option.is_some(symbol) {
-            let exported = foreign_export(state, option_usize(symbol));
+            let exported = hircore.foreign_export(state, hircore.option_usize(symbol));
             if option.is_some(exported) {
-                let declaration = option_foreign_export(exported).declaration;
+                let declaration = hircore.option_foreign_export(exported).declaration;
                 if option.is_some(declaration) &&
-                   option_usize(declaration) < vec.len(state.m.foreign_bindings) {
+                   hircore.option_usize(declaration) < vec.len(state.m.foreign_bindings) {
                     return option.Option[usize].Some(
-                        state.m.foreign_bindings[option_usize(declaration)].type_id);
+                        state.m.foreign_bindings[hircore.option_usize(declaration)].type_id);
                 }
             }
         }
-        if ast_is(node.kind, model.AstKind.Member) &&
+        if hircore.ast_is(node.kind, model.AstKind.Member) &&
            vec.len(node.children) > 0 {
             let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
                 node_types, function_symbol);
             if option.is_some(base) {
-                let base_type = verifier_type(state, option_usize(base));
-                if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
-                    let owner = foreign_declaration(state, base_type.binding);
-                    let owner_type = option_binding_type(owner.detail);
+                let base_type = hircore.verifier_type(state, hircore.option_usize(base));
+                if hircore.kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                    let owner = hircalls.foreign_declaration(state, base_type.binding);
+                    let owner_type = hircalls.option_binding_type(owner.detail);
                     let name = source_member_name(file, unwrapped);
                     for member in owner_type.members {
-                        let member_decl = foreign_declaration(state, member);
+                        let member_decl = hircalls.foreign_declaration(state, member);
                         var callable = false;
                         switch member_decl.detail {
                             case model.ForeignDetail.Callable(value):
@@ -845,19 +847,19 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
                         }
                     }
                     for member in owner_type.properties {
-                        if foreign_declaration(state, member).name == name {
+                        if hircalls.foreign_declaration(state, member).name == name {
                             return option.Option[usize].Some(
                                 state.m.foreign_bindings[member].type_id);
                         }
                     }
                 }
-                if kind_is(base_type.kind, model.TypeKind.NominalStruct) {
-                    let declaration = nominal_type(state, option_usize(base));
+                if hircore.kind_is(base_type.kind, model.TypeKind.NominalStruct) {
+                    let declaration = hircore.nominal_type(state, hircore.option_usize(base));
                     for field in declaration.fields {
-                        if verifier_symbol(state, field.symbol).name ==
+                        if hircore.verifier_symbol(state, field.symbol).name ==
                            source_member_name(file, unwrapped) {
                             return option.Option[usize].Some(
-                                field_type(inout state, option_usize(base), field));
+                                hircore.field_type(inout state, hircore.option_usize(base), field));
                         }
                     }
                 }
@@ -869,43 +871,43 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         }
         return option.Option[usize].None;
     }
-    if ast_is(node.kind, model.AstKind.Call) && vec.len(node.children) > 0 {
+    if hircore.ast_is(node.kind, model.AstKind.Call) && vec.len(node.children) > 0 {
         let callee = node.children[0];
         let target = source_unwrap_ast(state, file, callee);
         let target_node = file.nodes[target];
         let symbol = source_ast_symbol(state, module, file_index, file, target);
         if option.is_some(symbol) {
-            let exported = foreign_export(state, option_usize(symbol));
+            let exported = hircore.foreign_export(state, hircore.option_usize(symbol));
             if option.is_some(exported) &&
-               vec.len(option_foreign_export(exported).candidates) > 0 {
+               vec.len(hircore.option_foreign_export(exported).candidates) > 0 {
                 return common_foreign_result(state,
-                    option_foreign_export(exported).candidates);
+                    hircore.option_foreign_export(exported).candidates);
             }
-            if symbol_is(verifier_symbol(state, option_usize(symbol)).kind,
+            if hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(symbol)).kind,
                          model.SymbolKind.Function) {
-                let found = function_entry_index(state, option_usize(symbol));
+                let found = hircore.function_entry_index(state, hircore.option_usize(symbol));
                 if found >= 0 {
-                    return option.Option[usize].Some(verifier_type(state,
-                        verifier_function(state,
-                            option_usize(symbol)).signature).result);
+                    return option.Option[usize].Some(hircore.verifier_type(state,
+                        hircore.verifier_function(state,
+                            hircore.option_usize(symbol)).signature).result);
                 }
             }
         }
         var method = target;
-        if ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
+        if hircore.ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
            vec.len(target_node.children) > 0 {
             method = source_unwrap_ast(state, file, target_node.children[0]);
         }
         let method_node = file.nodes[method];
-        if ast_is(method_node.kind, model.AstKind.Member) &&
+        if hircore.ast_is(method_node.kind, model.AstKind.Member) &&
            !option.is_some(source_ast_symbol(state, module, file_index, file, method)) {
             let base = source_ast_type(inout state, module, file_index, file, method_node.children[0],
                 depth + 1, node_types, function_symbol);
             if option.is_some(base) &&
-               kind_is(verifier_type(state, option_usize(base)).kind,
+               hircore.kind_is(hircore.verifier_type(state, hircore.option_usize(base)).kind,
                    model.TypeKind.ForeignOpaque) {
                 let candidates = source_method_candidates(state,
-                    option_usize(base), source_member_name(file, method));
+                    hircore.option_usize(base), source_member_name(file, method));
                 if vec.len(candidates) > 0 {
                     return common_foreign_result(state, candidates);
                 }
@@ -914,14 +916,14 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         let callee_type = source_ast_type(inout state, module, file_index, file, callee, depth + 1,
             node_types, function_symbol);
         if option.is_some(callee_type) {
-            let kind = verifier_type(state, option_usize(callee_type)).kind;
-            if kind_is(kind, model.TypeKind.Function) {
+            let kind = hircore.verifier_type(state, hircore.option_usize(callee_type)).kind;
+            if hircore.kind_is(kind, model.TypeKind.Function) {
                 return option.Option[usize].Some(
-                    verifier_type(state, option_usize(callee_type)).result);
+                    hircore.verifier_type(state, hircore.option_usize(callee_type)).result);
             }
-            if kind_is(kind, model.TypeKind.ForeignOpaque) {
+            if hircore.kind_is(kind, model.TypeKind.ForeignOpaque) {
                 let candidates = source_callable_candidates(state,
-                    option_usize(callee_type));
+                    hircore.option_usize(callee_type));
                 if vec.len(candidates) > 0 {
                     return common_foreign_result(state, candidates);
                 }
@@ -929,41 +931,41 @@ func source_ast_type(state inout Verifier, module usize, file_index usize,
         }
         return node_type_unique(node_types, model.NodeRef(module: module, file: file_index, node: unwrapped));
     }
-    if ast_is(node.kind, model.AstKind.NeutralBracket) &&
+    if hircore.ast_is(node.kind, model.AstKind.NeutralBracket) &&
        vec.len(node.children) == 2 {
         let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
             node_types, function_symbol);
         if option.is_some(base) {
-            let base_type = verifier_type(state, option_usize(base));
-            if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
-                let owner = foreign_declaration(state, base_type.binding);
-                let owner_type = option_binding_type(owner.detail);
+            let base_type = hircore.verifier_type(state, hircore.option_usize(base));
+            if hircore.kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                let owner = hircalls.foreign_declaration(state, base_type.binding);
+                let owner_type = hircalls.option_binding_type(owner.detail);
                 if vec.len(owner_type.indexers) > 0 {
                     return option.Option[usize].Some(
                         state.m.foreign_bindings[owner_type.indexers[0]].type_id);
                 }
             }
-            if kind_is(base_type.kind, model.TypeKind.Vec) ||
-               kind_is(base_type.kind, model.TypeKind.Slice) {
+            if hircore.kind_is(base_type.kind, model.TypeKind.Vec) ||
+               hircore.kind_is(base_type.kind, model.TypeKind.Slice) {
                 return option.Option[usize].Some(base_type.type_args[0]);
             }
         }
     }
-    if ast_is(node.kind, model.AstKind.Slice) {
+    if hircore.ast_is(node.kind, model.AstKind.Slice) {
         let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
             node_types, function_symbol);
         if option.is_some(base) {
-            let base_type = verifier_type(state, option_usize(base));
-            if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
-                let owner = foreign_declaration(state, base_type.binding);
-                let owner_type = option_binding_type(owner.detail);
+            let base_type = hircore.verifier_type(state, hircore.option_usize(base));
+            if hircore.kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                let owner = hircalls.foreign_declaration(state, base_type.binding);
+                let owner_type = hircalls.option_binding_type(owner.detail);
                 if vec.len(owner_type.slices) > 0 {
                     return option.Option[usize].Some(
                         state.m.foreign_bindings[owner_type.slices[0]].type_id);
                 }
             }
-            if kind_is(base_type.kind, model.TypeKind.Vec) ||
-               kind_is(base_type.kind, model.TypeKind.Slice) {
+            if hircore.kind_is(base_type.kind, model.TypeKind.Vec) ||
+               hircore.kind_is(base_type.kind, model.TypeKind.Slice) {
                 return base;
             }
         }
@@ -980,8 +982,8 @@ func source_member_name(file model.ParseResult, id usize) string {
     return file.lexed.tokens[node.token_end - 1].spelling;
 }
 
-func common_foreign_result(state Verifier, candidates Vec[usize])
-    option.Option[usize] throws Invalid {
+func common_foreign_result(state hircore.Verifier, candidates Vec[usize])
+    option.Option[usize] throws hircore.Invalid {
     var result = option.Option[usize].None;
     for candidate in candidates {
         if candidate >= vec.len(state.m.foreign_bindings) {
@@ -991,8 +993,8 @@ func common_foreign_result(state Verifier, candidates Vec[usize])
         if !option.is_some(binding.signature) {
             return option.Option[usize].None;
         }
-        let value = verifier_type(state, option_usize(binding.signature)).result;
-        if option.is_some(result) && option_usize(result) != value {
+        let value = hircore.verifier_type(state, hircore.option_usize(binding.signature)).result;
+        if option.is_some(result) && hircore.option_usize(result) != value {
             return option.Option[usize].None;
         }
         result = option.Option[usize].Some(value);
@@ -1000,17 +1002,17 @@ func common_foreign_result(state Verifier, candidates Vec[usize])
     return result;
 }
 
-func source_method_candidates(state Verifier, receiver usize, name string)
-    Vec[usize] throws Invalid {
+func source_method_candidates(state hircore.Verifier, receiver usize, name string)
+    Vec[usize] throws hircore.Invalid {
     let result = vec.empty[usize]();
-    let receiver_type = verifier_type(state, receiver);
-    if !kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+    let receiver_type = hircore.verifier_type(state, receiver);
+    if !hircore.kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
         return result;
     }
-    let owner = foreign_declaration(state, receiver_type.binding);
-    var owner_type = option_binding_type(owner.detail);
+    let owner = hircalls.foreign_declaration(state, receiver_type.binding);
+    var owner_type = hircalls.option_binding_type(owner.detail);
     for member in owner_type.members {
-        let declaration = foreign_declaration(state, member);
+        let declaration = hircalls.foreign_declaration(state, member);
         var callable = false;
         switch declaration.detail {
             case model.ForeignDetail.Callable(value):
@@ -1025,17 +1027,17 @@ func source_method_candidates(state Verifier, receiver usize, name string)
     return result;
 }
 
-func source_callable_candidates(state Verifier, receiver usize) Vec[usize]
-    throws Invalid {
+func source_callable_candidates(state hircore.Verifier, receiver usize) Vec[usize]
+    throws hircore.Invalid {
     let result = vec.empty[usize]();
-    let receiver_type = verifier_type(state, receiver);
-    if !kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+    let receiver_type = hircore.verifier_type(state, receiver);
+    if !hircore.kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
         return result;
     }
-    let owner = foreign_declaration(state, receiver_type.binding);
-    let owner_type = option_binding_type(owner.detail);
+    let owner = hircalls.foreign_declaration(state, receiver_type.binding);
+    let owner_type = hircalls.option_binding_type(owner.detail);
     for member in owner_type.members {
-        let declaration = foreign_declaration(state, member);
+        let declaration = hircalls.foreign_declaration(state, member);
         var callable = false;
         switch declaration.detail {
             case model.ForeignDetail.Callable(value):

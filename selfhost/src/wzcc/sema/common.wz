@@ -1,5 +1,7 @@
 // CPP check.cpp:129-207,414-500. No declaration/expression checker algorithms.
 package sema;
+
+import "app/wzcc/semaeffects" as effects;
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -241,4 +243,12 @@ func expression_mode(state inout Checker, input model.NodeRef) ArgumentMode thro
 func argument_mode(state inout Checker, r model.NodeRef) ArgumentMode throws Error {
     let value=child(inout state,r,0);
     return expression_mode(inout state,value);
+}
+
+func effect_error(state inout Checker, problem effects.Error) Error throws Error {
+    switch problem {
+        case effects.Error.Support(detail): return Error.Support(detail);
+        case effects.Error.Rejected(location, message, code):
+            return reject(inout state, location, message, code);
+    }
 }

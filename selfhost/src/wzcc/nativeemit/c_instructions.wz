@@ -497,6 +497,7 @@ func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
                 }
                 case option.Option.None: {}
             }
+            if state.options.debug_info { debug_unavailable(instruction.slot, inout state); }
             return option.Option[Value].Some(value);
         }
         case nativeir.Op.Take: {
@@ -509,11 +510,13 @@ func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
                     throw invalid("take of a slot without an active flag");
                 }
             }
+            if state.options.debug_info { debug_unavailable(instruction.slot, inout state); }
             return c_none_result();
         }
         case nativeir.Op.Destroy: {
             let slot_type = c_native_slot_type(instruction.slot, state);
             destroy_slot(instruction.slot, slot_type, inout state);
+            if state.options.debug_info { debug_unavailable(instruction.slot, inout state); }
             return c_none_result();
         }
         case nativeir.Op.Function: {

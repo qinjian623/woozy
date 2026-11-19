@@ -1,6 +1,8 @@
 // Generic/direct/typed call argument ordering and scalar conversions.
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -198,7 +200,7 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             switch constraint_receiver {
                 case option.Option.Some(value): {
                     let value_type = lookup_type(inout state, value);
-                    if b_type_kind_is(value_type.kind, model.TypeKind.TypeParameter) {
+                    if effects.b_type_kind_is(value_type.kind, model.TypeKind.TypeParameter) {
                         vec.push(substitutions, model.Substitution(
                             symbol: value_type.declaration, type_id: value));
                     }
@@ -439,7 +441,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
             option.Option[usize].None, false);
         let target_type = lookup_type(inout state, target);
         if !integer(inout state, target) &&
-           !b_type_kind_is(target_type.kind, model.TypeKind.Float) {
+           !effects.b_type_kind_is(target_type.kind, model.TypeKind.Float) {
             throw unavailable(inout state, r,
                 "only explicit integer/float numeric conversions are implemented");
         }
@@ -467,7 +469,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
         }
         let x = expression(inout state, expression_ref, expected);
         let source_integer = integer(inout state, x.value.type_id);
-        let source_float = b_type_kind_is(
+        let source_float = effects.b_type_kind_is(
             lookup_type(inout state, x.value.type_id).kind, model.TypeKind.Float);
         if !source_integer && !source_float {
             throw reject(inout state, argument,
@@ -477,7 +479,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
         let source_width = width(inout state, x.value.type_id);
         let target_width = width(inout state, target);
         let float_pair = source_float &&
-            b_type_kind_is(target_type.kind, model.TypeKind.Float);
+            effects.b_type_kind_is(target_type.kind, model.TypeKind.Float);
         if float_pair && source_width != 32 && source_width != 64 {
             throw reject(inout state, r,
                 "floating conversion source has an invalid width",
@@ -519,7 +521,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
                     value.integer = option.Option[bigint.BigInt].Some(truncated);
                 case option.Option.None: {}
             }
-        } else if b_type_kind_is(target_type.kind, model.TypeKind.Float) {
+        } else if effects.b_type_kind_is(target_type.kind, model.TypeKind.Float) {
             switch x.value.integer {
                 case option.Option.Some(integer_value):
                     try {
@@ -578,7 +580,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
                     option.Option[usize].None);
         }
         let callee_type = lookup_type(inout state, callee.value.type_id);
-        if b_type_kind_is(callee_type.kind, model.TypeKind.ForeignOpaque) {
+        if effects.b_type_kind_is(callee_type.kind, model.TypeKind.ForeignOpaque) {
             let candidates = foreign_members(inout state, callee.value.type_id,
                 "", "callable");
             if vec.len(candidates) == 0 {
@@ -588,7 +590,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
             return foreign_call(inout state, r, callee_ref, candidates,
                 option.Option[Expr].Some(callee));
         }
-        if !b_type_kind_is(callee_type.kind, model.TypeKind.Function) {
+        if !effects.b_type_kind_is(callee_type.kind, model.TypeKind.Function) {
             throw reject(inout state, callee_ref,
                 "callee is not a function", "E_CALL_ARGUMENT");
         }

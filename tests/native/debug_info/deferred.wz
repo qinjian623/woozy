@@ -1,0 +1,17 @@
+package app;
+
+func measure(seed i32, total inout i32) i32 {
+    defer {
+        let item = seed + 1;
+        total += item; // BREAK_DEFER
+    }
+    if seed == 10 { return 5; }
+    return 6;
+}
+
+func main() i32 {
+    var total i32 = 0;
+    let first = measure(10, inout total);
+    let second = measure(20, inout total);
+    return first + second + total - 1;
+}

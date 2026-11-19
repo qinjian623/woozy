@@ -1,6 +1,8 @@
 // Constants, flow analysis, patterns, switches and statements (CPP 4695-5895).
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/constant" as constant_pkg;
 import "app/wzcc/foreign" as foreign;
@@ -32,7 +34,7 @@ func evaluated_constant(value inout Constant, constant_value hir.ConstantValue)
             value.value.string_value = option.Option[string].Some(payload.utf8);
         case hir.ConstantData.FunctionValue(payload): {
             value.function = option.Option[usize].Some(payload.symbol);
-            value.type_args = b_copy_ids(payload.type_args);
+            value.type_args = effects.b_copy_ids(payload.type_args);
         }
         default: {}
     }
@@ -98,7 +100,7 @@ func constant(state inout Checker, symbol_id usize) Constant throws Error { let 
                 case option.Option.None: {}
             }
             result.function = option.Option[usize].Some(function.symbol);
-            result.type_args = b_copy_ids(function.type_args);
+            result.type_args = effects.b_copy_ids(function.type_args);
         }
         case option.Option.None: {}
     }
@@ -172,204 +174,15 @@ func new_scope(state inout Checker, r model.NodeRef,
     return id;
 }
 
-func flow(state inout Checker, id usize, depth usize) Flow throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if depth > 512 {
-        throw internal_error("flow nesting limit");
-    }
-    if id >= vec.len(state.m.nodes) {
-        throw internal_error("invalid flow node");
-    }
-    let n = state.m.nodes[id];
-    var out = b_flow_empty();
-    let kind = hir.node_kind(n.data);
-    if b_node_kind_is(kind, hir.NodeKind.Defer) {
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.ShortCircuit) {
-        let first = flow(inout state, n.children[0], depth + 1);
-        b_flow_merge(out, first);
-        let known = b_node_bool_literal(state.m.nodes[n.children[0]]);
-        var take_second = true;
-        switch known {
-            case option.Option.Some(value):
-                switch n.data {
-                    case hir.NodeData.ShortCircuit(payload):
-                        switch payload.op {
-                            case hir.LogicalOp.And: if !value.value { take_second = false; }
-                            case hir.LogicalOp.Or: if value.value { take_second = false; }
-                        }
-                    default: {}
-                }
-            case option.Option.None: {}
-        }
-        if take_second {
-            b_flow_merge(out, flow(inout state, n.children[1], depth + 1));
-        }
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.Block) {
-        for child_id in n.children {
-            if !out.falls { break; }
-            let child_flow = flow(inout state, child_id, depth + 1);
-            b_flow_merge(out, child_flow);
-            out.falls = child_flow.falls;
-        }
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.If) {
-        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
-        let known = b_node_bool_literal(state.m.nodes[n.children[0]]);
-        var has_known = false;
-        var known_value = false;
-        switch known {
-            case option.Option.Some(value): { has_known = true; known_value = value.value; }
-            case option.Option.None: {}
-        }
-        out.falls = !has_known && vec.len(n.children) == 2;
-        for var index usize = 1; index < vec.len(n.children); index += 1 {
-            if has_known {
-                if known_value && index != 1 { continue; }
-                if !known_value && index != 2 { continue; }
-            }
-            let branch = flow(inout state, n.children[index], depth + 1);
-            b_flow_merge(out, branch);
-            out.falls = out.falls || branch.falls;
-        }
-        if has_known && !known_value && vec.len(n.children) == 2 {
-            out.falls = true;
-        }
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.Try) {
-        let body = flow(inout state, n.children[0], depth + 1);
-        out = b_flow_copy(body);
-        var catches = vec.empty[hir.Catch]();
-        switch n.data {
-            case hir.NodeData.Try(value): catches = value.catches;
-            default: {}
-        }
-        for catch_value in catches {
-            b_remove_id(out.errors, catch_value.error_type);
-        }
-        for catch_value in catches {
-            var reachable = false;
-            for error_id in body.errors {
-                if b_patterns_overlap(inout state, error_id, catch_value.error_type) {
-                    reachable = true;
-                }
-            }
-            if !reachable { continue; }
-            let handler = flow(inout state, catch_value.body, depth + 1);
-            b_flow_merge(out, handler);
-            out.falls = out.falls || handler.falls;
-        }
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.Switch) {
-        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
-        out.falls = false;
-        for var index usize = 1; index < vec.len(n.children); index += 1 {
-            let arm = flow(inout state, n.children[index], depth + 1);
-            b_flow_merge(out, arm);
-            out.falls = out.falls || arm.falls || b_vec_contains(arm.breaks, id);
-        }
-        b_remove_id(out.breaks, id);
-        return out;
-    }
-    if b_node_kind_is(kind, hir.NodeKind.For) {
-        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
-        b_flow_merge(out, flow(inout state, n.children[1], depth + 1));
-        let known = b_node_bool_literal(state.m.nodes[n.children[1]]);
-        var cond_known = false;
-        var cond_value = true;
-        switch known {
-            case option.Option.Some(value): { cond_known = true; cond_value = value.value; }
-            case option.Option.None: {}
-        }
-        if cond_known && !cond_value { return out; }
-        let body = flow(inout state, n.children[3], depth + 1);
-        b_flow_merge(out, body);
-        if body.falls || b_vec_contains(body.continues, id) {
-            b_flow_merge(out, flow(inout state, n.children[2], depth + 1));
-        }
-        out.falls = !cond_known || b_vec_contains(body.breaks, id);
-        b_remove_id(out.breaks, id);
-        b_remove_id(out.continues, id);
-        return out;
-    }
-    for child_id in n.children {
-        b_flow_merge(out, flow(inout state, child_id, depth + 1));
-    }
-    switch b_node_call(n) {
-        case option.Option.Some(payload):
-            b_flow_add_signature_error(inout state, out, payload.signature);
-        case option.Option.None: {}
-    }
-    switch b_node_constraint_call(n) {
-        case option.Option.Some(payload):
-            b_flow_add_signature_error(inout state, out, payload.signature);
-        case option.Option.None: {}
-    }
-    switch b_node_foreign_read(n) {
-        case option.Option.Some(payload):
-            b_insert_sorted(out.errors,
-                b_foreign_binding(inout state, payload.binding).read_error);
-        case option.Option.None: {}
-    }
-    if b_node_await(n) {
-        let task_node_type = state.m.nodes[n.children[0]].type_id;
-        let task_type = lookup_type(inout state, task_node_type);
-        if !b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
-           vec.len(task_type.type_args) < 2 {
-            throw internal_error("await child is not a Task");
-        }
-        let error_id = task_type.type_args[1];
-        if !b_type_kind_is(lookup_type(inout state, error_id).kind,
-                           model.TypeKind.Unit) {
-            b_insert_sorted(out.errors, error_id);
-        }
-    }
-    if b_node_throw(n) {
-        b_insert_sorted(out.errors, state.m.nodes[n.children[0]].type_id);
-        out.falls = false;
-    }
-    switch b_node_return(n) {
-        case option.Option.Some(value): out.falls = false;
-        case option.Option.None: {}
-    }
-    switch b_node_break(n) {
-        case option.Option.Some(value): {
-            b_insert_sorted(out.breaks, value.loop);
-            out.falls = false;
-        }
-        case option.Option.None: {}
-    }
-    switch b_node_continue(n) {
-        case option.Option.Some(value): {
-            b_insert_sorted(out.continues, value.loop);
-            out.falls = false;
-        }
-        case option.Option.None: {}
-    }
-    return out;
+
+func flow(state inout Checker, id usize, depth usize) effects.Flow throws Error {
+    try { return effects.flow(state.m, id, depth); }
+    catch problem effects.Error { throw effect_error(inout state, problem); }
 }
 
-func b_flow_add_signature_error(state inout Checker, out Flow,
-                                signature_id usize) throws Error {
-    let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let signature_type = lookup_type(inout state, signature_id);
-    switch signature_type.throws_type {
-        case option.Option.Some(value): b_insert_sorted(out.errors, value);
-        case option.Option.None: {}
-    }
-}
-
-func b_patterns_overlap(state inout Checker, left usize, right usize) bool throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    try { return types.patterns_overlap(left, right, state.m.types); }
-    catch error types.Error { throw Error.Support(support_from_type_error(error)); }
+func b_patterns_overlap(state inout Checker, left usize, right usize) bool throws Error {
+    try { return effects.b_patterns_overlap(state.m, left, right); }
+    catch problem effects.Error { throw effect_error(inout state, problem); }
 }
 
 func block(state inout Checker, r model.NodeRef, outer bool) Statement throws Error { let b_module=state.m;
@@ -429,7 +242,7 @@ func pattern(state inout Checker, r model.NodeRef, type_id usize)
         throw unavailable(inout state, r,
             "only literal, enum variant, binding and wildcard patterns are implemented");
     }
-    if !b_type_kind_is(lookup_type(inout state, type_id).kind,
+    if !effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                        model.TypeKind.NominalEnum) {
         throw reject(inout state, r, "variant pattern requires an enum",
             "E_TYPE_MISMATCH");
@@ -534,7 +347,7 @@ func b_domain_for(state inout Checker, type_id usize)
             throw model.SupportError.Limit(
                 "pattern coverage type is missing");
     }
-    if b_type_kind_is(value.kind, model.TypeKind.NominalEnum) {
+    if effects.b_type_kind_is(value.kind, model.TypeKind.NominalEnum) {
         var declaration_index usize = 0;
         var found = false;
         switch a_nominal_id_get(state.nominal_ids, value.declaration) {
@@ -588,15 +401,15 @@ func b_domain_for(state inout Checker, type_id usize)
             kind: pattern_analysis.DomainKind.NominalEnum,
             constructors: constructors, bits: 0);
     }
-    if b_type_kind_is(value.kind, model.TypeKind.Bool) {
+    if effects.b_type_kind_is(value.kind, model.TypeKind.Bool) {
         return pattern_analysis.Domain(
             kind: pattern_analysis.DomainKind.BoolDomain,
             constructors: [], bits: 1);
     }
-    if b_type_kind_is(value.kind, model.TypeKind.SignedInt) ||
-       b_type_kind_is(value.kind, model.TypeKind.UnsignedInt) ||
-       b_type_kind_is(value.kind, model.TypeKind.Isize) ||
-       b_type_kind_is(value.kind, model.TypeKind.Usize) {
+    if effects.b_type_kind_is(value.kind, model.TypeKind.SignedInt) ||
+       effects.b_type_kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       effects.b_type_kind_is(value.kind, model.TypeKind.Isize) ||
+       effects.b_type_kind_is(value.kind, model.TypeKind.Usize) {
         var bits u32 = 0;
         try { bits = types.bit_width(value, state.m.config); }
         catch error types.Error { throw support_from_type_error(error); }
@@ -604,12 +417,12 @@ func b_domain_for(state inout Checker, type_id usize)
             kind: pattern_analysis.DomainKind.IntegerDomain,
             constructors: [], bits: bits);
     }
-    if b_type_kind_is(value.kind, model.TypeKind.Float) {
+    if effects.b_type_kind_is(value.kind, model.TypeKind.Float) {
         return pattern_analysis.Domain(
             kind: pattern_analysis.DomainKind.FloatDomain,
             constructors: [], bits: value.bits);
     }
-    if b_type_kind_is(value.kind, model.TypeKind.String) {
+    if effects.b_type_kind_is(value.kind, model.TypeKind.String) {
         return pattern_analysis.Domain(
             kind: pattern_analysis.DomainKind.StringDomain,
             constructors: [], bits: 0);
@@ -834,7 +647,7 @@ func b_statement_binding(state inout Checker, r model.NodeRef,
         pure = constant_pkg.evaluate_hir_constant(state.m, e.id);
     }
     var alias = option.Option[Constant].None;
-    switch b_node_read(state.m.nodes[e.id]) {
+    switch effects.b_node_read(state.m.nodes[e.id]) {
         case option.Option.Some(read):
             if b_symbol_kind_is(symbol(inout state, read.symbol).kind,
                                 model.SymbolKind.Constant) {
@@ -895,13 +708,13 @@ func b_statement_binding(state inout Checker, r model.NodeRef,
                     case option.Option.None: {}
                 }
                 c.function = option.Option[usize].Some(function.symbol);
-                c.type_args = b_copy_ids(function.type_args);
+                c.type_args = effects.b_copy_ids(function.type_args);
             }
             case option.Option.None: {
                 switch alias {
                     case option.Option.Some(stored): {
                         c.function = stored.function;
-                        c.type_args = b_copy_ids(stored.type_args);
+                        c.type_args = effects.b_copy_ids(stored.type_args);
                     }
                     case option.Option.None: {}
                 }
@@ -934,12 +747,12 @@ func b_statement_assign(state inout Checker, r model.NodeRef,
         var op = hir.BinaryOp.Add;
         switch compound { case option.Option.Some(value): op = value; case option.Option.None: {} }
         let p_type = lookup_type(inout state, p.value.type_id);
-        let floating = b_type_kind_is(p_type.kind, model.TypeKind.Float) &&
+        let floating = effects.b_type_kind_is(p_type.kind, model.TypeKind.Float) &&
             (b_binary_id(op) == BINARY_ADD || b_binary_id(op) == BINARY_SUBTRACT ||
              b_binary_id(op) == BINARY_MULTIPLY || b_binary_id(op) == BINARY_DIVIDE);
-        let text = b_type_kind_is(p_type.kind, model.TypeKind.String) &&
+        let text = effects.b_type_kind_is(p_type.kind, model.TypeKind.String) &&
             b_binary_id(op) == BINARY_ADD;
-        if text && !b_node_kind_is(hir.node_kind(state.m.nodes[p.id].data),
+        if text && !effects.b_node_kind_is(hir.node_kind(state.m.nodes[p.id].data),
                                    hir.NodeKind.Place) {
             throw unavailable(inout state, r,
                 "string += requires a whole writable binding");
@@ -987,11 +800,11 @@ func b_statement_try(state inout Checker, r model.NodeRef,
         let case_ref = b_child_m(b_module, r, index);
         let type_id = parse_type(inout state, b_child_m(b_module, case_ref, 0),
             option.Option[usize].None, false);
-        if b_vec_contains(types_seen, type_id) {
+        if effects.b_vec_contains(types_seen, type_id) {
             throw unavailable(inout state, case_ref,
                 "duplicate catch types are not implemented");
         }
-        b_insert_sorted(types_seen, type_id);
+        effects.b_insert_sorted(types_seen, type_id);
         vec.push(catches, hir.Catch(error_type: type_id,
             binding: definition(inout state, case_ref), scope: 0, body: 0,
             source: source(inout state, case_ref)));
@@ -1078,7 +891,7 @@ func b_statement_if(state inout Checker, r model.NodeRef,
         else_falls = no.falls;
         else_breaks = no.breaks;
     }
-    switch b_node_bool_literal(state.m.nodes[cond.id]) {
+    switch effects.b_node_bool_literal(state.m.nodes[cond.id]) {
         case option.Option.Some(value): {
             if value.value {
                 falls = yes.falls;
@@ -1105,9 +918,9 @@ func b_statement_for_in(state inout Checker, r model.NodeRef,
         option.Option[usize].None);
     let collection_type = collection.value.type_id;
     let collection_kind = lookup_type(inout state, collection_type).kind;
-    let builtin = b_type_kind_is(collection_kind, model.TypeKind.Vec) ||
-        b_type_kind_is(collection_kind, model.TypeKind.Slice) ||
-        b_type_kind_is(collection_kind, model.TypeKind.String);
+    let builtin = effects.b_type_kind_is(collection_kind, model.TypeKind.Vec) ||
+        effects.b_type_kind_is(collection_kind, model.TypeKind.Slice) ||
+        effects.b_type_kind_is(collection_kind, model.TypeKind.String);
     var trait_index = option.Option[usize].None;
     if !builtin { trait_index = std_iterator_trait(inout state); }
     var iterator_next = option.Option[hir.MethodPrototype].None;
@@ -1115,7 +928,7 @@ func b_statement_for_in(state inout Checker, r model.NodeRef,
     var bound = option.Option[hir.TraitRef].None;
     var element_type usize = 0;
     let constrained_iterator = !builtin &&
-        b_type_kind_is(collection_kind, model.TypeKind.TypeParameter);
+        effects.b_type_kind_is(collection_kind, model.TypeKind.TypeParameter);
     if !builtin {
         var trait_id usize = 0;
         switch trait_index {
@@ -1214,7 +1027,7 @@ func b_statement_for_in(state inout Checker, r model.NodeRef,
         option.Option[usize].Some(loop_scope));
     let body_scope_id = state.scope;
     if builtin {
-        if b_type_kind_is(collection_kind, model.TypeKind.String) {
+        if effects.b_type_kind_is(collection_kind, model.TypeKind.String) {
             element_type = scalar(inout state, model.TypeKind.UnsignedInt, 32);
         } else {
             element_type = b_type_args0(inout state, collection_type);
@@ -1459,7 +1272,7 @@ func b_statement_for(state inout Checker, r model.NodeRef,
     vec.pop(state.break_targets);
     state.scope = saved;
     var forever = false;
-    switch b_node_bool_literal(state.m.nodes[cond_id]) {
+    switch effects.b_node_bool_literal(state.m.nodes[cond_id]) {
         case option.Option.Some(value): forever = value.value;
         case option.Option.None: {}
     }

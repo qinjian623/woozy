@@ -1,0 +1,913 @@
+// Verifier state plus source/name/type lookup primitives.  Algorithms are
+// split across the other files in this package; this file mirrors the private
+// Verifier storage and the small const helpers at the top of src/hir/hir.cpp.
+package core;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct Local {
+    pub type_id usize;
+    pub scope usize;
+    pub function usize;
+    pub writable bool;
+    pub ready usize;
+    pub read_only bool;
+}
+
+pub struct LocalEntry {
+    pub symbol usize;
+    pub value Local;
+}
+
+pub struct FunctionEntry {
+    pub symbol usize;
+    pub in_template bool;
+    pub index usize;
+}
+
+pub struct TemplateEntry {
+    pub symbol usize;
+    pub index usize;
+}
+
+pub struct NominalEntry {
+    pub symbol usize;
+    pub index usize;
+}
+
+pub struct InstanceEntry {
+    pub symbol usize;
+    pub index usize;
+}
+
+pub struct AllFunction {
+    pub in_template bool;
+    pub index usize;
+}
+
+pub struct OwnerEntry {
+    pub has bool;
+    pub symbol usize;
+}
+
+pub struct NodeOptionEntry {
+    pub has bool;
+    pub value usize;
+}
+
+struct TraitKey {
+    actual usize;
+    declaration usize;
+    args Vec[usize];
+}
+
+struct TraitResultEntry {
+    key TraitKey;
+    value bool;
+}
+
+struct ValidatedEntry {
+    type_id usize;
+    allowed Vec[usize];
+}
+
+pub struct FunctionNodeIndex {
+    pub symbol usize;
+    pub nodes Vec[usize];
+}
+
+pub struct DefinedSymbol {
+    pub module usize;
+    pub file usize;
+    pub node usize;
+    pub symbol usize;
+}
+
+pub struct Verifier {
+    pub m hir.HirModule;
+    pub functions Vec[FunctionEntry];
+    pub locals Vec[LocalEntry];
+    pub enter Vec[usize];
+    pub leave Vec[usize];
+    pub owners Vec[OwnerEntry];
+    pub scope_used Vec[bool];
+    pub parents Vec[NodeOptionEntry];
+    pub scope_nodes Vec[NodeOptionEntry];
+    pub clock usize;
+    pub templates Vec[TemplateEntry];
+    pub nominals Vec[NominalEntry];
+    pub instances Vec[InstanceEntry];
+    pub all_functions Vec[AllFunction];
+    pub function_node_index Vec[FunctionNodeIndex];
+    pub synthetic_iterator_sources Vec[model.NodeRef];
+    pub synthetic_iterator_calls Vec[usize];
+    pub substituted types.Context;
+    active_constraints Vec[TraitKey];
+    active_trait_bounds Vec[TraitKey];
+    drop_known Vec[bool];
+    drop_result Vec[bool];
+    function_map Vec[i64];
+    pub external_map Vec[i64];
+    pub external_functions Vec[hir.HirFunction];
+    template_map Vec[i64];
+    pub nominal_map Vec[i64];
+    pub instance_map Vec[i64];
+    local_map Vec[i64];
+    pub impl_method_map Vec[i64];
+    pub defined_functions Vec[DefinedSymbol];
+    defined_type_params Vec[DefinedSymbol];
+    pub template_source_nodes Vec[DefinedSymbol];
+    trait_buckets Vec[Vec[TraitResultEntry]];
+    validated_empty Vec[bool];
+    validated_buckets Vec[Vec[ValidatedEntry]];
+}
+
+func defined_less(left DefinedSymbol, right DefinedSymbol) bool {
+    if left.module != right.module {
+        return left.module < right.module;
+    }
+    if left.file != right.file {
+        return left.file < right.file;
+    }
+    if left.node != right.node {
+        return left.node < right.node;
+    }
+    return left.symbol < right.symbol;
+}
+
+pub func defined_ref_cmp(item DefinedSymbol, reference model.NodeRef) i32 {
+    if item.module != reference.module {
+        if item.module < reference.module {
+            return -1;
+        }
+        return 1;
+    }
+    if item.file != reference.file {
+        if item.file < reference.file {
+            return -1;
+        }
+        return 1;
+    }
+    if item.node != reference.node {
+        if item.node < reference.node {
+            return -1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+func sort_defined_symbols(values Vec[DefinedSymbol]) {
+    let n = vec.len(values);
+    if n < 2 {
+        return;
+    }
+    let scratch = vec.empty[DefinedSymbol]();
+    vec.reserve(scratch, n);
+    for var index usize = 0; index < n; index += 1 {
+        vec.push(scratch, values[index]);
+    }
+    var width usize = 1;
+    for width < n {
+        var left usize = 0;
+        for left < n {
+            var mid = left + width;
+            if mid > n {
+                mid = n;
+            }
+            var right = left + width * 2;
+            if right > n {
+                right = n;
+            }
+            var i = left;
+            var j = mid;
+            var out = left;
+            for i < mid && j < right {
+                if defined_less(values[j], values[i]) {
+                    scratch[out] = values[j];
+                    j += 1;
+                } else {
+                    scratch[out] = values[i];
+                    i += 1;
+                }
+                out += 1;
+            }
+            for i < mid {
+                scratch[out] = values[i];
+                i += 1;
+                out += 1;
+            }
+            for j < right {
+                scratch[out] = values[j];
+                j += 1;
+                out += 1;
+            }
+            left += width * 2;
+        }
+        for var index usize = 0; index < n; index += 1 {
+            values[index] = scratch[index];
+        }
+        width *= 2;
+    }
+}
+
+pub func defined_lower_bound(values Vec[DefinedSymbol],
+                         reference model.NodeRef) usize {
+    var low usize = 0;
+    var high = vec.len(values);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if defined_ref_cmp(values[mid], reference) < 0 {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
+pub func defined_first(values Vec[DefinedSymbol], reference model.NodeRef) i64 {
+    let pos = defined_lower_bound(values, reference);
+    if pos < vec.len(values) && defined_ref_cmp(values[pos], reference) == 0 {
+        return i64(values[pos].symbol);
+    }
+    return -1;
+}
+
+pub func defined_last(values Vec[DefinedSymbol], reference model.NodeRef) i64 {
+    let pos = defined_lower_bound(values, reference);
+    if pos >= vec.len(values) || defined_ref_cmp(values[pos], reference) != 0 {
+        return -1;
+    }
+    var cur = pos;
+    for cur + 1 < vec.len(values) &&
+          defined_ref_cmp(values[cur + 1], reference) == 0 {
+        cur += 1;
+    }
+    return i64(values[cur].symbol);
+}
+
+func empty_trait_buckets() Vec[Vec[TraitResultEntry]] {
+    let buckets = vec.empty[Vec[TraitResultEntry]]();
+    vec.reserve(buckets, 256);
+    for var index usize = 0; index < 256; index += 1 {
+        vec.push(buckets, vec.empty[TraitResultEntry]());
+    }
+    return buckets;
+}
+
+func empty_validated_buckets() Vec[Vec[ValidatedEntry]] {
+    let buckets = vec.empty[Vec[ValidatedEntry]]();
+    vec.reserve(buckets, 256);
+    for var index usize = 0; index < 256; index += 1 {
+        vec.push(buckets, vec.empty[ValidatedEntry]());
+    }
+    return buckets;
+}
+
+pub func make_verifier(module hir.HirModule) Verifier {
+    let owners = vec.empty[OwnerEntry]();
+    let parents = vec.empty[NodeOptionEntry]();
+    let scope_used = vec.empty[bool]();
+    let scope_nodes = vec.empty[NodeOptionEntry]();
+    vec.reserve(owners, vec.len(module.nodes));
+    vec.reserve(parents, vec.len(module.nodes));
+    vec.reserve(scope_used, vec.len(module.scopes));
+    vec.reserve(scope_nodes, vec.len(module.scopes));
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        vec.push(owners, OwnerEntry(has: false, symbol: 0));
+        vec.push(parents, NodeOptionEntry(has: false, value: 0));
+    }
+    for var index usize = 0; index < vec.len(module.scopes); index += 1 {
+        vec.push(scope_used, false);
+        vec.push(scope_nodes, NodeOptionEntry(has: false, value: 0));
+    }
+    let enter = vec.make[usize](vec.len(module.nodes), 0);
+    let leave = vec.make[usize](vec.len(module.nodes), 0);
+    let type_count = types.size(module.types);
+    let drop_known = vec.make[bool](type_count, false);
+    let drop_result = vec.make[bool](type_count, false);
+    let sym_count = vec.len(module.resolved.symbols);
+    let function_map = vec.make[i64](sym_count, -1);
+    let external_map = vec.make[i64](sym_count, -1);
+    let template_map = vec.make[i64](sym_count, -1);
+    let nominal_map = vec.make[i64](sym_count, -1);
+    let instance_map = vec.make[i64](sym_count, -1);
+    // Source-method checks run before instance_records. Index identities now,
+    // keeping the first record; this does not validate origins or substitutions.
+    for var index usize = 0; index < vec.len(module.instances); index += 1 {
+        let symbol = module.instances[index].symbol;
+        if symbol < sym_count && instance_map[symbol] < 0 {
+            instance_map[symbol] = i64(index);
+        }
+    }
+    let local_map = vec.make[i64](sym_count, -1);
+    let impl_method_map = vec.make[i64](sym_count, -1);
+    let defined_functions = vec.empty[DefinedSymbol]();
+    let defined_type_params = vec.empty[DefinedSymbol]();
+    for symbol in module.resolved.symbols {
+        if option.is_some(symbol.definition) {
+            let def = option_ref(symbol.definition);
+            if symbol_is(symbol.kind, model.SymbolKind.Function) {
+                vec.push(defined_functions, DefinedSymbol(
+                    module: def.module, file: def.file, node: def.node,
+                    symbol: symbol.id));
+            } else if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) {
+                vec.push(defined_type_params, DefinedSymbol(
+                    module: def.module, file: def.file, node: def.node,
+                    symbol: symbol.id));
+            }
+        }
+    }
+    sort_defined_symbols(defined_functions);
+    sort_defined_symbols(defined_type_params);
+    let template_source_nodes = vec.empty[DefinedSymbol]();
+    vec.reserve(template_source_nodes, vec.len(module.templates));
+    for template in module.templates {
+        let ref = template.function.source.node;
+        vec.push(template_source_nodes, DefinedSymbol(
+            module: ref.module, file: ref.file, node: ref.node,
+            symbol: template.function.symbol));
+    }
+    sort_defined_symbols(template_source_nodes);
+    let validated_empty = vec.make[bool](type_count + 1, false);
+    return Verifier(m: module, functions: [], locals: [], enter: enter,
+        leave: leave, owners: owners, scope_used: scope_used,
+        parents: parents, scope_nodes: scope_nodes, clock: 0,
+        templates: [], nominals: [], instances: [], all_functions: [],
+        function_node_index: [], synthetic_iterator_sources: [],
+        synthetic_iterator_calls: [],
+        substituted: types.clone_context(module.types),
+        active_constraints: [], active_trait_bounds: [],
+        drop_known: drop_known, drop_result: drop_result,
+        function_map: function_map, external_map: external_map,
+        external_functions: [], template_map: template_map,
+        nominal_map: nominal_map, instance_map: instance_map,
+        local_map: local_map, impl_method_map: impl_method_map,
+        defined_functions: defined_functions,
+        defined_type_params: defined_type_params,
+        template_source_nodes: template_source_nodes,
+        trait_buckets: empty_trait_buckets(),
+        validated_empty: validated_empty,
+        validated_buckets: empty_validated_buckets());
+}
+
+pub func make_callback_verifier(state Verifier, context types.Context) Verifier {
+    return Verifier(m: state.m, functions: state.functions, locals: state.locals,
+        enter: [], leave: [], owners: [], scope_used: [], parents: [],
+        scope_nodes: [], clock: 0, templates: state.templates,
+        nominals: state.nominals, instances: state.instances,
+        all_functions: [], function_node_index: [],
+        synthetic_iterator_sources: [], synthetic_iterator_calls: [],
+        substituted: context, active_constraints: [], active_trait_bounds: [],
+        drop_known: state.drop_known, drop_result: state.drop_result,
+        function_map: state.function_map, external_map: state.external_map,
+        external_functions: state.external_functions,
+        template_map: state.template_map,
+        nominal_map: state.nominal_map, instance_map: state.instance_map,
+        local_map: state.local_map, impl_method_map: state.impl_method_map,
+        defined_functions: state.defined_functions,
+        defined_type_params: state.defined_type_params,
+        template_source_nodes: state.template_source_nodes,
+        trait_buckets: empty_trait_buckets(),
+        validated_empty: state.validated_empty,
+        validated_buckets: empty_validated_buckets());
+}
+
+pub func verifier_type(state Verifier, id usize) model.Type throws Invalid {
+    return type_of(state.m, id);
+}
+
+pub func verifier_node(state Verifier, id usize) hir.HirNode throws Invalid {
+    need(id < vec.len(state.m.nodes), "out-of-range HirNodeId");
+    return state.m.nodes[id];
+}
+
+pub func verifier_scope(state Verifier, id usize) hir.HirScope throws Invalid {
+    need(id < vec.len(state.m.scopes), "out-of-range ScopeId");
+    return state.m.scopes[id];
+}
+
+pub func verifier_symbol(state Verifier, id usize) model.Symbol throws Invalid {
+    need(id < vec.len(state.m.resolved.symbols), "out-of-range SymbolId");
+    let value = state.m.resolved.symbols[id];
+    need(value.id == id, "symbol index/identity mismatch");
+    need(value.module < vec.len(state.m.resolved.project.modules),
+        "symbol module index");
+    return value;
+}
+
+pub func verifier_module(state Verifier, id usize) model.Module throws Invalid {
+    need(id < vec.len(state.m.resolved.project.modules), "module index");
+    let value = state.m.resolved.project.modules[id];
+    need(value.id == id, "module index/identity mismatch");
+    return value;
+}
+
+pub func verifier_file(state Verifier, module usize, file usize)
+    model.ParseResult throws Invalid {
+    let value = verifier_module(state, module);
+    need(file < vec.len(value.files), "source file index");
+    let index = value.files[file];
+    need(index < vec.len(state.m.resolved.project.files),
+        "source parse index");
+    return state.m.resolved.project.files[index];
+}
+
+pub func verifier_ast(state Verifier, reference model.NodeRef)
+    model.AstNode throws Invalid {
+    let file = verifier_file(state, reference.module, reference.file);
+    need(reference.node < vec.len(file.nodes), "source AST node index");
+    return file.nodes[reference.node];
+}
+
+pub func verifier_source(state Verifier, source hir.HirSource)
+    throws Invalid {
+    let project = state.m.resolved.project;
+    need(source.node.module < vec.len(project.modules), "source module index");
+    let module = project.modules[source.node.module];
+    need(module.id == source.node.module, "module index/identity mismatch");
+    need(source.node.file < vec.len(module.files), "source file index");
+    let file_index = module.files[source.node.file];
+    need(file_index < vec.len(project.files), "source parse index");
+    let file = project.files[file_index];
+    need(!file.recovered, "owning AST contains syntax recovery");
+    need(file.lexed.source.valid, "source snapshot missing/invalid");
+    need(source.node.node < vec.len(file.nodes), "source AST node index");
+    let ast = file.nodes[source.node.node];
+    need(ast.span.begin_byte <= ast.span.end_byte &&
+         ast.span.end_byte <= u64(vec.len(file.lexed.source.original)),
+        "invalid AST source span");
+    need(!ast.recovered && !ast_is(ast.kind, model.AstKind.Error),
+        "unresolved/recovered AST source");
+    need(source.span.snapshot == file.lexed.source.id &&
+         source.span.snapshot == ast.span.snapshot &&
+         source.span.begin_byte <= source.span.end_byte &&
+         source.span.end_byte <= u64(vec.len(file.lexed.source.original)) &&
+         source.span.begin_byte >= ast.span.begin_byte &&
+         source.span.end_byte <= ast.span.end_byte,
+        "invalid source span");
+}
+
+pub func verifier_ancestor(state Verifier, first usize, second usize) bool
+    throws Invalid {
+    var a = first;
+    var b = second;
+    for var count usize = 0; count <= vec.len(state.m.scopes); count += 1 {
+        if a == b {
+            return true;
+        }
+        let value = verifier_scope(state, b);
+        switch value.parent {
+            case option.Option.Some(parent):
+                b = parent;
+            case option.Option.None:
+                return false;
+        }
+    }
+    fail("scope cycle");
+    return false;
+}
+
+pub func verifier_unit(state Verifier, node hir.HirNode) throws Invalid {
+    need(kind_is(verifier_type(state, node.type_id).kind,
+                 model.TypeKind.Unit), "statement must have Unit type");
+}
+
+pub func foreign_access_read(node hir.HirNode) bool {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value): {
+            switch value.access {
+                case option.Option.Some(access): {
+                    let id = foreign_access_id(access);
+                    return id == 0 || id == 2 || id == 4;
+                }
+                case option.Option.None: return false;
+            }
+        }
+        default: return false;
+    }
+}
+
+pub func foreign_access_place(node hir.HirNode) bool {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value): {
+            switch value.access {
+                case option.Option.Some(access): {
+                    let id = foreign_access_id(access);
+                    return id == 1 || id == 3 || id == 5;
+                }
+                case option.Option.None: return false;
+            }
+        }
+        default: return false;
+    }
+}
+
+func verifier_expression(state Verifier, node hir.HirNode) bool {
+    let kind = hir.node_kind(node.data);
+    // This explicit switch is the complete expression whitelist.  Do not add a
+    // numeric range gate: Await/TraitObjectInit/TraitDispatch are kinds 42-44
+    // and the C++ expression() helper lists them explicitly.
+    var candidate = false;
+    switch kind {
+        case hir.NodeKind.UnitLiteral: candidate = true;
+        case hir.NodeKind.ConstantLiteral: candidate = true;
+        case hir.NodeKind.BoolLiteral: candidate = true;
+        case hir.NodeKind.IntegerLiteral: candidate = true;
+        case hir.NodeKind.FloatLiteral: candidate = true;
+        case hir.NodeKind.StringLiteral: candidate = true;
+        case hir.NodeKind.Read: candidate = true;
+        case hir.NodeKind.FunctionValue: candidate = true;
+        case hir.NodeKind.Unary: candidate = true;
+        case hir.NodeKind.Binary: candidate = true;
+        case hir.NodeKind.ShortCircuit: candidate = true;
+        case hir.NodeKind.IntegerConvert: candidate = true;
+        case hir.NodeKind.Call: candidate = true;
+        case hir.NodeKind.StructInit: candidate = true;
+        case hir.NodeKind.EnumInit: candidate = true;
+        case hir.NodeKind.FieldRead: candidate = true;
+        case hir.NodeKind.ConstraintCall: candidate = true;
+        case hir.NodeKind.Move: candidate = true;
+        case hir.NodeKind.VecInit: candidate = true;
+        case hir.NodeKind.IndexRead: candidate = true;
+        case hir.NodeKind.VecSlice: candidate = true;
+        case hir.NodeKind.ForeignRead: candidate = true;
+        case hir.NodeKind.CFieldRead: candidate = true;
+        case hir.NodeKind.Await: candidate = true;
+        case hir.NodeKind.TraitObjectInit: candidate = true;
+        case hir.NodeKind.TraitDispatch: candidate = true;
+        default: candidate = false;
+    }
+    if !candidate {
+        return false;
+    }
+    return foreign_access_read(node) || !foreign_access_place(node);
+}
+
+pub func verifier_expr(state Verifier, id usize) hir.HirNode throws Invalid {
+    let value = verifier_node(state, id);
+    need(verifier_expression(state, value), "expected value expression");
+    return value;
+}
+
+pub func verifier_statement(state Verifier, node hir.HirNode) bool {
+    if verifier_expression(state, node) {
+        return false;
+    }
+    let kind = hir.node_kind(node.data);
+    if node_is(kind, hir.NodeKind.Place) ||
+       node_is(kind, hir.NodeKind.FieldPlace) ||
+       node_is(kind, hir.NodeKind.IndexPlace) {
+        return false;
+    }
+    return !foreign_access_place(node);
+}
+
+pub func function_entry_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.function_map) {
+        return state.function_map[symbol];
+    }
+    for var index usize = 0; index < vec.len(state.functions); index += 1 {
+        if state.functions[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+pub func function_push(state inout Verifier, symbol usize, in_template bool,
+                   index usize) {
+    let slot = vec.len(state.functions);
+    vec.push(state.functions, FunctionEntry(symbol: symbol,
+        in_template: in_template, index: index));
+    if symbol < vec.len(state.function_map) {
+        state.function_map[symbol] = i64(slot);
+    }
+}
+
+pub func external_entry_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.external_map) {
+        return state.external_map[symbol];
+    }
+    return -1;
+}
+
+pub func verifier_function(state Verifier, symbol usize) hir.HirFunction
+    throws Invalid {
+    let ignored = verifier_symbol(state, symbol);
+    let found = function_entry_index(state, symbol);
+    if found < 0 {
+        let external = external_entry_index(state, symbol);
+        if external >= 0 {
+            return state.external_functions[usize(external)];
+        }
+        fail("function identity has no HIR definition");
+    }
+    let entry = state.functions[usize(found)];
+    if entry.in_template {
+        return state.m.templates[entry.index].function;
+    }
+    return state.m.functions[entry.index];
+}
+
+// Only real methods nested in an exported trait implementation are callable
+// across packages even when the method symbol itself is private.
+pub func external_trait_method(module hir.HirModule, symbol_id usize) bool {
+    if symbol_id >= vec.len(module.resolved.symbols) { return false; }
+    let symbol = module.resolved.symbols[symbol_id];
+    if !option.is_some(symbol.definition) { return false; }
+    let source = option_ref(symbol.definition);
+    for implementation in module.impls {
+        if !ids_contains_unsorted(implementation.methods, symbol_id) ||
+           !option.is_some(implementation.trait_ref) { continue; }
+        let trait_ref = option_trait_ref(implementation.trait_ref);
+        if trait_ref.declaration >= vec.len(module.resolved.symbols) { continue; }
+        let trait_symbol = module.resolved.symbols[trait_ref.declaration];
+        if !symbol_is(trait_symbol.kind, model.SymbolKind.Trait) ||
+           !trait_symbol.exported || source.module != symbol.module ||
+           implementation.source.node.module != source.module ||
+           implementation.source.node.file != source.file ||
+           source.module >= vec.len(module.resolved.project.modules) { continue; }
+        let owner = module.resolved.project.modules[source.module];
+        if source.file >= vec.len(owner.files) { continue; }
+        let file_id = owner.files[source.file];
+        if file_id >= vec.len(module.resolved.project.files) { continue; }
+        let file = module.resolved.project.files[file_id];
+        if implementation.source.node.node >= vec.len(file.nodes) { continue; }
+        let syntax = file.nodes[implementation.source.node.node];
+        if !ast_is(syntax.kind, model.AstKind.Impl) { continue; }
+        for child in syntax.children { if child == source.node { return true; } }
+    }
+    return false;
+}
+
+pub func template_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.template_map) {
+        return state.template_map[symbol];
+    }
+    for var index usize = 0; index < vec.len(state.templates); index += 1 {
+        if state.templates[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+pub func template_push(state inout Verifier, symbol usize, index usize) {
+    let slot = vec.len(state.templates);
+    vec.push(state.templates, TemplateEntry(symbol: symbol, index: index));
+    if symbol < vec.len(state.template_map) {
+        state.template_map[symbol] = i64(slot);
+    }
+}
+
+pub func nominal_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.nominal_map) {
+        return state.nominal_map[symbol];
+    }
+    for var index usize = 0; index < vec.len(state.nominals); index += 1 {
+        if state.nominals[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func nominal_push(state inout Verifier, symbol usize, index usize) {
+    let slot = vec.len(state.nominals);
+    vec.push(state.nominals, NominalEntry(symbol: symbol, index: index));
+    if symbol < vec.len(state.nominal_map) {
+        state.nominal_map[symbol] = i64(slot);
+    }
+}
+
+pub func instance_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.instance_map) {
+        return state.instance_map[symbol];
+    }
+    for var index usize = 0; index < vec.len(state.instances); index += 1 {
+        if state.instances[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+pub func instance_push(state inout Verifier, symbol usize, index usize) {
+    let slot = vec.len(state.instances);
+    vec.push(state.instances, InstanceEntry(symbol: symbol, index: index));
+    if symbol < vec.len(state.instance_map) {
+        state.instance_map[symbol] = i64(slot);
+    }
+}
+
+pub func all_function_value(state Verifier, entry AllFunction) hir.HirFunction {
+    if entry.in_template {
+        return state.m.templates[entry.index].function;
+    }
+    return state.m.functions[entry.index];
+}
+
+pub func local_index(state Verifier, symbol usize) i64 {
+    if symbol < vec.len(state.local_map) {
+        return state.local_map[symbol];
+    }
+    for var index usize = 0; index < vec.len(state.locals); index += 1 {
+        if state.locals[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+pub func verifier_local(state Verifier, symbol usize) Local throws Invalid {
+    let found = local_index(state, symbol);
+    if found < 0 {
+        fail("missing local binding");
+    }
+    return state.locals[usize(found)].value;
+}
+
+pub func local_insert(state inout Verifier, symbol usize, value Local) bool {
+    if local_index(state, symbol) >= 0 {
+        return false;
+    }
+    let slot = vec.len(state.locals);
+    vec.push(state.locals, LocalEntry(symbol: symbol, value: value));
+    if symbol < vec.len(state.local_map) {
+        state.local_map[symbol] = i64(slot);
+    }
+    return true;
+}
+
+pub func impl_method_lookup(state Verifier, origin usize) i64 {
+    if origin < vec.len(state.impl_method_map) {
+        return state.impl_method_map[origin];
+    }
+    return -1;
+}
+
+pub func scope_node(state Verifier, scope usize) option.Option[usize] {
+    if scope >= vec.len(state.scope_nodes) {
+        return option.Option[usize].None;
+    }
+    let value = state.scope_nodes[scope];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.value);
+}
+
+pub func parent_node(state Verifier, node usize) option.Option[usize] {
+    if node >= vec.len(state.parents) {
+        return option.Option[usize].None;
+    }
+    let value = state.parents[node];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.value);
+}
+
+pub func owner_of(state Verifier, node usize) option.Option[usize] {
+    if node >= vec.len(state.owners) {
+        return option.Option[usize].None;
+    }
+    let value = state.owners[node];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.symbol);
+}
+
+func same_trait_key(key TraitKey, actual usize, declaration usize,
+                    args Vec[usize]) bool {
+    return key.actual == actual && key.declaration == declaration &&
+           ids_equal(key.args, args);
+}
+
+func trait_key_insert(values Vec[TraitKey], actual usize, declaration usize,
+                      args Vec[usize]) bool {
+    for value in values {
+        if same_trait_key(value, actual, declaration, args) {
+            return false;
+        }
+    }
+    vec.push(values, TraitKey(actual: actual, declaration: declaration,
+        args: ids_copy(args)));
+    return true;
+}
+
+func trait_key_erase(values Vec[TraitKey], actual usize, declaration usize,
+                     args Vec[usize]) {
+    var index usize = 0;
+    for index < vec.len(values) &&
+          !same_trait_key(values[index], actual, declaration, args) {
+        index += 1;
+    }
+    if index == vec.len(values) {
+        return;
+    }
+    for index + 1 < vec.len(values) {
+        values[index] = values[index + 1];
+        index += 1;
+    }
+    let popped = vec.pop(values);
+}
+
+func trait_bucket_index(actual usize, declaration usize, args Vec[usize]) usize {
+    var h u64 = u64(actual) * 0x9e3779b97f4a7c15;
+    h ^= u64(declaration) * 0xbf58476d1ce4e5b9;
+    h ^= u64(vec.len(args)) * 0x94d049bb133111eb;
+    for arg in args {
+        h = (h ^ (u64(arg) + 0x9e3779b97f4a7c15)) * 0xbf58476d1ce4e5b9;
+    }
+    return usize(h & 255);
+}
+
+func trait_result_find(state Verifier, actual usize, declaration usize,
+                       args Vec[usize]) option.Option[bool] {
+    let bucket = state.trait_buckets[trait_bucket_index(actual, declaration,
+        args)];
+    for entry in bucket {
+        if same_trait_key(entry.key, actual, declaration, args) {
+            return option.Option[bool].Some(entry.value);
+        }
+    }
+    return option.Option[bool].None;
+}
+
+func trait_result_set(state inout Verifier, actual usize, declaration usize,
+                      args Vec[usize], value bool) {
+    let bucket = state.trait_buckets[trait_bucket_index(actual, declaration,
+        args)];
+    for var index usize = 0; index < vec.len(bucket); index += 1 {
+        if same_trait_key(bucket[index].key, actual, declaration, args) {
+            bucket[index].value = value;
+            return;
+        }
+    }
+    vec.push(bucket, TraitResultEntry(
+        key: TraitKey(actual: actual, declaration: declaration,
+            args: ids_copy(args)), value: value));
+}
+
+func validated_find(state Verifier, id usize, allowed Vec[usize]) bool {
+    if vec.len(allowed) == 0 && id < vec.len(state.validated_empty) {
+        return state.validated_empty[id];
+    }
+    let bucket = state.validated_buckets[id & 255];
+    for entry in bucket {
+        if entry.type_id == id && ids_equal(entry.allowed, allowed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func validated_insert(state inout Verifier, id usize, allowed Vec[usize]) {
+    if vec.len(allowed) == 0 && id < vec.len(state.validated_empty) {
+        state.validated_empty[id] = true;
+        return;
+    }
+    if validated_find(state, id, allowed) {
+        return;
+    }
+    let bucket = state.validated_buckets[id & 255];
+    vec.push(bucket, ValidatedEntry(type_id: id, allowed: ids_copy(allowed)));
+}
+
+pub func allowed_for(state Verifier, function usize) Vec[usize] {
+    let result = vec.empty[usize]();
+    let found = template_index(state, function);
+    if found >= 0 {
+        for parameter in state.m.templates[usize(found)].params {
+            ids_insert(result, parameter.symbol);
+        }
+    }
+    return result;
+}
+
+pub func declared_parameters(state Verifier) Vec[usize] throws Invalid {
+    let result = vec.empty[usize]();
+    for symbol in state.m.resolved.symbols {
+        if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) {
+            var real = option.is_some(symbol.definition);
+            for entry in state.m.resolved.self_parameters {
+                if entry.symbol == symbol.id {
+                    verifier_source(state, hir.HirSource(node: entry.source,
+                        span: verifier_ast(state, entry.source).span));
+                    real = true;
+                }
+            }
+            need(real, "type parameter lacks a real declaration or Self owner");
+            ids_insert(result, symbol.id);
+        }
+    }
+    return result;
+}

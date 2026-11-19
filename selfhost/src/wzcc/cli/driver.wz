@@ -63,8 +63,8 @@ func help_text() string {
         "       woozyc check --syntax-only [--format json] FILE\n" +
         "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       woozyc build --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
-        "       Native build also accepts --opt 0|2, --target TRIPLE and --package-objects\n" +
-        "       Source Make: build --project MANIFEST --out-dir DIR --source-make [--cache-dir DIR] [--opt 0|2]";
+        "       Native build also accepts -g (DWARF), --opt 0|2, --target TRIPLE and --package-objects\n" +
+        "       Source Make: build --project MANIFEST --out-dir DIR --source-make [--cache-dir DIR] [--opt 0|2] [-g]";
 }
 func syntax_command(options Options, manager inout source.Manager) i32 throws os.Error {
     let read = input.read(options.path, inout manager);

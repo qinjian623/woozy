@@ -144,7 +144,8 @@
         llvm::GlobalValue::InternalLinkage,
         retain ? "lang.vec.retain" : "lang.vec.release", module);
     cached = fn;
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *vec = fn->getArg(0);
     auto observer = module.getOrInsertFunction(
@@ -199,7 +200,6 @@
     builder.CreateBr(done);
     builder.SetInsertPoint(done);
     builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   llvm::Function *value_op(TypeId id, bool copy) {
@@ -210,7 +210,8 @@
         llvm::GlobalValue::InternalLinkage,
         std::string(copy ? "lang.copy." : "lang.drop.") + std::to_string(id.value), module);
     value_ops.emplace(key, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *address = fn->getArg(0);
     auto t = type(id);
@@ -353,7 +354,7 @@
       }
       builder.SetInsertPoint(done);
     }
-    builder.CreateRetVoid(); builder.restoreIP(ip); return fn;
+    builder.CreateRetVoid(); return fn;
   }
   llvm::Function *trait_box_op(TypeId concrete, bool clone) {
     auto &cache = clone ? trait_clone_fns : trait_drop_fns;
@@ -369,7 +370,8 @@
             std::to_string(concrete.value),
         module);
     cache.emplace(concrete.value, fn);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *data = fn->getArg(0);
     auto *call = runtime(clone ? "lang_trait_box_clone_v1"
@@ -381,7 +383,6 @@
       builder.CreateRet(call);
     else
       builder.CreateRetVoid();
-    builder.restoreIP(ip);
     return fn;
   }
   llvm::Function *trait_method_thunk(TypeId dyn, TypeId concrete,
@@ -399,7 +400,8 @@
             std::to_string(concrete.value) + "." +
             std::to_string(target.value),
         module);
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *data = fn->getArg(0);
     auto *loaded = builder.CreateLoad(lower_type(concrete), data);
@@ -418,7 +420,6 @@
     if (receiver_copy)
       builder.CreateCall(value_op(concrete, false), {receiver_copy});
     builder.CreateRet(result);
-    builder.restoreIP(ip);
     return fn;
   }
   llvm::GlobalVariable *

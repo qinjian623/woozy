@@ -1,9 +1,10 @@
 // HIR node shape validation, aggregate/pattern checks, effect bodies and the
 // executable tree traversal.  Mirrors Verifier::shape/aggregate_shape/
 // effect_shape/pattern_shape/tree/source_effect_nodes.
-package hirverify;
+package nodes;
 
-import "app/wzcc/constant" as constant;
+import "app/wzcc/hirverify/calls" as hircalls;
+import "app/wzcc/hirverify/core" as hircore;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/literal" as literal;
 import "app/wzcc/model" as model;
@@ -31,37 +32,37 @@ struct IteratorForShape {
 
 func same_ref_opt(left option.Option[hir.HirSource],
                   right option.Option[hir.HirSource]) bool {
-    return same_source_opt(left, right);
+    return hircore.same_source_opt(left, right);
 }
 
-func trait_object_shape(state inout Verifier, node hir.HirNode)
-    throws Invalid {
-    need(vec.len(node.children) == 1,
+func trait_object_shape(state inout hircore.Verifier, node hir.HirNode)
+    throws hircore.Invalid {
+    hircore.need(vec.len(node.children) == 1,
         "trait object construction arity");
     var init = hir.TraitObjectInit(trait_ref: hir.TraitRef(declaration: 0,
             args: []), concrete: 0, methods: [], method_args: []);
     switch node.data {
         case hir.NodeData.TraitObjectInit(value): init = value;
-        default: fail("trait object payload");
+        default: hircore.fail("trait object payload");
     }
-    let want = verifier_type(state, node.type_id);
-    need(kind_is(want.kind, model.TypeKind.TraitObject),
+    let want = hircore.verifier_type(state, node.type_id);
+    hircore.need(hircore.kind_is(want.kind, model.TypeKind.TraitObject),
         "trait object construction destination is not dyn");
-    need(init.trait_ref.declaration == want.declaration &&
-         ids_equal(init.trait_ref.args, want.type_args),
+    hircore.need(init.trait_ref.declaration == want.declaration &&
+         hircore.ids_equal(init.trait_ref.args, want.type_args),
         "trait object construction application differs from its type");
-    let trait_index = trait_declaration(state, init.trait_ref.declaration);
-    need(trait_index >= 0,
+    let trait_index = hircore.trait_declaration(state, init.trait_ref.declaration);
+    hircore.need(trait_index >= 0,
         "trait object construction has no trait declaration");
     let trait_value = state.m.traits[usize(trait_index)];
-    check_object_safe(inout state, init.trait_ref.declaration, node.source.span);
-    let concrete = verifier_expr(state, node.children[0]);
-    need(init.concrete == concrete.type_id &&
-         !kind_is(verifier_type(state, concrete.type_id).kind,
+    hircore.check_object_safe(inout state, init.trait_ref.declaration, node.source.span);
+    let concrete = hircore.verifier_expr(state, node.children[0]);
+    hircore.need(init.concrete == concrete.type_id &&
+         !hircore.kind_is(hircore.verifier_type(state, concrete.type_id).kind,
                   model.TypeKind.TraitObject) &&
-         !type_contains_parameter(state.m, concrete.type_id),
+         !hircore.type_contains_parameter(state.m, concrete.type_id),
         "trait object construction concrete type mismatch");
-    need(vec.len(init.methods) == vec.len(trait_value.methods),
+    hircore.need(vec.len(init.methods) == vec.len(trait_value.methods),
         "trait object vtable method count");
     var impl_index i64 = -1;
     for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
@@ -79,13 +80,13 @@ func trait_object_shape(state inout Verifier, node hir.HirNode)
             continue;
         }
         let sub = vec.empty[model.Substitution]();
-        if !matches(inout state, candidate.self_type, concrete.type_id, sub) {
+        if !hircore.matches(inout state, candidate.self_type, concrete.type_id, sub) {
             continue;
         }
-        let application = option_trait_ref(candidate.trait_ref);
+        let application = hircore.option_trait_ref(candidate.trait_ref);
         var matched = true;
         for var arg usize = 0; arg < vec.len(init.trait_ref.args); arg += 1 {
-            if !matches(inout state, application.args[arg],
+            if !hircore.matches(inout state, application.args[arg],
                         init.trait_ref.args[arg], sub) {
                 matched = false;
                 break;
@@ -94,10 +95,10 @@ func trait_object_shape(state inout Verifier, node hir.HirNode)
         if !matched {
             continue;
         }
-        need(impl_index < 0, "ambiguous trait object implementation");
+        hircore.need(impl_index < 0, "ambiguous trait object implementation");
         impl_index = i64(index);
     }
-    need(impl_index >= 0,
+    hircore.need(impl_index >= 0,
         "trait object construction has no implementation");
     let implementation = state.m.impls[usize(impl_index)];
     for var index usize = 0; index < vec.len(trait_value.methods); index += 1 {
@@ -111,69 +112,69 @@ func trait_object_shape(state inout Verifier, node hir.HirNode)
         }
         var expected i64 = -1;
         for method in implementation.methods {
-            if verifier_symbol(state, method).name ==
-               verifier_symbol(state, prototype.symbol).name {
-                need(expected < 0,
+            if hircore.verifier_symbol(state, method).name ==
+               hircore.verifier_symbol(state, prototype.symbol).name {
+                hircore.need(expected < 0,
                     "duplicate trait object implementation method");
                 expected = i64(method);
             }
         }
-        need(expected >= 0 && i64(origin) == expected,
+        hircore.need(expected >= 0 && i64(origin) == expected,
             "trait object method target differs from the unique implementation");
-        let ignored = verifier_function(state, target);
-        need(template_index(state, target) < 0,
+        let ignored = hircore.verifier_function(state, target);
+        hircore.need(hircore.template_index(state, target) < 0,
             "trait object method target is not concrete");
-        need(vec.len(init.method_args) == vec.len(init.methods),
+        hircore.need(vec.len(init.method_args) == vec.len(init.methods),
             "trait object method argument metadata");
         for instance in state.m.instances {
             if instance.symbol == target {
-                need(ids_equal(instance.type_args, init.method_args[index]),
+                hircore.need(hircore.ids_equal(instance.type_args, init.method_args[index]),
                     "trait object method instance arguments differ");
             }
         }
     }
 }
 
-func trait_dispatch_shape(state inout Verifier, node hir.HirNode)
-    throws Invalid {
+func trait_dispatch_shape(state inout hircore.Verifier, node hir.HirNode)
+    throws hircore.Invalid {
     var dispatch = hir.TraitDispatch(trait_ref: hir.TraitRef(declaration: 0,
             args: []), method: 0, signature: 0, index: 0, args: []);
     switch node.data {
         case hir.NodeData.TraitDispatch(value): dispatch = value;
-        default: fail("trait dispatch payload");
+        default: hircore.fail("trait dispatch payload");
     }
-    need(vec.len(node.children) > 0,
+    hircore.need(vec.len(node.children) > 0,
         "trait dispatch has no receiver");
-    let receiver_type = verifier_type(state,
-        verifier_expr(state, node.children[0]).type_id);
-    need(kind_is(receiver_type.kind, model.TypeKind.TraitObject),
+    let receiver_type = hircore.verifier_type(state,
+        hircore.verifier_expr(state, node.children[0]).type_id);
+    hircore.need(hircore.kind_is(receiver_type.kind, model.TypeKind.TraitObject),
         "trait dispatch receiver is not dyn");
-    need(dispatch.trait_ref.declaration == receiver_type.declaration &&
-         ids_equal(dispatch.trait_ref.args, receiver_type.type_args),
+    hircore.need(dispatch.trait_ref.declaration == receiver_type.declaration &&
+         hircore.ids_equal(dispatch.trait_ref.args, receiver_type.type_args),
         "trait dispatch application differs from its receiver");
-    let trait_index = trait_declaration(state, dispatch.trait_ref.declaration);
-    need(trait_index >= 0, "trait dispatch has no trait declaration");
+    let trait_index = hircore.trait_declaration(state, dispatch.trait_ref.declaration);
+    hircore.need(trait_index >= 0, "trait dispatch has no trait declaration");
     let trait_value = state.m.traits[usize(trait_index)];
-    check_object_safe(inout state, dispatch.trait_ref.declaration,
+    hircore.check_object_safe(inout state, dispatch.trait_ref.declaration,
         node.source.span);
-    need(usize(dispatch.index) < vec.len(trait_value.methods),
+    hircore.need(usize(dispatch.index) < vec.len(trait_value.methods),
         "trait dispatch vtable index");
     let prototype = trait_value.methods[usize(dispatch.index)];
-    need(prototype.symbol == dispatch.method,
+    hircore.need(prototype.symbol == dispatch.method,
         "trait dispatch vtable method differs from its prototype");
     let sub = vec.empty[model.Substitution]();
     var self_type = model.empty_type(model.TypeKind.TraitObject);
     self_type.declaration = receiver_type.declaration;
-    self_type.type_args = ids_copy(receiver_type.type_args);
-    let receiver_id = intern_type(inout state, self_type);
+    self_type.type_args = hircore.ids_copy(receiver_type.type_args);
+    let receiver_id = hircore.intern_type(inout state, self_type);
     vec.push(sub, model.Substitution(symbol: trait_value.self, type_id: receiver_id));
     for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
         vec.push(sub, model.Substitution(symbol: trait_value.params[index].symbol,
             type_id: dispatch.trait_ref.args[index]));
     }
-    let full = substitute_type(inout state, prototype.signature, sub);
-    let full_type = verifier_type(state, full);
-    need(kind_is(full_type.kind, model.TypeKind.Function) &&
+    let full = hircore.substitute_type(inout state, prototype.signature, sub);
+    let full_type = hircore.verifier_type(state, full);
+    hircore.need(hircore.kind_is(full_type.kind, model.TypeKind.Function) &&
          !option.is_some(full_type.throws_type),
         "trait dispatch prototype is not a nonthrowing function");
     var abi = model.empty_type(model.TypeKind.Function);
@@ -181,44 +182,44 @@ func trait_dispatch_shape(state inout Verifier, node hir.HirNode)
     for var index usize = 1; index < vec.len(full_type.parameters); index += 1 {
         vec.push(abi.parameters, full_type.parameters[index]);
     }
-    let abi_id = intern_type(inout state, abi);
-    need(dispatch.signature == abi_id,
+    let abi_id = hircore.intern_type(inout state, abi);
+    hircore.need(dispatch.signature == abi_id,
         "trait dispatch ABI signature mismatch");
-    let abi_type = verifier_type(state, dispatch.signature);
-    need(node.type_id == abi_type.result, "trait dispatch result type");
-    need(vec.len(dispatch.args) == vec.len(node.children) &&
+    let abi_type = hircore.verifier_type(state, dispatch.signature);
+    hircore.need(node.type_id == abi_type.result, "trait dispatch result type");
+    hircore.need(vec.len(dispatch.args) == vec.len(node.children) &&
          vec.len(dispatch.args) == vec.len(full_type.parameters),
         "trait dispatch argument count");
     let receiver = dispatch.args[0];
-    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+    hircore.need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
          !option.is_some(receiver.label) &&
-         mode_is_id(receiver.mode, 0) &&
+         hircore.mode_is_id(receiver.mode, 0) &&
          receiver.expression == node.children[0],
         "trait dispatch receiver mapping");
     var named = false;
     let seen = vec.empty[u32]();
     for var index usize = 0; index < vec.len(dispatch.args); index += 1 {
         let argument = dispatch.args[index];
-        need(argument.source_index == u32(index) &&
+        hircore.need(argument.source_index == u32(index) &&
              argument.expression == node.children[index] &&
              usize(argument.parameter_index) < vec.len(full_type.parameters) &&
              !ids_contains_u32(seen, argument.parameter_index) &&
-             mode_is_id(argument.mode, 0),
+             hircore.mode_is_id(argument.mode, 0),
             "trait dispatch argument mapping/mode");
         ids_insert_u32(seen, argument.parameter_index);
         if index > 0 {
-            need(verifier_node(state, argument.expression).type_id ==
+            hircore.need(hircore.verifier_node(state, argument.expression).type_id ==
                  full_type.parameters[usize(argument.parameter_index)].type_id,
                 "trait dispatch argument type");
-            let ignored = verifier_expr(state, argument.expression);
+            let ignored = hircore.verifier_expr(state, argument.expression);
         }
         if option.is_some(argument.label) {
             named = true;
-            need(option_string_value(argument.label) ==
+            hircore.need(hircore.option_string_value(argument.label) ==
                  prototype.parameters[usize(argument.parameter_index)].label,
                 "trait dispatch argument label");
         } else {
-            need(!named && usize(argument.parameter_index) == index,
+            hircore.need(!named && usize(argument.parameter_index) == index,
                 "trait dispatch positional argument order");
         }
     }
@@ -239,40 +240,40 @@ func ids_insert_u32(values Vec[u32], value u32) {
     }
 }
 
-func check_iterator_protocol(state inout Verifier, node hir.HirNode,
-                             iterator hir.IteratorFor) throws Invalid {
+func check_iterator_protocol(state inout hircore.Verifier, node hir.HirNode,
+                             iterator hir.IteratorFor) throws hircore.Invalid {
     var fi = hir.ForIn(element: 0, body_scope: 0, body: 0,
         iterator: option.Option[hir.IteratorFor].None);
     switch node.data {
         case hir.NodeData.ForIn(value): fi = value;
-        default: fail("for-in payload");
+        default: hircore.fail("for-in payload");
     }
-    need(vec.len(node.children) == 3 && node.children[2] == iterator.next,
+    hircore.need(vec.len(node.children) == 3 && node.children[2] == iterator.next,
         "for-in Iterator next is not this loop child");
-    let next = verifier_node(state, iterator.next);
+    let next = hircore.verifier_node(state, iterator.next);
     let next_kind = hir.node_kind(next.data);
-    need(node_is(next_kind, hir.NodeKind.Call) ||
-         node_is(next_kind, hir.NodeKind.ConstraintCall),
+    hircore.need(hircore.node_is(next_kind, hir.NodeKind.Call) ||
+         hircore.node_is(next_kind, hir.NodeKind.ConstraintCall),
         "for-in Iterator next node kind");
-    let trait_index = std_iterator_trait(state);
-    need(trait_index >= 0, "std/iter.Iterator declaration missing");
+    let trait_index = hircore.std_iterator_trait(state);
+    hircore.need(trait_index >= 0, "std/iter.Iterator declaration missing");
     let trait_value = state.m.traits[usize(trait_index)];
-    need(vec.len(trait_value.params) == 1, "std/iter.Iterator arity");
-    let prototype_index = iterator_next_prototype(state, usize(trait_index));
+    hircore.need(vec.len(trait_value.params) == 1, "std/iter.Iterator arity");
+    let prototype_index = hircore.iterator_next_prototype(state, usize(trait_index));
     let prototype = trait_value.methods[usize(prototype_index)];
-    need(vec.len(source_parameters(inout state, prototype.source)) == 0,
+    hircore.need(vec.len(hircore.source_parameters(inout state, prototype.source)) == 0,
         "std/iter.Iterator.next has its own type parameters");
-    let raw_next = verifier_type(state, prototype.signature);
-    need(vec.len(raw_next.parameters) == 1 &&
-         mode_is_id(raw_next.parameters[0].mode, 1) &&
-         kind_is(verifier_type(state, raw_next.parameters[0].type_id).kind,
+    let raw_next = hircore.verifier_type(state, prototype.signature);
+    hircore.need(vec.len(raw_next.parameters) == 1 &&
+         hircore.mode_is_id(raw_next.parameters[0].mode, 1) &&
+         hircore.kind_is(hircore.verifier_type(state, raw_next.parameters[0].type_id).kind,
                  model.TypeKind.TypeParameter) &&
-         verifier_type(state, raw_next.parameters[0].type_id).declaration ==
+         hircore.verifier_type(state, raw_next.parameters[0].type_id).declaration ==
              trait_value.self,
         "std/iter.Iterator.next prototype receiver");
-    need(!option.is_some(raw_next.throws_type),
+    hircore.need(!option.is_some(raw_next.throws_type),
         "std/iter.Iterator.next prototype throws");
-    need(std_option_type(state, raw_next.result),
+    hircore.need(hircore.std_option_type(state, raw_next.result),
         "std/iter.Iterator.next prototype result");
 
     let signature_sub = vec.empty[model.Substitution]();
@@ -280,17 +281,17 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
         type_id: iterator.iterator));
     vec.push(signature_sub, model.Substitution(symbol: trait_value.params[0].symbol,
         type_id: iterator.element));
-    let expected_signature = substitute_type(inout state,
+    let expected_signature = hircore.substitute_type(inout state,
         prototype.signature, signature_sub);
-    let expected_type = verifier_type(state, expected_signature);
-    need(expected_type.result == next.type_id,
+    let expected_type = hircore.verifier_type(state, expected_signature);
+    hircore.need(expected_type.result == next.type_id,
         "for-in Iterator next result type");
-    need(!option.is_some(expected_type.throws_type),
+    hircore.need(!option.is_some(expected_type.throws_type),
         "for-in Iterator next signature throws");
 
     var args = vec.empty[hir.CallArg]();
     var next_signature usize = 0;
-    if node_is(next_kind, hir.NodeKind.Call) {
+    if hircore.node_is(next_kind, hir.NodeKind.Call) {
         var call = hir.Call(kind: hir.CalleeKind.Direct, signature: 0,
             direct_symbol: option.Option[usize].None,
             callee: option.Option[usize].None, args: [], type_args: [],
@@ -301,16 +302,16 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
             case hir.NodeData.Call(value): call = value;
             default: {}
         }
-        need(callee_id(call.kind) == 0 && option.is_some(call.direct_symbol) &&
+        hircore.need(hircore.callee_id(call.kind) == 0 && option.is_some(call.direct_symbol) &&
              !option.is_some(call.callee),
             "for-in Iterator next is not a direct call");
         args = call.args;
         next_signature = call.signature;
-        let matched = iterator_impl(inout state, iterator.iterator,
+        let matched = hircore.iterator_impl(inout state, iterator.iterator,
             iterator.element);
-        need(matched.found >= 0, "for-in Iterator implementation missing");
+        hircore.need(matched.found >= 0, "for-in Iterator implementation missing");
         let implementation = state.m.impls[usize(matched.found)];
-        var target = option_usize(call.direct_symbol);
+        var target = hircore.option_usize(call.direct_symbol);
         var has_instance = false;
         for instance in state.m.instances {
             if instance.symbol == target {
@@ -321,33 +322,33 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
         }
         var expected_next i64 = -1;
         for method in implementation.methods {
-            if verifier_symbol(state, method).name == "next" {
-                need(expected_next < 0,
+            if hircore.verifier_symbol(state, method).name == "next" {
+                hircore.need(expected_next < 0,
                     "Iterator implementation has duplicate next");
                 expected_next = i64(method);
             }
         }
-        need(expected_next >= 0 && i64(target) == expected_next,
+        hircore.need(expected_next >= 0 && i64(target) == expected_next,
             "for-in next target is not the selected Iterator impl method");
         let complete = vec.empty[usize]();
         for parameter in implementation.params {
-            let found = substitution_index(matched.substitutions,
+            let found = hircore.substitution_index(matched.substitutions,
                 parameter.symbol);
-            need(found >= 0,
+            hircore.need(found >= 0,
                 "for-in Iterator impl argument is not determined");
             vec.push(complete, matched.substitutions[usize(found)].type_id);
         }
         if has_instance {
             for instance in state.m.instances {
-                if instance.symbol == option_usize(call.direct_symbol) {
-                    need(ids_equal(instance.type_args, complete),
+                if instance.symbol == hircore.option_usize(call.direct_symbol) {
+                    hircore.need(hircore.ids_equal(instance.type_args, complete),
                         "for-in Iterator instance arguments differ from the impl");
                 }
             }
         } else {
-            need(vec.len(complete) == 0,
+            hircore.need(vec.len(complete) == 0,
                 "generic Iterator impl survived without an instance");
-            need(vec.len(call.type_args) == 0,
+            hircore.need(vec.len(call.type_args) == 0,
                 "non-instance for-in next has type arguments");
         }
     } else {
@@ -358,45 +359,45 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
             case hir.NodeData.ConstraintCall(value): constraint = value;
             default: {}
         }
-        need(constraint.trait_ref.declaration == trait_value.symbol &&
+        hircore.need(constraint.trait_ref.declaration == trait_value.symbol &&
              vec.len(constraint.trait_ref.args) == 1 &&
              constraint.trait_ref.args[0] == iterator.element,
             "for-in ConstraintCall is not the exact std/iter.Iterator application");
-        need(constraint.method == prototype.symbol,
+        hircore.need(constraint.method == prototype.symbol,
             "for-in ConstraintCall method is not std/iter.Iterator.next");
-        need(constraint.receiver == iterator.iterator,
+        hircore.need(constraint.receiver == iterator.iterator,
             "for-in ConstraintCall receiver differs from the loop iterator");
         args = constraint.args;
         next_signature = constraint.signature;
     }
-    need(next_signature == expected_signature,
+    hircore.need(next_signature == expected_signature,
         "for-in Iterator next is not the selected trait signature");
-    need(vec.len(args) == 1 && vec.len(next.children) == 1,
+    hircore.need(vec.len(args) == 1 && vec.len(next.children) == 1,
         "for-in Iterator next argument arity");
     let receiver = args[0];
-    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+    hircore.need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
          !option.is_some(receiver.label) &&
-         mode_is_id(receiver.mode, 1) &&
+         hircore.mode_is_id(receiver.mode, 1) &&
          receiver.expression == next.children[0],
         "for-in Iterator next receiver mapping");
-    let place = verifier_node(state, receiver.expression);
+    let place = hircore.verifier_node(state, receiver.expression);
     var place_symbol usize = 0;
     switch place.data {
         case hir.NodeData.Place(value): place_symbol = value.symbol;
         default: {}
     }
-    need(node_is(hir.node_kind(place.data), hir.NodeKind.Place) &&
+    hircore.need(hircore.node_is(hir.node_kind(place.data), hir.NodeKind.Place) &&
          place_symbol == iterator.cursor &&
          place.type_id == iterator.iterator && place.scope == node.scope,
         "for-in Iterator next does not use this loop's hidden cursor");
-    need(std_option_type(state, next.type_id),
+    hircore.need(hircore.std_option_type(state, next.type_id),
         "for-in next result is not std/option.Option");
-    let option_type = verifier_type(state, next.type_id);
-    need(vec.len(option_type.type_args) == 1 &&
+    let option_type = hircore.verifier_type(state, next.type_id);
+    hircore.need(vec.len(option_type.type_args) == 1 &&
          option_type.type_args[0] == iterator.element,
         "for-in Option element differs from Iterator[T]");
-    let declared = nominal_index(state, option_type.declaration);
-    need(declared >= 0, "for-in Option declaration missing");
+    let declared = hircore.nominal_index(state, option_type.declaration);
+    hircore.need(declared >= 0, "for-in Option declaration missing");
     let option_decl = state.m.nominals[usize(declared)];
     var some i64 = -1;
     var none i64 = -1;
@@ -408,10 +409,10 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
             none = i64(index);
         }
     }
-    need(some >= 0 && none >= 0 && some != none,
+    hircore.need(some >= 0 && none >= 0 && some != none,
         "for-in Option Some/None identities");
     let some_variant = option_decl.variants[usize(some)];
-    need(vec.len(some_variant.payload) == 1 &&
+    hircore.need(vec.len(some_variant.payload) == 1 &&
          some_variant.payload[0].symbol == iterator.some_field,
         "for-in Option Some payload field identity");
     let option_sub = vec.empty[model.Substitution]();
@@ -420,48 +421,48 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
             symbol: option_decl.params[index].symbol,
             type_id: option_type.type_args[index]));
     }
-    need(substitute_type(inout state, some_variant.payload[0].type_id,
+    hircore.need(hircore.substitute_type(inout state, some_variant.payload[0].type_id,
              option_sub) == iterator.element,
         "for-in Option Some payload type differs from element");
     var cursor_places usize = 0;
     for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
         let candidate = state.m.nodes[index];
         let candidate_kind = hir.node_kind(candidate.data);
-        if node_is(candidate_kind, hir.NodeKind.Read) {
+        if hircore.node_is(candidate_kind, hir.NodeKind.Read) {
             switch candidate.data {
                 case hir.NodeData.Read(value):
-                    need(value.symbol != iterator.cursor &&
+                    hircore.need(value.symbol != iterator.cursor &&
                          value.symbol != iterator.option,
                         "for-in hidden cursor/Option used as an ordinary binding");
                 default: {}
             }
         }
-        if node_is(candidate_kind, hir.NodeKind.Binding) {
+        if hircore.node_is(candidate_kind, hir.NodeKind.Binding) {
             switch candidate.data {
                 case hir.NodeData.Binding(value):
-                    need(value.symbol != iterator.cursor &&
+                    hircore.need(value.symbol != iterator.cursor &&
                          value.symbol != iterator.option,
                         "for-in hidden cursor/Option used as an ordinary binding");
                 default: {}
             }
         }
-        if node_is(candidate_kind, hir.NodeKind.Move) {
+        if hircore.node_is(candidate_kind, hir.NodeKind.Move) {
             switch candidate.data {
                 case hir.NodeData.Move(value): {
                     if option.is_some(value.binding) {
-                        need(option_usize(value.binding) != iterator.cursor &&
-                             option_usize(value.binding) != iterator.option,
+                        hircore.need(hircore.option_usize(value.binding) != iterator.cursor &&
+                             hircore.option_usize(value.binding) != iterator.option,
                             "for-in hidden cursor/Option used as an ordinary binding");
                     }
                 }
                 default: {}
             }
         }
-        if node_is(candidate_kind, hir.NodeKind.FunctionValue) {
+        if hircore.node_is(candidate_kind, hir.NodeKind.FunctionValue) {
             switch candidate.data {
                 case hir.NodeData.FunctionValue(value): {
                     for capture in value.captures {
-                        need(capture.source != iterator.cursor &&
+                        hircore.need(capture.source != iterator.cursor &&
                              capture.source != iterator.option,
                             "for-in hidden cursor/Option used as an ordinary binding");
                     }
@@ -469,16 +470,16 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
                 default: {}
             }
         }
-        if node_is(candidate_kind, hir.NodeKind.Place) {
+        if hircore.node_is(candidate_kind, hir.NodeKind.Place) {
             switch candidate.data {
                 case hir.NodeData.Place(value): {
                     if value.symbol == iterator.cursor {
-                        need(index == next.children[0] &&
+                        hircore.need(index == next.children[0] &&
                              candidate.scope == node.scope,
                             "for-in hidden cursor place belongs to another use");
                         cursor_places += 1;
                     } else {
-                        need(value.symbol != iterator.option,
+                        hircore.need(value.symbol != iterator.option,
                             "for-in hidden cursor/Option used as an ordinary binding");
                     }
                 }
@@ -486,123 +487,123 @@ func check_iterator_protocol(state inout Verifier, node hir.HirNode,
             }
         }
     }
-    need(cursor_places == 1, "for-in hidden cursor place count");
+    hircore.need(cursor_places == 1, "for-in hidden cursor place count");
 }
 
-func shape(state inout Verifier, id usize) throws Invalid {
-    let node = verifier_node(state, id);
-    verifier_source(state, node.source);
-    let node_owner = verifier_scope(state, node.scope).function;
-    let node_allowed = allowed_for(state, node_owner);
-    valid_type(inout state, node.type_id, node_allowed);
+pub func shape(state inout hircore.Verifier, id usize) throws hircore.Invalid {
+    let node = hircore.verifier_node(state, id);
+    hircore.verifier_source(state, node.source);
+    let node_owner = hircore.verifier_scope(state, node.scope).function;
+    let node_allowed = hircore.allowed_for(state, node_owner);
+    hircore.valid_type(inout state, node.type_id, node_allowed);
     let node_kind = hir.node_kind(node.data);
-    if kind_is(verifier_type(state, node.type_id).kind,
+    if hircore.kind_is(hircore.verifier_type(state, node.type_id).kind,
                model.TypeKind.ForeignCallable) {
-        need(node_is(node_kind, hir.NodeKind.ForeignRead),
+        hircore.need(hircore.node_is(node_kind, hir.NodeKind.ForeignRead),
             "internal foreign callable used as a source value");
     }
     let children = node.children;
-    if node_is(node_kind, hir.NodeKind.UnitLiteral) {
-        need(vec.len(children) == 0, "node child count");
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.UnitLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
+        hircore.verifier_unit(state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.BoolLiteral) {
-        need(vec.len(children) == 0, "node child count");
-        need(kind_is(verifier_type(state, node.type_id).kind,
+    if hircore.node_is(node_kind, hir.NodeKind.BoolLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, node.type_id).kind,
                      model.TypeKind.Bool), "bool literal type");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.IntegerLiteral) {
-        need(vec.len(children) == 0, "node child count");
+    if hircore.node_is(node_kind, hir.NodeKind.IntegerLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
         var literal_value = hir.IntegerLiteral(decimal: "", bits: 0);
         switch node.data {
             case hir.NodeData.IntegerLiteral(value): literal_value = value;
             default: {}
         }
-        integer_literal(state, node, literal_value);
+        hircore.integer_literal(state, node, literal_value);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.FloatLiteral) {
-        need(vec.len(children) == 0, "node child count");
-        let value_type = verifier_type(state, node.type_id);
-        need(kind_is(value_type.kind, model.TypeKind.Float),
+    if hircore.node_is(node_kind, hir.NodeKind.FloatLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
+        let value_type = hircore.verifier_type(state, node.type_id);
+        hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Float),
             "float literal type");
         var bits u64 = 0;
         switch node.data {
             case hir.NodeData.FloatLiteral(value): bits = value.bits;
             default: {}
         }
-        need(value_type.bits != 32 || bits <= 4294967295,
+        hircore.need(value_type.bits != 32 || bits <= 4294967295,
             "f32 literal bit pattern");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.StringLiteral) {
-        need(vec.len(children) == 0, "node child count");
-        need(kind_is(verifier_type(state, node.type_id).kind,
+    if hircore.node_is(node_kind, hir.NodeKind.StringLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, node.type_id).kind,
                      model.TypeKind.String), "string literal type");
         var bytes = "";
         switch node.data {
             case hir.NodeData.StringLiteral(value): bytes = value.utf8;
             default: {}
         }
-        need(valid_utf8(bytes), "invalid UTF-8 string");
-        need(bytes == source_string(state, node.source.node),
+        hircore.need(valid_utf8(bytes), "invalid UTF-8 string");
+        hircore.need(bytes == hircore.source_string(state, node.source.node),
             "string literal bytes differ from real source");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.ConstantLiteral) {
-        need(vec.len(children) == 0, "node child count");
+    if hircore.node_is(node_kind, hir.NodeKind.ConstantLiteral) {
+        hircore.need(vec.len(children) == 0, "node child count");
         var value = hir.ConstantValue(type_id: 0,
             data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
         switch node.data {
             case hir.NodeData.ConstantLiteral(payload): value = payload.value;
             default: {}
         }
-        need(value.type_id == node.type_id,
+        hircore.need(value.type_id == node.type_id,
             "constant root type differs from expression");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Read) ||
-       node_is(node_kind, hir.NodeKind.Place) {
-        need(vec.len(children) == 0, "node child count");
+    if hircore.node_is(node_kind, hir.NodeKind.Read) ||
+       hircore.node_is(node_kind, hir.NodeKind.Place) {
+        hircore.need(vec.len(children) == 0, "node child count");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.FunctionValue) {
-        let value = function_value_payload(node);
-        need(!(option.is_some(value.bound) && vec.len(value.captures) > 0),
+    if hircore.node_is(node_kind, hir.NodeKind.FunctionValue) {
+        let value = hircalls.function_value_payload(node);
+        hircore.need(!(option.is_some(value.bound) && vec.len(value.captures) > 0),
             "function value has both captures and a bound receiver");
         if option.is_some(value.bound) {
-            need(vec.len(children) == 1, "node child count");
-            need(verifier_expr(state, children[0]).type_id ==
+            hircore.need(vec.len(children) == 1, "node child count");
+            hircore.need(hircore.verifier_expr(state, children[0]).type_id ==
                  option_bound_receiver(value.bound).type_id,
                 "bound receiver child type");
         } else {
-            need(vec.len(children) == vec.len(value.captures),
+            hircore.need(vec.len(children) == vec.len(value.captures),
                 "node child count");
             for var index usize = 0; index < vec.len(children); index += 1 {
-                need(verifier_expr(state, children[index]).type_id ==
+                hircore.need(hircore.verifier_expr(state, children[index]).type_id ==
                      value.captures[index].type_id, "capture child type");
             }
         }
         for argument in value.type_args {
-            valid_type(inout state, argument, node_allowed);
+            hircore.valid_type(inout state, argument, node_allowed);
         }
-        if option.is_some(trait_prototype(state, value.symbol)) {
-            need(template_index(state, verifier_scope(state, node.scope).function) >= 0,
+        if option.is_some(hircore.trait_prototype(state, value.symbol)) {
+            hircore.need(hircore.template_index(state, hircore.verifier_scope(state, node.scope).function) >= 0,
                 "trait prototype function value survived into concrete execution");
         } else {
-            let owner = verifier_scope(state, node.scope).function;
-            if template_index(state, owner) < 0 {
-                need(template_index(state, value.symbol) < 0 &&
+            let owner = hircore.verifier_scope(state, node.scope).function;
+            if hircore.template_index(state, owner) < 0 {
+                hircore.need(hircore.template_index(state, value.symbol) < 0 &&
                      vec.len(value.type_args) == 0,
                     "template function value survived into concrete execution");
             }
-            let full = verifier_type(state,
-                instantiated_signature(inout state, value.symbol,
+            let full = hircore.verifier_type(state,
+                hircore.instantiated_signature(inout state, value.symbol,
                     value.type_args));
             if option.is_some(value.bound) {
-                need(vec.len(full.parameters) > 0,
+                hircore.need(vec.len(full.parameters) > 0,
                     "bound method has no Self parameter");
                 var trimmed = full;
                 var index usize = 1;
@@ -612,41 +613,41 @@ func shape(state inout Verifier, id usize) throws Invalid {
                     index += 1;
                 }
                 trimmed.parameters = remaining;
-                need(types.equal(verifier_type(state, node.type_id), trimmed),
+                hircore.need(types.equal(hircore.verifier_type(state, node.type_id), trimmed),
                     "bound method value type mismatch");
             } else {
-                need(node.type_id == instantiated_signature(inout state,
+                hircore.need(node.type_id == hircore.instantiated_signature(inout state,
                          value.symbol, value.type_args),
                     "function value type mismatch");
             }
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Binding) {
-        need(vec.len(children) == 1, "node child count");
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.Binding) {
+        hircore.need(vec.len(children) == 1, "node child count");
+        hircore.verifier_unit(state, node);
         var symbol_id usize = 0;
         switch node.data {
             case hir.NodeData.Binding(value): symbol_id = value.symbol;
             default: {}
         }
-        let symbol = verifier_symbol(state, symbol_id);
-        need(symbol_is(symbol.kind, model.SymbolKind.Value) ||
-             symbol_is(symbol.kind, model.SymbolKind.Constant),
+        let symbol = hircore.verifier_symbol(state, symbol_id);
+        hircore.need(hircore.symbol_is(symbol.kind, model.SymbolKind.Value) ||
+             hircore.symbol_is(symbol.kind, model.SymbolKind.Constant),
             "binding symbol kind");
-        let ignored = verifier_expr(state, children[0]);
+        let ignored = hircore.verifier_expr(state, children[0]);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Assign) {
-        need(vec.len(children) == 2, "node child count");
-        verifier_unit(state, node);
-        let left = verifier_node(state, children[0]);
-        let right = verifier_expr(state, children[1]);
+    if hircore.node_is(node_kind, hir.NodeKind.Assign) {
+        hircore.need(vec.len(children) == 2, "node child count");
+        hircore.verifier_unit(state, node);
+        let left = hircore.verifier_node(state, children[0]);
+        let right = hircore.verifier_expr(state, children[1]);
         let left_kind = hir.node_kind(left.data);
-        need(node_is(left_kind, hir.NodeKind.Place) ||
-             node_is(left_kind, hir.NodeKind.FieldPlace) ||
-             node_is(left_kind, hir.NodeKind.IndexPlace) ||
-             foreign_access_place(left), "assignment requires writable place");
+        hircore.need(hircore.node_is(left_kind, hir.NodeKind.Place) ||
+             hircore.node_is(left_kind, hir.NodeKind.FieldPlace) ||
+             hircore.node_is(left_kind, hir.NodeKind.IndexPlace) ||
+             hircore.foreign_access_place(left), "assignment requires writable place");
         var compound = option.Option[hir.BinaryOp].None;
         switch node.data {
             case hir.NodeData.Assign(value): compound = value.compound;
@@ -654,23 +655,23 @@ func shape(state inout Verifier, id usize) throws Invalid {
         }
         if option.is_some(compound) {
             let op = option_binary(compound);
-            need(binary_id(op) <= 9, "invalid compound assignment operator");
-            if kind_is(verifier_type(state, left.type_id).kind,
+            hircore.need(hircore.binary_id(op) <= 9, "invalid compound assignment operator");
+            if hircore.kind_is(hircore.verifier_type(state, left.type_id).kind,
                        model.TypeKind.String) {
-                need(node_is(left_kind, hir.NodeKind.Place),
+                hircore.need(hircore.node_is(left_kind, hir.NodeKind.Place),
                     "string compound assignment requires a whole binding");
             }
-            operator_types(state, op, left.type_id, right.type_id,
+            hircore.operator_types(state, op, left.type_id, right.type_id,
                 left.type_id);
         } else {
-            need(left.type_id == right.type_id, "assignment type mismatch");
+            hircore.need(left.type_id == right.type_id, "assignment type mismatch");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Unary) {
-        need(vec.len(children) == 1, "node child count");
-        let argument = verifier_expr(state, children[0]);
-        let kind = verifier_type(state, argument.type_id).kind;
+    if hircore.node_is(node_kind, hir.NodeKind.Unary) {
+        hircore.need(vec.len(children) == 1, "node child count");
+        let argument = hircore.verifier_expr(state, children[0]);
+        let kind = hircore.verifier_type(state, argument.type_id).kind;
         var op = hir.UnaryOp.Negate;
         switch node.data {
             case hir.NodeData.Unary(value): op = value.op;
@@ -678,105 +679,105 @@ func shape(state inout Verifier, id usize) throws Invalid {
         }
         let op_id = unary_id(op);
         if op_id == 0 {
-            need(number_kind(kind) && node.type_id == argument.type_id,
+            hircore.need(hircore.number_kind(kind) && node.type_id == argument.type_id,
                 "negation types");
         } else if op_id == 1 {
-            need(kind_is(kind, model.TypeKind.Bool) &&
+            hircore.need(hircore.kind_is(kind, model.TypeKind.Bool) &&
                  node.type_id == argument.type_id, "logical not types");
         } else if op_id == 2 {
-            need(integer_kind(kind) && node.type_id == argument.type_id,
+            hircore.need(hircore.integer_kind(kind) && node.type_id == argument.type_id,
                 "bitwise not types");
         } else {
-            fail("unknown unary operator");
+            hircore.fail("unknown unary operator");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Binary) {
-        need(vec.len(children) == 2, "node child count");
+    if hircore.node_is(node_kind, hir.NodeKind.Binary) {
+        hircore.need(vec.len(children) == 2, "node child count");
         var op = hir.BinaryOp.Add;
         switch node.data {
             case hir.NodeData.Binary(value): op = value.op;
             default: {}
         }
-        operator_types(state, op, verifier_expr(state, children[0]).type_id,
-            verifier_expr(state, children[1]).type_id, node.type_id);
+        hircore.operator_types(state, op, hircore.verifier_expr(state, children[0]).type_id,
+            hircore.verifier_expr(state, children[1]).type_id, node.type_id);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.ShortCircuit) {
-        need(vec.len(children) == 2, "node child count");
+    if hircore.node_is(node_kind, hir.NodeKind.ShortCircuit) {
+        hircore.need(vec.len(children) == 2, "node child count");
         var op = hir.LogicalOp.And;
         switch node.data {
             case hir.NodeData.ShortCircuit(value): op = value.op;
             default: {}
         }
-        need(logical_id(op) == 0 || logical_id(op) == 1,
+        hircore.need(hircore.logical_id(op) == 0 || hircore.logical_id(op) == 1,
             "unknown short circuit operator");
-        need(kind_is(verifier_type(state, node.type_id).kind,
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, node.type_id).kind,
                      model.TypeKind.Bool) &&
-             verifier_expr(state, children[0]).type_id == node.type_id &&
-             verifier_expr(state, children[1]).type_id == node.type_id,
+             hircore.verifier_expr(state, children[0]).type_id == node.type_id &&
+             hircore.verifier_expr(state, children[1]).type_id == node.type_id,
             "short circuit types");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.IntegerConvert) {
-        need(vec.len(children) == 1, "node child count");
-        let source_type_value = verifier_type(state,
-            verifier_expr(state, children[0]).type_id);
-        let destination = verifier_type(state, node.type_id);
+    if hircore.node_is(node_kind, hir.NodeKind.IntegerConvert) {
+        hircore.need(vec.len(children) == 1, "node child count");
+        let source_type_value = hircore.verifier_type(state,
+            hircore.verifier_expr(state, children[0]).type_id);
+        let destination = hircore.verifier_type(state, node.type_id);
         let source_kind = source_type_value.kind;
         let destination_kind = destination.kind;
-        let float_pair = kind_is(source_kind, model.TypeKind.Float) &&
-            kind_is(destination_kind, model.TypeKind.Float) &&
+        let float_pair = hircore.kind_is(source_kind, model.TypeKind.Float) &&
+            hircore.kind_is(destination_kind, model.TypeKind.Float) &&
             (source_type_value.bits == 32 || source_type_value.bits == 64) &&
             (destination.bits == 32 || destination.bits == 64);
-        need((integer_kind(source_kind) && integer_kind(destination_kind)) ||
-             (kind_is(source_kind, model.TypeKind.Float) &&
-              integer_kind(destination_kind)) ||
-             (integer_kind(source_kind) &&
-              kind_is(destination_kind, model.TypeKind.Float)) || float_pair,
+        hircore.need((hircore.integer_kind(source_kind) && hircore.integer_kind(destination_kind)) ||
+             (hircore.kind_is(source_kind, model.TypeKind.Float) &&
+              hircore.integer_kind(destination_kind)) ||
+             (hircore.integer_kind(source_kind) &&
+              hircore.kind_is(destination_kind, model.TypeKind.Float)) || float_pair,
             "integer conversion types");
-        let file = verifier_file(state, node.source.node.module,
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         var reference = node.source.node;
         let syntax = file.nodes[reference.node];
-        need(ast_is(syntax.kind, model.AstKind.Call) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Call) &&
              vec.len(syntax.children) == 2 && vec.len(children) == 1,
             "conversion source is not a real one-argument call");
         var callee_ref = reference;
         callee_ref.node = syntax.children[0];
-        let callee = unwrapped(state, callee_ref);
-        let target_symbol = resolved_source(state, callee);
-        need(option.is_some(target_symbol) &&
-             symbol_is(verifier_symbol(state, option_usize(target_symbol)).kind,
+        let callee = hircore.unwrapped(state, callee_ref);
+        let target_symbol = hircore.resolved_source(state, callee);
+        hircore.need(option.is_some(target_symbol) &&
+             hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(target_symbol)).kind,
                  model.SymbolKind.BuiltinType) &&
              vec.len(file.nodes[callee.node].children) == 0,
             "conversion callee is not a plain builtin numeric type");
-        let conversion_owner = verifier_scope(state, node.scope).function;
-        let conversion_target = source_type_in_function(inout state,
+        let conversion_owner = hircore.verifier_scope(state, node.scope).function;
+        let conversion_target = hircore.source_type_in_function(inout state,
             callee_ref, conversion_owner);
-        need(conversion_target == node.type_id,
+        hircore.need(conversion_target == node.type_id,
             "conversion target differs from source callee");
         var argument_ref = reference;
         argument_ref.node = syntax.children[1];
         let argument = file.nodes[argument_ref.node];
-        need(ast_is(argument.kind, model.AstKind.Argument) &&
+        hircore.need(hircore.ast_is(argument.kind, model.AstKind.Argument) &&
              vec.len(argument.children) == 1,
             "conversion source argument shape");
-        need(!(argument.token_begin + 1 < argument.token_end &&
+        hircore.need(!(argument.token_begin + 1 < argument.token_end &&
                file.lexed.tokens[argument.token_begin + 1].spelling == ":"),
             "conversion source argument has a label");
         var operand_ref = argument_ref;
         operand_ref.node = argument.children[0];
-        need(same_ref(unwrapped(state,
-                 verifier_node(state, children[0]).source.node),
-                 unwrapped(state, operand_ref)),
+        hircore.need(hircore.same_ref(hircore.unwrapped(state,
+                 hircore.verifier_node(state, children[0]).source.node),
+                 hircore.unwrapped(state, operand_ref)),
             "conversion operand differs from the real source argument");
-        need(same_span(verifier_node(state, children[0]).source.span,
-                 file.nodes[unwrapped(state, operand_ref).node].span),
+        hircore.need(hircore.same_span(hircore.verifier_node(state, children[0]).source.span,
+                 file.nodes[hircore.unwrapped(state, operand_ref).node].span),
             "conversion operand span differs from the complete source argument");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Call) {
+    if hircore.node_is(node_kind, hir.NodeKind.Call) {
         var call = hir.Call(kind: hir.CalleeKind.Direct, signature: 0,
             direct_symbol: option.Option[usize].None,
             callee: option.Option[usize].None, args: [], type_args: [],
@@ -787,97 +788,97 @@ func shape(state inout Verifier, id usize) throws Invalid {
             case hir.NodeData.Call(value): call = value;
             default: {}
         }
-        check_call(inout state, node, call);
+        hircalls.check_call(inout state, node, call);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.TraitObjectInit) {
+    if hircore.node_is(node_kind, hir.NodeKind.TraitObjectInit) {
         trait_object_shape(inout state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.TraitDispatch) {
+    if hircore.node_is(node_kind, hir.NodeKind.TraitDispatch) {
         trait_dispatch_shape(inout state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Block) {
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.Block) {
+        hircore.verifier_unit(state, node);
         for child in children {
-            need(verifier_statement(state, verifier_node(state, child)),
+            hircore.need(hircore.verifier_statement(state, hircore.verifier_node(state, child)),
                 "block child must be a statement");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.ExpressionStatement) {
-        need(vec.len(children) == 1, "node child count");
-        verifier_unit(state, node);
-        let ignored = verifier_expr(state, children[0]);
+    if hircore.node_is(node_kind, hir.NodeKind.ExpressionStatement) {
+        hircore.need(vec.len(children) == 1, "node child count");
+        hircore.verifier_unit(state, node);
+        let ignored = hircore.verifier_expr(state, children[0]);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.If) {
-        need(vec.len(children) == 2 || vec.len(children) == 3,
+    if hircore.node_is(node_kind, hir.NodeKind.If) {
+        hircore.need(vec.len(children) == 2 || vec.len(children) == 3,
             "if child count");
-        verifier_unit(state, node);
-        need(kind_is(verifier_type(state,
-                     verifier_expr(state, children[0]).type_id).kind,
+        hircore.verifier_unit(state, node);
+        hircore.need(hircore.kind_is(hircore.verifier_type(state,
+                     hircore.verifier_expr(state, children[0]).type_id).kind,
                      model.TypeKind.Bool) &&
-             node_is(hir.node_kind(verifier_node(state, children[1]).data),
+             hircore.node_is(hir.node_kind(hircore.verifier_node(state, children[1]).data),
                      hir.NodeKind.Block) &&
              (vec.len(children) == 2 ||
-              node_is(hir.node_kind(verifier_node(state, children[2]).data),
+              hircore.node_is(hir.node_kind(hircore.verifier_node(state, children[2]).data),
                       hir.NodeKind.Block)),
             "if condition/branch shape");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.For) {
-        need(vec.len(children) == 4, "node child count");
-        verifier_unit(state, node);
-        let init_kind = hir.node_kind(verifier_node(state, children[0]).data);
-        let step_kind = hir.node_kind(verifier_node(state, children[2]).data);
-        need((node_is(init_kind, hir.NodeKind.Binding) ||
-              node_is(init_kind, hir.NodeKind.Assign) ||
-              node_is(init_kind, hir.NodeKind.ExpressionStatement) ||
-              node_is(init_kind, hir.NodeKind.Noop)) &&
-             (node_is(step_kind, hir.NodeKind.Assign) ||
-              node_is(step_kind, hir.NodeKind.ExpressionStatement) ||
-              node_is(step_kind, hir.NodeKind.Noop)) &&
-             kind_is(verifier_type(state,
-                 verifier_expr(state, children[1]).type_id).kind,
+    if hircore.node_is(node_kind, hir.NodeKind.For) {
+        hircore.need(vec.len(children) == 4, "node child count");
+        hircore.verifier_unit(state, node);
+        let init_kind = hir.node_kind(hircore.verifier_node(state, children[0]).data);
+        let step_kind = hir.node_kind(hircore.verifier_node(state, children[2]).data);
+        hircore.need((hircore.node_is(init_kind, hir.NodeKind.Binding) ||
+              hircore.node_is(init_kind, hir.NodeKind.Assign) ||
+              hircore.node_is(init_kind, hir.NodeKind.ExpressionStatement) ||
+              hircore.node_is(init_kind, hir.NodeKind.Noop)) &&
+             (hircore.node_is(step_kind, hir.NodeKind.Assign) ||
+              hircore.node_is(step_kind, hir.NodeKind.ExpressionStatement) ||
+              hircore.node_is(step_kind, hir.NodeKind.Noop)) &&
+             hircore.kind_is(hircore.verifier_type(state,
+                 hircore.verifier_expr(state, children[1]).type_id).kind,
                  model.TypeKind.Bool) &&
-             node_is(hir.node_kind(verifier_node(state, children[3]).data),
+             hircore.node_is(hir.node_kind(hircore.verifier_node(state, children[3]).data),
                  hir.NodeKind.Block),
             "for children shape");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Noop) ||
-       node_is(node_kind, hir.NodeKind.Break) ||
-       node_is(node_kind, hir.NodeKind.Continue) {
-        need(vec.len(children) == 0, "node child count");
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.Noop) ||
+       hircore.node_is(node_kind, hir.NodeKind.Break) ||
+       hircore.node_is(node_kind, hir.NodeKind.Continue) {
+        hircore.need(vec.len(children) == 0, "node child count");
+        hircore.verifier_unit(state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Return) {
-        need(vec.len(children) <= 1, "return child count");
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.Return) {
+        hircore.need(vec.len(children) <= 1, "return child count");
+        hircore.verifier_unit(state, node);
         if vec.len(children) > 0 {
-            let ignored = verifier_expr(state, children[0]);
+            let ignored = hircore.verifier_expr(state, children[0]);
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.StructInit) ||
-       node_is(node_kind, hir.NodeKind.EnumInit) ||
-       node_is(node_kind, hir.NodeKind.FieldRead) ||
-       node_is(node_kind, hir.NodeKind.FieldPlace) ||
-       node_is(node_kind, hir.NodeKind.Switch) ||
-       node_is(node_kind, hir.NodeKind.ConstraintCall) {
+    if hircore.node_is(node_kind, hir.NodeKind.StructInit) ||
+       hircore.node_is(node_kind, hir.NodeKind.EnumInit) ||
+       hircore.node_is(node_kind, hir.NodeKind.FieldRead) ||
+       hircore.node_is(node_kind, hir.NodeKind.FieldPlace) ||
+       hircore.node_is(node_kind, hir.NodeKind.Switch) ||
+       hircore.node_is(node_kind, hir.NodeKind.ConstraintCall) {
         aggregate_shape(inout state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Try) ||
-       node_is(node_kind, hir.NodeKind.Defer) ||
-       node_is(node_kind, hir.NodeKind.Throw) {
+    if hircore.node_is(node_kind, hir.NodeKind.Try) ||
+       hircore.node_is(node_kind, hir.NodeKind.Defer) ||
+       hircore.node_is(node_kind, hir.NodeKind.Throw) {
         effect_shape(inout state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Move) {
+    if hircore.node_is(node_kind, hir.NodeKind.Move) {
         var move_value = hir.Move(binding: option.Option[usize].None);
         switch node.data {
             case hir.NodeData.Move(value): move_value = value;
@@ -885,73 +886,73 @@ func shape(state inout Verifier, id usize) throws Invalid {
         }
         var move_arity = vec.len(children) == 1;
         if option.is_some(move_value.binding) { move_arity = vec.len(children) == 0; }
-        need(move_arity, "move source arity");
+        hircore.need(move_arity, "move source arity");
         if !option.is_some(move_value.binding) {
-            need(verifier_expr(state, children[0]).type_id == node.type_id,
+            hircore.need(hircore.verifier_expr(state, children[0]).type_id == node.type_id,
                 "move temporary type");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.VecInit) {
-        let value_type = verifier_type(state, node.type_id);
-        need(kind_is(value_type.kind, model.TypeKind.Vec),
+    if hircore.node_is(node_kind, hir.NodeKind.VecInit) {
+        let value_type = hircore.verifier_type(state, node.type_id);
+        hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Vec),
             "list type must be Vec");
         for child in children {
-            need(verifier_expr(state, child).type_id == value_type.type_args[0],
+            hircore.need(hircore.verifier_expr(state, child).type_id == value_type.type_args[0],
                 "Vec element type");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.IndexRead) ||
-       node_is(node_kind, hir.NodeKind.IndexPlace) {
-        need(vec.len(children) == 2, "node child count");
-        let receiver = verifier_type(state,
-            verifier_expr(state, children[0]).type_id);
-        let text_value = kind_is(receiver.kind, model.TypeKind.String);
-        let c_pointer = c_pointer_kind(receiver.kind);
-        need((kind_is(receiver.kind, model.TypeKind.Vec) ||
-              kind_is(receiver.kind, model.TypeKind.Slice) ||
-              (text_value && node_is(node_kind, hir.NodeKind.IndexRead)) ||
+    if hircore.node_is(node_kind, hir.NodeKind.IndexRead) ||
+       hircore.node_is(node_kind, hir.NodeKind.IndexPlace) {
+        hircore.need(vec.len(children) == 2, "node child count");
+        let receiver = hircore.verifier_type(state,
+            hircore.verifier_expr(state, children[0]).type_id);
+        let text_value = hircore.kind_is(receiver.kind, model.TypeKind.String);
+        let c_pointer = hircore.c_pointer_kind(receiver.kind);
+        hircore.need((hircore.kind_is(receiver.kind, model.TypeKind.Vec) ||
+              hircore.kind_is(receiver.kind, model.TypeKind.Slice) ||
+              (text_value && hircore.node_is(node_kind, hir.NodeKind.IndexRead)) ||
               c_pointer) &&
-             integer_kind(verifier_type(state,
-                 verifier_expr(state, children[1]).type_id).kind),
+             hircore.integer_kind(hircore.verifier_type(state,
+                 hircore.verifier_expr(state, children[1]).type_id).kind),
             "index types");
         if c_pointer {
-            need(vec.len(receiver.type_args) == 1 &&
+            hircore.need(vec.len(receiver.type_args) == 1 &&
                  node.type_id == receiver.type_args[0] &&
-                 !kind_is(verifier_type(state, node.type_id).kind,
+                 !hircore.kind_is(hircore.verifier_type(state, node.type_id).kind,
                           model.TypeKind.Unit) &&
-                 (!node_is(node_kind, hir.NodeKind.IndexPlace) ||
+                 (!hircore.node_is(node_kind, hir.NodeKind.IndexPlace) ||
                   receiver.bits == 1),
                 "C index result/write permission");
         } else if text_value {
-            let result_type = verifier_type(state, node.type_id);
-            need(kind_is(result_type.kind, model.TypeKind.UnsignedInt) &&
+            let result_type = hircore.verifier_type(state, node.type_id);
+            hircore.need(hircore.kind_is(result_type.kind, model.TypeKind.UnsignedInt) &&
                  result_type.bits == 32, "indexed element type");
         } else {
-            need(node.type_id == receiver.type_args[0],
+            hircore.need(node.type_id == receiver.type_args[0],
                 "indexed element type");
         }
-        let file = verifier_file(state, node.source.node.module,
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         let syntax = file.nodes[node.source.node.node];
-        need(ast_is(syntax.kind, model.AstKind.NeutralBracket) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.NeutralBracket) &&
              vec.len(syntax.children) == 2,
             "index source is not a real NeutralBracket");
         var first = node.source.node;
         first.node = syntax.children[0];
         var second = node.source.node;
         second.node = syntax.children[1];
-        need(same_ref(unwrapped(state,
-                 verifier_node(state, children[0]).source.node),
-                 unwrapped(state, first)) &&
-             same_ref(unwrapped(state,
-                 verifier_node(state, children[1]).source.node),
-                 unwrapped(state, second)),
+        hircore.need(hircore.same_ref(hircore.unwrapped(state,
+                 hircore.verifier_node(state, children[0]).source.node),
+                 hircore.unwrapped(state, first)) &&
+             hircore.same_ref(hircore.unwrapped(state,
+                 hircore.verifier_node(state, children[1]).source.node),
+                 hircore.unwrapped(state, second)),
             "index receiver/index differs from the real Bracket children");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.VecSlice) {
+    if hircore.node_is(node_kind, hir.NodeKind.VecSlice) {
         var slice = hir.VecSlice(start: option.Option[usize].None,
             end: option.Option[usize].None);
         switch node.data {
@@ -965,30 +966,30 @@ func shape(state inout Verifier, id usize) throws Invalid {
         if option.is_some(slice.end) {
             expected_children += 1;
         }
-        need(vec.len(children) == expected_children, "slice arity");
-        let result_type = verifier_type(state, node.type_id);
-        need((kind_is(result_type.kind, model.TypeKind.Vec) ||
-              kind_is(result_type.kind, model.TypeKind.Slice) ||
-              kind_is(result_type.kind, model.TypeKind.String)) &&
-             verifier_expr(state, children[0]).type_id == node.type_id,
+        hircore.need(vec.len(children) == expected_children, "slice arity");
+        let result_type = hircore.verifier_type(state, node.type_id);
+        hircore.need((hircore.kind_is(result_type.kind, model.TypeKind.Vec) ||
+              hircore.kind_is(result_type.kind, model.TypeKind.Slice) ||
+              hircore.kind_is(result_type.kind, model.TypeKind.String)) &&
+             hircore.verifier_expr(state, children[0]).type_id == node.type_id,
             "slice receiver type");
         var index usize = 1;
         if option.is_some(slice.start) {
-            need(children[index] == option_usize(slice.start) &&
-                 integer_kind(verifier_type(state,
-                     verifier_expr(state, option_usize(slice.start)).type_id).kind),
+            hircore.need(children[index] == hircore.option_usize(slice.start) &&
+                 hircore.integer_kind(hircore.verifier_type(state,
+                     hircore.verifier_expr(state, hircore.option_usize(slice.start)).type_id).kind),
                 "slice start");
             index += 1;
         }
         if option.is_some(slice.end) {
-            need(children[index] == option_usize(slice.end) &&
-                 integer_kind(verifier_type(state,
-                     verifier_expr(state, option_usize(slice.end)).type_id).kind),
+            hircore.need(children[index] == hircore.option_usize(slice.end) &&
+                 hircore.integer_kind(hircore.verifier_type(state,
+                     hircore.verifier_expr(state, hircore.option_usize(slice.end)).type_id).kind),
                 "slice end");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.ForIn) {
+    if hircore.node_is(node_kind, hir.NodeKind.ForIn) {
         var for_in = hir.ForIn(element: 0, body_scope: 0, body: 0,
             iterator: option.Option[hir.IteratorFor].None);
         switch node.data {
@@ -996,43 +997,43 @@ func shape(state inout Verifier, id usize) throws Invalid {
             default: {}
         }
         if !option.is_some(for_in.iterator) {
-            need(vec.len(children) == 2, "node child count");
-            verifier_unit(state, node);
-            let collection = verifier_type(state,
-                verifier_expr(state, children[0]).type_id);
-            need(kind_is(collection.kind, model.TypeKind.Vec) ||
-                 kind_is(collection.kind, model.TypeKind.Slice) ||
-                 kind_is(collection.kind, model.TypeKind.String),
+            hircore.need(vec.len(children) == 2, "node child count");
+            hircore.verifier_unit(state, node);
+            let collection = hircore.verifier_type(state,
+                hircore.verifier_expr(state, children[0]).type_id);
+            hircore.need(hircore.kind_is(collection.kind, model.TypeKind.Vec) ||
+                 hircore.kind_is(collection.kind, model.TypeKind.Slice) ||
+                 hircore.kind_is(collection.kind, model.TypeKind.String),
                 "for-in type/body");
         } else {
-            need(vec.len(children) == 3, "node child count");
-            verifier_unit(state, node);
+            hircore.need(vec.len(children) == 3, "node child count");
+            hircore.verifier_unit(state, node);
             let iterator = option_iterator(for_in.iterator);
-            need(iterator.next == children[2],
+            hircore.need(iterator.next == children[2],
                 "for-in Iterator next child identity");
-            need(verifier_expr(state, children[0]).type_id ==
+            hircore.need(hircore.verifier_expr(state, children[0]).type_id ==
                  iterator.iterator, "for-in Iterator source type");
-            let cursor_symbol = verifier_symbol(state, iterator.cursor);
-            let option_symbol = verifier_symbol(state, iterator.option);
-            need(symbol_is(cursor_symbol.kind, model.SymbolKind.Value) &&
+            let cursor_symbol = hircore.verifier_symbol(state, iterator.cursor);
+            let option_symbol = hircore.verifier_symbol(state, iterator.option);
+            hircore.need(hircore.symbol_is(cursor_symbol.kind, model.SymbolKind.Value) &&
                  !option.is_some(cursor_symbol.definition) &&
                  !option.is_some(cursor_symbol.declaration) &&
-                 symbol_is(option_symbol.kind, model.SymbolKind.Value) &&
+                 hircore.symbol_is(option_symbol.kind, model.SymbolKind.Value) &&
                  !option.is_some(option_symbol.definition) &&
                  !option.is_some(option_symbol.declaration),
                 "for-in Iterator hidden locals");
             check_iterator_protocol(inout state, node, iterator);
         }
-        need(for_in.body == children[1] &&
-             node_is(hir.node_kind(verifier_node(state, for_in.body).data),
+        hircore.need(for_in.body == children[1] &&
+             hircore.node_is(hir.node_kind(hircore.verifier_node(state, for_in.body).data),
                      hir.NodeKind.Block) &&
-             verifier_node(state, for_in.body).scope == for_in.body_scope,
+             hircore.verifier_node(state, for_in.body).scope == for_in.body_scope,
             "for-in body");
-        declaration(inout state, for_in.element, node.source,
+        hircore.declaration(inout state, for_in.element, node.source,
             model.SymbolKind.Value, model.AstKind.ForIn);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.ForeignRead) {
+    if hircore.node_is(node_kind, hir.NodeKind.ForeignRead) {
         var access = hir.ForeignRead(binding: 0,
             access: option.Option[hir.ForeignAccessKind].None,
             start: option.Option[usize].None, end: option.Option[usize].None);
@@ -1041,43 +1042,43 @@ func shape(state inout Verifier, id usize) throws Invalid {
             default: {}
         }
         if option.is_some(access.access) {
-            foreign_access(inout state, id);
+            hircalls.foreign_access(inout state, id);
         } else {
-            foreign_read(inout state, id);
+            hircalls.foreign_read(inout state, id);
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.CFieldRead) {
-        c_field_read(inout state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.CFieldRead) {
+        hircalls.c_field_read(inout state, node);
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Await) {
-        need(vec.len(children) == 1, "node child count");
-        let task = verifier_type(state,
-            verifier_expr(state, children[0]).type_id);
-        need(kind_is(task.kind, model.TypeKind.Task),
+    if hircore.node_is(node_kind, hir.NodeKind.Await) {
+        hircore.need(vec.len(children) == 1, "node child count");
+        let task = hircore.verifier_type(state,
+            hircore.verifier_expr(state, children[0]).type_id);
+        hircore.need(hircore.kind_is(task.kind, model.TypeKind.Task),
             "await child is not a Task");
-        need(node.type_id == task.type_args[0], "await result type");
+        hircore.need(node.type_id == task.type_args[0], "await result type");
         let error = task.type_args[1];
-        var listed = kind_is(verifier_type(state, error).kind,
+        var listed = hircore.kind_is(hircore.verifier_type(state, error).kind,
             model.TypeKind.Unit);
         for value in node.errors {
             if value == error {
                 listed = true;
             }
         }
-        need(listed, "await task error is missing from the node error set");
+        hircore.need(listed, "await task error is missing from the node error set");
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Unsupported) {
+    if hircore.node_is(node_kind, hir.NodeKind.Unsupported) {
         var feature = "";
         switch node.data {
             case hir.NodeData.Unsupported(value): feature = value.feature;
             default: {}
         }
-        fail_at("unsupported HIR node: " + feature, node.source.span);
+        hircore.fail_at("unsupported HIR node: " + feature, node.source.span);
     }
-    fail("unknown HIR node kind");
+    hircore.fail("unknown HIR node kind");
 }
 
 func option_binary(value option.Option[hir.BinaryOp]) hir.BinaryOp {
@@ -1095,7 +1096,7 @@ func unary_id(value hir.UnaryOp) u32 {
     }
 }
 
-func option_bound_receiver(value option.Option[hir.BoundReceiver])
+pub func option_bound_receiver(value option.Option[hir.BoundReceiver])
     hir.BoundReceiver {
     switch value {
         case option.Option.Some(item): return item;
@@ -1104,7 +1105,7 @@ func option_bound_receiver(value option.Option[hir.BoundReceiver])
     }
 }
 
-func option_iterator(value option.Option[hir.IteratorFor])
+pub func option_iterator(value option.Option[hir.IteratorFor])
     hir.IteratorFor {
     switch value {
         case option.Option.Some(item): return item;
@@ -1166,53 +1167,53 @@ func pattern_literal_id(value hir.PatternLiteral) u32 {
     }
 }
 
-func register_pattern(state inout Verifier, value hir.Pattern, scope usize,
-                      function usize, ready usize) throws Invalid {
-    verifier_source(state, value.source);
-    let allowed_values = allowed_for(state, function);
-    valid_type(inout state, value.type_id, allowed_values);
-    need(!(option.is_some(value.variant) && option.is_some(value.binding)) &&
+func register_pattern(state inout hircore.Verifier, value hir.Pattern, scope usize,
+                      function usize, ready usize) throws hircore.Invalid {
+    hircore.verifier_source(state, value.source);
+    let allowed_values = hircore.allowed_for(state, function);
+    hircore.valid_type(inout state, value.type_id, allowed_values);
+    hircore.need(!(option.is_some(value.variant) && option.is_some(value.binding)) &&
          !(option.is_some(value.variant) && option.is_some(value.literal)) &&
          !(option.is_some(value.binding) && option.is_some(value.literal)),
         "pattern variant/binding/literal are mutually exclusive");
     if option.is_some(value.variant) {
-        need(!option.is_some(value.binding) &&
+        hircore.need(!option.is_some(value.binding) &&
              !option.is_some(value.literal), "variant pattern fields");
     } else if option.is_some(value.binding) {
-        need(!option.is_some(value.literal) && vec.len(value.payload) == 0,
+        hircore.need(!option.is_some(value.literal) && vec.len(value.payload) == 0,
             "binding pattern payload");
-        declaration(inout state, option_usize(value.binding), value.source,
+        hircore.declaration(inout state, hircore.option_usize(value.binding), value.source,
             model.SymbolKind.Value, model.AstKind.BindPattern);
-        need(local_insert(inout state, option_usize(value.binding),
-                 Local(type_id: value.type_id, scope: scope, function: function,
+        hircore.need(hircore.local_insert(inout state, hircore.option_usize(value.binding),
+                 hircore.Local(type_id: value.type_id, scope: scope, function: function,
                      writable: false, ready: ready, read_only: false)),
             "duplicate pattern binding identity");
     } else if option.is_some(value.literal) {
-        need(vec.len(value.payload) == 0, "literal pattern payload");
+        hircore.need(vec.len(value.payload) == 0, "literal pattern payload");
     } else {
-        need(vec.len(value.payload) == 0, "wildcard pattern payload");
+        hircore.need(vec.len(value.payload) == 0, "wildcard pattern payload");
     }
     for child in value.payload {
         register_pattern(inout state, child, scope, function, ready);
     }
 }
 
-func pattern_ast(state Verifier, source hir.HirSource) model.AstNode
-    throws Invalid {
-    let file = verifier_file(state, source.node.module, source.node.file);
-    need(source.node.node < vec.len(file.nodes), "pattern source node");
+func pattern_ast(state hircore.Verifier, source hir.HirSource) model.AstNode
+    throws hircore.Invalid {
+    let file = hircore.verifier_file(state, source.node.module, source.node.file);
+    hircore.need(source.node.node < vec.len(file.nodes), "pattern source node");
     return file.nodes[source.node.node];
 }
 
-func pattern_variant_name(state Verifier, source hir.HirSource) string
-    throws Invalid {
-    let file = verifier_file(state, source.node.module, source.node.file);
+func pattern_variant_name(state hircore.Verifier, source hir.HirSource) string
+    throws hircore.Invalid {
+    let file = hircore.verifier_file(state, source.node.module, source.node.file);
     let ast = file.nodes[source.node.node];
     var name = "";
     var depth u32 = 0;
     var index = ast.token_begin;
     for index < ast.token_end {
-        need(index < vec.len(file.lexed.tokens), "pattern token range");
+        hircore.need(index < vec.len(file.lexed.tokens), "pattern token range");
         let token = file.lexed.tokens[index].spelling;
         if token == "(" && depth == 0 {
             break;
@@ -1224,7 +1225,7 @@ func pattern_variant_name(state Verifier, source hir.HirSource) string
             depth -= 1;
         }
         if token == "." && depth == 0 {
-            need(index + 1 < vec.len(file.lexed.tokens),
+            hircore.need(index + 1 < vec.len(file.lexed.tokens),
                 "variant name token");
             name = file.lexed.tokens[index + 1].spelling;
         }
@@ -1233,17 +1234,17 @@ func pattern_variant_name(state Verifier, source hir.HirSource) string
     return name;
 }
 
-func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
+func pattern_shape(state inout hircore.Verifier, value hir.Pattern, expected usize,
                    owner usize, has_parent bool, parent hir.HirSource,
-                   has_required bool, required hir.HirSource) throws Invalid {
-    verifier_source(state, value.source);
-    need(value.type_id == expected, "pattern type mismatch");
+                   has_required bool, required hir.HirSource) throws hircore.Invalid {
+    hircore.verifier_source(state, value.source);
+    hircore.need(value.type_id == expected, "pattern type mismatch");
     if has_required {
-        need(same_source(value.source, required),
+        hircore.need(hircore.same_source(value.source, required),
             "pattern source is not the exact AST pattern");
     }
     if has_parent {
-        need(value.source.node.module == parent.node.module &&
+        hircore.need(value.source.node.module == parent.node.module &&
              value.source.node.file == parent.node.file &&
              value.source.span.snapshot == parent.span.snapshot &&
              value.source.span.begin_byte >= parent.span.begin_byte &&
@@ -1251,41 +1252,41 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
             "nested pattern source belongs to another pattern");
     }
     let ast = pattern_ast(state, value.source);
-    let file = verifier_file(state, value.source.node.module,
+    let file = hircore.verifier_file(state, value.source.node.module,
         value.source.node.file);
-    need(!(option.is_some(value.variant) && option.is_some(value.binding)) &&
+    hircore.need(!(option.is_some(value.variant) && option.is_some(value.binding)) &&
          !(option.is_some(value.variant) && option.is_some(value.literal)) &&
          !(option.is_some(value.binding) && option.is_some(value.literal)),
         "pattern variant/binding/literal are mutually exclusive");
     if !option.is_some(value.variant) && !option.is_some(value.literal) {
-        need(ast_is(ast.kind, model.AstKind.BindPattern) ||
-             ast_is(ast.kind, model.AstKind.Case),
+        hircore.need(hircore.ast_is(ast.kind, model.AstKind.BindPattern) ||
+             hircore.ast_is(ast.kind, model.AstKind.Case),
             "wildcard/binding pattern source kind");
         if option.is_some(value.binding) {
-            need(ast_is(ast.kind, model.AstKind.BindPattern) &&
+            hircore.need(hircore.ast_is(ast.kind, model.AstKind.BindPattern) &&
                  ast.token_begin < vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[ast.token_begin].spelling != "_",
                 "binding pattern source/name");
-            need(verifier_symbol(state, option_usize(value.binding)).name ==
+            hircore.need(hircore.verifier_symbol(state, hircore.option_usize(value.binding)).name ==
                  file.lexed.tokens[ast.token_begin].spelling,
                 "binding pattern symbol differs from source");
-        } else if ast_is(ast.kind, model.AstKind.BindPattern) {
-            need(ast.token_begin < vec.len(file.lexed.tokens) &&
+        } else if hircore.ast_is(ast.kind, model.AstKind.BindPattern) {
+            hircore.need(ast.token_begin < vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[ast.token_begin].spelling == "_",
                 "wildcard pattern source/name");
         } else {
-            need(ast.token_begin < ast.token_end &&
+            hircore.need(ast.token_begin < ast.token_end &&
                  file.lexed.tokens[ast.token_begin].spelling == "default",
                 "wildcard pattern source is not an explicit default");
         }
-        need(vec.len(value.payload) == 0, "wildcard/binding payload");
+        hircore.need(vec.len(value.payload) == 0, "wildcard/binding payload");
         return;
     }
     if option.is_some(value.literal) {
-        need(!option.is_some(value.binding) && !option.is_some(value.variant) &&
+        hircore.need(!option.is_some(value.binding) && !option.is_some(value.variant) &&
              vec.len(value.payload) == 0,
             "literal pattern payload/binding");
-        need(ast_is(ast.kind, model.AstKind.LiteralPattern),
+        hircore.need(hircore.ast_is(ast.kind, model.AstKind.LiteralPattern),
             "literal pattern source kind");
         var decoded = hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(value: false));
         try {
@@ -1297,10 +1298,10 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
                 case model.SupportError.Invalid(text_value): message = text_value;
                 case model.SupportError.Limit(text_value): message = text_value;
             }
-            fail_at(message, value.source.span);
+            hircore.fail_at(message, value.source.span);
         }
         let written = option_pattern_literal(value.literal);
-        need(pattern_literal_id(decoded) == pattern_literal_id(written),
+        hircore.need(pattern_literal_id(decoded) == pattern_literal_id(written),
             "literal pattern alternative differs from its type");
         if pattern_literal_id(decoded) == 0 {
             var decoded_value = false;
@@ -1313,7 +1314,7 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
                 case hir.PatternLiteral.BoolLiteral(item): written_value = item.value;
                 default: {}
             }
-            need(written_value == decoded_value,
+            hircore.need(written_value == decoded_value,
                 "bool literal pattern value differs from source");
         } else if pattern_literal_id(decoded) == 1 {
             var decoded_decimal = "";
@@ -1334,7 +1335,7 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
                 }
                 default: {}
             }
-            need(written_decimal == decoded_decimal &&
+            hircore.need(written_decimal == decoded_decimal &&
                  written_bits == decoded_bits,
                 "integer literal pattern value differs from source");
         } else if pattern_literal_id(decoded) == 2 {
@@ -1348,7 +1349,7 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
                 case hir.PatternLiteral.FloatLiteral(item): written_bits = item.bits;
                 default: {}
             }
-            need(written_bits == decoded_bits,
+            hircore.need(written_bits == decoded_bits,
                 "float literal pattern bits differ from source");
         } else {
             var decoded_text = "";
@@ -1361,40 +1362,40 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
                 case hir.PatternLiteral.StringLiteral(item): written_text = item.utf8;
                 default: {}
             }
-            need(written_text == decoded_text,
+            hircore.need(written_text == decoded_text,
                 "string literal pattern bytes differ from source");
         }
         return;
     }
-    need(ast_is(ast.kind, model.AstKind.VariantPattern),
+    hircore.need(hircore.ast_is(ast.kind, model.AstKind.VariantPattern),
         "variant pattern source kind");
-    need(!option.is_some(value.binding) && !option.is_some(value.literal) &&
-         kind_is(verifier_type(state, expected).kind,
+    hircore.need(!option.is_some(value.binding) && !option.is_some(value.literal) &&
+         hircore.kind_is(hircore.verifier_type(state, expected).kind,
                  model.TypeKind.NominalEnum),
         "variant pattern type");
     var base = option.Option[usize].None;
     for occurrence in state.m.resolved.occurrences {
-        if same_ref(occurrence.source, value.source.node) {
+        if hircore.same_ref(occurrence.source, value.source.node) {
             base = option.Option[usize].Some(occurrence.symbol);
         }
     }
-    need(option.is_some(base) &&
-         option_usize(base) == verifier_type(state, expected).declaration,
+    hircore.need(option.is_some(base) &&
+         hircore.option_usize(base) == hircore.verifier_type(state, expected).declaration,
         "pattern source enum identity");
-    let declaration = nominal_type(state, expected);
+    let declaration = hircore.nominal_type(state, expected);
     var variant_index i64 = -1;
     for var index usize = 0; index < vec.len(declaration.variants); index += 1 {
-        if declaration.variants[index].symbol == option_usize(value.variant) {
+        if declaration.variants[index].symbol == hircore.option_usize(value.variant) {
             variant_index = i64(index);
         }
     }
-    need(variant_index >= 0 &&
+    hircore.need(variant_index >= 0 &&
          vec.len(value.payload) ==
              vec.len(declaration.variants[usize(variant_index)].payload),
         "pattern variant/payload mismatch");
     let name = pattern_variant_name(state, value.source);
-    need(name != "" &&
-         verifier_symbol(state, option_usize(value.variant)).name == name,
+    hircore.need(name != "" &&
+         hircore.verifier_symbol(state, hircore.option_usize(value.variant)).name == name,
         "pattern variant name differs from source");
     let variant = declaration.variants[usize(variant_index)];
     var type_argument usize = 0;
@@ -1402,25 +1403,25 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
     var previous_end u64 = value.source.span.begin_byte;
     for child in ast.children {
         let kind = file.nodes[child].kind;
-        if ast_is(kind, model.AstKind.NamedType) ||
-           ast_is(kind, model.AstKind.FunctionType) ||
-           ast_is(kind, model.AstKind.ParenthesizedType) {
-            let type_args = verifier_type(state, value.type_id).type_args;
-            need(type_argument < vec.len(type_args),
+        if hircore.ast_is(kind, model.AstKind.NamedType) ||
+           hircore.ast_is(kind, model.AstKind.FunctionType) ||
+           hircore.ast_is(kind, model.AstKind.ParenthesizedType) {
+            let type_args = hircore.verifier_type(state, value.type_id).type_args;
+            hircore.need(type_argument < vec.len(type_args),
                 "pattern type argument count");
             var reference = value.source.node;
             reference.node = child;
-            need(source_type_in_function(inout state, reference, owner) ==
+            hircore.need(hircore.source_type_in_function(inout state, reference, owner) ==
                  type_args[type_argument],
                 "pattern type argument differs from source");
             type_argument += 1;
             continue;
         }
-        need(payload_index < vec.len(value.payload),
+        hircore.need(payload_index < vec.len(value.payload),
             "wrong variant pattern payload count");
         let child_pattern = value.payload[payload_index];
         let child_ast = file.nodes[child];
-        need(child_ast.span.snapshot == value.source.span.snapshot &&
+        hircore.need(child_ast.span.snapshot == value.source.span.snapshot &&
              child_ast.span.begin_byte >= previous_end &&
              child_ast.span.end_byte <= value.source.span.end_byte,
             "pattern payload source/order");
@@ -1429,13 +1430,13 @@ func pattern_shape(state inout Verifier, value hir.Pattern, expected usize,
             node: model.NodeRef(module: value.source.node.module,
                 file: value.source.node.file, node: child),
             span: child_ast.span);
-        let child_type = field_type(inout state, expected,
+        let child_type = hircore.field_type(inout state, expected,
             variant.payload[payload_index]);
         pattern_shape(inout state, child_pattern, child_type, owner, true,
             value.source, true, required_child);
         payload_index += 1;
     }
-    need(payload_index == vec.len(value.payload),
+    hircore.need(payload_index == vec.len(value.payload),
         "wrong variant pattern payload count");
 }
 
@@ -1448,14 +1449,14 @@ func option_pattern_literal(value option.Option[hir.PatternLiteral])
     }
 }
 
-func aggregate_shape(state inout Verifier, node hir.HirNode)
-    throws Invalid {
+func aggregate_shape(state inout hircore.Verifier, node hir.HirNode)
+    throws hircore.Invalid {
     let node_kind = hir.node_kind(node.data);
-    if node_is(node_kind, hir.NodeKind.FieldRead) ||
-       node_is(node_kind, hir.NodeKind.FieldPlace) {
-        need(vec.len(node.children) == 1, "field receiver count");
-        let base = verifier_node(state, node.children[0]);
-        need(kind_is(verifier_type(state, base.type_id).kind,
+    if hircore.node_is(node_kind, hir.NodeKind.FieldRead) ||
+       hircore.node_is(node_kind, hir.NodeKind.FieldPlace) {
+        hircore.need(vec.len(node.children) == 1, "field receiver count");
+        let base = hircore.verifier_node(state, node.children[0]);
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, base.type_id).kind,
                      model.TypeKind.NominalStruct),
             "field receiver nominal kind");
         var field_symbol usize = 0;
@@ -1464,57 +1465,57 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
             case hir.NodeData.FieldPlace(value): field_symbol = value.field;
             default: {}
         }
-        let declaration = nominal_type(state, base.type_id);
+        let declaration = hircore.nominal_type(state, base.type_id);
         var field_index i64 = -1;
         for var index usize = 0; index < vec.len(declaration.fields); index += 1 {
             if declaration.fields[index].symbol == field_symbol {
                 field_index = i64(index);
             }
         }
-        need(field_index >= 0 &&
-             node.type_id == field_type(inout state, base.type_id,
+        hircore.need(field_index >= 0 &&
+             node.type_id == hircore.field_type(inout state, base.type_id,
                  declaration.fields[usize(field_index)]),
             "field identity/type mismatch");
-        let file = verifier_file(state, node.source.node.module,
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         let syntax = file.nodes[node.source.node.node];
-        need(ast_is(syntax.kind, model.AstKind.Member) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Member) &&
              vec.len(syntax.children) > 0 &&
              syntax.token_end > syntax.token_begin &&
              syntax.token_end <= vec.len(file.lexed.tokens),
             "field source is not a real Member");
-        need(verifier_symbol(state, field_symbol).name ==
+        hircore.need(hircore.verifier_symbol(state, field_symbol).name ==
              file.lexed.tokens[syntax.token_end - 1].spelling,
             "field identity differs from the source member name");
         var receiver = node.source.node;
         receiver.node = syntax.children[0];
-        need(same_ref(unwrapped(state, base.source.node),
-                 unwrapped(state, receiver)),
+        hircore.need(hircore.same_ref(hircore.unwrapped(state, base.source.node),
+                 hircore.unwrapped(state, receiver)),
             "field receiver differs from the real Member base");
-        if node_is(node_kind, hir.NodeKind.FieldRead) {
-            let ignored = verifier_expr(state, node.children[0]);
+        if hircore.node_is(node_kind, hir.NodeKind.FieldRead) {
+            let ignored = hircore.verifier_expr(state, node.children[0]);
         } else {
             let base_kind = hir.node_kind(base.data);
-            need(node_is(base_kind, hir.NodeKind.Place) ||
-                 node_is(base_kind, hir.NodeKind.FieldPlace) ||
-                 node_is(base_kind, hir.NodeKind.IndexPlace),
+            hircore.need(hircore.node_is(base_kind, hir.NodeKind.Place) ||
+                 hircore.node_is(base_kind, hir.NodeKind.FieldPlace) ||
+                 hircore.node_is(base_kind, hir.NodeKind.IndexPlace),
                 "field write requires writable base");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.StructInit) ||
-       node_is(node_kind, hir.NodeKind.EnumInit) {
+    if hircore.node_is(node_kind, hir.NodeKind.StructInit) ||
+       hircore.node_is(node_kind, hir.NodeKind.EnumInit) {
         var nominal_kind = model.TypeKind.NominalStruct;
-        if node_is(node_kind, hir.NodeKind.EnumInit) {
+        if hircore.node_is(node_kind, hir.NodeKind.EnumInit) {
             nominal_kind = model.TypeKind.NominalEnum;
         }
-        need(kind_is(verifier_type(state, node.type_id).kind, nominal_kind),
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, node.type_id).kind, nominal_kind),
             "constructor nominal kind");
-        let declaration = nominal_type(state, node.type_id);
+        let declaration = hircore.nominal_type(state, node.type_id);
         var fields_kind usize = 0;
         var args = vec.empty[hir.CallArg]();
         var variant_symbol usize = 0;
-        if node_is(node_kind, hir.NodeKind.StructInit) {
+        if hircore.node_is(node_kind, hir.NodeKind.StructInit) {
             switch node.data {
                 case hir.NodeData.StructInit(value): args = value.fields;
                 default: {}
@@ -1539,65 +1540,65 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
                     variant_index = i64(index);
                 }
             }
-            need(variant_index >= 0, "constructor field/variant arity");
+            hircore.need(variant_index >= 0, "constructor field/variant arity");
             fields = declaration.variants[usize(variant_index)].payload;
         }
-        need(vec.len(args) == vec.len(fields) &&
+        hircore.need(vec.len(args) == vec.len(fields) &&
              vec.len(node.children) == vec.len(args),
             "constructor field/variant arity");
-        let file = verifier_file(state, node.source.node.module,
+        let file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
         let syntax = file.nodes[node.source.node.node];
-        need((ast_is(syntax.kind, model.AstKind.Call) &&
+        hircore.need((hircore.ast_is(syntax.kind, model.AstKind.Call) &&
               vec.len(syntax.children) == vec.len(args) + 1) ||
              (fields_kind == 1 && vec.len(args) == 0 &&
-              ast_is(syntax.kind, model.AstKind.Member)),
+              hircore.ast_is(syntax.kind, model.AstKind.Member)),
             "constructor source kind/arity");
         if fields_kind == 1 {
             var callee = syntax;
-            if ast_is(syntax.kind, model.AstKind.Call) {
+            if hircore.ast_is(syntax.kind, model.AstKind.Call) {
                 callee = file.nodes[syntax.children[0]];
             }
-            need(ast_is(callee.kind, model.AstKind.Member) &&
+            hircore.need(hircore.ast_is(callee.kind, model.AstKind.Member) &&
                  callee.token_end > 0 &&
                  callee.token_end <= vec.len(file.lexed.tokens) &&
                  file.lexed.tokens[callee.token_end - 1].spelling ==
-                     verifier_symbol(state, variant_symbol).name,
+                     hircore.verifier_symbol(state, variant_symbol).name,
                 "constructor source variant identity");
         }
         let seen = vec.empty[u32]();
         var named = false;
         for var index usize = 0; index < vec.len(args); index += 1 {
             let argument = args[index];
-            need(argument.source_index == u32(index) &&
+            hircore.need(argument.source_index == u32(index) &&
                  usize(argument.parameter_index) < vec.len(fields) &&
                  !ids_contains_u32(seen, argument.parameter_index),
                 "constructor argument mapping");
             ids_insert_u32(seen, argument.parameter_index);
             let field = fields[usize(argument.parameter_index)];
-            need(node.children[index] == argument.expression &&
-                 mode_is_id(argument.mode, 0) &&
-                 verifier_expr(state, argument.expression).type_id ==
-                     field_type(inout state, node.type_id, field),
+            hircore.need(node.children[index] == argument.expression &&
+                 hircore.mode_is_id(argument.mode, 0) &&
+                 hircore.verifier_expr(state, argument.expression).type_id ==
+                     hircore.field_type(inout state, node.type_id, field),
                 "constructor argument type/mode/order");
             let argument_syntax = file.nodes[syntax.children[index + 1]];
-            need(ast_is(argument_syntax.kind, model.AstKind.Argument) &&
+            hircore.need(hircore.ast_is(argument_syntax.kind, model.AstKind.Argument) &&
                  vec.len(argument_syntax.children) == 1 &&
                  argument_syntax.token_begin + 1 < vec.len(file.lexed.tokens),
                 "constructor source argument");
             let labelled = file.lexed.tokens[
                 argument_syntax.token_begin + 1].spelling == ":";
-            need(option.is_some(argument.label) == labelled,
+            hircore.need(option.is_some(argument.label) == labelled,
                 "constructor source label presence");
             if option.is_some(argument.label) {
                 named = true;
-                need(option_string_value(argument.label) ==
-                         verifier_symbol(state, field.symbol).name &&
-                     option_string_value(argument.label) ==
+                hircore.need(hircore.option_string_value(argument.label) ==
+                         hircore.verifier_symbol(state, field.symbol).name &&
+                     hircore.option_string_value(argument.label) ==
                          file.lexed.tokens[argument_syntax.token_begin].spelling,
                     "constructor field/source label mismatch");
             } else {
-                need(fields_kind == 1 && !named &&
+                hircore.need(fields_kind == 1 && !named &&
                      usize(argument.parameter_index) == index,
                     "constructor positional argument index/order");
             }
@@ -1605,22 +1606,22 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
             let original = file.nodes[er];
             for true {
                 let value = file.nodes[er];
-                if ast_is(value.kind, model.AstKind.Parenthesized) ||
-                   (ast_is(value.kind, model.AstKind.Unary) &&
+                if hircore.ast_is(value.kind, model.AstKind.Parenthesized) ||
+                   (hircore.ast_is(value.kind, model.AstKind.Unary) &&
                     file.lexed.tokens[value.token_begin].spelling == "+") {
-                    need(vec.len(value.children) == 1,
+                    hircore.need(vec.len(value.children) == 1,
                         "constructor source wrapper");
                     er = value.children[0];
                     continue;
                 }
-                need(!ast_is(value.kind, model.AstKind.Unary) ||
+                hircore.need(!hircore.ast_is(value.kind, model.AstKind.Unary) ||
                      (file.lexed.tokens[value.token_begin].spelling != "inout" &&
                       file.lexed.tokens[value.token_begin].spelling != "move"),
                     "constructor source argument mode");
                 break;
             }
-            let source = verifier_node(state, argument.expression).source;
-            need(source.node.module == node.source.node.module &&
+            let source = hircore.verifier_node(state, argument.expression).source;
+            hircore.need(source.node.module == node.source.node.module &&
                  source.node.file == node.source.node.file &&
                  source.span.begin_byte >= original.span.begin_byte &&
                  source.span.end_byte <= original.span.end_byte,
@@ -1628,16 +1629,16 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Switch) {
-        verifier_unit(state, node);
+    if hircore.node_is(node_kind, hir.NodeKind.Switch) {
+        hircore.verifier_unit(state, node);
         var switch_value = hir.Switch(arms: [], exhaustive: false);
         switch node.data {
             case hir.NodeData.Switch(value): switch_value = value;
             default: {}
         }
-        need(vec.len(node.children) == vec.len(switch_value.arms) + 1 &&
+        hircore.need(vec.len(node.children) == vec.len(switch_value.arms) + 1 &&
              vec.len(node.children) > 0, "switch child count");
-        let scrutinee = verifier_expr(state, node.children[0]).type_id;
+        let scrutinee = hircore.verifier_expr(state, node.children[0]).type_id;
         let coverage_context = CoverageContext(m: state.m,
             context: state.substituted);
         var covered = pattern.coverage(scrutinee,
@@ -1649,11 +1650,11 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
         for var index usize = 0;
             index < vec.len(switch_value.arms); index += 1 {
             let arm = switch_value.arms[index];
-            verifier_source(state, arm.source);
-            let arm_file = verifier_file(state, arm.source.node.module,
+            hircore.verifier_source(state, arm.source);
+            let arm_file = hircore.verifier_file(state, arm.source.node.module,
                 arm.source.node.file);
             let case_ast = arm_file.nodes[arm.source.node.node];
-            need(ast_is(case_ast.kind, model.AstKind.Case),
+            hircore.need(hircore.ast_is(case_ast.kind, model.AstKind.Case),
                 "switch arm source is not a case");
             var has_required = false;
             var required = arm.source;
@@ -1661,7 +1662,7 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
                arm_file.lexed.tokens[case_ast.token_begin].spelling == "default" {
                 has_required = true;
             } else {
-                need(vec.len(case_ast.children) > 0,
+                hircore.need(vec.len(case_ast.children) > 0,
                     "case pattern child missing");
                 let child = case_ast.children[0];
                 var child_ref = arm.source.node;
@@ -1670,56 +1671,56 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
                     span: arm_file.nodes[child].span);
                 has_required = true;
             }
-            let arm_owner = verifier_scope(state, node.scope).function;
+            let arm_owner = hircore.verifier_scope(state, node.scope).function;
             pattern_shape(inout state, arm.pattern, scrutinee, arm_owner, true,
                 arm.source, has_required, required);
-            need(same_ref(verifier_scope(state, arm.scope).source.node,
+            hircore.need(hircore.same_ref(hircore.verifier_scope(state, arm.scope).source.node,
                      arm.source.node) &&
-                 same_ref(verifier_node(state, arm.body).source.node,
+                 hircore.same_ref(hircore.verifier_node(state, arm.body).source.node,
                      arm.source.node),
                 "switch arm source belongs to another case");
-            need(arm.body == node.children[index + 1] &&
-                 node_is(hir.node_kind(verifier_node(state, arm.body).data),
+            hircore.need(arm.body == node.children[index + 1] &&
+                 hircore.node_is(hir.node_kind(hircore.verifier_node(state, arm.body).data),
                      hir.NodeKind.Block) &&
-                 verifier_node(state, arm.body).scope == arm.scope &&
+                 hircore.verifier_node(state, arm.body).scope == arm.scope &&
                  scope_parent_is(state, arm.scope, node.scope),
                 "switch arm body/scope");
             var reachable = false;
             try {
                 reachable = pattern.add(inout covered, arm.pattern);
             } catch error model.SupportError {
-                support_error(error);
+                hircore.support_error(error);
             }
-            need(reachable, "unreachable switch arm");
+            hircore.need(reachable, "unreachable switch arm");
         }
         var exhaustive = false;
         try {
             exhaustive = pattern.exhaustive(inout covered);
         } catch error model.SupportError {
-            support_error(error);
+            hircore.support_error(error);
         }
-        need(switch_value.exhaustive && exhaustive, "nonexhaustive switch");
+        hircore.need(switch_value.exhaustive && exhaustive, "nonexhaustive switch");
         return;
     }
     let constraint = constraint_call_payload(node);
-    let owner = verifier_scope(state, node.scope).function;
-    need(template_index(state, owner) >= 0,
+    let owner = hircore.verifier_scope(state, node.scope).function;
+    hircore.need(hircore.template_index(state, owner) >= 0,
         "constraint call survived into concrete execution");
-    let trait_index = trait_declaration(state, constraint.trait_ref.declaration);
-    need(trait_index >= 0, "missing constraint trait");
+    let trait_index = hircore.trait_declaration(state, constraint.trait_ref.declaration);
+    hircore.need(trait_index >= 0, "missing constraint trait");
     let trait_value = state.m.traits[usize(trait_index)];
-    let owner_allowed = allowed_for(state, owner);
-    check_trait_application(inout state, constraint.trait_ref, owner_allowed);
-    check_trait_parameter_bounds(inout state, constraint.trait_ref,
+    let owner_allowed = hircore.allowed_for(state, owner);
+    hircore.check_trait_application(inout state, constraint.trait_ref, owner_allowed);
+    hircore.check_trait_parameter_bounds(inout state, constraint.trait_ref,
         constraint.receiver, 0);
-    let template = state.m.templates[usize(template_index(state, owner))];
+    let template = state.m.templates[usize(hircore.template_index(state, owner))];
     var bounded = false;
     for parameter in template.params {
         switch parameter.trait_ref {
             case option.Option.Some(bound): {
-                let receiver_type = verifier_type(state, constraint.receiver);
-                if same_trait_ref(bound, constraint.trait_ref) &&
-                   kind_is(receiver_type.kind, model.TypeKind.TypeParameter) &&
+                let receiver_type = hircore.verifier_type(state, constraint.receiver);
+                if hircore.same_trait_ref(bound, constraint.trait_ref) &&
+                   hircore.kind_is(receiver_type.kind, model.TypeKind.TypeParameter) &&
                    receiver_type.declaration == parameter.symbol {
                     bounded = true;
                 }
@@ -1727,88 +1728,88 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
             case option.Option.None: {}
         }
     }
-    need(bounded, "method is not authorized by template constraints");
+    hircore.need(bounded, "method is not authorized by template constraints");
     var method_index i64 = -1;
     for var index usize = 0; index < vec.len(trait_value.methods); index += 1 {
         if trait_value.methods[index].symbol == constraint.method {
             method_index = i64(index);
         }
     }
-    need(method_index >= 0, "missing constraint method");
+    hircore.need(method_index >= 0, "missing constraint method");
     let method = trait_value.methods[usize(method_index)];
-    let written = source_method_call(state, node);
+    let written = hircalls.source_method_call(state, node);
     if !option.is_some(written) {
-        need(synthetic_iterator_node(state, node.source),
+        hircore.need(synthetic_iterator_node(state, node.source),
             "constraint call without a written method is not an Iterator next");
-        need(std_iterator_trait(state) == trait_index,
+        hircore.need(hircore.std_iterator_trait(state) == trait_index,
             "synthetic for-in next is not std/iter.Iterator");
-        let source_file = verifier_file(state, node.source.node.module,
+        let source_file = hircore.verifier_file(state, node.source.node.module,
             node.source.node.file);
-        need(ast_is(source_file.nodes[node.source.node.node].kind,
+        hircore.need(hircore.ast_is(source_file.nodes[node.source.node.node].kind,
                  model.AstKind.ForIn),
             "constraint call lost its source method");
-        need(verifier_symbol(state, constraint.method).name == "next" &&
+        hircore.need(hircore.verifier_symbol(state, constraint.method).name == "next" &&
              vec.len(constraint.args) == 1 && vec.len(node.children) == 1,
             "synthetic for-in next shape");
-        let method_own = source_parameters(inout state, method.source);
-        need(vec.len(method_own) == 0, "synthetic for-in next is generic");
+        let method_own = hircore.source_parameters(inout state, method.source);
+        hircore.need(vec.len(method_own) == 0, "synthetic for-in next is generic");
         let sub = vec.empty[model.Substitution]();
         vec.push(sub, model.Substitution(symbol: trait_value.self,
             type_id: constraint.receiver));
-        need(vec.len(constraint.trait_ref.args) == vec.len(trait_value.params),
+        hircore.need(vec.len(constraint.trait_ref.args) == vec.len(trait_value.params),
             "synthetic for-in next trait arity");
         for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
             vec.push(sub, model.Substitution(symbol: trait_value.params[index].symbol,
                 type_id: constraint.trait_ref.args[index]));
         }
-        valid_type(inout state, constraint.signature, owner_allowed);
-        need(constraint.signature == substitute_type(inout state,
+        hircore.valid_type(inout state, constraint.signature, owner_allowed);
+        hircore.need(constraint.signature == hircore.substitute_type(inout state,
                  method.signature, sub),
             "synthetic for-in next signature mismatch");
-        let signature = verifier_type(state, constraint.signature);
-        let prototype = verifier_type(state, method.signature);
-        need(vec.len(prototype.parameters) == 1 &&
-             mode_is_id(prototype.parameters[0].mode, 1),
+        let signature = hircore.verifier_type(state, constraint.signature);
+        let prototype = hircore.verifier_type(state, method.signature);
+        hircore.need(vec.len(prototype.parameters) == 1 &&
+             hircore.mode_is_id(prototype.parameters[0].mode, 1),
             "synthetic for-in next prototype mode");
         let receiver = constraint.args[0];
-        need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+        hircore.need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
              !option.is_some(receiver.label) &&
-             mode_is_id(receiver.mode, 1) &&
+             hircore.mode_is_id(receiver.mode, 1) &&
              receiver.expression == node.children[0] &&
-             verifier_node(state, receiver.expression).type_id ==
+             hircore.verifier_node(state, receiver.expression).type_id ==
                  constraint.receiver &&
              node.type_id == signature.result,
             "synthetic for-in next receiver/result");
-        let place = verifier_node(state, receiver.expression);
-        need(inout_place(place) &&
-             inout_slot_type(state.m, place.type_id, owner_allowed),
+        let place = hircore.verifier_node(state, receiver.expression);
+        hircore.need(hircalls.inout_place(place) &&
+             hircore.inout_slot_type(state.m, place.type_id, owner_allowed),
             "synthetic for-in next inout cursor");
-        check_call_aliases(inout state, constraint.args, false);
+        hircalls.check_call_aliases(inout state, constraint.args, false);
         return;
     }
-    let source = source_method_call_value(written);
-    need(source.name == verifier_symbol(state, constraint.method).name,
+    let source = hircalls.source_method_call_value(written);
+    hircore.need(source.name == hircore.verifier_symbol(state, constraint.method).name,
         "constraint call source method differs from target");
-    let template_qualifier = template_trait_parameter(state, source, owner);
-    valid_type(inout state, constraint.signature, owner_allowed);
-    let ignored = constraint_method_arguments(inout state, node, constraint,
+    let template_qualifier = hircalls.template_trait_parameter(state, source, owner);
+    hircore.valid_type(inout state, constraint.signature, owner_allowed);
+    let ignored = hircalls.constraint_method_arguments(inout state, node, constraint,
         trait_value, method);
-    let signature = verifier_type(state, constraint.signature);
+    let signature = hircore.verifier_type(state, constraint.signature);
     if template_qualifier {
-        need(kind_is(verifier_type(state, constraint.receiver).kind,
+        hircore.need(hircore.kind_is(hircore.verifier_type(state, constraint.receiver).kind,
                      model.TypeKind.TypeParameter),
             "T-qualified constraint receiver is not a type parameter");
-        need(source_type_in_function(inout state, source.base, owner) ==
+        hircore.need(hircore.source_type_in_function(inout state, source.base, owner) ==
                  constraint.receiver,
             "T-qualified constraint source type differs from receiver");
-        let raw = verifier_type(state, method.signature);
+        let raw = hircore.verifier_type(state, method.signature);
         for parameter in raw.parameters {
-            need(mode_is_id(parameter.mode, 0) ||
-                 mode_is_id(parameter.mode, 1) ||
-                 mode_is_id(parameter.mode, 2),
+            hircore.need(hircore.mode_is_id(parameter.mode, 0) ||
+                 hircore.mode_is_id(parameter.mode, 1) ||
+                 hircore.mode_is_id(parameter.mode, 2),
                 "trait-static parameter mode is unsupported");
         }
-        need(node.type_id == signature.result &&
+        hircore.need(node.type_id == signature.result &&
              vec.len(constraint.args) == vec.len(signature.parameters) &&
              vec.len(node.children) == vec.len(constraint.args),
             "trait-static call arity/children");
@@ -1816,164 +1817,164 @@ func aggregate_shape(state inout Verifier, node hir.HirNode)
         var named = false;
         for var index usize = 0; index < vec.len(constraint.args); index += 1 {
             let argument = constraint.args[index];
-            need(argument.source_index == u32(index) &&
+            hircore.need(argument.source_index == u32(index) &&
                  usize(argument.parameter_index) < vec.len(signature.parameters) &&
                  !ids_contains_u32(seen, argument.parameter_index),
                 "trait-static argument mapping");
             ids_insert_u32(seen, argument.parameter_index);
-            need(node.children[index] == argument.expression,
+            hircore.need(node.children[index] == argument.expression,
                 "trait-static children must preserve source order");
             let parameter = signature.parameters[usize(argument.parameter_index)];
-            let value = verifier_node(state, argument.expression);
-            need(mode_is_id(argument.mode, mode_id_value(parameter.mode)) &&
+            let value = hircore.verifier_node(state, argument.expression);
+            hircore.need(hircore.mode_is_id(argument.mode, hircore.mode_id_value(parameter.mode)) &&
                  value.type_id == parameter.type_id,
                 "trait-static argument type/mode");
-            if mode_is_id(parameter.mode, 1) {
-                need(inout_place(value) &&
-                     inout_slot_type(state.m, parameter.type_id, owner_allowed),
+            if hircore.mode_is_id(parameter.mode, 1) {
+                hircore.need(hircalls.inout_place(value) &&
+                     hircore.inout_slot_type(state.m, parameter.type_id, owner_allowed),
                     "trait-static inout requires a whole Woozy value place");
             } else {
-                need(mode_is_id(parameter.mode, 0) ||
-                     mode_is_id(parameter.mode, 2),
+                hircore.need(hircore.mode_is_id(parameter.mode, 0) ||
+                     hircore.mode_is_id(parameter.mode, 2),
                     "unsupported trait-static argument mode");
-                let checked = verifier_expr(state, argument.expression);
+                let checked = hircore.verifier_expr(state, argument.expression);
             }
             if option.is_some(argument.label) {
                 named = true;
-                need(option_string_value(argument.label) ==
+                hircore.need(hircore.option_string_value(argument.label) ==
                      method.parameters[usize(argument.parameter_index)].label,
                     "trait-static label differs from trait prototype");
             } else {
-                need(!named && usize(argument.parameter_index) == index,
+                hircore.need(!named && usize(argument.parameter_index) == index,
                     "trait-static positional argument index/order");
             }
         }
-        check_call_aliases(inout state, constraint.args, false);
+        hircalls.check_call_aliases(inout state, constraint.args, false);
         return;
     }
     if source.has_base_symbol {
-        let kind = verifier_symbol(state, source.base_symbol).kind;
-        need(!symbol_is(kind, model.SymbolKind.Type) &&
-             !symbol_is(kind, model.SymbolKind.BuiltinType) &&
-             !symbol_is(kind, model.SymbolKind.TypeParameter),
+        let kind = hircore.verifier_symbol(state, source.base_symbol).kind;
+        hircore.need(!hircore.symbol_is(kind, model.SymbolKind.Type) &&
+             !hircore.symbol_is(kind, model.SymbolKind.BuiltinType) &&
+             !hircore.symbol_is(kind, model.SymbolKind.TypeParameter),
             "value-form constraint call has a type qualifier");
     }
-    let prototype = verifier_type(state, method.signature);
-    need(vec.len(method.parameters) > 0 &&
+    let prototype = hircore.verifier_type(state, method.signature);
+    hircore.need(vec.len(method.parameters) > 0 &&
          vec.len(prototype.parameters) > 0,
         "constraint method must declare Self");
     for parameter in prototype.parameters {
-        need(mode_is_id(parameter.mode, 0) || mode_is_id(parameter.mode, 1) ||
-             mode_is_id(parameter.mode, 2),
+        hircore.need(hircore.mode_is_id(parameter.mode, 0) || hircore.mode_is_id(parameter.mode, 1) ||
+             hircore.mode_is_id(parameter.mode, 2),
             "unsupported constraint method parameter mode");
     }
-    let raw_self = verifier_type(state, prototype.parameters[0].type_id);
-    need(kind_is(raw_self.kind, model.TypeKind.TypeParameter) &&
+    let raw_self = hircore.verifier_type(state, prototype.parameters[0].type_id);
+    hircore.need(hircore.kind_is(raw_self.kind, model.TypeKind.TypeParameter) &&
          raw_self.declaration == trait_value.self,
         "constraint method self type must be the trait Self");
-    need(node.type_id == signature.result &&
+    hircore.need(node.type_id == signature.result &&
          vec.len(constraint.args) == vec.len(signature.parameters) &&
          vec.len(node.children) == vec.len(constraint.args) &&
          vec.len(constraint.args) > 0,
         "constraint call shape");
     let receiver = constraint.args[0];
-    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+    hircore.need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
          !option.is_some(receiver.label) &&
-         mode_is_id(receiver.mode, mode_id_value(prototype.parameters[0].mode)) &&
+         hircore.mode_is_id(receiver.mode, hircore.mode_id_value(prototype.parameters[0].mode)) &&
          receiver.expression == node.children[0] &&
-         verifier_node(state, receiver.expression).type_id ==
+         hircore.verifier_node(state, receiver.expression).type_id ==
              constraint.receiver,
         "constraint receiver order/mode/type");
-    check_receiver_source(inout state, node, constraint.args, source.base,
+    hircalls.check_receiver_source(inout state, node, constraint.args, source.base,
         prototype.parameters[0].mode);
     let seen = vec.empty[u32]();
     ids_insert_u32(seen, 0);
-    if mode_is_id(receiver.mode, 1) {
-        let place = verifier_node(state, receiver.expression);
-        need(inout_place(place) &&
-             inout_slot_type(state.m, place.type_id, owner_allowed),
+    if hircore.mode_is_id(receiver.mode, 1) {
+        let place = hircore.verifier_node(state, receiver.expression);
+        hircore.need(hircalls.inout_place(place) &&
+             hircore.inout_slot_type(state.m, place.type_id, owner_allowed),
             "constraint receiver inout requires a whole Woozy value place");
     } else {
-        let checked = verifier_expr(state, receiver.expression);
+        let checked = hircore.verifier_expr(state, receiver.expression);
     }
     var named = false;
     for var index usize = 1; index < vec.len(constraint.args); index += 1 {
         let argument = constraint.args[index];
-        need(argument.source_index == u32(index) &&
+        hircore.need(argument.source_index == u32(index) &&
              usize(argument.parameter_index) < vec.len(signature.parameters) &&
              !ids_contains_u32(seen, argument.parameter_index),
             "constraint call argument mapping");
         ids_insert_u32(seen, argument.parameter_index);
-        need(node.children[index] == argument.expression,
+        hircore.need(node.children[index] == argument.expression,
             "constraint call children must preserve source order");
         let parameter = signature.parameters[usize(argument.parameter_index)];
-        let value = verifier_node(state, argument.expression);
-        need(mode_is_id(argument.mode, mode_id_value(parameter.mode)) &&
+        let value = hircore.verifier_node(state, argument.expression);
+        hircore.need(hircore.mode_is_id(argument.mode, hircore.mode_id_value(parameter.mode)) &&
              value.type_id == parameter.type_id,
             "constraint argument type/mode");
-        if mode_is_id(parameter.mode, 1) {
+        if hircore.mode_is_id(parameter.mode, 1) {
             let raw = prototype.parameters[usize(argument.parameter_index)];
             var trait_self_slot = false;
-            if index > 0 && mode_is_id(raw.mode, 1) {
-                let raw_type = verifier_type(state, raw.type_id);
-                trait_self_slot = kind_is(raw_type.kind,
+            if index > 0 && hircore.mode_is_id(raw.mode, 1) {
+                let raw_type = hircore.verifier_type(state, raw.type_id);
+                trait_self_slot = hircore.kind_is(raw_type.kind,
                         model.TypeKind.TypeParameter) &&
                     raw_type.declaration == trait_value.self &&
                     parameter.type_id == constraint.receiver;
             }
-            need(inout_place(value) &&
-                 (inout_slot_type(state.m, parameter.type_id, owner_allowed) ||
+            hircore.need(hircalls.inout_place(value) &&
+                 (hircore.inout_slot_type(state.m, parameter.type_id, owner_allowed) ||
                   trait_self_slot),
                 "constraint inout requires a whole Woozy value place");
         } else {
-            need(mode_is_id(parameter.mode, 0) ||
-                 mode_is_id(parameter.mode, 2),
+            hircore.need(hircore.mode_is_id(parameter.mode, 0) ||
+                 hircore.mode_is_id(parameter.mode, 2),
                 "unsupported constraint argument mode");
-            let checked = verifier_expr(state, argument.expression);
+            let checked = hircore.verifier_expr(state, argument.expression);
         }
         if option.is_some(argument.label) {
             named = true;
-            need(option_string_value(argument.label) ==
+            hircore.need(hircore.option_string_value(argument.label) ==
                  method.parameters[usize(argument.parameter_index)].label,
                 "constraint call label differs from trait prototype");
         } else {
-            need(!named && usize(argument.parameter_index) == index,
+            hircore.need(!named && usize(argument.parameter_index) == index,
                 "constraint positional argument index/order");
         }
     }
-    check_call_aliases(inout state, constraint.args, false);
+    hircalls.check_call_aliases(inout state, constraint.args, false);
 }
 
 func constraint_call_payload(node hir.HirNode) hir.ConstraintCall
-    throws Invalid {
+    throws hircore.Invalid {
     switch node.data {
         case hir.NodeData.ConstraintCall(value): return value;
-        default: fail("constraint call payload");
+        default: hircore.fail("constraint call payload");
     }
     return hir.ConstraintCall(trait_ref: hir.TraitRef(declaration: 0,
         args: []), method: 0, receiver: 0, signature: 0, args: []);
 }
 
-func scope_parent_is(state Verifier, scope usize, expected usize) bool
-    throws Invalid {
-    switch verifier_scope(state, scope).parent {
+func scope_parent_is(state hircore.Verifier, scope usize, expected usize) bool
+    throws hircore.Invalid {
+    switch hircore.verifier_scope(state, scope).parent {
         case option.Option.Some(value): return value == expected;
         case option.Option.None: return false;
     }
 }
 
-func synthetic_iterator_node(state Verifier, source hir.HirSource) bool {
+func synthetic_iterator_node(state hircore.Verifier, source hir.HirSource) bool {
     for node in state.m.nodes {
         switch node.data {
             case hir.NodeData.ForIn(value): {
                 switch value.iterator {
                     case option.Option.Some(iterator): {
-                        if same_ref(source.node,
+                        if hircore.same_ref(source.node,
                                 state.m.nodes[iterator.next].source.node) {
                             return true;
                         }
                         for child in state.m.nodes[iterator.next].children {
-                            if same_ref(source.node,
+                            if hircore.same_ref(source.node,
                                     state.m.nodes[child].source.node) {
                                 return true;
                             }
@@ -1988,88 +1989,88 @@ func synthetic_iterator_node(state Verifier, source hir.HirSource) bool {
     return false;
 }
 
-func effect_shape(state inout Verifier, node hir.HirNode) throws Invalid {
-    verifier_unit(state, node);
-    let effect_owner = verifier_scope(state, node.scope).function;
-    let effect_allowed = allowed_for(state, effect_owner);
-    let file = verifier_file(state, node.source.node.module,
+func effect_shape(state inout hircore.Verifier, node hir.HirNode) throws hircore.Invalid {
+    hircore.verifier_unit(state, node);
+    let effect_owner = hircore.verifier_scope(state, node.scope).function;
+    let effect_allowed = hircore.allowed_for(state, effect_owner);
+    let file = hircore.verifier_file(state, node.source.node.module,
         node.source.node.file);
     let syntax = file.nodes[node.source.node.node];
     let node_kind = hir.node_kind(node.data);
-    if node_is(node_kind, hir.NodeKind.Try) {
+    if hircore.node_is(node_kind, hir.NodeKind.Try) {
         var try_value = hir.Try(catches: []);
         switch node.data {
             case hir.NodeData.Try(value): try_value = value;
             default: {}
         }
-        need(ast_is(syntax.kind, model.AstKind.Try) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Try) &&
              vec.len(syntax.children) == vec.len(try_value.catches) + 1 &&
              vec.len(node.children) == vec.len(syntax.children) &&
              vec.len(try_value.catches) > 0,
             "try source/handler count");
-        need(node_is(hir.node_kind(verifier_node(state,
+        hircore.need(hircore.node_is(hir.node_kind(hircore.verifier_node(state,
                  node.children[0]).data), hir.NodeKind.Block),
             "try protected block");
-        need(source_child_matches(inout state, node, node.children[0],
+        hircore.need(hircalls.source_child_matches(inout state, node, node.children[0],
                  syntax.children[0]), "effect body differs from source");
         let caught = vec.empty[usize]();
         for var index usize = 0; index < vec.len(try_value.catches); index += 1 {
             let handler = try_value.catches[index];
-            verifier_source(state, handler.source);
+            hircore.verifier_source(state, handler.source);
             var reference = node.source.node;
             reference.node = syntax.children[index + 1];
-            need(same_ref(handler.source.node, reference),
+            hircore.need(hircore.same_ref(handler.source.node, reference),
                 "catch source/order mismatch");
-            declaration(inout state, handler.binding, handler.source,
+            hircore.declaration(inout state, handler.binding, handler.source,
                 model.SymbolKind.Value, model.AstKind.Catch);
             let catch_ast = file.nodes[reference.node];
-            need(vec.len(catch_ast.children) == 2, "catch syntax shape");
+            hircore.need(vec.len(catch_ast.children) == 2, "catch syntax shape");
             var type_ref = reference;
             type_ref.node = catch_ast.children[0];
-            valid_type(inout state, handler.error_type, effect_allowed);
-            need(handler.error_type == source_type_in_function(inout state,
+            hircore.valid_type(inout state, handler.error_type, effect_allowed);
+            hircore.need(handler.error_type == hircore.source_type_in_function(inout state,
                      type_ref, effect_owner),
                 "catch error type differs from source");
-            need(ids_insert(caught, handler.error_type),
+            hircore.need(hircore.ids_insert(caught, handler.error_type),
                 "duplicate catch type");
-            need(handler.body == node.children[index + 1] &&
-                 node_is(hir.node_kind(verifier_node(state, handler.body).data),
+            hircore.need(handler.body == node.children[index + 1] &&
+                 hircore.node_is(hir.node_kind(hircore.verifier_node(state, handler.body).data),
                      hir.NodeKind.Block) &&
-                 verifier_node(state, handler.body).scope == handler.scope &&
+                 hircore.verifier_node(state, handler.body).scope == handler.scope &&
                  scope_parent_is(state, handler.scope, node.scope) &&
-                 same_ref(verifier_scope(state, handler.scope).source.node,
+                 hircore.same_ref(hircore.verifier_scope(state, handler.scope).source.node,
                      handler.source.node),
                 "catch scope/body mismatch");
-            need(source_child_matches(inout state, node, handler.body,
+            hircore.need(hircalls.source_child_matches(inout state, node, handler.body,
                      catch_ast.children[1]), "effect body differs from source");
         }
         return;
     }
-    if node_is(node_kind, hir.NodeKind.Defer) {
+    if hircore.node_is(node_kind, hir.NodeKind.Defer) {
         var defer_value = hir.Defer(owner_scope: 0, references: []);
         switch node.data {
             case hir.NodeData.Defer(value): defer_value = value;
             default: {}
         }
-        need(ast_is(syntax.kind, model.AstKind.Defer) &&
+        hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Defer) &&
              vec.len(syntax.children) == 1 && vec.len(node.children) == 1 &&
-             node_is(hir.node_kind(verifier_node(state,
+             hircore.node_is(hir.node_kind(hircore.verifier_node(state,
                  node.children[0]).data), hir.NodeKind.Block) &&
              defer_value.owner_scope == node.scope,
             "defer source/body/registration scope");
-        need(source_child_matches(inout state, node, node.children[0],
+        hircore.need(hircalls.source_child_matches(inout state, node, node.children[0],
                  syntax.children[0]), "effect body differs from source");
         for reference in defer_value.references {
-            let symbol = verifier_symbol(state, reference);
+            let symbol = hircore.verifier_symbol(state, reference);
         }
         return;
     }
-    need(ast_is(syntax.kind, model.AstKind.Throw) &&
+    hircore.need(hircore.ast_is(syntax.kind, model.AstKind.Throw) &&
          vec.len(syntax.children) == 1 && vec.len(node.children) == 1,
         "throw source/arity");
-    let value = verifier_expr(state, node.children[0]);
+    let value = hircore.verifier_expr(state, node.children[0]);
     let original = file.nodes[syntax.children[0]];
-    need(value.source.span.begin_byte >= original.span.begin_byte &&
+    hircore.need(value.source.span.begin_byte >= original.span.begin_byte &&
          value.source.span.end_byte <= original.span.end_byte,
         "throw expression differs from source");
 }
@@ -2079,8 +2080,8 @@ struct Frame {
     next usize;
 }
 
-func tree(state inout Verifier, function_value hir.HirFunction)
-    throws Invalid {
+pub func tree(state inout hircore.Verifier, function_value hir.HirFunction)
+    throws hircore.Invalid {
     let stack = vec.empty[Frame]();
     let loops = vec.empty[usize]();
     let break_targets = vec.empty[usize]();
@@ -2089,7 +2090,7 @@ func tree(state inout Verifier, function_value hir.HirFunction)
     for vec.len(stack) > 0 {
         let frame_index = vec.len(stack) - 1;
         let current_id = stack[frame_index].id;
-        let node = verifier_node(state, current_id);
+        let node = hircore.verifier_node(state, current_id);
         if stack[frame_index].next < vec.len(node.children) {
             let child = node.children[stack[frame_index].next];
             stack[frame_index].next += 1;
@@ -2099,45 +2100,45 @@ func tree(state inout Verifier, function_value hir.HirFunction)
         }
         state.leave[current_id] = state.clock + 1;
         state.clock += 1;
-        if node_is(hir.node_kind(node.data), hir.NodeKind.Binding) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.Binding) {
             var binding = hir.Binding(symbol: 0, writable: false);
             switch node.data {
                 case hir.NodeData.Binding(value): binding = value;
                 default: {}
             }
-            let symbol = verifier_symbol(state, binding.symbol);
-            declaration(inout state, binding.symbol, node.source, symbol.kind,
+            let symbol = hircore.verifier_symbol(state, binding.symbol);
+            hircore.declaration(inout state, binding.symbol, node.source, symbol.kind,
                 model.AstKind.Binding);
-            let file = verifier_file(state, node.source.node.module,
+            let file = hircore.verifier_file(state, node.source.node.module,
                 node.source.node.file);
             let ast = file.nodes[node.source.node.node];
-            need(ast.token_begin < vec.len(file.lexed.tokens),
+            hircore.need(ast.token_begin < vec.len(file.lexed.tokens),
                 "binding token range");
             let keyword = file.lexed.tokens[ast.token_begin].spelling;
-            need(keyword == "let" || keyword == "var" || keyword == "const",
+            hircore.need(keyword == "let" || keyword == "var" || keyword == "const",
                 "local binding keyword");
-            need(!binding.writable || keyword == "var",
+            hircore.need(!binding.writable || keyword == "var",
                 "non-var binding marked writable");
-            need(!symbol_is(symbol.kind, model.SymbolKind.Constant) ||
+            hircore.need(!hircore.symbol_is(symbol.kind, model.SymbolKind.Constant) ||
                  !binding.writable, "constant marked writable");
-            let binding_type = verifier_node(state, node.children[0]).type_id;
+            let binding_type = hircore.verifier_node(state, node.children[0]).type_id;
             let binding_ready = state.leave[current_id];
-            need(local_insert(inout state, binding.symbol,
-                     Local(type_id: binding_type, scope: node.scope,
+            hircore.need(hircore.local_insert(inout state, binding.symbol,
+                     hircore.Local(type_id: binding_type, scope: node.scope,
                          function: function_value.symbol,
                          writable: binding.writable, ready: binding_ready,
                          read_only: false)),
                 "duplicate local/parameter identity");
         }
-        if node_is(hir.node_kind(node.data), hir.NodeKind.For) ||
-           node_is(hir.node_kind(node.data), hir.NodeKind.ForIn) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.For) ||
+           hircore.node_is(hir.node_kind(node.data), hir.NodeKind.ForIn) {
             if vec.len(loops) > 0 {
                 let popped = vec.pop(loops);
             }
         }
-        if node_is(hir.node_kind(node.data), hir.NodeKind.For) ||
-           node_is(hir.node_kind(node.data), hir.NodeKind.ForIn) ||
-           node_is(hir.node_kind(node.data), hir.NodeKind.Switch) {
+        if hircore.node_is(hir.node_kind(node.data), hir.NodeKind.For) ||
+           hircore.node_is(hir.node_kind(node.data), hir.NodeKind.ForIn) ||
+           hircore.node_is(hir.node_kind(node.data), hir.NodeKind.Switch) {
             if vec.len(break_targets) > 0 {
                 let popped = vec.pop(break_targets);
             }
@@ -2146,11 +2147,11 @@ func tree(state inout Verifier, function_value hir.HirFunction)
     }
 }
 
-func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
+func tree_push(state inout hircore.Verifier, function_value hir.HirFunction, id usize,
                has_parent bool, parent usize, stack Vec[Frame],
-               loops Vec[usize], break_targets Vec[usize]) throws Invalid {
-    let node = verifier_node(state, id);
-    need(!state.owners[id].has,
+               loops Vec[usize], break_targets Vec[usize]) throws hircore.Invalid {
+    let node = hircore.verifier_node(state, id);
+    hircore.need(!state.owners[id].has,
         "HIR node cycle or shared executable child");
     state.owners[id].has = true;
     state.owners[id].symbol = function_value.symbol;
@@ -2160,45 +2161,45 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
     }
     state.clock += 1;
     state.enter[id] = state.clock;
-    need(node.source.node.module == function_value.source.node.module &&
+    hircore.need(node.source.node.module == function_value.source.node.module &&
          node.source.node.file == function_value.source.node.file &&
          node.source.span.begin_byte >= function_value.source.span.begin_byte &&
          node.source.span.end_byte <= function_value.source.span.end_byte,
         "node source belongs to another function");
-    let scope = verifier_scope(state, node.scope);
-    need(scope.function == function_value.symbol,
+    let scope = hircore.verifier_scope(state, node.scope);
+    hircore.need(scope.function == function_value.symbol,
         "node scope belongs to another function");
     if !has_parent {
-        need(node_is(hir.node_kind(node.data), hir.NodeKind.Block) &&
+        hircore.need(hircore.node_is(hir.node_kind(node.data), hir.NodeKind.Block) &&
              node.scope == function_value.scope &&
              !option.is_some(scope.parent),
             "function root block/scope");
     } else {
-        let parent_node = verifier_node(state, parent);
+        let parent_node = hircore.verifier_node(state, parent);
         let kind = hir.node_kind(node.data);
-        if node_is(kind, hir.NodeKind.Block) ||
-           node_is(kind, hir.NodeKind.For) ||
-           node_is(kind, hir.NodeKind.ForIn) {
-            need(option.is_some(scope.parent) &&
-                 option_usize(scope.parent) == parent_node.scope,
+        if hircore.node_is(kind, hir.NodeKind.Block) ||
+           hircore.node_is(kind, hir.NodeKind.For) ||
+           hircore.node_is(kind, hir.NodeKind.ForIn) {
+            hircore.need(option.is_some(scope.parent) &&
+                 hircore.option_usize(scope.parent) == parent_node.scope,
                 "nested scope must have structural parent");
         } else {
-            need(node.scope == parent_node.scope,
+            hircore.need(node.scope == parent_node.scope,
                 "node scope differs from enclosing construct");
         }
-        if node_is(kind, hir.NodeKind.Place) ||
-           node_is(kind, hir.NodeKind.FieldPlace) ||
-           node_is(kind, hir.NodeKind.IndexPlace) ||
-           foreign_access_place(node) {
-            var allowed = node_is(hir.node_kind(parent_node.data),
+        if hircore.node_is(kind, hir.NodeKind.Place) ||
+           hircore.node_is(kind, hir.NodeKind.FieldPlace) ||
+           hircore.node_is(kind, hir.NodeKind.IndexPlace) ||
+           hircore.foreign_access_place(node) {
+            var allowed = hircore.node_is(hir.node_kind(parent_node.data),
                     hir.NodeKind.Assign) &&
                 vec.len(parent_node.children) > 0 &&
                 parent_node.children[0] == id;
             let parent_kind = hir.node_kind(parent_node.data);
-            if node_is(parent_kind, hir.NodeKind.Call) ||
-               node_is(parent_kind, hir.NodeKind.ConstraintCall) {
+            if hircore.node_is(parent_kind, hir.NodeKind.Call) ||
+               hircore.node_is(parent_kind, hir.NodeKind.ConstraintCall) {
                 var args = vec.empty[hir.CallArg]();
-                if node_is(parent_kind, hir.NodeKind.Call) {
+                if hircore.node_is(parent_kind, hir.NodeKind.Call) {
                     switch parent_node.data {
                         case hir.NodeData.Call(value): args = value.args;
                         default: {}
@@ -2211,34 +2212,34 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
                 }
                 for argument in args {
                     allowed = allowed ||
-                        (mode_is_id(argument.mode, 1) &&
+                        (hircore.mode_is_id(argument.mode, 1) &&
                          argument.expression == id);
                 }
             }
             allowed = allowed ||
-                (node_is(parent_kind, hir.NodeKind.FieldPlace) &&
+                (hircore.node_is(parent_kind, hir.NodeKind.FieldPlace) &&
                  vec.len(parent_node.children) > 0 &&
                  parent_node.children[0] == id);
-            need(allowed, "place used outside assignment or inout argument");
+            hircore.need(allowed, "place used outside assignment or inout argument");
         }
     }
     let kind = hir.node_kind(node.data);
-    if node_is(kind, hir.NodeKind.Block) ||
-       node_is(kind, hir.NodeKind.For) ||
-       node_is(kind, hir.NodeKind.ForIn) {
-        need(!state.scope_used[node.scope], "scope has multiple owning constructs");
+    if hircore.node_is(kind, hir.NodeKind.Block) ||
+       hircore.node_is(kind, hir.NodeKind.For) ||
+       hircore.node_is(kind, hir.NodeKind.ForIn) {
+        hircore.need(!state.scope_used[node.scope], "scope has multiple owning constructs");
         state.scope_used[node.scope] = true;
         state.scope_nodes[node.scope].has = true;
         state.scope_nodes[node.scope].value = id;
     }
-    if node_is(kind, hir.NodeKind.For) || node_is(kind, hir.NodeKind.ForIn) {
+    if hircore.node_is(kind, hir.NodeKind.For) || hircore.node_is(kind, hir.NodeKind.ForIn) {
         vec.push(loops, id);
     }
-    if node_is(kind, hir.NodeKind.For) || node_is(kind, hir.NodeKind.ForIn) ||
-       node_is(kind, hir.NodeKind.Switch) {
+    if hircore.node_is(kind, hir.NodeKind.For) || hircore.node_is(kind, hir.NodeKind.ForIn) ||
+       hircore.node_is(kind, hir.NodeKind.Switch) {
         vec.push(break_targets, id);
     }
-    if node_is(kind, hir.NodeKind.Switch) {
+    if hircore.node_is(kind, hir.NodeKind.Switch) {
         var switch_value = hir.Switch(arms: [], exhaustive: false);
         switch node.data {
             case hir.NodeData.Switch(value): switch_value = value;
@@ -2250,7 +2251,7 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
                 function_value.symbol, pattern_ready);
         }
     }
-    if node_is(kind, hir.NodeKind.Try) {
+    if hircore.node_is(kind, hir.NodeKind.Try) {
         var try_value = hir.Try(catches: []);
         switch node.data {
             case hir.NodeData.Try(value): try_value = value;
@@ -2258,14 +2259,14 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
         }
         let catch_ready = state.enter[id];
         for handler in try_value.catches {
-            need(local_insert(inout state, handler.binding,
-                     Local(type_id: handler.error_type, scope: handler.scope,
+            hircore.need(hircore.local_insert(inout state, handler.binding,
+                     hircore.Local(type_id: handler.error_type, scope: handler.scope,
                          function: function_value.symbol, writable: false,
                          ready: catch_ready, read_only: false)),
                 "duplicate catch binding identity");
         }
     }
-    if node_is(kind, hir.NodeKind.ForIn) {
+    if hircore.node_is(kind, hir.NodeKind.ForIn) {
         var for_in = hir.ForIn(element: 0, body_scope: 0, body: 0,
             iterator: option.Option[hir.IteratorFor].None);
         switch node.data {
@@ -2275,14 +2276,14 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
         let forin_ready = state.enter[id];
         if option.is_some(for_in.iterator) {
             let iterator = option_iterator(for_in.iterator);
-            need(local_insert(inout state, iterator.cursor,
-                     Local(type_id: iterator.iterator, scope: node.scope,
+            hircore.need(hircore.local_insert(inout state, iterator.cursor,
+                     hircore.Local(type_id: iterator.iterator, scope: node.scope,
                          function: function_value.symbol, writable: true,
                          ready: forin_ready, read_only: false)),
                 "duplicate for-in Iterator cursor");
-            let next_type = verifier_node(state, iterator.next).type_id;
-            need(local_insert(inout state, iterator.option,
-                     Local(type_id: next_type, scope: for_in.body_scope,
+            let next_type = hircore.verifier_node(state, iterator.next).type_id;
+            hircore.need(hircore.local_insert(inout state, iterator.option,
+                     hircore.Local(type_id: next_type, scope: for_in.body_scope,
                          function: function_value.symbol, writable: false,
                          ready: forin_ready, read_only: false)),
                 "duplicate for-in Iterator option");
@@ -2291,45 +2292,45 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
         if option.is_some(for_in.iterator) {
             element_type = option_iterator(for_in.iterator).element;
         } else {
-            need(vec.len(node.children) > 0, "for-in collection child");
-            let collection_type = verifier_node(state,
+            hircore.need(vec.len(node.children) > 0, "for-in collection child");
+            let collection_type = hircore.verifier_node(state,
                 node.children[0]).type_id;
-            element_type = iteration_element(inout state, collection_type);
+            element_type = hircore.iteration_element(inout state, collection_type);
         }
-        need(local_insert(inout state, for_in.element,
-                 Local(type_id: element_type, scope: for_in.body_scope,
+        hircore.need(hircore.local_insert(inout state, for_in.element,
+                 hircore.Local(type_id: element_type, scope: for_in.body_scope,
                      function: function_value.symbol, writable: false,
                      ready: forin_ready, read_only: false)),
             "duplicate for-in element");
     }
-    if node_is(kind, hir.NodeKind.Return) {
+    if hircore.node_is(kind, hir.NodeKind.Return) {
         var return_value = hir.Return(function: 0);
         switch node.data {
             case hir.NodeData.Return(value): return_value = value;
             default: {}
         }
-        need(return_value.function == function_value.symbol,
+        hircore.need(return_value.function == function_value.symbol,
             "return target function mismatch");
-        let signature = verifier_type(state, function_value.signature);
+        let signature = hircore.verifier_type(state, function_value.signature);
         var result_type = signature.result;
         if function_value.is_async {
-            let task = verifier_type(state, result_type);
-            need(kind_is(task.kind, model.TypeKind.Task) &&
+            let task = hircore.verifier_type(state, result_type);
+            hircore.need(hircore.kind_is(task.kind, model.TypeKind.Task) &&
                  vec.len(task.type_args) == 2,
                 "async function result is not a Task");
             result_type = task.type_args[0];
         }
-        var return_ok = kind_is(verifier_type(state, result_type).kind,
+        var return_ok = hircore.kind_is(hircore.verifier_type(state, result_type).kind,
             model.TypeKind.Unit);
         if vec.len(node.children) > 0 {
-            return_ok = verifier_expr(state, node.children[0]).type_id == result_type;
+            return_ok = hircore.verifier_expr(state, node.children[0]).type_id == result_type;
         }
-        need(return_ok, "function return type mismatch");
+        hircore.need(return_ok, "function return type mismatch");
     }
-    if node_is(kind, hir.NodeKind.Break) ||
-       node_is(kind, hir.NodeKind.Continue) {
+    if hircore.node_is(kind, hir.NodeKind.Break) ||
+       hircore.node_is(kind, hir.NodeKind.Continue) {
         var target usize = 0;
-        if node_is(kind, hir.NodeKind.Break) {
+        if hircore.node_is(kind, hir.NodeKind.Break) {
             switch node.data {
                 case hir.NodeData.Break(value): target = value.loop;
                 default: {}
@@ -2340,22 +2341,22 @@ func tree_push(state inout Verifier, function_value hir.HirFunction, id usize,
                 default: {}
             }
         }
-        let target_node = verifier_node(state, target);
+        let target_node = hircore.verifier_node(state, target);
         let target_kind = hir.node_kind(target_node.data);
         var targets = loops;
-        if node_is(kind, hir.NodeKind.Break) {
+        if hircore.node_is(kind, hir.NodeKind.Break) {
             targets = break_targets;
         }
-        need((node_is(target_kind, hir.NodeKind.For) ||
-              node_is(target_kind, hir.NodeKind.ForIn) ||
-              (node_is(kind, hir.NodeKind.Break) &&
-               node_is(target_kind, hir.NodeKind.Switch))) &&
+        hircore.need((hircore.node_is(target_kind, hir.NodeKind.For) ||
+              hircore.node_is(target_kind, hir.NodeKind.ForIn) ||
+              (hircore.node_is(kind, hir.NodeKind.Break) &&
+               hircore.node_is(target_kind, hir.NodeKind.Switch))) &&
              vec.len(targets) > 0 &&
              targets[vec.len(targets) - 1] == target,
             "jump target must be nearest enclosing loop in same function");
-        need(verifier_scope(state, target_node.scope).function ==
+        hircore.need(hircore.verifier_scope(state, target_node.scope).function ==
                  function_value.symbol &&
-             verifier_ancestor(state, target_node.scope, node.scope),
+             hircore.verifier_ancestor(state, target_node.scope, node.scope),
             "jump function/scope mismatch");
     }
     vec.push(stack, Frame(id: id, next: 0));

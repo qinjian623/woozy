@@ -7,6 +7,7 @@ package nativeemit;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
+import "app/wzcc/nativeadapter" as nativeadapter;
 import "app/wzcc/nativeir" as nativeir;
 import "std/option" as option;
 import "std/vec" as vec;
@@ -664,63 +665,16 @@ func emit_c_instruction(instruction nativeir.Instruction, args Vec[Value],
 }
 
 func e_registration_callback_checked(project model.Project,
-                                     callable model.CCallableDecl)
-    option.Option[RegistrationCallback] throws Error {
-    switch callable.registers {
-        case option.Option.None: return option.Option[RegistrationCallback].None;
-        case option.Option.Some(registers): {
-            if registers.callback_parameter >= vec.len(callable.parameters) ||
-               registers.userdata_parameter >= vec.len(callable.parameters) ||
-               registers.callback_parameter == registers.userdata_parameter {
-                throw invalid("registration parameter index out of range");
-            }
-            let callback_ref = callable.parameters[registers.callback_parameter].type_ref;
-            if !e_c_type_kind_is(callback_ref.kind, model.CTypeKind.Named) || callback_ref.named == 0 {
-                throw invalid("registration callback is not a named C type");
-            }
-            let callback = e_c_type(project, callback_ref.named);
-            if !e_c_decl_kind_is(callback.kind, model.CDeclKind.Callback) {
-                throw invalid("registration callback is not a C callback");
-            }
-            if registers.callback_userdata_parameter >= vec.len(callback.parameters) ||
-               !e_unit_pointer(callback.parameters[
-                   registers.callback_userdata_parameter].type_ref) {
-                throw invalid("callback userdata is not PtrMut[Unit]");
-            }
-            if !e_unit_pointer(callable.parameters[
-                registers.userdata_parameter].type_ref) {
-                throw invalid("registration userdata is not PtrMut[Unit]");
-            }
-            let result_ref = callable.result.type_ref;
-            if !e_c_type_kind_is(result_ref.kind, model.CTypeKind.Named) || result_ref.named == 0 {
-                throw invalid("registration result is not a C resource");
-            }
-            let resource = e_c_type(project, result_ref.named);
-            if !e_c_decl_kind_is(resource.kind, model.CDeclKind.Resource) {
-                throw invalid("registration result is not a managed resource");
-            }
-            switch resource.registration {
-                case option.Option.None: {
-                    throw invalid("registration result is not a managed resource");
-                }
-                case option.Option.Some(registration): {
-                    if registration.callback_type != callback_ref.named {
-                        throw invalid("registration callback type differs from resource");
-                    }
-                    if registration.unregister_symbol == "" {
-                        throw invalid("managed resource has no unregister symbol");
-                    }
-                }
-            }
-            return option.Option[RegistrationCallback].Some(
-                RegistrationCallback(resource_type: resource.id,
-                    callback_type: callback.id,
-                    callback_parameter: registers.callback_parameter,
-                    userdata_parameter: registers.userdata_parameter,
-                    callback_userdata_parameter:
-                        registers.callback_userdata_parameter));
+    callable model.CCallableDecl) option.Option[RegistrationCallback] throws Error {
+    try {
+        switch nativeadapter.e_registration_callback_checked(project, callable) {
+            case option.Option.None: return option.Option[RegistrationCallback].None;
+            case option.Option.Some(value): return option.Option[RegistrationCallback].Some(
+                RegistrationCallback(resource_type: value.resource_type, callback_type: value.callback_type,
+                    callback_parameter: value.callback_parameter, userdata_parameter: value.userdata_parameter,
+                    callback_userdata_parameter: value.callback_userdata_parameter));
         }
-    }
+    } catch error nativeadapter.Error { throw adapter_error(error); }
 }
 
 func registration_callback(project model.Project,
@@ -734,28 +688,6 @@ func registration_callback(project model.Project,
     }
 }
 
-func registration_close(project model.Project,
-                        callable model.CCallableDecl) bool {
-    switch callable.registers {
-        case option.Option.Some(registers): return false;
-        case option.Option.None: {}
-    }
-    if vec.len(callable.parameters) != 1 { return false; }
-    let result_ref = callable.result.type_ref;
-    if !e_c_type_kind_is(result_ref.kind, model.CTypeKind.Scalar) || result_ref.scalar != "Unit" {
-        return false;
-    }
-    let reference = callable.parameters[0].type_ref;
-    if !e_c_type_kind_is(reference.kind, model.CTypeKind.Named) || reference.named == 0 ||
-       usize(reference.named) > vec.len(project.c_types) {
-        return false;
-    }
-    let resource = project.c_types[usize(reference.named) - 1];
-    if !e_c_decl_kind_is(resource.kind, model.CDeclKind.Resource) { return false; }
-    switch resource.registration {
-        case option.Option.None: return false;
-        case option.Option.Some(registration): {
-            return callable.symbol == registration.unregister_symbol;
-        }
-    }
+func registration_close(project model.Project, callable model.CCallableDecl) bool {
+    return nativeadapter.registration_close(project, callable);
 }

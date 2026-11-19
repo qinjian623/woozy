@@ -5,6 +5,8 @@
 // AST/type predicates that are needed by more than one of the b_*.wz files.
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/hirclone" as hirclone;
@@ -23,13 +25,6 @@ func b_kind_is(actual model.AstKind, expected model.AstKind) bool {
     return model.ast_kind_id(actual) == model.ast_kind_id(expected);
 }
 
-func b_type_kind_is(actual model.TypeKind, expected model.TypeKind) bool {
-    return model.type_kind_id(actual) == model.type_kind_id(expected);
-}
-
-func b_node_kind_is(actual hir.NodeKind, expected hir.NodeKind) bool {
-    return hir.node_kind_id(actual) == hir.node_kind_id(expected);
-}
 
 func b_symbol_kind_is(actual model.SymbolKind, expected model.SymbolKind) bool {
     return model.symbol_kind_id(actual) == model.symbol_kind_id(expected);
@@ -75,87 +70,11 @@ func b_exit_kind_is(actual hir.ExitKind, expected hir.ExitKind) bool {
     }
 }
 
-func b_option_is_some(value option.Option[usize]) bool {
-    switch value { case option.Option.Some(id): return true; case option.Option.None: return false; }
-}
 
 func b_option_value(value option.Option[usize], fallback usize) usize {
     switch value { case option.Option.Some(id): return id; case option.Option.None: return fallback; }
 }
 
-func b_option_equal(left option.Option[usize], right option.Option[usize]) bool {
-    switch left {
-        case option.Option.Some(a):
-            switch right {
-                case option.Option.Some(b): return a == b;
-                case option.Option.None: return false;
-            }
-        case option.Option.None:
-            switch right {
-                case option.Option.Some(b): return false;
-                case option.Option.None: return true;
-            }
-    }
-}
-
-func b_vec_contains_unsorted(values Vec[usize], value usize) bool {
-    for item in values { if item == value { return true; } }
-    return false;
-}
-
-func b_vec_lower_bound(values Vec[usize], value usize) usize {
-    var low usize = 0;
-    var high = vec.len(values);
-    for low < high {
-        let mid = low + (high - low) / 2;
-        if values[mid] < value {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
-    }
-    return low;
-}
-
-func b_vec_contains(values Vec[usize], value usize) bool {
-    let position = b_vec_lower_bound(values, value);
-    return position < vec.len(values) && values[position] == value;
-}
-
-// Sorted, unique set insertion. Flow errors/breaks/continues are std::set in
-// C++, so their published order must not depend on traversal order.
-func b_insert_sorted(values Vec[usize], value usize) {
-    let position = b_vec_lower_bound(values, value);
-    let n = vec.len(values);
-    if position < n && values[position] == value { return; }
-    vec.push(values, value);
-    var index = n;
-    for index > position {
-        values[index] = values[index - 1];
-        index -= 1;
-    }
-    values[position] = value;
-}
-
-func b_remove_id(values Vec[usize], value usize) {
-    let position = b_vec_lower_bound(values, value);
-    let n = vec.len(values);
-    if position >= n || values[position] != value {
-        return;
-    }
-    var shift = position;
-    for shift + 1 < n {
-        values[shift] = values[shift + 1];
-        shift += 1;
-    }
-    let discarded = vec.pop(values);
-}
-
-func b_copy_ids(values Vec[usize]) Vec[usize] {
-    let out = vec.empty[usize]();
-    for value in values { vec.push(out, value); }
-    return out;
-}
 
 func b_copy_u64_ids(values Vec[u64]) Vec[u64] {
     let out = vec.empty[u64]();
@@ -228,7 +147,7 @@ func b_clone_constant_value(value hir.ConstantValue) hir.ConstantValue throws Er
 
 func b_copy_constant(value Constant) Constant throws Error {
     var out = Constant(value: b_copy_value(value.value), function: value.function,
-        type_args: b_copy_ids(value.type_args),
+        type_args: effects.b_copy_ids(value.type_args),
         aggregate: option.Option[hir.ConstantValue].None);
     switch value.aggregate {
         case option.Option.Some(aggregate):
@@ -241,7 +160,7 @@ func b_copy_constant(value Constant) Constant throws Error {
 
 func b_copy_trait_ref(value hir.TraitRef) hir.TraitRef {
     return hir.TraitRef(declaration: value.declaration,
-        args: b_copy_ids(value.args));
+        args: effects.b_copy_ids(value.args));
 }
 
 func b_copy_optional_trait(value option.Option[hir.TraitRef])
@@ -395,14 +314,14 @@ func b_constants_set(state inout Checker, symbol usize, value Constant) throws E
 
 func b_evaluating_add(state inout Checker, symbol usize) bool { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if b_vec_contains(state.evaluating, symbol) { return false; }
-    b_insert_sorted(state.evaluating, symbol);
+    if effects.b_vec_contains(state.evaluating, symbol) { return false; }
+    effects.b_insert_sorted(state.evaluating, symbol);
     return true;
 }
 
 func b_evaluating_remove(state inout Checker, symbol usize) { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    b_remove_id(state.evaluating, symbol);
+    effects.b_remove_id(state.evaluating, symbol);
 }
 
 func b_closures_pos(entries Vec[ClosureEntry], symbol usize) usize {
@@ -559,7 +478,7 @@ func b_bound_value(state inout Checker, symbol usize)
 
 func b_async_contains(state inout Checker, symbol usize) bool { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    return b_vec_contains(state.async_functions, symbol);
+    return effects.b_vec_contains(state.async_functions, symbol);
 }
 
 func b_type_args0(state inout Checker, type_id usize) usize throws Error { let b_module=state.m;
@@ -640,62 +559,15 @@ func b_module_path(state inout Checker, module usize) string throws Error { let 
     return project.modules[module].logical_path;
 }
 
-func b_foreign_binding(state inout Checker, binding usize) hir.ForeignBinding throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if binding >= vec.len(state.m.foreign_bindings) {
-        throw internal_error("invalid foreign binding index");
-    }
-    return state.m.foreign_bindings[binding];
+func b_foreign_binding(state inout Checker, binding usize) hir.ForeignBinding throws Error {
+    try { return effects.b_foreign_binding(state.m, binding); }
+    catch problem effects.Error { throw effect_error(inout state, problem); }
 }
 
 func b_statement_result(id usize, falls bool, breaks bool) Statement {
     return Statement(id: id, falls: falls, breaks: breaks);
 }
 
-func b_flow_empty() Flow {
-    return Flow(falls: true, errors: vec.empty[usize](),
-        breaks: vec.empty[usize](), continues: vec.empty[usize]());
-}
-
-func b_flow_merge(out Flow, value Flow) {
-    for id in value.errors { b_insert_sorted(out.errors, id); }
-    for id in value.breaks { b_insert_sorted(out.breaks, id); }
-    for id in value.continues { b_insert_sorted(out.continues, id); }
-}
-
-func b_flow_copy(value Flow) Flow {
-    return Flow(falls: value.falls, errors: b_copy_ids(value.errors),
-        breaks: b_copy_ids(value.breaks), continues: b_copy_ids(value.continues));
-}
-
-func b_node_read(node hir.HirNode) option.Option[hir.Read] {
-    switch node.data {
-        case hir.NodeData.Read(value): return option.Option[hir.Read].Some(value);
-        default: return option.Option[hir.Read].None;
-    }
-}
-
-func b_node_place(node hir.HirNode) option.Option[hir.Place] {
-    switch node.data {
-        case hir.NodeData.Place(value): return option.Option[hir.Place].Some(value);
-        default: return option.Option[hir.Place].None;
-    }
-}
-
-func b_node_move(node hir.HirNode) option.Option[hir.Move] {
-    switch node.data {
-        case hir.NodeData.Move(value): return option.Option[hir.Move].Some(value);
-        default: return option.Option[hir.Move].None;
-    }
-}
-
-func b_node_bool_literal(node hir.HirNode) option.Option[hir.BoolLiteral] {
-    switch node.data {
-        case hir.NodeData.BoolLiteral(value):
-            return option.Option[hir.BoolLiteral].Some(value);
-        default: return option.Option[hir.BoolLiteral].None;
-    }
-}
 
 func b_node_integer_literal(node hir.HirNode) option.Option[hir.IntegerLiteral] {
     switch node.data {
@@ -714,29 +586,6 @@ func b_node_short_circuit(node hir.HirNode)
     }
 }
 
-func b_node_call(node hir.HirNode) option.Option[hir.Call] {
-    switch node.data {
-        case hir.NodeData.Call(value): return option.Option[hir.Call].Some(value);
-        default: return option.Option[hir.Call].None;
-    }
-}
-
-func b_node_constraint_call(node hir.HirNode)
-    option.Option[hir.ConstraintCall] {
-    switch node.data {
-        case hir.NodeData.ConstraintCall(value):
-            return option.Option[hir.ConstraintCall].Some(value);
-        default: return option.Option[hir.ConstraintCall].None;
-    }
-}
-
-func b_node_foreign_read(node hir.HirNode) option.Option[hir.ForeignRead] {
-    switch node.data {
-        case hir.NodeData.ForeignRead(value):
-            return option.Option[hir.ForeignRead].Some(value);
-        default: return option.Option[hir.ForeignRead].None;
-    }
-}
 
 func b_node_switch(node hir.HirNode) option.Option[hir.Switch] {
     switch node.data {
@@ -781,37 +630,9 @@ func b_node_defer(node hir.HirNode) option.Option[hir.Defer] {
     }
 }
 
-func b_node_await(node hir.HirNode) bool {
-    switch node.data { case hir.NodeData.Await(value): return true; default: return false; }
-}
-
-func b_node_throw(node hir.HirNode) bool {
-    switch node.data { case hir.NodeData.Throw(value): return true; default: return false; }
-}
-
-func b_node_return(node hir.HirNode) option.Option[hir.Return] {
-    switch node.data {
-        case hir.NodeData.Return(value): return option.Option[hir.Return].Some(value);
-        default: return option.Option[hir.Return].None;
-    }
-}
-
-func b_node_break(node hir.HirNode) option.Option[hir.Break] {
-    switch node.data {
-        case hir.NodeData.Break(value): return option.Option[hir.Break].Some(value);
-        default: return option.Option[hir.Break].None;
-    }
-}
-
-func b_node_continue(node hir.HirNode) option.Option[hir.Continue] {
-    switch node.data {
-        case hir.NodeData.Continue(value): return option.Option[hir.Continue].Some(value);
-        default: return option.Option[hir.Continue].None;
-    }
-}
 
 func b_node_foreign_place(node hir.HirNode) bool {
-    let read = b_node_foreign_read(node);
+    let read = effects.b_node_foreign_read(node);
     switch read {
         case option.Option.Some(value): {
             switch value.access {

@@ -1,6 +1,8 @@
 // Calls, foreign/C call construction and call borrow checking.
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -81,7 +83,7 @@ func system_call(state inout Checker, r model.NodeRef, callee model.NodeRef,
         let expected = call_type.parameters[index].type_id;
         let value = expression(inout state, argument.value,
             option.Option[usize].Some(expected));
-        if b_node_kind_is(hir.node_kind(state.m.nodes[value.id].data),
+        if effects.b_node_kind_is(hir.node_kind(state.m.nodes[value.id].data),
                           hir.NodeKind.Move) {
             throw reject(inout state, argument_ref,
                 "system operations require ordinary arguments",
@@ -334,7 +336,7 @@ func c_foreign_call(state inout Checker, r model.NodeRef, id u32) Expr throws Er
                     "C registering callback requires a non-throwing ordinary function value with the source signature",
                     "E_CALL_ARGUMENT");
             }
-        } else if b_type_kind_is(lookup_type(inout state, expected).kind,
+        } else if effects.b_type_kind_is(lookup_type(inout state, expected).kind,
                                  model.TypeKind.CForeignCallback) {
             e = expression(inout state, er, option.Option[usize].None);
             let callback_type = lookup_type(inout state, expected).c_type;
@@ -361,8 +363,8 @@ func c_foreign_call(state inout Checker, r model.NodeRef, id u32) Expr throws Er
             }
         } else {
             let wanted = lookup_type(inout state, expected);
-            if b_type_kind_is(wanted.kind, model.TypeKind.CForeignPointer) ||
-               b_type_kind_is(wanted.kind, model.TypeKind.CForeignBuffer) {
+            if effects.b_type_kind_is(wanted.kind, model.TypeKind.CForeignPointer) ||
+               effects.b_type_kind_is(wanted.kind, model.TypeKind.CForeignBuffer) {
                 e = expression(inout state, er, option.Option[usize].None);
             } else {
                 e = expression(inout state, er, option.Option[usize].Some(expected));
@@ -432,7 +434,7 @@ func call(state inout Checker, r model.NodeRef,
     }
     switch type_expression(inout state, callee_ref) {
         case option.Option.Some(type_id): {
-            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+            if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                               model.TypeKind.NominalStruct) {
                 return constructor(inout state, r, type_id,
                     option.Option[usize].None);
@@ -555,7 +557,7 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
     switch type_expression(inout state, base) {
         case option.Option.Some(type_id): {
             let qualifier = lookup_type(inout state, type_id);
-            if b_type_kind_is(qualifier.kind, model.TypeKind.TypeParameter) {
+            if effects.b_type_kind_is(qualifier.kind, model.TypeKind.TypeParameter) {
                 let application = b_bound_value(inout state, qualifier.declaration);
                 var application_value = hir.TraitRef(declaration: 0, args: []);
                 switch application {
@@ -603,7 +605,7 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
                 throw reject(inout state, r,
                     "method is not declared by the constraint", "E_NAME_NOT_FOUND");
             }
-            if b_type_kind_is(qualifier.kind, model.TypeKind.NominalEnum) {
+            if effects.b_type_kind_is(qualifier.kind, model.TypeKind.NominalEnum) {
                 let declaration = nominal(inout state, type_id);
                 for variant in declaration.variants {
                     if symbol(inout state, variant.symbol).name == name {
@@ -655,7 +657,7 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
         receiver = expression(inout state, base, option.Option[usize].None);
     }
     let receiver_type = lookup_type(inout state, receiver.value.type_id);
-    if b_type_kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+    if effects.b_type_kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
         if !b_mode_is(receiver_mode, model.ParamMode.Ordinary) {
             throw unavailable(inout state, base,
                 "external receiver modes are not supported");
@@ -673,11 +675,11 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
         return foreign_call(inout state, r, method_ref, candidates,
             option.Option[Expr].Some(receiver));
     }
-    if b_type_kind_is(receiver_type.kind, model.TypeKind.TraitObject) {
+    if effects.b_type_kind_is(receiver_type.kind, model.TypeKind.TraitObject) {
         return trait_object_call(inout state, r, method_ref, receiver,
             method_explicit, expected);
     }
-    if b_type_kind_is(receiver_type.kind, model.TypeKind.NominalStruct) {
+    if effects.b_type_kind_is(receiver_type.kind, model.TypeKind.NominalStruct) {
         let declaration = nominal(inout state, receiver.value.type_id);
         for field in declaration.fields {
             if symbol(inout state, field.symbol).name == name {
@@ -691,7 +693,7 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
                         receiver.value.type_id);
                     let field_type_id = field_type(inout state,
                         receiver.value.type_id, found);
-                    if !b_type_kind_is(lookup_type(inout state, field_type_id).kind,
+                    if !effects.b_type_kind_is(lookup_type(inout state, field_type_id).kind,
                                        model.TypeKind.Vec) {
                         throw reject(inout state, method_ref,
                             "function fields do not take type arguments",
@@ -737,7 +739,7 @@ func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
             }
         }
     }
-    if b_type_kind_is(receiver_type.kind, model.TypeKind.TypeParameter) {
+    if effects.b_type_kind_is(receiver_type.kind, model.TypeKind.TypeParameter) {
         let bound = b_bound_value(inout state, receiver_type.declaration);
         var application_value = hir.TraitRef(declaration: 0, args: []);
         switch bound {

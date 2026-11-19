@@ -1,6 +1,8 @@
 // Function-value source identity and constant-value re-evaluation.
-package hirverify;
+package nodes;
 
+import "app/wzcc/hirverify/calls" as hircalls;
+import "app/wzcc/hirverify/core" as hircore;
 import "app/wzcc/constant" as constant;
 import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
@@ -15,76 +17,76 @@ struct CaptureOccurrence {
     node usize;
 }
 
-func constant_function_source(state inout Verifier, id usize)
-    FunctionSource throws Invalid {
+pub func constant_function_source(state inout hircore.Verifier, id usize)
+    hircore.FunctionSource throws hircore.Invalid {
     var constant_id = id;
     let visited = vec.empty[usize]();
     for true {
-        let symbol = verifier_symbol(state, constant_id);
-        need(symbol_is(symbol.kind, model.SymbolKind.Constant) &&
+        let symbol = hircore.verifier_symbol(state, constant_id);
+        hircore.need(hircore.symbol_is(symbol.kind, model.SymbolKind.Constant) &&
              option.is_some(symbol.definition),
             "constant function source is not a real constant");
-        need(ids_insert(visited, constant_id),
+        hircore.need(hircore.ids_insert(visited, constant_id),
             "constant function source cycle");
-        let declaration = option_ref(symbol.definition);
-        let file = verifier_file(state, declaration.module, declaration.file);
+        let declaration = hircore.option_ref(symbol.definition);
+        let file = hircore.verifier_file(state, declaration.module, declaration.file);
         let binding = file.nodes[declaration.node];
-        need(ast_is(binding.kind, model.AstKind.Binding) &&
+        hircore.need(hircore.ast_is(binding.kind, model.AstKind.Binding) &&
              vec.len(binding.children) > 0,
             "constant function source is not a binding");
         var initializer = declaration;
         initializer.node = binding.children[vec.len(binding.children) - 1];
-        initializer = unwrapped(state, initializer);
+        initializer = hircore.unwrapped(state, initializer);
         let ast = file.nodes[initializer.node];
-        if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
-            let function = defined_last(state.defined_functions, initializer);
-            need(function >= 0,
+        if hircore.ast_is(ast.kind, model.AstKind.FunctionLiteral) {
+            let function = hircore.defined_last(state.defined_functions, initializer);
+            hircore.need(function >= 0,
                 "constant function literal has no resolved symbol");
-            return FunctionSource(function: usize(function),
+            return hircore.FunctionSource(function: usize(function),
                 type_args: [], explicit_type_args: false);
         }
-        if ast_is(ast.kind, model.AstKind.NeutralBracket) {
-            need(vec.len(ast.children) > 0,
+        if hircore.ast_is(ast.kind, model.AstKind.NeutralBracket) {
+            hircore.need(vec.len(ast.children) > 0,
                 "constant generic function value has no target");
             var base = initializer;
             base.node = ast.children[0];
-            let function = resolved_source(state, base);
-            need(option.is_some(function) &&
-                 symbol_is(verifier_symbol(state, option_usize(function)).kind,
+            let function = hircore.resolved_source(state, base);
+            hircore.need(option.is_some(function) &&
+                 hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(function)).kind,
                      model.SymbolKind.Function),
                 "constant generic initializer is not a function");
             let type_args = vec.empty[usize]();
             for var index usize = 1; index < vec.len(ast.children); index += 1 {
                 var argument = initializer;
                 argument.node = ast.children[index];
-                vec.push(type_args, source_type(inout state, argument));
+                vec.push(type_args, hircore.source_type(inout state, argument));
             }
-            return FunctionSource(function: option_usize(function),
+            return hircore.FunctionSource(function: hircore.option_usize(function),
                 type_args: type_args, explicit_type_args: true);
         }
-        need(ast_is(ast.kind, model.AstKind.Name) ||
-             ast_is(ast.kind, model.AstKind.Member),
+        hircore.need(hircore.ast_is(ast.kind, model.AstKind.Name) ||
+             hircore.ast_is(ast.kind, model.AstKind.Member),
             "constant function initializer has an unsupported source kind");
-        let target = resolved_source(state, initializer);
-        need(option.is_some(target),
+        let target = hircore.resolved_source(state, initializer);
+        hircore.need(option.is_some(target),
             "constant function initializer has no resolved symbol");
-        let selected = verifier_symbol(state, option_usize(target));
-        if symbol_is(selected.kind, model.SymbolKind.Function) {
-            return FunctionSource(function: option_usize(target),
+        let selected = hircore.verifier_symbol(state, hircore.option_usize(target));
+        if hircore.symbol_is(selected.kind, model.SymbolKind.Function) {
+            return hircore.FunctionSource(function: hircore.option_usize(target),
                 type_args: [], explicit_type_args: false);
         }
-        need(symbol_is(selected.kind, model.SymbolKind.Constant),
+        hircore.need(hircore.symbol_is(selected.kind, model.SymbolKind.Constant),
             "constant initializer is neither a function nor a constant");
-        constant_id = option_usize(target);
+        constant_id = hircore.option_usize(target);
     }
-    return FunctionSource(function: 0, type_args: [], explicit_type_args: false);
+    return hircore.FunctionSource(function: 0, type_args: [], explicit_type_args: false);
 }
 
-func source_lambda_value(state inout Verifier, reference model.NodeRef,
-                         owner usize) hir.FunctionValue throws Invalid {
-    let original = defined_first(state.defined_functions, reference);
-    need(original >= 0, "function literal has no original declaration");
-    let template_found = template_index(state, usize(original));
+func source_lambda_value(state inout hircore.Verifier, reference model.NodeRef,
+                         owner usize) hir.FunctionValue throws hircore.Invalid {
+    let original = hircore.defined_first(state.defined_functions, reference);
+    hircore.need(original >= 0, "function literal has no original declaration");
+    let template_found = hircore.template_index(state, usize(original));
     if template_found < 0 {
         return hir.FunctionValue(symbol: usize(original), type_args: [],
             captures: [], move_capture: false,
@@ -93,18 +95,18 @@ func source_lambda_value(state inout Verifier, reference model.NodeRef,
     let template = state.m.templates[usize(template_found)];
     let arguments = vec.empty[usize]();
     for parameter in template.params {
-        vec.push(arguments, parameter_type(inout state, parameter.symbol));
+        vec.push(arguments, hircore.parameter_type(inout state, parameter.symbol));
     }
-    if template_index(state, owner) >= 0 {
+    if hircore.template_index(state, owner) >= 0 {
         return hir.FunctionValue(symbol: usize(original), type_args: arguments,
             captures: [], move_capture: false,
             bound: option.Option[hir.BoundReceiver].None);
     }
-    let environment = instance_index(state, owner);
-    need(environment >= 0,
+    let environment = hircore.instance_index(state, owner);
+    hircore.need(environment >= 0,
         "generic function literal has no enclosing instance");
     let instance = state.m.instances[usize(environment)];
-    let parameters = state.m.templates[usize(template_index(state,
+    let parameters = state.m.templates[usize(hircore.template_index(state,
         instance.origin))].params;
     let substitutions = vec.empty[model.Substitution]();
     for var index usize = 0; index < vec.len(parameters); index += 1 {
@@ -113,31 +115,31 @@ func source_lambda_value(state inout Verifier, reference model.NodeRef,
             type_id: instance.type_args[index]));
     }
     for var index usize = 0; index < vec.len(arguments); index += 1 {
-        arguments[index] = substitute_type(inout state, arguments[index],
+        arguments[index] = hircore.substitute_type(inout state, arguments[index],
             substitutions);
     }
     for candidate in state.m.instances {
         if candidate.origin == usize(original) &&
-           ids_equal(candidate.type_args, arguments) {
+           hircore.ids_equal(candidate.type_args, arguments) {
             return hir.FunctionValue(symbol: candidate.symbol, type_args: [],
                 captures: [], move_capture: false,
                 bound: option.Option[hir.BoundReceiver].None);
         }
     }
-    fail("function literal has no matching enclosing specialization");
+    hircore.fail("function literal has no matching enclosing specialization");
     return hir.FunctionValue(symbol: 0, type_args: [], captures: [],
         move_capture: false, bound: option.Option[hir.BoundReceiver].None);
 }
 
-func capture_origins(state Verifier, literal model.NodeRef) Vec[usize]
-    throws Invalid {
-    let file = verifier_file(state, literal.module, literal.file);
+pub func capture_origins(state hircore.Verifier, literal model.NodeRef) Vec[usize]
+    throws hircore.Invalid {
+    let file = hircore.verifier_file(state, literal.module, literal.file);
     let subtree = vec.empty[usize]();
     let pending = vec.empty[usize]();
     vec.push(pending, literal.node);
     for vec.len(pending) > 0 {
-        let id = option_usize(vec.pop(pending));
-        if !ids_insert(subtree, id) {
+        let id = hircore.option_usize(vec.pop(pending));
+        if !hircore.ids_insert(subtree, id) {
             continue;
         }
         for child in file.nodes[id].children {
@@ -149,10 +151,10 @@ func capture_origins(state Verifier, literal model.NodeRef) Vec[usize]
         let reference = occurrence.source;
         if reference.module != literal.module ||
            reference.file != literal.file ||
-           !ids_contains(subtree, reference.node) {
+           !hircore.ids_contains(subtree, reference.node) {
             continue;
         }
-        if !symbol_is(verifier_symbol(state, occurrence.symbol).kind,
+        if !hircore.symbol_is(hircore.verifier_symbol(state, occurrence.symbol).kind,
                       model.SymbolKind.Value) {
             continue;
         }
@@ -175,16 +177,16 @@ func capture_origins(state Verifier, literal model.NodeRef) Vec[usize]
     let result = vec.empty[usize]();
     let seen = vec.empty[usize]();
     for occurrence in found {
-        let declaration = verifier_symbol(state, occurrence.symbol);
+        let declaration = hircore.verifier_symbol(state, occurrence.symbol);
         var inside = false;
         if option.is_some(declaration.definition) {
-            let definition = option_ref(declaration.definition);
+            let definition = hircore.option_ref(declaration.definition);
             if definition.module == literal.module &&
                definition.file == literal.file {
-                inside = ids_contains(subtree, definition.node);
+                inside = hircore.ids_contains(subtree, definition.node);
             }
         }
-        if inside || !ids_insert(seen, occurrence.symbol) {
+        if inside || !hircore.ids_insert(seen, occurrence.symbol) {
             continue;
         }
         vec.push(result, occurrence.symbol);
@@ -192,7 +194,7 @@ func capture_origins(state Verifier, literal model.NodeRef) Vec[usize]
     return result;
 }
 
-func capture_source_origin(state Verifier, id usize) usize {
+func capture_source_origin(state hircore.Verifier, id usize) usize {
     for instance in state.m.instances {
         for rename in instance.renamed {
             if rename.replacement == id {
@@ -203,7 +205,7 @@ func capture_source_origin(state Verifier, id usize) usize {
     return id;
 }
 
-func function_capture(function_value hir.HirFunction, origin usize)
+pub func function_capture(function_value hir.HirFunction, origin usize)
     option.Option[hir.CaptureBinding] {
     for capture in function_value.captures {
         if capture.origin == origin {
@@ -213,66 +215,66 @@ func function_capture(function_value hir.HirFunction, origin usize)
     return option.Option[hir.CaptureBinding].None;
 }
 
-func check_literal_function_value(state inout Verifier, node hir.HirNode,
+func check_literal_function_value(state inout hircore.Verifier, node hir.HirNode,
                                   value hir.FunctionValue,
-                                  literal_ref model.NodeRef) throws Invalid {
-    let owner = verifier_scope(state, node.scope).function;
+                                  literal_ref model.NodeRef) throws hircore.Invalid {
+    let owner = hircore.verifier_scope(state, node.scope).function;
     let expected = source_lambda_value(inout state, literal_ref, owner);
-    need(value.symbol == expected.symbol &&
-         ids_equal(value.type_args, expected.type_args),
+    hircore.need(value.symbol == expected.symbol &&
+         hircore.ids_equal(value.type_args, expected.type_args),
         "function literal identity differs from its enclosing specialization");
-    let target_found = function_entry_index(state, value.symbol);
-    need(target_found >= 0,
+    let target_found = hircore.function_entry_index(state, value.symbol);
+    hircore.need(target_found >= 0,
         "capturing function value has no HIR lambda entry");
-    let lambda = verifier_function(state, value.symbol);
-    need(vec.len(lambda.captures) == vec.len(value.captures),
+    let lambda = hircore.verifier_function(state, value.symbol);
+    hircore.need(vec.len(lambda.captures) == vec.len(value.captures),
         "function value capture count differs from the lambda entry");
-    need(vec.len(node.children) == vec.len(value.captures),
+    hircore.need(vec.len(node.children) == vec.len(value.captures),
         "function value capture child count");
-    let creator_found = function_entry_index(state, owner);
-    need(creator_found >= 0, "function value creator has no HIR entry");
-    let creator = verifier_function(state, owner);
+    let creator_found = hircore.function_entry_index(state, owner);
+    hircore.need(creator_found >= 0, "function value creator has no HIR entry");
+    let creator = hircore.verifier_function(state, owner);
     for var index usize = 0; index < vec.len(value.captures); index += 1 {
         let source = value.captures[index];
         let binding = lambda.captures[index];
-        need(source.origin == binding.origin && source.type_id == binding.type_id,
+        hircore.need(source.origin == binding.origin && source.type_id == binding.type_id,
             "function value capture order/origin/type differs from the lambda entry");
-        let dependent = type_contains_parameter(state.m, source.type_id);
-        let owning = dependent || classify_needs_drop(inout state,
+        let dependent = hircore.type_contains_parameter(state.m, source.type_id);
+        let owning = dependent || hircore.classify_needs_drop(inout state,
             source.type_id);
         let expected_move = value.move_capture && owning;
-        need(source.is_move == expected_move,
+        hircore.need(source.is_move == expected_move,
             "capture move intent differs from the real function value mode");
         if !expected_move && !dependent &&
-           !ordinary_copyable(state.m, source.type_id) {
-            fail("ordinary function capture type is not copyable");
+           !hircore.ordinary_copyable(state.m, source.type_id) {
+            hircore.fail("ordinary function capture type is not copyable");
         }
         let outer = function_capture(creator, source.origin);
         if option.is_some(outer) {
-            need(source.source == option_capture(outer).local,
+            hircore.need(source.source == option_capture(outer).local,
                 "capture source is not the creator's matching capture local");
         } else {
-            need(capture_source_origin(state, source.source) ==
+            hircore.need(capture_source_origin(state, source.source) ==
                      capture_source_origin(state, source.origin),
                 "capture source is not the creator binding for its origin");
-            let found = local_index(state, source.source);
-            need(found >= 0 &&
+            let found = hircore.local_index(state, source.source);
+            hircore.need(found >= 0 &&
                  state.locals[usize(found)].value.function == owner,
                 "capture source is not a creator-local binding");
         }
-        let child = verifier_node(state, node.children[index]);
-        need(child.type_id == source.type_id, "capture child type");
+        let child = hircore.verifier_node(state, node.children[index]);
+        hircore.need(child.type_id == source.type_id, "capture child type");
         if expected_move {
             var move_binding = false;
             var move_source usize = 0;
             switch child.data {
                 case hir.NodeData.Move(move_value): {
                     move_binding = option.is_some(move_value.binding);
-                    move_source = option_usize(move_value.binding);
+                    move_source = hircore.option_usize(move_value.binding);
                 }
                 default: {}
             }
-            need(move_binding && move_source == source.source &&
+            hircore.need(move_binding && move_source == source.source &&
                  vec.len(child.children) == 0,
                 "owning capture child is not a synthetic source move");
         } else {
@@ -285,14 +287,14 @@ func check_literal_function_value(state inout Verifier, node hir.HirNode,
                 }
                 default: {}
             }
-            need(read && read_symbol == source.source &&
+            hircore.need(read && read_symbol == source.source &&
                  vec.len(child.children) == 0,
                 "copied capture child is not a creator source read");
         }
     }
 }
 
-func option_capture(value option.Option[hir.CaptureBinding])
+pub func option_capture(value option.Option[hir.CaptureBinding])
     hir.CaptureBinding {
     switch value {
         case option.Option.Some(item): return item;
@@ -301,29 +303,29 @@ func option_capture(value option.Option[hir.CaptureBinding])
     }
 }
 
-func check_bound_method_value(state inout Verifier, node hir.HirNode,
-                              value hir.FunctionValue) throws Invalid {
-    need(vec.len(value.captures) == 0 && !value.move_capture &&
+func check_bound_method_value(state inout hircore.Verifier, node hir.HirNode,
+                              value hir.FunctionValue) throws hircore.Invalid {
+    hircore.need(vec.len(value.captures) == 0 && !value.move_capture &&
          option.is_some(value.bound),
         "bound function value has inconsistent capture metadata");
-    need(vec.len(node.children) == 1,
+    hircore.need(vec.len(node.children) == 1,
         "bound function value receiver count");
-    let receiver = verifier_node(state, node.children[0]);
+    let receiver = hircore.verifier_node(state, node.children[0]);
     let bound = option_bound_receiver(value.bound);
-    need(receiver.type_id == bound.type_id,
+    hircore.need(receiver.type_id == bound.type_id,
         "bound receiver type differs from its schema");
-    let full_id = instantiated_signature(inout state, value.symbol,
+    let full_id = hircore.instantiated_signature(inout state, value.symbol,
         value.type_args);
-    let full = verifier_type(state, full_id);
-    need(vec.len(full.parameters) > 0,
+    let full = hircore.verifier_type(state, full_id);
+    hircore.need(vec.len(full.parameters) > 0,
         "bound method has no Self parameter");
     let self_parameter = full.parameters[0];
-    need(self_parameter.type_id == bound.type_id &&
-         mode_id_value(self_parameter.mode) == mode_id_value(bound.mode) &&
-         (mode_is_id(self_parameter.mode, 0) ||
-          mode_is_id(self_parameter.mode, 2)),
+    hircore.need(self_parameter.type_id == bound.type_id &&
+         hircore.mode_id_value(self_parameter.mode) == hircore.mode_id_value(bound.mode) &&
+         (hircore.mode_is_id(self_parameter.mode, 0) ||
+          hircore.mode_is_id(self_parameter.mode, 2)),
         "bound method Self type/mode differs from its declaration");
-    need(ordinary_copyable(state.m, bound.type_id),
+    hircore.need(hircore.ordinary_copyable(state.m, bound.type_id),
         "bound receiver type is not ordinary-copyable");
     var trimmed = full;
     let remaining = vec.empty[model.ParameterType]();
@@ -331,50 +333,50 @@ func check_bound_method_value(state inout Verifier, node hir.HirNode,
         vec.push(remaining, full.parameters[index]);
     }
     trimmed.parameters = remaining;
-    need(types.equal(verifier_type(state, node.type_id), trimmed),
+    hircore.need(types.equal(hircore.verifier_type(state, node.type_id), trimmed),
         "bound method value type mismatch");
     var origin = value.symbol;
-    let instance = instance_index(state, value.symbol);
+    let instance = hircore.instance_index(state, value.symbol);
     if instance >= 0 {
         origin = state.m.instances[usize(instance)].origin;
     }
-    let impl_index = method_impl_index(state, origin);
+    let impl_index = hircalls.method_impl_index(state, origin);
     let implementation = state.m.impls[usize(impl_index)];
     let match = vec.empty[model.Substitution]();
-    need(ids_contains_unsorted(implementation.methods, origin) &&
-         matches(inout state, implementation.self_type, bound.type_id, match),
+    hircore.need(hircore.ids_contains_unsorted(implementation.methods, origin) &&
+         hircore.matches(inout state, implementation.self_type, bound.type_id, match),
         "bound method receiver does not select its impl");
-    let file = verifier_file(state, node.source.node.module,
+    let file = hircore.verifier_file(state, node.source.node.module,
         node.source.node.file);
     var source = node.source.node;
     var ast = file.nodes[source.node];
-    for ast_is(ast.kind, model.AstKind.Parenthesized) {
-        need(vec.len(ast.children) > 0, "bound method source wrapper");
+    for hircore.ast_is(ast.kind, model.AstKind.Parenthesized) {
+        hircore.need(vec.len(ast.children) > 0, "bound method source wrapper");
         source.node = ast.children[0];
         ast = file.nodes[source.node];
     }
-    need(ast_is(ast.kind, model.AstKind.Member) &&
+    hircore.need(hircore.ast_is(ast.kind, model.AstKind.Member) &&
          vec.len(ast.children) == 1,
         "bound method source is not a value Member");
-    need(ast.token_end > ast.token_begin &&
+    hircore.need(ast.token_end > ast.token_begin &&
          ast.token_end <= vec.len(file.lexed.tokens),
         "bound method source token range");
-    need(verifier_symbol(state, origin).name ==
+    hircore.need(hircore.verifier_symbol(state, origin).name ==
          file.lexed.tokens[ast.token_end - 1].spelling,
         "bound method source name differs from its target");
     var base = source;
     base.node = ast.children[0];
     var base_ast = file.nodes[base.node];
-    for ast_is(base_ast.kind, model.AstKind.Parenthesized) {
-        need(vec.len(base_ast.children) > 0, "bound receiver wrapper");
+    for hircore.ast_is(base_ast.kind, model.AstKind.Parenthesized) {
+        hircore.need(vec.len(base_ast.children) > 0, "bound receiver wrapper");
         base.node = base_ast.children[0];
         base_ast = file.nodes[base.node];
     }
-    need(same_ref(receiver.source.node, base),
+    hircore.need(hircore.same_ref(receiver.source.node, base),
         "bound receiver child differs from the Member base");
     var base_move = false;
-    if ast_is(base_ast.kind, model.AstKind.Unary) {
-        need(base_ast.token_begin < vec.len(file.lexed.tokens),
+    if hircore.ast_is(base_ast.kind, model.AstKind.Unary) {
+        hircore.need(base_ast.token_begin < vec.len(file.lexed.tokens),
             "bound receiver token range");
         base_move = file.lexed.tokens[base_ast.token_begin].spelling == "move";
     }
@@ -385,15 +387,15 @@ func check_bound_method_value(state inout Verifier, node hir.HirNode,
                 move_binding = option.is_some(move_value.binding);
             default: {}
         }
-        need(move_binding, "move-bound receiver is not a source binding move");
+        hircore.need(move_binding, "move-bound receiver is not a source binding move");
     } else {
-        need(!node_is(hir.node_kind(receiver.data), hir.NodeKind.Move),
+        hircore.need(!hircore.node_is(hir.node_kind(receiver.data), hir.NodeKind.Move),
             "ordinary bound receiver was replaced by a move");
     }
 }
 
-func function_value_source(state inout Verifier, node hir.HirNode)
-    throws Invalid {
+func function_value_source(state inout hircore.Verifier, node hir.HirNode)
+    throws hircore.Invalid {
     var value = hir.FunctionValue(symbol: 0, type_args: [], captures: [],
         move_capture: false, bound: option.Option[hir.BoundReceiver].None);
     var has_value = false;
@@ -407,158 +409,158 @@ func function_value_source(state inout Verifier, node hir.HirNode)
     if !has_value {
         return;
     }
-    let file = verifier_file(state, node.source.node.module,
+    let file = hircore.verifier_file(state, node.source.node.module,
         node.source.node.file);
     var reference = node.source.node;
     var ast = file.nodes[reference.node];
-    for ast_is(ast.kind, model.AstKind.Parenthesized) ||
-        ast_is(ast.kind, model.AstKind.BracketItem) ||
-        ast_is(ast.kind, model.AstKind.NeutralBracket) {
-        need(vec.len(ast.children) > 0, "function value source wrapper");
+    for hircore.ast_is(ast.kind, model.AstKind.Parenthesized) ||
+        hircore.ast_is(ast.kind, model.AstKind.BracketItem) ||
+        hircore.ast_is(ast.kind, model.AstKind.NeutralBracket) {
+        hircore.need(vec.len(ast.children) > 0, "function value source wrapper");
         reference.node = ast.children[0];
         ast = file.nodes[reference.node];
     }
     var move_literal = false;
-    if ast_is(ast.kind, model.AstKind.Unary) &&
+    if hircore.ast_is(ast.kind, model.AstKind.Unary) &&
        file.lexed.tokens[ast.token_begin].spelling == "move" {
-        need(vec.len(ast.children) == 1, "move func source arity");
+        hircore.need(vec.len(ast.children) == 1, "move func source arity");
         move_literal = true;
         reference.node = ast.children[0];
         ast = file.nodes[reference.node];
-        for ast_is(ast.kind, model.AstKind.Parenthesized) ||
-            ast_is(ast.kind, model.AstKind.BracketItem) ||
-            ast_is(ast.kind, model.AstKind.NeutralBracket) {
-            need(vec.len(ast.children) > 0, "move func literal wrapper");
+        for hircore.ast_is(ast.kind, model.AstKind.Parenthesized) ||
+            hircore.ast_is(ast.kind, model.AstKind.BracketItem) ||
+            hircore.ast_is(ast.kind, model.AstKind.NeutralBracket) {
+            hircore.need(vec.len(ast.children) > 0, "move func literal wrapper");
             reference.node = ast.children[0];
             ast = file.nodes[reference.node];
         }
     }
-    if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
-        need(value.move_capture == move_literal,
+    if hircore.ast_is(ast.kind, model.AstKind.FunctionLiteral) {
+        hircore.need(value.move_capture == move_literal,
             "function value move_capture differs from its real source");
-        need(!option.is_some(value.bound),
+        hircore.need(!option.is_some(value.bound),
             "literal function value cannot also bind a receiver");
         check_literal_function_value(inout state, node, value, reference);
         return;
     }
-    need(!move_literal, "move func source is not a function literal");
-    need(!value.move_capture, "plain function value cannot claim move capture");
+    hircore.need(!move_literal, "move func source is not a function literal");
+    hircore.need(!value.move_capture, "plain function value cannot claim move capture");
     if option.is_some(value.bound) {
         check_bound_method_value(inout state, node, value);
         return;
     }
-    need(vec.len(value.captures) == 0,
+    hircore.need(vec.len(value.captures) == 0,
         "captured function value has no verified literal source");
-    let method = source_method_member(state, node.source.node);
+    let method = hircalls.source_method_member(state, node.source.node);
     if option.is_some(method) {
-        let source = source_method_call_value(method);
-        let prototype = trait_prototype(state, value.symbol);
+        let source = hircalls.source_method_call_value(method);
+        let prototype = hircore.trait_prototype(state, value.symbol);
         if option.is_some(prototype) {
             let refs = option_proto(prototype);
             let trait_value = state.m.traits[refs.trait_index];
             let method_value = trait_value.methods[refs.method];
-            check_template_method_value_source(inout state, node, value,
+            hircalls.check_template_method_value_source(inout state, node, value,
                 trait_value, method_value, source);
         } else {
-            check_concrete_method_value_source(inout state, node, value,
+            hircalls.check_concrete_method_value_source(inout state, node, value,
                 source, false, 0, false, 0);
         }
         return;
     }
-    let prototype = trait_prototype(state, value.symbol);
-    if option.is_some(prototype) || method_value_is_impl(state, value) {
-        let source = constant_method_source(state, node);
-        need(option.is_some(source),
+    let prototype = hircore.trait_prototype(state, value.symbol);
+    if option.is_some(prototype) || hircalls.method_value_is_impl(state, value) {
+        let source = hircalls.constant_method_source(state, node);
+        hircore.need(option.is_some(source),
             "method value source has no method or constant declaration");
-        need(!option.is_some(prototype),
+        hircore.need(!option.is_some(prototype),
             "trait prototype method value source is not a bounded T method");
-        check_concrete_method_value_source(inout state, node, value,
-            source_method_call_value(source), true,
-            source_method_call_value(source).base.module, true, 0);
+        hircalls.check_concrete_method_value_source(inout state, node, value,
+            hircalls.source_method_call_value(source), true,
+            hircalls.source_method_call_value(source).base.module, true, 0);
         return;
     }
     var source_symbol = option.Option[usize].None;
     for occurrence in state.m.resolved.occurrences {
-        if same_ref(occurrence.source, reference) {
+        if hircore.same_ref(occurrence.source, reference) {
             source_symbol = option.Option[usize].Some(occurrence.symbol);
         }
     }
     if option.is_some(source_symbol) &&
-       symbol_is(verifier_symbol(state, option_usize(source_symbol)).kind,
+       hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(source_symbol)).kind,
                  model.SymbolKind.Constant) {
         let expected = constant_function_source(inout state,
-            option_usize(source_symbol));
+            hircore.option_usize(source_symbol));
         var actual_function = value.symbol;
         var actual_args = value.type_args;
-        let instance = instance_index(state, value.symbol);
+        let instance = hircore.instance_index(state, value.symbol);
         if instance >= 0 {
             actual_function = state.m.instances[usize(instance)].origin;
             actual_args = state.m.instances[usize(instance)].type_args;
         }
-        need(actual_function == expected.function,
+        hircore.need(actual_function == expected.function,
             "constant function value differs from its real initializer function or ordered type arguments");
-        need(!expected.explicit_type_args ||
-             ids_equal(actual_args, expected.type_args),
+        hircore.need(!expected.explicit_type_args ||
+             hircore.ids_equal(actual_args, expected.type_args),
             "constant function value differs from its real initializer function or ordered type arguments");
         return;
     }
     if !option.is_some(source_symbol) ||
-       !symbol_is(verifier_symbol(state, option_usize(source_symbol)).kind,
+       !hircore.symbol_is(hircore.verifier_symbol(state, hircore.option_usize(source_symbol)).kind,
                   model.SymbolKind.Function) {
         return;
     }
     var origin = value.symbol;
-    let instance = instance_index(state, value.symbol);
+    let instance = hircore.instance_index(state, value.symbol);
     if instance >= 0 {
         origin = state.m.instances[usize(instance)].origin;
     }
-    need(origin == option_usize(source_symbol),
+    hircore.need(origin == hircore.option_usize(source_symbol),
         "function value source identity differs from resolver");
 }
 
-func option_proto(value option.Option[ProtoRef]) ProtoRef {
+func option_proto(value option.Option[hircore.ProtoRef]) hircore.ProtoRef {
     switch value {
         case option.Option.Some(item): return item;
-        case option.Option.None: return ProtoRef(trait_index: 0, method: 0);
+        case option.Option.None: return hircore.ProtoRef(trait_index: 0, method: 0);
     }
 }
 
-func function_value_sources(state inout Verifier) throws Invalid {
+pub func function_value_sources(state inout hircore.Verifier) throws hircore.Invalid {
     for node in state.m.nodes {
         function_value_source(inout state, node);
     }
 }
 
-func check_constant(state inout Verifier, node hir.HirNode,
-                    value hir.ConstantValue) throws Invalid {
-    need(value.type_id == node.type_id,
+pub func check_constant(state inout hircore.Verifier, node hir.HirNode,
+                    value hir.ConstantValue) throws hircore.Invalid {
+    hircore.need(value.type_id == node.type_id,
         "constant root type differs from expression");
     let work = vec.empty[usize]();
     check_constant_shape(inout state, node, value, 0, work);
     let context = state.substituted;
     let module_value = state.m;
-    let owner = verifier_scope(state, node.scope).function;
+    let owner = hircore.verifier_scope(state, node.scope).function;
     let expected = constant_source_value_safe(inout state, module_value,
         context, node, owner);
     if !constant.same_constant_value(value, expected) {
-        fail_at("constant value differs from real source" +
+        hircore.fail_at("constant value differs from real source" +
             constant_difference(value, expected), node.source.span);
     }
 }
 
-func constant_source_value_safe(state inout Verifier, module_value hir.HirModule,
+func constant_source_value_safe(state inout hircore.Verifier, module_value hir.HirModule,
                                 context types.Context, node hir.HirNode,
-                                owner usize) hir.ConstantValue throws Invalid {
-    var callback_state = make_callback_verifier(state, context);
+                                owner usize) hir.ConstantValue throws hircore.Invalid {
+    var callback_state = hircore.make_callback_verifier(state, context);
     try {
         return constant.source_constant_value(module_value,
             inout state.substituted, node.source.node, node.type_id,
             func(reference model.NodeRef) usize throws model.SupportError {
                 var probe = callback_state;
                 try {
-                    return source_type_in_function(inout probe, reference,
+                    return hircore.source_type_in_function(inout probe, reference,
                         owner);
-                } catch error Invalid {
+                } catch error hircore.Invalid {
                     throw model.SupportError.Invalid(error.message);
                 }
             },
@@ -569,27 +571,27 @@ func constant_source_value_safe(state inout Verifier, module_value hir.HirModule
                     let found = constant_function_value_source(inout probe,
                         reference, signature, node);
                     return found;
-                } catch error Invalid {
+                } catch error hircore.Invalid {
                     throw model.SupportError.Invalid(error.message);
                 }
             });
     } catch error model.SupportError {
-        support_error(error);
+        hircore.support_error(error);
         return hir.ConstantValue(type_id: 0,
             data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
     }
 }
 
-func constant_function_value_source(state inout Verifier,
+func constant_function_value_source(state inout hircore.Verifier,
                                     reference model.NodeRef, signature usize,
                                     outer hir.HirNode) hir.FunctionValue
-    throws Invalid {
-    let literal = unwrapped(state, reference);
-    let file = verifier_file(state, literal.module, literal.file);
-    let outer_owner = verifier_scope(state, outer.scope).function;
-    if ast_is(file.nodes[literal.node].kind, model.AstKind.FunctionLiteral) {
+    throws hircore.Invalid {
+    let literal = hircore.unwrapped(state, reference);
+    let file = hircore.verifier_file(state, literal.module, literal.file);
+    let outer_owner = hircore.verifier_scope(state, outer.scope).function;
+    if hircore.ast_is(file.nodes[literal.node].kind, model.AstKind.FunctionLiteral) {
         let value = source_lambda_value(inout state, literal, outer_owner);
-        need(try_constant_function(inout state, outer, reference, signature,
+        hircore.need(try_constant_function(inout state, outer, reference, signature,
                  value, literal),
             "constant function literal signature/source mismatch");
         return value;
@@ -606,17 +608,17 @@ func constant_function_value_source(state inout Verifier,
     for template in state.m.templates {
         let arguments = vec.empty[usize]();
         var ref = reference;
-        for ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
-            need(vec.len(file.nodes[ref.node].children) > 0,
+        for hircore.ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
+            hircore.need(vec.len(file.nodes[ref.node].children) > 0,
                 "constant function wrapper");
             ref.node = file.nodes[ref.node].children[0];
         }
-        if ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) {
+        if hircore.ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) {
             for var index usize = 1;
                 index < vec.len(file.nodes[ref.node].children); index += 1 {
                 var argument = ref;
                 argument.node = file.nodes[ref.node].children[index];
-                vec.push(arguments, source_type_in_function(inout state,
+                vec.push(arguments, hircore.source_type_in_function(inout state,
                     argument, outer_owner));
             }
         }
@@ -640,144 +642,144 @@ func constant_function_value_source(state inout Verifier,
             }
         }
     }
-    fail("constant function has no matching real source identity");
+    hircore.fail("constant function has no matching real source identity");
     return hir.FunctionValue(symbol: 0, type_args: [], captures: [],
         move_capture: false, bound: option.Option[hir.BoundReceiver].None);
 }
 
-func try_constant_function(state inout Verifier, outer hir.HirNode,
+func try_constant_function(state inout hircore.Verifier, outer hir.HirNode,
                            reference model.NodeRef, signature usize,
                            value hir.FunctionValue, literal model.NodeRef)
-    bool throws Invalid {
-    let outer_owner = verifier_scope(state, outer.scope).function;
-    if !option.is_some(trait_prototype(state, value.symbol)) &&
-       instantiated_signature(inout state, value.symbol, value.type_args) !=
+    bool throws hircore.Invalid {
+    let outer_owner = hircore.verifier_scope(state, outer.scope).function;
+    if !option.is_some(hircore.trait_prototype(state, value.symbol)) &&
+       hircore.instantiated_signature(inout state, value.symbol, value.type_args) !=
            signature {
         return false;
     }
     let candidate = hir.HirNode(type_id: signature,
         source: hir.HirSource(node: reference,
-            span: verifier_ast(state, reference).span),
+            span: hircore.verifier_ast(state, reference).span),
         scope: outer.scope, children: [], data: hir.NodeData.FunctionValue(
             value), errors: [], exits: []);
     try {
         function_value_source(inout state, candidate);
-    } catch error Invalid {
+    } catch error hircore.Invalid {
         return false;
     }
-    let file = verifier_file(state, reference.module, reference.file);
+    let file = hircore.verifier_file(state, reference.module, reference.file);
     var ref = reference;
-    for ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
-        need(vec.len(file.nodes[ref.node].children) > 0,
+    for hircore.ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
+        hircore.need(vec.len(file.nodes[ref.node].children) > 0,
             "constant function wrapper");
         ref.node = file.nodes[ref.node].children[0];
     }
-    if ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) &&
-       !option.is_some(source_method_member(state, reference)) {
+    if hircore.ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) &&
+       !option.is_some(hircalls.source_method_member(state, reference)) {
         let written = vec.empty[usize]();
         for var index usize = 1;
             index < vec.len(file.nodes[ref.node].children); index += 1 {
             var argument = ref;
             argument.node = file.nodes[ref.node].children[index];
-            vec.push(written, source_type_in_function(inout state, argument,
+            vec.push(written, hircore.source_type_in_function(inout state, argument,
                 outer_owner));
         }
         var actual = value.type_args;
-        let instance = instance_index(state, value.symbol);
+        let instance = hircore.instance_index(state, value.symbol);
         if instance >= 0 {
             actual = state.m.instances[usize(instance)].type_args;
         }
-        need(ids_equal(actual, written),
+        hircore.need(hircore.ids_equal(actual, written),
             "constant function explicit arguments differ from source");
     }
     return true;
 }
 
-func check_constant_shape(state inout Verifier, node hir.HirNode,
+func check_constant_shape(state inout hircore.Verifier, node hir.HirNode,
                           value hir.ConstantValue, depth usize,
-                          work Vec[usize]) throws Invalid {
-    need(depth <= 128 && vec.len(work) < 100000,
+                          work Vec[usize]) throws hircore.Invalid {
+    hircore.need(depth <= 128 && vec.len(work) < 100000,
         "constant value exceeds budget");
     vec.push(work, 0);
-    let constant_owner = verifier_scope(state, node.scope).function;
-    let constant_allowed = allowed_for(state, constant_owner);
-    valid_type(inout state, value.type_id, constant_allowed);
-    let value_type = verifier_type(state, value.type_id);
+    let constant_owner = hircore.verifier_scope(state, node.scope).function;
+    let constant_allowed = hircore.allowed_for(state, constant_owner);
+    hircore.valid_type(inout state, value.type_id, constant_allowed);
+    let value_type = hircore.verifier_type(state, value.type_id);
     switch value.data {
         case hir.ConstantData.ConstantAggregate(aggregate): {
-            need(kind_is(value_type.kind, model.TypeKind.NominalStruct) ||
-                 kind_is(value_type.kind, model.TypeKind.NominalEnum),
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.NominalStruct) ||
+                 hircore.kind_is(value_type.kind, model.TypeKind.NominalEnum),
                 "constant aggregate type");
-            let declaration = nominal_type(state, value.type_id);
+            let declaration = hircore.nominal_type(state, value.type_id);
             var fields = declaration.fields;
-            if kind_is(value_type.kind, model.TypeKind.NominalEnum) {
+            if hircore.kind_is(value_type.kind, model.TypeKind.NominalEnum) {
                 var variant_index i64 = -1;
                 for var index usize = 0;
                     index < vec.len(declaration.variants); index += 1 {
                     if option.is_some(aggregate.variant) &&
                        declaration.variants[index].symbol ==
-                           option_usize(aggregate.variant) {
+                           hircore.option_usize(aggregate.variant) {
                         variant_index = i64(index);
                     }
                 }
-                need(variant_index >= 0, "constant payload arity/variant");
+                hircore.need(variant_index >= 0, "constant payload arity/variant");
                 fields = declaration.variants[usize(variant_index)].payload;
             } else {
-                need(!option.is_some(aggregate.variant),
+                hircore.need(!option.is_some(aggregate.variant),
                     "variant on constant struct");
             }
-            need(vec.len(aggregate.fields) == vec.len(fields),
+            hircore.need(vec.len(aggregate.fields) == vec.len(fields),
                 "constant payload arity/variant");
             for var index usize = 0; index < vec.len(aggregate.fields); index += 1 {
-                need(aggregate.fields[index].type_id ==
-                     field_type(inout state, value.type_id, fields[index]),
+                hircore.need(aggregate.fields[index].type_id ==
+                     hircore.field_type(inout state, value.type_id, fields[index]),
                     "constant field type/order");
                 check_constant_shape(inout state, node,
                     aggregate.fields[index], depth + 1, work);
             }
         }
         case hir.ConstantData.IntegerLiteral(integer_value): {
-            need(integer_kind(value_type.kind), "constant integer type");
+            hircore.need(hircore.integer_kind(value_type.kind), "constant integer type");
             let fake_node = hir.HirNode(type_id: value.type_id,
                 source: node.source, scope: node.scope, children: [],
                 data: hir.NodeData.IntegerLiteral(integer_value), errors: [],
                 exits: []);
-            integer_literal(state, fake_node, integer_value);
+            hircore.integer_literal(state, fake_node, integer_value);
         }
         case hir.ConstantData.StringLiteral(string_value): {
-            need(kind_is(value_type.kind, model.TypeKind.String),
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.String),
                 "constant string type");
-            need(valid_utf8(string_value.utf8), "invalid UTF-8 string");
+            hircore.need(valid_utf8(string_value.utf8), "invalid UTF-8 string");
         }
         case hir.ConstantData.FloatLiteral(float_value): {
-            need(kind_is(value_type.kind, model.TypeKind.Float) &&
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Float) &&
                  (value_type.bits == 64 || float_value.bits >> 32 == 0),
                 "constant float bits/type");
         }
         case hir.ConstantData.FunctionValue(function_value): {
-            need(kind_is(value_type.kind, model.TypeKind.Function),
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Function),
                 "constant function type");
-            need(vec.len(function_value.captures) == 0 &&
+            hircore.need(vec.len(function_value.captures) == 0 &&
                  !function_value.move_capture &&
                  !option.is_some(function_value.bound),
                 "constant function value cannot capture or bind a receiver");
-            if option.is_some(trait_prototype(state, function_value.symbol)) {
-                need(template_index(state,
-                         verifier_scope(state, node.scope).function) >= 0,
+            if option.is_some(hircore.trait_prototype(state, function_value.symbol)) {
+                hircore.need(hircore.template_index(state,
+                         hircore.verifier_scope(state, node.scope).function) >= 0,
                     "constant trait prototype survived concrete execution");
             } else {
-                need(instantiated_signature(inout state,
+                hircore.need(hircore.instantiated_signature(inout state,
                          function_value.symbol, function_value.type_args) ==
                          value.type_id,
                     "constant function signature");
             }
         }
         case hir.ConstantData.BoolLiteral(_): {
-            need(kind_is(value_type.kind, model.TypeKind.Bool),
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Bool),
                 "constant bool type");
         }
         case hir.ConstantData.UnitLiteral(_): {
-            need(kind_is(value_type.kind, model.TypeKind.Unit),
+            hircore.need(hircore.kind_is(value_type.kind, model.TypeKind.Unit),
                 "constant Unit type");
         }
     }
@@ -848,29 +850,29 @@ func decimal(value usize) string {
     return result;
 }
 
-func public_constant_values(state inout Verifier) throws Invalid {
+pub func public_constant_values(state inout hircore.Verifier) throws hircore.Invalid {
     for node in state.m.nodes {
         let kind = hir.node_kind(node.data);
-        if !node_is(kind, hir.NodeKind.FunctionValue) &&
-           !node_is(kind, hir.NodeKind.ConstantLiteral) {
+        if !hircore.node_is(kind, hir.NodeKind.FunctionValue) &&
+           !hircore.node_is(kind, hir.NodeKind.ConstantLiteral) {
             continue;
         }
-        let symbol_id = resolved_source(state, node.source.node);
+        let symbol_id = hircore.resolved_source(state, node.source.node);
         if !option.is_some(symbol_id) {
             continue;
         }
-        let symbol = verifier_symbol(state, option_usize(symbol_id));
-        if !symbol_is(symbol.kind, model.SymbolKind.Constant) ||
+        let symbol = hircore.verifier_symbol(state, hircore.option_usize(symbol_id));
+        if !hircore.symbol_is(symbol.kind, model.SymbolKind.Constant) ||
            !symbol.exported {
             continue;
         }
         let private_type = foreign.private_interface_type(state.m.types,
             state.m.resolved, [node.type_id]);
         if option.is_some(private_type) {
-            let private_symbol = verifier_symbol(state,
-                option_usize(private_type));
-            fail_at("public constant value uses private type: " +
-                private_symbol.name, option_span_value(private_symbol.declaration));
+            let private_symbol = hircore.verifier_symbol(state,
+                hircore.option_usize(private_type));
+            hircore.fail_at("public constant value uses private type: " +
+                private_symbol.name, hircore.option_span_value(private_symbol.declaration));
         }
     }
 }

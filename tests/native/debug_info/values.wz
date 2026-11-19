@@ -1,0 +1,75 @@
+package app;
+
+import "std/slice" as slice;
+import "std/text" as text;
+
+struct Point { x i32; y i64; }
+struct Crate[T] { item T; }
+enum Choice { Empty; Number(value i32); }
+enum Failure { Bad(code i32); }
+
+impl Point {
+    func read(self Point) i32 {
+        return self.x; // BREAK_METHOD
+    }
+}
+
+func unwrap[T](crate Crate[T]) T {
+    let item = crate.item;
+    return item; // BREAK_GENERIC
+}
+
+func transfer() i32 {
+    let input Vec[i32] = [7];
+    let moved = move input; // BREAK_BEFORE_MOVE
+    let value = moved[0]; // BREAK_AFTER_MOVE
+    return value;
+}
+
+func fail() throws Failure {
+    throw Failure.Bad(21);
+}
+
+func inspect(seed i32) i32 {
+    let point = Point(x: seed, y: 80);
+    let payload = Crate[Point](item: point);
+    let numbers Vec[i32] = [4, 9, 11];
+    let window = slice.view[i32](numbers, 1, 3);
+    let word = "你好";
+    let choice = Choice.Number(13);
+    var total i32 = 0;
+    {
+        let seed i32 = seed + 4; // BREAK_VALUES
+        total += seed; // BREAK_SHADOW
+    }
+    for item in numbers {
+        total += item; // BREAK_ITERATION
+        total -= item;
+        break;
+    }
+    try { fail(); }
+    catch caught Failure {
+        switch caught { // BREAK_CATCH
+            case Failure.Bad(code): { total += code; total -= code; }
+        }
+    }
+    switch choice {
+        case Choice.Empty: return 1;
+        case Choice.Number(value): {
+            total += value; // BREAK_PATTERN
+        }
+    }
+    let finish = func(delta i32) i32 {
+        var captured i32 = total;
+        captured += delta; // BREAK_CAPTURE
+        return captured;
+    };
+    let result = finish(payload.item.x);
+    let copy = unwrap[Point](payload);
+    return result + i32(text.len(word)) + window[0] + numbers[0] + copy.read() - seed
+        + transfer() - 7;
+}
+
+func main() i32 {
+    return inspect(5);
+}

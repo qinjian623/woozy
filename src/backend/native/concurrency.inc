@@ -17,7 +17,8 @@
           llvm::GlobalValue::InternalLinkage, name, module);
     };
     ThreadBridge bridge{layout, make(builder.getInt64Ty(), "lang.thread.entry"), nullptr, nullptr};
-    auto ip = builder.saveIP();
+    llvm::IRBuilderBase::InsertPointGuard debug_guard(builder);
+    builder.SetCurrentDebugLocation({});
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", bridge.entry));
     auto *data = bridge.entry->getArg(0);
     auto *saved = builder.CreateLoad(
@@ -47,7 +48,6 @@
       }
       builder.CreateRetVoid();
     }
-    builder.restoreIP(ip);
     thread_bridges.emplace(entry_type, bridge);
     return bridge;
   }

@@ -1,0 +1,220 @@
+package semaeffects;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct Flow {
+    pub falls bool;
+    pub errors Vec[usize];
+    pub breaks Vec[usize];
+    pub continues Vec[usize];
+}
+
+func b_flow_empty() Flow {
+    return Flow(falls: true, errors: vec.empty[usize](),
+        breaks: vec.empty[usize](), continues: vec.empty[usize]());
+}
+
+func b_flow_merge(out Flow, value Flow) {
+    for id in value.errors { b_insert_sorted(out.errors, id); }
+    for id in value.breaks { b_insert_sorted(out.breaks, id); }
+    for id in value.continues { b_insert_sorted(out.continues, id); }
+}
+
+func b_flow_copy(value Flow) Flow {
+    return Flow(falls: value.falls, errors: b_copy_ids(value.errors),
+        breaks: b_copy_ids(value.breaks), continues: b_copy_ids(value.continues));
+}
+
+pub func flow(module hir.HirModule, id usize, depth usize) Flow throws Error {
+    if depth > 512 {
+        throw internal_error("flow nesting limit");
+    }
+    if id >= vec.len(module.nodes) {
+        throw internal_error("invalid flow node");
+    }
+    let n = module.nodes[id];
+    var out = b_flow_empty();
+    let kind = hir.node_kind(n.data);
+    if b_node_kind_is(kind, hir.NodeKind.Defer) {
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.ShortCircuit) {
+        let first = flow(module, n.children[0], depth + 1);
+        b_flow_merge(out, first);
+        let known = b_node_bool_literal(module.nodes[n.children[0]]);
+        var take_second = true;
+        switch known {
+            case option.Option.Some(value):
+                switch n.data {
+                    case hir.NodeData.ShortCircuit(payload):
+                        switch payload.op {
+                            case hir.LogicalOp.And: if !value.value { take_second = false; }
+                            case hir.LogicalOp.Or: if value.value { take_second = false; }
+                        }
+                    default: {}
+                }
+            case option.Option.None: {}
+        }
+        if take_second {
+            b_flow_merge(out, flow(module, n.children[1], depth + 1));
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Block) {
+        for child_id in n.children {
+            if !out.falls { break; }
+            let child_flow = flow(module, child_id, depth + 1);
+            b_flow_merge(out, child_flow);
+            out.falls = child_flow.falls;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.If) {
+        b_flow_merge(out, flow(module, n.children[0], depth + 1));
+        let known = b_node_bool_literal(module.nodes[n.children[0]]);
+        var has_known = false;
+        var known_value = false;
+        switch known {
+            case option.Option.Some(value): { has_known = true; known_value = value.value; }
+            case option.Option.None: {}
+        }
+        out.falls = !has_known && vec.len(n.children) == 2;
+        for var index usize = 1; index < vec.len(n.children); index += 1 {
+            if has_known {
+                if known_value && index != 1 { continue; }
+                if !known_value && index != 2 { continue; }
+            }
+            let branch = flow(module, n.children[index], depth + 1);
+            b_flow_merge(out, branch);
+            out.falls = out.falls || branch.falls;
+        }
+        if has_known && !known_value && vec.len(n.children) == 2 {
+            out.falls = true;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Try) {
+        let body = flow(module, n.children[0], depth + 1);
+        out = b_flow_copy(body);
+        var catches = vec.empty[hir.Catch]();
+        switch n.data {
+            case hir.NodeData.Try(value): catches = value.catches;
+            default: {}
+        }
+        for catch_value in catches {
+            b_remove_id(out.errors, catch_value.error_type);
+        }
+        for catch_value in catches {
+            var reachable = false;
+            for error_id in body.errors {
+                if b_patterns_overlap(module, error_id, catch_value.error_type) {
+                    reachable = true;
+                }
+            }
+            if !reachable { continue; }
+            let handler = flow(module, catch_value.body, depth + 1);
+            b_flow_merge(out, handler);
+            out.falls = out.falls || handler.falls;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Switch) {
+        b_flow_merge(out, flow(module, n.children[0], depth + 1));
+        out.falls = false;
+        for var index usize = 1; index < vec.len(n.children); index += 1 {
+            let arm = flow(module, n.children[index], depth + 1);
+            b_flow_merge(out, arm);
+            out.falls = out.falls || arm.falls || b_vec_contains(arm.breaks, id);
+        }
+        b_remove_id(out.breaks, id);
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.For) {
+        b_flow_merge(out, flow(module, n.children[0], depth + 1));
+        b_flow_merge(out, flow(module, n.children[1], depth + 1));
+        let known = b_node_bool_literal(module.nodes[n.children[1]]);
+        var cond_known = false;
+        var cond_value = true;
+        switch known {
+            case option.Option.Some(value): { cond_known = true; cond_value = value.value; }
+            case option.Option.None: {}
+        }
+        if cond_known && !cond_value { return out; }
+        let body = flow(module, n.children[3], depth + 1);
+        b_flow_merge(out, body);
+        if body.falls || b_vec_contains(body.continues, id) {
+            b_flow_merge(out, flow(module, n.children[2], depth + 1));
+        }
+        out.falls = !cond_known || b_vec_contains(body.breaks, id);
+        b_remove_id(out.breaks, id);
+        b_remove_id(out.continues, id);
+        return out;
+    }
+    for child_id in n.children {
+        b_flow_merge(out, flow(module, child_id, depth + 1));
+    }
+    switch b_node_call(n) {
+        case option.Option.Some(payload):
+            b_flow_add_signature_error(module, out, payload.signature);
+        case option.Option.None: {}
+    }
+    switch b_node_constraint_call(n) {
+        case option.Option.Some(payload):
+            b_flow_add_signature_error(module, out, payload.signature);
+        case option.Option.None: {}
+    }
+    switch b_node_foreign_read(n) {
+        case option.Option.Some(payload):
+            b_insert_sorted(out.errors,
+                b_foreign_binding(module, payload.binding).read_error);
+        case option.Option.None: {}
+    }
+    if b_node_await(n) {
+        let task_node_type = module.nodes[n.children[0]].type_id;
+        let task_type = lookup_type(module, task_node_type);
+        if !b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
+           vec.len(task_type.type_args) < 2 {
+            throw internal_error("await child is not a Task");
+        }
+        let error_id = task_type.type_args[1];
+        if !b_type_kind_is(lookup_type(module, error_id).kind,
+                           model.TypeKind.Unit) {
+            b_insert_sorted(out.errors, error_id);
+        }
+    }
+    if b_node_throw(n) {
+        b_insert_sorted(out.errors, module.nodes[n.children[0]].type_id);
+        out.falls = false;
+    }
+    switch b_node_return(n) {
+        case option.Option.Some(value): out.falls = false;
+        case option.Option.None: {}
+    }
+    switch b_node_break(n) {
+        case option.Option.Some(value): {
+            b_insert_sorted(out.breaks, value.loop);
+            out.falls = false;
+        }
+        case option.Option.None: {}
+    }
+    switch b_node_continue(n) {
+        case option.Option.Some(value): {
+            b_insert_sorted(out.continues, value.loop);
+            out.falls = false;
+        }
+        case option.Option.None: {}
+    }
+    return out;
+}
+
+func b_flow_add_signature_error(module hir.HirModule, out Flow,
+                                signature_id usize) throws Error {
+    let signature_type = lookup_type(module, signature_id);
+    switch signature_type.throws_type {
+        case option.Option.Some(value): b_insert_sorted(out.errors, value);
+        case option.Option.None: {}
+    }
+}

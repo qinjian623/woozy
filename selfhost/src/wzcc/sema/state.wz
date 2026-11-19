@@ -47,13 +47,8 @@ struct PlacePath { is_index bool; known bool; value u64; }
 struct ContainerPath { indexes Vec[PlacePath]; fields Vec[u64]; }
 struct PlaceAccess { root usize; path Vec[PlacePath]; }
 struct CaptureUse { origin usize; environment usize; type_id usize; first_use model.NodeRef; }
-struct Flow { falls bool; errors Vec[usize]; breaks Vec[usize]; continues Vec[usize]; }
 struct Statement { id usize; falls bool; breaks bool; }
 // CPP annotate's local Cleanup record, not persistent Checker state.
-struct AnnotationCleanup {
-    handler_floor usize; body usize; external Vec[usize]; references Vec[usize];
-}
-
 // Named entry records replace CPP maps, never maps keyed by formatted strings.
 struct NodeSymbolEntry { key NodeKey; symbol usize; }
 struct SymbolTypeEntry { symbol usize; type_id usize; }

@@ -37,9 +37,10 @@ def main():
     work.mkdir(parents=True, exist_ok=False)
     report_path = work / 'report.json'
     sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    effect_source = source / 'hirverify/flow/effectsrc.wz'
     report = {'status': 'running', 'source_root': str(source), 'stdlib_root': str(stdlib),
               'compiler': str(compiler), 'compiler_sha256': sha(compiler),
-              'effectsrc_sha256': sha(source / 'hirverify/effectsrc.wz'), 'commands': []}
+              'effectsrc_sha256': sha(effect_source), 'commands': []}
 
     def save():
         report_path.write_text(json.dumps(report, indent=2) + '\n')
@@ -56,11 +57,11 @@ def main():
         fixtures = repo / 'selfhost/tests/hirverify'
         index_project = work / 'index-project'
         base.stage_project(index_project, HERE / 'driver.wz', fixtures / 'lang.toml', generated=True)
-        shutil.copyfile(HERE / 'index_test.wz', index_project / 'src/wzcc/hirverify/index_test.wz')
+        shutil.copyfile(HERE / 'index_test.wz', index_project / 'src/wzcc/hirverify/flow/index_test.wz')
         hir_project = work / 'hir-project'
         base.stage_project(hir_project, fixtures / 'src/main.wz', fixtures / 'lang.toml')
         shutil.copyfile(HERE / 'effect_control.wz', hir_project / 'src/effect_control.wz')
-        shutil.copyfile(HERE / 'index_test.wz', hir_project / 'src/wzcc/hirverify/index_test.wz')
+        shutil.copyfile(HERE / 'index_test.wz', hir_project / 'src/wzcc/hirverify/flow/index_test.wz')
         fixes = hir_project / 'src/fixes.wz'
         content = fixes.read_text()
         anchor = '    io.println("SUMMARY mode=" + mode + " fixture=" + fixture +'
@@ -87,7 +88,7 @@ def main():
                 base.check_five_mode(throw.stdout, 'throw', fixture)
         report['staged_changes'] = [str(project) for project in (index_project, hir_project)
             if staged_before[str(project)] != base.snapshot_tree(project / 'src')]
-        report['source_after_sha256'] = sha(source / 'hirverify/effectsrc.wz')
+        report['source_after_sha256'] = sha(effect_source)
         report['compiler_after_sha256'] = sha(compiler)
         if (report['staged_changes'] or report['source_after_sha256'] != report['effectsrc_sha256']
                 or report['compiler_after_sha256'] != report['compiler_sha256']):

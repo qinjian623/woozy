@@ -2,7 +2,7 @@
 // verifier.  C++ uses std::map/std::set; this package uses insertion-ordered
 // arrays with explicit lookup helpers so every diagnostic follows source/HIR
 // order and no hash iteration order can leak into behaviour.
-package hirverify;
+package core;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -13,25 +13,25 @@ import "std/vec" as vec;
 
 // Internal invalid-HIR failure.  The span is optional exactly like
 // std::optional<SourceSpan> in the C++ verifier.
-struct Invalid {
-    message string;
-    has_span bool;
-    span model.Span;
+pub struct Invalid {
+    pub message string;
+    pub has_span bool;
+    pub span model.Span;
 }
 
-func empty_span() model.Span {
+pub func empty_span() model.Span {
     return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
 }
 
-func fail(message string) throws Invalid {
+pub func fail(message string) throws Invalid {
     throw Invalid(message: message, has_span: false, span: empty_span());
 }
 
-func fail_at(message string, span model.Span) throws Invalid {
+pub func fail_at(message string, span model.Span) throws Invalid {
     throw Invalid(message: message, has_span: true, span: span);
 }
 
-func need(condition bool, message string) throws Invalid {
+pub func need(condition bool, message string) throws Invalid {
     if !condition {
         fail(message);
     }
@@ -41,11 +41,11 @@ func support_invalid(message string) throws Invalid {
     fail(message);
 }
 
-func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+pub func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
     return model.type_kind_id(kind) == model.type_kind_id(expected);
 }
 
-func ast_is(kind model.AstKind, expected model.AstKind) bool {
+pub func ast_is(kind model.AstKind, expected model.AstKind) bool {
     return model.ast_kind_id(kind) == model.ast_kind_id(expected);
 }
 
@@ -53,7 +53,7 @@ func token_is(kind model.TokenKind, expected model.TokenKind) bool {
     return model.token_kind_id(kind) == model.token_kind_id(expected);
 }
 
-func symbol_is(kind model.SymbolKind, expected model.SymbolKind) bool {
+pub func symbol_is(kind model.SymbolKind, expected model.SymbolKind) bool {
     return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
 }
 
@@ -65,7 +65,7 @@ func mode_is(mode model.ParamMode, expected model.ParamMode) bool {
     }
 }
 
-func mode_is_id(mode model.ParamMode, id u32) bool {
+pub func mode_is_id(mode model.ParamMode, id u32) bool {
     switch mode {
         case model.ParamMode.Ordinary: return id == 0;
         case model.ParamMode.Inout: return id == 1;
@@ -73,7 +73,7 @@ func mode_is_id(mode model.ParamMode, id u32) bool {
     }
 }
 
-func backend_is(value model.Backend, expected model.Backend) bool {
+pub func backend_is(value model.Backend, expected model.Backend) bool {
     switch value {
         case model.Backend.Native: {
             switch expected {
@@ -90,7 +90,7 @@ func backend_is(value model.Backend, expected model.Backend) bool {
     }
 }
 
-func phase_is(value model.PhaseState, expected model.PhaseState) bool {
+pub func phase_is(value model.PhaseState, expected model.PhaseState) bool {
     switch value {
         case model.PhaseState.Complete: return phase_id(expected) == 0;
         case model.PhaseState.Recovered: return phase_id(expected) == 1;
@@ -108,7 +108,7 @@ func phase_id(value model.PhaseState) u32 {
     }
 }
 
-func node_is(value hir.NodeKind, expected hir.NodeKind) bool {
+pub func node_is(value hir.NodeKind, expected hir.NodeKind) bool {
     return hir.node_kind_id(value) == hir.node_kind_id(expected);
 }
 
@@ -120,7 +120,7 @@ func unary_is(value hir.UnaryOp, id u32) bool {
     }
 }
 
-func binary_id(value hir.BinaryOp) u32 {
+pub func binary_id(value hir.BinaryOp) u32 {
     switch value {
         case hir.BinaryOp.Add: return 0;
         case hir.BinaryOp.Subtract: return 1;
@@ -141,14 +141,14 @@ func binary_id(value hir.BinaryOp) u32 {
     }
 }
 
-func logical_id(value hir.LogicalOp) u32 {
+pub func logical_id(value hir.LogicalOp) u32 {
     switch value {
         case hir.LogicalOp.And: return 0;
         case hir.LogicalOp.Or: return 1;
     }
 }
 
-func callee_id(value hir.CalleeKind) u32 {
+pub func callee_id(value hir.CalleeKind) u32 {
     switch value {
         case hir.CalleeKind.Direct: return 0;
         case hir.CalleeKind.FunctionValue: return 1;
@@ -158,7 +158,7 @@ func callee_id(value hir.CalleeKind) u32 {
     }
 }
 
-func foreign_access_id(value hir.ForeignAccessKind) u32 {
+pub func foreign_access_id(value hir.ForeignAccessKind) u32 {
     switch value {
         case hir.ForeignAccessKind.PropertyRead: return 0;
         case hir.ForeignAccessKind.PropertyPlace: return 1;
@@ -169,7 +169,7 @@ func foreign_access_id(value hir.ForeignAccessKind) u32 {
     }
 }
 
-func exit_kind_id(value hir.ExitKind) u32 {
+pub func exit_kind_id(value hir.ExitKind) u32 {
     switch value {
         case hir.ExitKind.Normal: return 0;
         case hir.ExitKind.Return: return 1;
@@ -180,7 +180,7 @@ func exit_kind_id(value hir.ExitKind) u32 {
     }
 }
 
-func option_usize(value option.Option[usize]) usize {
+pub func option_usize(value option.Option[usize]) usize {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return 0;
@@ -191,7 +191,7 @@ func option_has(value option.Option[usize]) bool {
     return option.is_some(value);
 }
 
-func option_some(value usize) option.Option[usize] {
+pub func option_some(value usize) option.Option[usize] {
     return option.Option[usize].Some(value);
 }
 
@@ -203,7 +203,7 @@ func option_string_has(value option.Option[string]) bool {
     return option.is_some(value);
 }
 
-func option_string_value(value option.Option[string]) string {
+pub func option_string_value(value option.Option[string]) string {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return "";
@@ -214,7 +214,7 @@ func option_u32_has(value option.Option[u32]) bool {
     return option.is_some(value);
 }
 
-func option_u32_value(value option.Option[u32]) u32 {
+pub func option_u32_value(value option.Option[u32]) u32 {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return 0;
@@ -225,7 +225,7 @@ func option_type_has(value option.Option[usize]) bool {
     return option.is_some(value);
 }
 
-func ids_contains_unsorted(values Vec[usize], value usize) bool {
+pub func ids_contains_unsorted(values Vec[usize], value usize) bool {
     for item in values {
         if item == value {
             return true;
@@ -248,12 +248,12 @@ func ids_lower_bound(values Vec[usize], value usize) usize {
     return low;
 }
 
-func ids_contains(values Vec[usize], value usize) bool {
+pub func ids_contains(values Vec[usize], value usize) bool {
     let position = ids_lower_bound(values, value);
     return position < vec.len(values) && values[position] == value;
 }
 
-func ids_insert(values Vec[usize], value usize) bool {
+pub func ids_insert(values Vec[usize], value usize) bool {
     let position = ids_lower_bound(values, value);
     let length = vec.len(values);
     if position < length && values[position] == value {
@@ -270,7 +270,7 @@ func ids_insert(values Vec[usize], value usize) bool {
     return true;
 }
 
-func ids_remove(values Vec[usize], value usize) {
+pub func ids_remove(values Vec[usize], value usize) {
     let position = ids_lower_bound(values, value);
     let length = vec.len(values);
     if position >= length || values[position] != value {
@@ -284,7 +284,7 @@ func ids_remove(values Vec[usize], value usize) {
     let popped = vec.pop(values);
 }
 
-func ids_equal(left Vec[usize], right Vec[usize]) bool {
+pub func ids_equal(left Vec[usize], right Vec[usize]) bool {
     if vec.len(left) != vec.len(right) {
         return false;
     }
@@ -296,7 +296,7 @@ func ids_equal(left Vec[usize], right Vec[usize]) bool {
     return true;
 }
 
-func ids_copy(values Vec[usize]) Vec[usize] {
+pub func ids_copy(values Vec[usize]) Vec[usize] {
     let out = vec.empty[usize]();
     vec.reserve(out, vec.len(values));
     for value in values {
@@ -305,7 +305,7 @@ func ids_copy(values Vec[usize]) Vec[usize] {
     return out;
 }
 
-func ids_union(target Vec[usize], source Vec[usize]) {
+pub func ids_union(target Vec[usize], source Vec[usize]) {
     for value in source {
         ids_insert(target, value);
     }
@@ -328,22 +328,22 @@ func symbols_contains(values Vec[usize], value usize) bool {
     return ids_contains(values, value);
 }
 
-func same_ref(left model.NodeRef, right model.NodeRef) bool {
+pub func same_ref(left model.NodeRef, right model.NodeRef) bool {
     return left.module == right.module && left.file == right.file &&
            left.node == right.node;
 }
 
-func same_span(left model.Span, right model.Span) bool {
+pub func same_span(left model.Span, right model.Span) bool {
     return left.snapshot == right.snapshot &&
            left.begin_byte == right.begin_byte &&
            left.end_byte == right.end_byte;
 }
 
-func same_source(left hir.HirSource, right hir.HirSource) bool {
+pub func same_source(left hir.HirSource, right hir.HirSource) bool {
     return same_ref(left.node, right.node) && same_span(left.span, right.span);
 }
 
-func same_source_opt(left option.Option[hir.HirSource],
+pub func same_source_opt(left option.Option[hir.HirSource],
                      right option.Option[hir.HirSource]) bool {
     if option.is_some(left) != option.is_some(right) {
         return false;
@@ -359,7 +359,7 @@ func same_source_opt(left option.Option[hir.HirSource],
     }
 }
 
-func same_trait_ref(left hir.TraitRef, right hir.TraitRef) bool {
+pub func same_trait_ref(left hir.TraitRef, right hir.TraitRef) bool {
     return left.declaration == right.declaration &&
            ids_equal(left.args, right.args);
 }
@@ -380,7 +380,7 @@ func same_trait_ref_opt(left option.Option[hir.TraitRef],
     }
 }
 
-func same_foreign_binding(left hir.ForeignBinding,
+pub func same_foreign_binding(left hir.ForeignBinding,
                           right hir.ForeignBinding) bool {
     if left.binding != right.binding || left.type_id != right.type_id ||
        option.is_some(left.signature) != option.is_some(right.signature) ||
@@ -415,7 +415,7 @@ func type_kind_id(value model.Type) u32 {
     return model.type_kind_id(value.kind);
 }
 
-func integer_kind(kind model.TypeKind) bool {
+pub func integer_kind(kind model.TypeKind) bool {
     return kind_is(kind, model.TypeKind.SignedInt) ||
            kind_is(kind, model.TypeKind.UnsignedInt) ||
            kind_is(kind, model.TypeKind.Isize) ||
@@ -427,7 +427,7 @@ func signed_integer_kind(kind model.TypeKind) bool {
            kind_is(kind, model.TypeKind.Isize);
 }
 
-func number_kind(kind model.TypeKind) bool {
+pub func number_kind(kind model.TypeKind) bool {
     return integer_kind(kind) || kind_is(kind, model.TypeKind.Float);
 }
 
@@ -437,19 +437,19 @@ func nominal_kind(kind model.TypeKind) bool {
            kind_is(kind, model.TypeKind.TypeParameter);
 }
 
-func c_named_kind(kind model.TypeKind) bool {
+pub func c_named_kind(kind model.TypeKind) bool {
     return kind_is(kind, model.TypeKind.CForeignRecord) ||
            kind_is(kind, model.TypeKind.CForeignResource) ||
            kind_is(kind, model.TypeKind.CForeignCallback) ||
            kind_is(kind, model.TypeKind.CForeignOpaque);
 }
 
-func c_pointer_kind(kind model.TypeKind) bool {
+pub func c_pointer_kind(kind model.TypeKind) bool {
     return kind_is(kind, model.TypeKind.CForeignPointer) ||
            kind_is(kind, model.TypeKind.CForeignBuffer);
 }
 
-func runtime_handle_kind(kind model.TypeKind) bool {
+pub func runtime_handle_kind(kind model.TypeKind) bool {
     return kind_is(kind, model.TypeKind.ThreadHandle) ||
            kind_is(kind, model.TypeKind.MutexHandle) ||
            kind_is(kind, model.TypeKind.CondvarHandle) ||
@@ -457,7 +457,7 @@ func runtime_handle_kind(kind model.TypeKind) bool {
            kind_is(kind, model.TypeKind.IpcHandle);
 }
 
-func type_contains_parameter(module hir.HirModule, id usize) bool
+pub func type_contains_parameter(module hir.HirModule, id usize) bool
     throws Invalid {
     let pending = vec.empty[usize]();
     vec.push(pending, id);
@@ -523,14 +523,14 @@ func spelling_at(file model.ParseResult, index usize) string throws Invalid {
     return file.lexed.tokens[index].spelling;
 }
 
-func option_ref(value option.Option[model.NodeRef]) model.NodeRef {
+pub func option_ref(value option.Option[model.NodeRef]) model.NodeRef {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return model.NodeRef(module: 0, file: 0, node: 0);
     }
 }
 
-func option_span_value(value option.Option[model.Span]) model.Span {
+pub func option_span_value(value option.Option[model.Span]) model.Span {
     switch value {
         case option.Option.Some(item): return item;
         case option.Option.None: return empty_span();
@@ -552,7 +552,7 @@ func option_string_is(value option.Option[string], expected string) bool {
     }
 }
 
-func option_usize_equal(left option.Option[usize],
+pub func option_usize_equal(left option.Option[usize],
                         right option.Option[usize]) bool {
     if option.is_some(left) != option.is_some(right) {
         return false;
@@ -561,4 +561,11 @@ func option_usize_equal(left option.Option[usize],
         return true;
     }
     return option_usize(left) == option_usize(right);
+}
+
+pub func option_trait_ref(value option.Option[hir.TraitRef]) hir.TraitRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return hir.TraitRef(declaration: 0, args: []);
+    }
 }

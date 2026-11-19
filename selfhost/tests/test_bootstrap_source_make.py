@@ -67,11 +67,8 @@ with tempfile.TemporaryDirectory(dir=REPO) as tmp:
         if command != actual:
             tracers.append(command[0])
             trace = Path(command[command.index('-o') + 1])
-            executed = [actual[0], '/usr/bin/make', '/bin/sh', '/usr/bin/mkdir']
-            if actual[actual.index('--opt') + 1] == '2':
-                executed.extend(str((tools / name).resolve()) for name in boot.SOURCE_MAKE_PARTITION_TOOLS)
             trace.write_text('\n'.join(f'execve("{x}", [], 0) = 0' for x in
-                executed))
+                (actual[0], '/usr/bin/make', '/bin/sh', '/usr/bin/mkdir')))
         return dict(stdout=b'{"status":"ok"}', stderr=b'', exit=0, timed_out=False,
                     cleanup_complete=True, abandoned_pipes=False)
 
@@ -118,19 +115,6 @@ with tempfile.TemporaryDirectory(dir=REPO) as tmp:
         with mock.patch.dict(os.environ, {'PATH': 'missing-bin'}):
             assert invoke(root / 'single', '--stages=1') == 0
         assert len(tracers) == 4
-        stderr = io.StringIO()
-        with redirect_stderr(stderr):
-            assert invoke(root / 'missing-split', '--stages=2', '--opt=2') == 1
-        assert 'llvm-split' in stderr.getvalue()
-        for name in boot.SOURCE_MAKE_PARTITION_TOOLS:
-            (tools / name).write_text(name)
-        optimized = root / 'optimized'
-        assert invoke(optimized, '--stages=2', '--opt=2') == 0
-        optimized_report = json.loads((optimized / 'result.json').read_text())
-        for name in boot.SOURCE_MAKE_PARTITION_TOOLS:
-            frozen = optimized / 'resources/toolchain' / name
-            assert str(frozen) == optimized_report['source_make_tools'][name]
-            assert str(frozen.resolve()) in optimized_report['stages'][1]['executables']
     calls = calls[:3]
     report = json.loads((root / 'out/result.json').read_text())
     assert report['status'] == 'ok' and report['stage23_binary_equal']

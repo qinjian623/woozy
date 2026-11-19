@@ -1,6 +1,5 @@
 package resources;
 
-import "std/fs" as fs;
 import "std/os" as os;
 import "std/process" as process;
 import "std/option" as option;
@@ -13,13 +12,6 @@ pub func directory() string throws os.Error {
 
 pub func standard_library() string throws os.Error {
     return path.join(directory(),"stdlib");
-}
-
-pub func source_partition_tools(root string) Vec[string] throws os.Error {
-    let split = root + "/toolchain/llvm-split";
-    let objcopy = root + "/toolchain/llvm-objcopy";
-    if fs.exists(split) && fs.exists(objcopy) { return [split, objcopy]; }
-    return [];
 }
 
 pub func llvm_bin(bundle string) string throws os.Error {

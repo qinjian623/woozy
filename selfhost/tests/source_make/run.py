@@ -77,11 +77,8 @@ def check_nominal(woozyc, root, cache_dir, env, failures):
             check(stats(out_dir)["opt_jobs"] == 2,
                   f"{label} did not recompile both packages", failures)
 
-def check_partitioned(woozyc, root, env, failures):
-    tools = woozyc.parent / "toolchain"
-    if not all((tools / name).is_file() for name in ("llvm-split", "llvm-objcopy")):
-        return
-    project = root / "partitioned"
+def check_large_source_packages(woozyc, root, env, failures):
+    project = root / "large-packages"
     for module in ("left", "right"):
         source = project / "src" / module
         source.mkdir(parents=True)
@@ -96,18 +93,20 @@ def check_partitioned(woozyc, root, env, failures):
         'func main() i32 { if left.value() == "left" && right.value() == "right" '
         '{ return 61; } return 1; }\n',
     )
-    output = root / "partitioned-out"
+    output = root / "large-packages-out"
     result = build(woozyc, manifest, output, None, env, root)
-    check(result.returncode == 0, "partitioned packages failed to link", failures)
+    check(result.returncode == 0, "large source packages failed to link", failures)
     if result.returncode != 0:
         return
     packages = json.loads((output / "make-report.json").read_text())["packages"]
+    check({p["logical_path"] for p in packages} == {"app", "app/left", "app/right"},
+          "expected one object per source package", failures)
     for package in packages:
         if package["logical_path"] in ("app/left", "app/right"):
-            check((package["opt_jobs"], package["llc_jobs"]) == (17, 16),
-                  f'{package["logical_path"]} did not use verified partitioning', failures)
+            check((package["opt_jobs"], package["llc_jobs"]) == (1, 1),
+                  f'{package["logical_path"]} did not use one verified LLVM unit', failures)
     executed = run([str(output / "program")], root, env)
-    check(executed.returncode == 61, "partitioned packages changed program value", failures)
+    check(executed.returncode == 61, "large source packages changed program value", failures)
 
 
 def main():
@@ -265,7 +264,7 @@ def main():
         check(preserved.returncode == EXPECTED + 10, "failed uncached build replaced program", failures)
 
         check_nominal(woozyc, root, cache_dir, env, failures)
-        check_partitioned(woozyc, root, env, failures)
+        check_large_source_packages(woozyc, root, env, failures)
 
     if failures:
         for failure in failures:

@@ -2,6 +2,8 @@
 // independent deep clones.
 package hirverify;
 
+import "app/wzcc/hirverify/backend" as hirbackend;
+import "app/wzcc/hirverify/core" as hircore;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/hirclone" as hirclone;
 import "app/wzcc/model" as model;
@@ -20,8 +22,8 @@ pub struct ExternalFunction {
 }
 
 pub struct VerifiedHirModule {
-    module hir.HirModule;
-    mode VerifyMode;
+    pub module hir.HirModule;
+    pub mode VerifyMode;
     externals Vec[ExternalFunction];
 }
 
@@ -32,18 +34,18 @@ pub struct VerifyResult {
     pub value option.Option[VerifiedHirModule];
 }
 
-func invalid_diagnostic(error Invalid) model.Diagnostic {
+func invalid_diagnostic(error hircore.Invalid) model.Diagnostic {
     var diagnostic = model.diagnostic("E_IR_INVALID", "lowering",
         error.message, error.span);
     diagnostic.has_primary = error.has_span;
     if !error.has_span {
-        diagnostic.primary = empty_span();
+        diagnostic.primary = hircore.empty_span();
     }
     return diagnostic;
 }
 
-func internal_failure(message string) Invalid {
-    return Invalid(message: message, has_span: false, span: empty_span());
+func internal_failure(message string) hircore.Invalid {
+    return hircore.Invalid(message: message, has_span: false, span: hircore.empty_span());
 }
 
 pub func verify_types(input hir.HirModule) model.UnitResult {
@@ -52,10 +54,10 @@ pub func verify_types(input hir.HirModule) model.UnitResult {
 
 func verify_types_external(input hir.HirModule,
                            externals Vec[ExternalFunction]) model.UnitResult {
-    var state = make_verifier(input);
+    var state = hircore.make_verifier(input);
     try {
         run_verification(inout state, externals);
-    } catch error Invalid {
+    } catch error hircore.Invalid {
         let diagnostics = vec.empty[model.Diagnostic]();
         vec.push(diagnostics, invalid_diagnostic(error));
         return model.UnitResult(state: model.PhaseState.Failed,
@@ -69,7 +71,7 @@ func verify_types_external(input hir.HirModule,
 func verify_binding_backends(module hir.HirModule) option.Option[VerifyResult] {
     let project = module.resolved.project;
     var backend_name = "native";
-    if backend_is(module.config.backend, model.Backend.Python) {
+    if hircore.backend_is(module.config.backend, model.Backend.Python) {
         backend_name = "python";
     }
     for module_value in project.modules {
@@ -92,7 +94,7 @@ func verify_binding_backends(module hir.HirModule) option.Option[VerifyResult] {
                     var diagnostic = model.diagnostic(
                         "E_CAPABILITY_UNAVAILABLE", "type",
                         "foreign source module is unavailable for this backend",
-                        empty_span());
+                        hircore.empty_span());
                     diagnostic.has_primary = false;
                     vec.push(diagnostics, diagnostic);
                     return option.Option[VerifyResult].Some(VerifyResult(
@@ -119,7 +121,7 @@ pub func verify_package(input hir.HirModule, mode VerifyMode,
                         package_id usize) VerifyResult {
     var externals = vec.empty[ExternalFunction]();
     try { externals = collect_externals(input, package_id); }
-    catch error Invalid {
+    catch error hircore.Invalid {
         let diagnostics = vec.empty[model.Diagnostic]();
         vec.push(diagnostics, invalid_diagnostic(error));
         return VerifyResult(state: model.PhaseState.Failed,
@@ -130,14 +132,14 @@ pub func verify_package(input hir.HirModule, mode VerifyMode,
 }
 
 func collect_externals(input hir.HirModule, package_id usize)
-    Vec[ExternalFunction] throws Invalid {
+    Vec[ExternalFunction] throws hircore.Invalid {
     let result = vec.empty[ExternalFunction]();
     let seen = vec.empty[usize]();
     for node in input.nodes {
         var symbol usize = 0; var signature usize = 0; var found = false;
         switch node.data {
             case hir.NodeData.Call(value): {
-                if callee_id(value.kind) == callee_id(hir.CalleeKind.Direct) {
+                if hircore.callee_id(value.kind) == hircore.callee_id(hir.CalleeKind.Direct) {
                     switch value.direct_symbol {
                         case option.Option.Some(id): {
                             symbol = id; signature = value.signature; found = true;
@@ -160,7 +162,7 @@ func collect_externals(input hir.HirModule, package_id usize)
             default: {}
         }
         if !found { continue; }
-        need(symbol < vec.len(input.resolved.symbols),
+        hircore.need(symbol < vec.len(input.resolved.symbols),
             "external call has an invalid function symbol");
         let value = input.resolved.symbols[symbol];
         if value.module == package_id { continue; }
@@ -172,25 +174,25 @@ func collect_externals(input hir.HirModule, package_id usize)
             if template.function.symbol == symbol { defined = true; }
         }
         if defined { continue; }
-        need(symbol_is(value.kind, model.SymbolKind.Function) &&
+        hircore.need(hircore.symbol_is(value.kind, model.SymbolKind.Function) &&
              option.is_some(value.definition),
             "external call target is not a real exported source declaration");
-        if !ids_insert(seen, symbol) { continue; }
+        if !hircore.ids_insert(seen, symbol) { continue; }
         vec.push(result, ExternalFunction(symbol: symbol, owner: value.module,
             signature: signature));
     }
     for implementation in input.impls {
         if !option.is_some(implementation.trait_ref) || vec.len(implementation.params) != 0 { continue; }
         for method in implementation.methods {
-            if method >= vec.len(input.resolved.symbols) || ids_contains(seen, method) { continue; }
+            if method >= vec.len(input.resolved.symbols) || hircore.ids_contains(seen, method) { continue; }
             let symbol = input.resolved.symbols[method];
             if symbol.module == package_id || !option.is_some(symbol.definition) ||
-               !external_trait_method(input, method) { continue; }
+               !hircore.external_trait_method(input, method) { continue; }
             var defined = false;
             for function in input.functions { if function.symbol == method { defined = true; } }
             for template in input.templates { if template.function.symbol == method { defined = true; } }
             if defined { continue; }
-            let reference = option_ref(symbol.definition);
+            let reference = hircore.option_ref(symbol.definition);
             let module = input.resolved.project.modules[reference.module];
             let file = input.resolved.project.files[module.files[reference.file]];
             let syntax = file.nodes[reference.node];
@@ -199,7 +201,7 @@ func collect_externals(input hir.HirModule, package_id usize)
                 if model.ast_kind_id(file.nodes[child].kind) == model.ast_kind_id(model.AstKind.GenericParameter) { generic = true; }
             }
             if generic { continue; }
-            if !ids_insert(seen, method) { continue; }
+            if !hircore.ids_insert(seen, method) { continue; }
             vec.push(result, ExternalFunction(symbol: method, owner: symbol.module, signature: 0));
         }
     }
@@ -233,19 +235,19 @@ func verify_impl(input hir.HirModule, mode VerifyMode,
     }
     if use_backend {
         let typed = verify_types_external(module, externals);
-        if phase_is(typed.state, model.PhaseState.Complete) && typed.has_value {
-            checked = check_backend_capabilities_verified(module);
+        if hircore.phase_is(typed.state, model.PhaseState.Complete) && typed.has_value {
+            checked = hirbackend.check_backend_capabilities_verified(module);
         } else { checked = typed; }
     } else {
         checked = verify_types_external(module, externals);
     }
-    if phase_is(checked.state, model.PhaseState.Complete) && checked.has_value {
+    if hircore.phase_is(checked.state, model.PhaseState.Complete) && checked.has_value {
         switch verify_binding_backends(module) {
             case option.Option.Some(rejected): return rejected;
             case option.Option.None: {}
         }
     }
-    if !phase_is(checked.state, model.PhaseState.Complete) ||
+    if !hircore.phase_is(checked.state, model.PhaseState.Complete) ||
        !checked.has_value {
         return VerifyResult(state: checked.state, failure: checked.failure,
             diagnostics: checked.diagnostics,
@@ -294,14 +296,14 @@ pub func ensure_backend(input VerifiedHirModule) VerifyResult {
                     value: option.Option[VerifiedHirModule].None);
             }
             let checked = check_backend_capabilities(module);
-            if phase_is(checked.state, model.PhaseState.Complete) &&
+            if hircore.phase_is(checked.state, model.PhaseState.Complete) &&
                checked.has_value {
                 switch verify_binding_backends(module) {
                     case option.Option.Some(rejected): return rejected;
                     case option.Option.None: {}
                 }
             }
-            if !phase_is(checked.state, model.PhaseState.Complete) ||
+            if !hircore.phase_is(checked.state, model.PhaseState.Complete) ||
                !checked.has_value {
                 return VerifyResult(state: checked.state,
                     failure: checked.failure, diagnostics: checked.diagnostics,

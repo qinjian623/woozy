@@ -92,6 +92,7 @@ def trace_check(label, trace, root, level, async_ir, hosted):
     assert '/usr/bin/ld' not in value
     passes = 'verify,default<O2>,verify' if level == 2 else ('verify,default<O0>,verify' if async_ir else 'verify')
     assert '"-passes=' + passes + '"' in value
+    assert ('/verified.bc"' in value) == async_ir
     assert '"-filetype=obj"' in value and '"-O=' + str(level) + '"' in value
     assert '"-relocation-model=pic"' in value and '"-code-model=small"' in value
     assert '"--ld-path=' + str(root / 'toolchain/ld.lld') + '"' in value
@@ -144,11 +145,22 @@ try:
     sources = [p for package in packages for p in sorted((SOURCE / package).glob('*.wz'))]
     # B–E may still be incomplete: only the accepted shared Output/text files are needed here.
     sources += [SOURCE / 'nativeemit' / name for name in ['state.wz', 'text.wz']]
+    debug = SOURCE / 'nativeemit/debug.wz'
+    if debug.is_file():
+        sources.append(debug)
     for source in sources:
         target = project / 'src/wzcc' / source.relative_to(SOURCE)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
         inputs.append({'source': str(source), 'sha256': sha(target)})
+    if debug.is_file():
+        fixture = HERE.parent / 'nativeemit_text/fixture_type_of.wz'
+        shutil.copy2(fixture, project / 'src/wzcc/nativeemit/fixture_type_of.wz')
+        inputs.append({'source': str(fixture), 'sha256': sha(fixture)})
+        if (SOURCE / 'nativeemit/debug_types.wz').is_file():
+            fixture = HERE.parent / 'nativeemit_text/fixture_debug_type.wz'
+            shutil.copy2(fixture, project / 'src/wzcc/nativeemit' / fixture.name)
+            inputs.append({'source': str(fixture), 'sha256': sha(fixture)})
     shutil.copy2(HERE / 'main.wz', project / 'src/main.wz')
     # SH31 added frontcache to nativebuild.wz and interface to the shared
     # nativeemit state.  Copy the real import closure instead of a stale

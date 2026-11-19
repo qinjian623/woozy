@@ -2,22 +2,18 @@
 // This is a direct port of the corresponding Verifier members in
 // src/hir/hir.cpp.  Producer TypeIds are only accepted after every shape,
 // declaration identity and source spelling is rebuilt independently.
-package hirverify;
+package core;
 
-import "app/wzcc/bigint" as bigint;
-import "app/wzcc/constant" as constant;
-import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
-import "app/wzcc/pattern" as pattern;
 import "app/wzcc/types" as types;
 import "app/wzcc/valueops" as valueops;
 import "std/option" as option;
 import "std/vec" as vec;
 
-struct ProtoRef {
-    trait_index usize;
-    method usize;
+pub struct ProtoRef {
+    pub trait_index usize;
+    pub method usize;
 }
 
 struct GenericOffset {
@@ -35,20 +31,20 @@ struct InoutWork {
     depth usize;
 }
 
-func type_error_to_invalid(error types.Error) throws Invalid {
+pub func type_error_to_invalid(error types.Error) throws Invalid {
     switch error {
         case types.Error.Invalid(message): fail(message);
     }
 }
 
-func support_error(error model.SupportError) throws Invalid {
+pub func support_error(error model.SupportError) throws Invalid {
     switch error {
         case model.SupportError.Invalid(message): fail(message);
         case model.SupportError.Limit(message): fail(message);
     }
 }
 
-func intern_type(state inout Verifier, value model.Type) usize
+pub func intern_type(state inout Verifier, value model.Type) usize
     throws Invalid {
     try {
         return types.intern(inout state.substituted, value);
@@ -58,7 +54,7 @@ func intern_type(state inout Verifier, value model.Type) usize
     }
 }
 
-func substitute_type(state inout Verifier, id usize,
+pub func substitute_type(state inout Verifier, id usize,
                      substitutions Vec[model.Substitution]) usize
     throws Invalid {
     try {
@@ -69,7 +65,7 @@ func substitute_type(state inout Verifier, id usize,
     }
 }
 
-func inout_slot_type(module hir.HirModule, id usize,
+pub func inout_slot_type(module hir.HirModule, id usize,
                      allowed Vec[usize]) bool throws Invalid {
     try {
         let slot = valueops.inout_slot(module, id, allowed);
@@ -88,11 +84,11 @@ func inout_slot_type_state(state inout Verifier, id usize,
     return inout_slot_type(state.m, id, allowed);
 }
 
-func weak_target(module hir.HirModule, id usize) bool {
+pub func weak_target(module hir.HirModule, id usize) bool {
     return valueops.weak_target(module, id);
 }
 
-func classify_needs_drop(state inout Verifier, id usize) bool
+pub func classify_needs_drop(state inout Verifier, id usize) bool
     throws Invalid {
     if id > 0 && id <= vec.len(state.drop_known) {
         if state.drop_known[id - 1] {
@@ -113,7 +109,7 @@ func classify_needs_drop(state inout Verifier, id usize) bool
     return result;
 }
 
-func ordinary_copyable(module hir.HirModule, id usize) bool
+pub func ordinary_copyable(module hir.HirModule, id usize) bool
     throws Invalid {
     try {
         return valueops.ordinary_copyable(module, id);
@@ -123,7 +119,7 @@ func ordinary_copyable(module hir.HirModule, id usize) bool
     }
 }
 
-func valid_type(state inout Verifier, id usize, allowed Vec[usize])
+pub func valid_type(state inout Verifier, id usize, allowed Vec[usize])
     throws Invalid {
     valid_type_depth(inout state, id, allowed, 0);
 }
@@ -286,7 +282,7 @@ func valid_type_depth(state inout Verifier, id usize, allowed Vec[usize],
     validated_insert(inout state, id, allowed);
 }
 
-func instantiated_signature(state inout Verifier, target usize,
+pub func instantiated_signature(state inout Verifier, target usize,
                             args Vec[usize]) usize throws Invalid {
     let found_function = verifier_function(state, target);
     let found_template = template_index(state, target);
@@ -307,14 +303,14 @@ func instantiated_signature(state inout Verifier, target usize,
     return substitute_type(inout state, found_function.signature, substitutions);
 }
 
-func nominal_type(state Verifier, id usize) hir.NominalDecl throws Invalid {
+pub func nominal_type(state Verifier, id usize) hir.NominalDecl throws Invalid {
     let value = verifier_type(state, id);
     let found = nominal_index(state, value.declaration);
     need(found >= 0, "missing nominal declaration");
     return state.m.nominals[usize(found)];
 }
 
-func field_type(state inout Verifier, id usize, field hir.FieldDecl) usize
+pub func field_type(state inout Verifier, id usize, field hir.FieldDecl) usize
     throws Invalid {
     let declaration = nominal_type(state, id);
     let value = verifier_type(state, id);
@@ -329,7 +325,7 @@ func field_type(state inout Verifier, id usize, field hir.FieldDecl) usize
     return substitute_type(inout state, field.type_id, substitutions);
 }
 
-func operator_types(state Verifier, op hir.BinaryOp, left usize, right usize,
+pub func operator_types(state Verifier, op hir.BinaryOp, left usize, right usize,
                     result usize) throws Invalid {
     let kind = verifier_type(state, left).kind;
     let op_id = binary_id(op);
@@ -373,7 +369,7 @@ func operator_types(state Verifier, op hir.BinaryOp, left usize, right usize,
     fail("unknown binary operator");
 }
 
-func iteration_element(state inout Verifier, collection usize) usize
+pub func iteration_element(state inout Verifier, collection usize) usize
     throws Invalid {
     let value = verifier_type(state, collection);
     if kind_is(value.kind, model.TypeKind.Vec) ||
@@ -388,7 +384,7 @@ func iteration_element(state inout Verifier, collection usize) usize
     return intern_type(inout state, rune);
 }
 
-func integer_literal(state Verifier, node hir.HirNode,
+pub func integer_literal(state Verifier, node hir.HirNode,
                      literal hir.IntegerLiteral) throws Invalid {
     let value = verifier_type(state, node.type_id);
     need(integer_kind(value.kind), "integer literal type");

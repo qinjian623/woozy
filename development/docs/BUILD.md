@@ -116,5 +116,27 @@ E_LINK_FAILED。发布前检查目的文件类型；第二个文件替换报错�
 ASan/UBSan覆盖本项目编译器代码；生成程序使用的独立运行库不继承编译器的检查选项。
 预编译LLVM和生成程序不计入该检查覆盖范围。
 
+## 用 GDB 调试 Woozy 程序
+
+Linux x86_64 原生构建加 `-g`，将 `.wz` 的源码位置和变量信息以 DWARF 格式写入可执行文件。
+
+```sh
+woozyc build --project tests/fixtures/core/lang.toml \
+  --backend native --opt 0 -g --out-dir build/core/debug
+gdb -ex 'directory tests/fixtures/core' build/core/debug/program
+```
+
+在 GDB 中用 `break main.wz:行号` 或 `break 函数名` 设置断点。`run` 启动，`step` 进入调用，`next` 执行到下一行，`bt` 查看调用栈，`info args` 和 `info locals` 查看参数和局部变量。`info threads` 查看原生线程。
+
+DWARF 中的项目源码路径相对于 `lang.toml` 所在目录。移动项目后，在 GDB 中用 `directory 项目目录` 指向新的位置。项目之外的标准库源码记作 `stdlib/…`，外部源码依赖记作 `dependencies/模块编号/逻辑模块/…`。可用 GDB 的 `set substitute-path` 指向这些源码的实际目录。
+
+结构体按源码字段显示，枚举显示当前变体及其字段。局部变量从初始化完成后可见，内层变量可以遮蔽外层同名变量。进入闭包后可以查看捕获值。异步函数可以在 `await` 前后的源码行设置断点，并查看该位置仍有可用存储的变量。
+
+多个退出分支可以各自执行同一个 `defer`。GDB 按行设断点时可能只选中一处，可以用 `disassemble /s` 查看其余分支的地址，再用 `break *地址` 设置断点。
+
+在仓库根目录启动的 GDB 中执行 `source tools/gdb/woozy.py`，就可以用 `print` 直接查看 UTF-8 字符串及 Vec、Slice 的元素。该脚本只读被调试进程的内存。
+
+`-g` 可以与 `--package-objects` 一起用，Woozy 版也可以和 `--source-make` 一起用。含有异步函数的项目可以用整包或 `--package-objects` 构建。源码单步和变量检查使用 `--opt 0` 较方便。`--opt 2` 下，内联和代码消除可能让行号跳跃，GDB 也可能显示 `<optimized out>`。C 外部类型和运行库内部对象的字段暂未完整描述。
+
 简单结构体、枚举、静态字符串、泛型、ARC和外部绑定仍需后续工作；
 T05整项在简单结构体与常量字符串补齐前保留in_progress。细节见[NATIVE_SCALARS.md](NATIVE_SCALARS.md)。

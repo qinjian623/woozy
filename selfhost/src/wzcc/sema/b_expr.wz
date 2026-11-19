@@ -1,6 +1,8 @@
 // Checker expression checking and exact constant folding (CPP 1465-2864).
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -186,12 +188,12 @@ func convert_to(state inout Checker, r model.NodeRef, value Expr,
         case option.Option.Some(wanted_id): {
             if wanted_id == value.value.type_id { return value; }
             let want = lookup_type(inout state, wanted_id);
-            if !b_type_kind_is(want.kind, model.TypeKind.TraitObject) {
+            if !effects.b_type_kind_is(want.kind, model.TypeKind.TraitObject) {
                 return value;
             }
             let actual = lookup_type(inout state, value.value.type_id);
-            if b_type_kind_is(actual.kind, model.TypeKind.TraitObject) ||
-               b_type_kind_is(actual.kind, model.TypeKind.Error) {
+            if effects.b_type_kind_is(actual.kind, model.TypeKind.TraitObject) ||
+               effects.b_type_kind_is(actual.kind, model.TypeKind.Error) {
                 return value;
             }
             if contains_parameter(inout state, value.value.type_id) {
@@ -210,7 +212,7 @@ func convert_to(state inout Checker, r model.NodeRef, value Expr,
             }
             let tr = state.m.traits[trait_index];
             let trait_ref = hir.TraitRef(declaration: want.declaration,
-                args: b_copy_ids(want.type_args));
+                args: effects.b_copy_ids(want.type_args));
             if !satisfies(inout state, r, value.value.type_id, trait_ref) {
                 throw reject(inout state, r,
                     "dyn conversion requires exactly one implementation of the complete trait application",
@@ -747,7 +749,7 @@ func b_expression_literal(state inout Checker, r model.NodeRef,
             case option.Option.Some(value): type_id = value;
             case option.Option.None: type_id = scalar(inout state, model.TypeKind.Float, 64);
         }
-        if !b_type_kind_is(lookup_type(inout state, type_id).kind,
+        if !effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                            model.TypeKind.Float) {
             throw reject(inout state, r,
                 "float literal requires float context", "E_TYPE_MISMATCH");
@@ -791,7 +793,7 @@ func b_expression_name_or_member(state inout Checker, r model.NodeRef,
     let base_ref = b_child_m(b_module, r, 0);
     switch type_expression(inout state, base_ref) {
         case option.Option.Some(type_id): {
-            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+            if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                               model.TypeKind.NominalEnum) {
                 let declaration = nominal(inout state, type_id);
                 let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
@@ -817,11 +819,11 @@ func b_expression_name_or_member(state inout Checker, r model.NodeRef,
     }
     let base = expression(inout state, base_ref, option.Option[usize].None);
     let base_type = lookup_type(inout state, base.value.type_id);
-    if b_type_kind_is(base_type.kind, model.TypeKind.TraitObject) {
+    if effects.b_type_kind_is(base_type.kind, model.TypeKind.TraitObject) {
         throw unavailable(inout state, r,
             "dyn trait methods can only be called directly");
     }
-    if b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+    if effects.b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
         let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
         let property = foreign_property(inout state, base.value.type_id, name);
         switch property {
@@ -848,7 +850,7 @@ func b_expression_name_or_member(state inout Checker, r model.NodeRef,
             }
         }
     }
-    if b_type_kind_is(base_type.kind, model.TypeKind.CForeignRecord) {
+    if effects.b_type_kind_is(base_type.kind, model.TypeKind.CForeignRecord) {
         let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
         let declaration = c_decl(inout state, base_type.c_type);
         var field_index usize = 0;
@@ -871,7 +873,7 @@ func b_expression_name_or_member(state inout Checker, r model.NodeRef,
             value: b_empty_value(type_id));
     }
     let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
-    if b_type_kind_is(base_type.kind, model.TypeKind.NominalStruct) {
+    if effects.b_type_kind_is(base_type.kind, model.TypeKind.NominalStruct) {
         let declaration = nominal(inout state, base.value.type_id);
         var has_field = false;
         for field in declaration.fields {
@@ -1062,7 +1064,7 @@ func b_expression_resolved_name(state inout Checker, r model.NodeRef, id usize,
                         check_function_value_inout(inout state, r, function_symbol,
                             constant_value.value.type_id);
                         let data = hir.FunctionValue(symbol: function_symbol,
-                            type_args: b_copy_ids(constant_value.type_args), captures: [],
+                            type_args: effects.b_copy_ids(constant_value.type_args), captures: [],
                             move_capture: false,
                             bound: option.Option[hir.BoundReceiver].None);
                         return Expr(id: node(inout state, r, constant_value.value.type_id,
@@ -1129,7 +1131,7 @@ func b_expression_await(state inout Checker, r model.NodeRef) Expr throws Error 
         option.Option[usize].None);
     let task_node = state.m.nodes[task.id];
     let task_type = lookup_type(inout state, task_node.type_id);
-    if !b_type_kind_is(task_type.kind, model.TypeKind.Task) {
+    if !effects.b_type_kind_is(task_type.kind, model.TypeKind.Task) {
         throw reject(inout state, r,
             "await requires a Task value", "E_AWAIT_NOT_TASK");
     }
@@ -1157,7 +1159,7 @@ func b_expression_unary(state inout Checker, r model.NodeRef,
     let a = expression(inout state, b_child_m(b_module, r, 0), child_expected);
     if op == "+" {
         if !integer(inout state, a.value.type_id) &&
-           !b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
+           !effects.b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
                            model.TypeKind.Float) {
             throw reject(inout state, r,
                 "unary plus requires a numeric operand", "E_TYPE_MISMATCH");
@@ -1175,7 +1177,7 @@ func b_expression_unary(state inout Checker, r model.NodeRef,
             "bitwise not requires an integer operand", "E_TYPE_MISMATCH");
     } else if op != "~" &&
               !integer(inout state, a.value.type_id) &&
-              !b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
+              !effects.b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
                               model.TypeKind.Float) {
         throw reject(inout state, r,
             "integer unary operator requires an integer operand",
@@ -1337,7 +1339,7 @@ func b_expression_binary(state inout Checker, r model.NodeRef,
             option.Option[usize].Some(b_boolean));
         var value = b_empty_value(b_boolean);
         var known = false;
-        switch b_node_bool_literal(state.m.nodes[a.id]) {
+        switch effects.b_node_bool_literal(state.m.nodes[a.id]) {
             case option.Option.Some(boolean_value): {
                 if (op_text == "&&" && !boolean_value.value) ||
                    (op_text == "||" && boolean_value.value) {
@@ -1348,9 +1350,9 @@ func b_expression_binary(state inout Checker, r model.NodeRef,
             case option.Option.None: {}
         }
         if !known {
-            switch b_node_bool_literal(state.m.nodes[a.id]) {
+            switch effects.b_node_bool_literal(state.m.nodes[a.id]) {
                 case option.Option.Some(a_boolean):
-                    switch b_node_bool_literal(state.m.nodes[b.id]) {
+                    switch effects.b_node_bool_literal(state.m.nodes[b.id]) {
                         case option.Option.Some(b_boolean): {
                             var combined = a_boolean.value || b_boolean.value;
                             if op_text == "&&" {
@@ -1399,7 +1401,7 @@ func b_expression_binary(state inout Checker, r model.NodeRef,
             option.Option[usize].Some(a.value.type_id));
     }
     let kind = lookup_type(inout state, a.value.type_id).kind;
-    if b_type_kind_is(kind, model.TypeKind.String) {
+    if effects.b_type_kind_is(kind, model.TypeKind.String) {
         if b_binary_id(op) != BINARY_ADD && !comparison {
             throw reject(inout state, r,
                 "string operators support concatenation and comparisons",
@@ -1420,8 +1422,8 @@ func b_expression_binary(state inout Checker, r model.NodeRef,
             "E_TYPE_MISMATCH");
     }
     if !integer(inout state, a.value.type_id) &&
-       !b_type_kind_is(kind, model.TypeKind.Float) &&
-       !(b_type_kind_is(kind, model.TypeKind.Bool) &&
+       !effects.b_type_kind_is(kind, model.TypeKind.Float) &&
+       !(effects.b_type_kind_is(kind, model.TypeKind.Bool) &&
          (b_binary_id(op) == BINARY_EQUAL || b_binary_id(op) == BINARY_NOT_EQUAL)) {
         throw reject(inout state, r,
             "invalid scalar operator operands", "E_TYPE_MISMATCH");
@@ -1429,10 +1431,10 @@ func b_expression_binary(state inout Checker, r model.NodeRef,
     var value = b_empty_value(b_boolean);
     if integer(inout state, a.value.type_id) {
         value = fold(inout state, op, a.value, b.value);
-    } else if b_type_kind_is(kind, model.TypeKind.Float) {
+    } else if effects.b_type_kind_is(kind, model.TypeKind.Float) {
         value = float_fold(inout state, op, a.value, b.value);
     }
-    if b_type_kind_is(kind, model.TypeKind.Bool) {
+    if effects.b_type_kind_is(kind, model.TypeKind.Bool) {
         switch a.value.boolean {
             case option.Option.Some(a_bool):
                 switch b.value.boolean {
@@ -1463,7 +1465,7 @@ func b_expression_list(state inout Checker, r model.NodeRef, n model.AstNode,
     switch expected {
         case option.Option.Some(type_id): {
             let value = lookup_type(inout state, type_id);
-            if !b_type_kind_is(value.kind, model.TypeKind.Vec) {
+            if !effects.b_type_kind_is(value.kind, model.TypeKind.Vec) {
                 throw reject(inout state, r,
                     "list requires Vec context", "E_TYPE_MISMATCH");
             }
@@ -1568,7 +1570,7 @@ func b_expression_slice(state inout Checker, r model.NodeRef,
         throw reject(inout state, r, "invalid slice delimiter", "E_TYPE_MISMATCH");
     }
     let base_type = lookup_type(inout state, base.value.type_id);
-    if b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+    if effects.b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
         let slice_id = foreign_slice(inout state, base.value.type_id);
         var binding usize = 0;
         switch slice_id {
@@ -1613,9 +1615,9 @@ func b_expression_slice(state inout Checker, r model.NodeRef,
                        hir.NodeData.ForeignRead(value: access), values),
             value: b_empty_value(record.type_id));
     }
-    if !b_type_kind_is(base_type.kind, model.TypeKind.Vec) &&
-       !b_type_kind_is(base_type.kind, model.TypeKind.Slice) &&
-       !b_type_kind_is(base_type.kind, model.TypeKind.String) {
+    if !effects.b_type_kind_is(base_type.kind, model.TypeKind.Vec) &&
+       !effects.b_type_kind_is(base_type.kind, model.TypeKind.Slice) &&
+       !effects.b_type_kind_is(base_type.kind, model.TypeKind.String) {
         throw reject(inout state, r,
             "slice receiver must be Vec, Slice or string", "E_TYPE_MISMATCH");
     }
@@ -1682,7 +1684,7 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
             if !candidate_resolved {
                 switch type_expression(inout state, b_child_m(b_module, candidate, 0)) {
                     case option.Option.Some(type_id): {
-                        if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                        if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                                           model.TypeKind.NominalEnum) {
                             let name = b_last_token_m(b_module, candidate);
                             let declaration = nominal(inout state, type_id);
@@ -1706,7 +1708,7 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
         }
         let value = expression(inout state, base, option.Option[usize].None);
         let receiver = lookup_type(inout state, value.value.type_id);
-        if b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
+        if effects.b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
             if vec.len(n.children) != 2 {
                 throw reject(inout state, r,
                     "external indexing requires exactly one index",
@@ -1740,8 +1742,8 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
                            [value.id, index.id]),
                 value: b_empty_value(record.type_id));
         }
-        if b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
-           b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
+        if effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
+           effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
             if state.unsafe_depth == 0 {
                 throw reject(inout state, r,
                     "C pointer/buffer indexing requires unsafe",
@@ -1761,7 +1763,7 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
                 throw internal_error("C pointer has no pointee");
             }
             let type_id = receiver.type_args[0];
-            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+            if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                               model.TypeKind.Unit) {
                 throw reject(inout state, r,
                     "void pointer cannot be indexed", "E_TYPE_MISMATCH");
@@ -1771,9 +1773,9 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
                            [value.id, index.id]),
                 value: b_empty_value(type_id));
         }
-        if !b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
-           !b_type_kind_is(receiver.kind, model.TypeKind.Slice) &&
-           !b_type_kind_is(receiver.kind, model.TypeKind.String) {
+        if !effects.b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
+           !effects.b_type_kind_is(receiver.kind, model.TypeKind.Slice) &&
+           !effects.b_type_kind_is(receiver.kind, model.TypeKind.String) {
             throw reject(inout state, r,
                 "index receiver must be Vec, Slice or string", "E_TYPE_MISMATCH");
         }
@@ -1787,7 +1789,7 @@ func b_expression_neutral(state inout Checker, r model.NodeRef,
             throw reject(inout state, r, "index must be integer", "E_TYPE_MISMATCH");
         }
         var type_id = b_i64_type;
-        if b_type_kind_is(receiver.kind, model.TypeKind.String) {
+        if effects.b_type_kind_is(receiver.kind, model.TypeKind.String) {
             type_id = scalar(inout state, model.TypeKind.UnsignedInt, 32);
         } else {
             if vec.len(receiver.type_args) == 0 {

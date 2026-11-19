@@ -17,6 +17,7 @@ pub struct Options {
     pub project string;
     pub output string;
     pub opt string;
+    pub debug_info bool;
     pub target string;
     pub std_binding string;
     pub backend string;
@@ -29,7 +30,7 @@ pub func arguments(args Vec[string]) Options {
         error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, lsp or capabilities",
         command: "", syntax: false, package_objects: false, source_make: false,
         make_state: "", make_package: "", cache_directory: "", json: false,
-        path: "", project: "", output: "", opt: "", target: "", std_binding: "", backend: "");
+        path: "", project: "", output: "", opt: "", debug_info: false, target: "", std_binding: "", backend: "");
     if vec.len(args) < 2 { return options; }
     options.command = args[1];
     if options.command == "--help" || options.command == "--version" {
@@ -77,6 +78,7 @@ pub func arguments(args Vec[string]) Options {
         else if argument == "--std-binding" && options.std_binding == "" && not_flag(next) { options.std_binding = next; index += 1; }
         else if argument == "--backend" && options.backend == "" && (next == "native" || next == "python") { options.backend = next; index += 1; }
         else if argument == "--opt" && options.command == "build" && options.opt == "" && (next == "0" || next == "2") { options.opt = next; index += 1; }
+        else if argument == "-g" && options.command == "build" && !options.debug_info { options.debug_info = true; }
         else if argument == "--target" && options.command == "build" && options.target == "" && not_flag(next) { options.target = next; index += 1; }
         else if not_flag(argument) && options.path == "" { options.path = argument; }
         else { return options; }
@@ -94,5 +96,6 @@ pub func arguments(args Vec[string]) Options {
     if options.package_objects && options.source_make { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make cannot be combined with --package-objects"; }
     if options.source_make && options.command != "build" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make requires build"; }
     if options.source_make && options.backend == "python" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make requires the native backend"; }
+    if options.debug_info && options.backend == "python" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: -g requires native build"; }
     return options;
 }

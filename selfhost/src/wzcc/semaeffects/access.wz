@@ -1,0 +1,211 @@
+package semaeffects;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+import "app/wzcc/types" as types;
+
+pub enum Error {
+    Rejected(node model.NodeRef, message string, code string);
+    Support(problem model.SupportError);
+}
+
+func internal_error(message string) Error {
+    return Error.Support(model.SupportError.Invalid(message));
+}
+
+func reject(node model.NodeRef, message string, code string) Error {
+    return Error.Rejected(node: node, message: message, code: code);
+}
+
+func lookup_type(module hir.HirModule, id usize) model.Type throws Error {
+    switch types.find(module.types, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw internal_error("invalid sema type reference");
+    }
+}
+
+pub func b_foreign_binding(module hir.HirModule, binding usize) hir.ForeignBinding throws Error {
+    if binding >= vec.len(module.foreign_bindings) {
+        throw internal_error("invalid foreign binding index");
+    }
+    return module.foreign_bindings[binding];
+}
+
+pub func b_patterns_overlap(module hir.HirModule, left usize, right usize) bool throws Error {
+    try { return types.patterns_overlap(left, right, module.types); }
+    catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message): throw Error.Support(model.SupportError.Invalid(message));
+        }
+    }
+}
+
+pub func b_type_kind_is(actual model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(actual) == model.type_kind_id(expected);
+}
+
+pub func b_node_kind_is(actual hir.NodeKind, expected hir.NodeKind) bool {
+    return hir.node_kind_id(actual) == hir.node_kind_id(expected);
+}
+
+func b_option_is_some(value option.Option[usize]) bool {
+    switch value { case option.Option.Some(id): return true; case option.Option.None: return false; }
+}
+
+func b_option_equal(left option.Option[usize], right option.Option[usize]) bool {
+    switch left {
+        case option.Option.Some(a):
+            switch right {
+                case option.Option.Some(b): return a == b;
+                case option.Option.None: return false;
+            }
+        case option.Option.None:
+            switch right {
+                case option.Option.Some(b): return false;
+                case option.Option.None: return true;
+            }
+    }
+}
+
+func b_vec_contains_unsorted(values Vec[usize], value usize) bool {
+    for item in values { if item == value { return true; } }
+    return false;
+}
+
+func b_vec_lower_bound(values Vec[usize], value usize) usize {
+    var low usize = 0;
+    var high = vec.len(values);
+    for low < high {
+        let mid = low + (high - low) / 2;
+        if values[mid] < value {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
+pub func b_vec_contains(values Vec[usize], value usize) bool {
+    let position = b_vec_lower_bound(values, value);
+    return position < vec.len(values) && values[position] == value;
+}
+
+// Sorted, unique set insertion. Flow errors/breaks/continues are std::set in
+// C++, so their published order must not depend on traversal order.
+pub func b_insert_sorted(values Vec[usize], value usize) {
+    let position = b_vec_lower_bound(values, value);
+    let n = vec.len(values);
+    if position < n && values[position] == value { return; }
+    vec.push(values, value);
+    var index = n;
+    for index > position {
+        values[index] = values[index - 1];
+        index -= 1;
+    }
+    values[position] = value;
+}
+
+pub func b_remove_id(values Vec[usize], value usize) {
+    let position = b_vec_lower_bound(values, value);
+    let n = vec.len(values);
+    if position >= n || values[position] != value {
+        return;
+    }
+    var shift = position;
+    for shift + 1 < n {
+        values[shift] = values[shift + 1];
+        shift += 1;
+    }
+    let discarded = vec.pop(values);
+}
+
+pub func b_copy_ids(values Vec[usize]) Vec[usize] {
+    let out = vec.empty[usize]();
+    for value in values { vec.push(out, value); }
+    return out;
+}
+
+pub func b_node_read(node hir.HirNode) option.Option[hir.Read] {
+    switch node.data {
+        case hir.NodeData.Read(value): return option.Option[hir.Read].Some(value);
+        default: return option.Option[hir.Read].None;
+    }
+}
+
+pub func b_node_place(node hir.HirNode) option.Option[hir.Place] {
+    switch node.data {
+        case hir.NodeData.Place(value): return option.Option[hir.Place].Some(value);
+        default: return option.Option[hir.Place].None;
+    }
+}
+
+pub func b_node_move(node hir.HirNode) option.Option[hir.Move] {
+    switch node.data {
+        case hir.NodeData.Move(value): return option.Option[hir.Move].Some(value);
+        default: return option.Option[hir.Move].None;
+    }
+}
+
+pub func b_node_foreign_read(node hir.HirNode) option.Option[hir.ForeignRead] {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value):
+            return option.Option[hir.ForeignRead].Some(value);
+        default: return option.Option[hir.ForeignRead].None;
+    }
+}
+
+func b_node_await(node hir.HirNode) bool {
+    switch node.data { case hir.NodeData.Await(value): return true; default: return false; }
+}
+
+func b_node_call(node hir.HirNode) option.Option[hir.Call] {
+    switch node.data {
+        case hir.NodeData.Call(value): return option.Option[hir.Call].Some(value);
+        default: return option.Option[hir.Call].None;
+    }
+}
+
+func b_node_constraint_call(node hir.HirNode)
+    option.Option[hir.ConstraintCall] {
+    switch node.data {
+        case hir.NodeData.ConstraintCall(value):
+            return option.Option[hir.ConstraintCall].Some(value);
+        default: return option.Option[hir.ConstraintCall].None;
+    }
+}
+
+pub func b_node_bool_literal(node hir.HirNode) option.Option[hir.BoolLiteral] {
+    switch node.data {
+        case hir.NodeData.BoolLiteral(value):
+            return option.Option[hir.BoolLiteral].Some(value);
+        default: return option.Option[hir.BoolLiteral].None;
+    }
+}
+
+func b_node_throw(node hir.HirNode) bool {
+    switch node.data { case hir.NodeData.Throw(value): return true; default: return false; }
+}
+
+func b_node_return(node hir.HirNode) option.Option[hir.Return] {
+    switch node.data {
+        case hir.NodeData.Return(value): return option.Option[hir.Return].Some(value);
+        default: return option.Option[hir.Return].None;
+    }
+}
+
+func b_node_break(node hir.HirNode) option.Option[hir.Break] {
+    switch node.data {
+        case hir.NodeData.Break(value): return option.Option[hir.Break].Some(value);
+        default: return option.Option[hir.Break].None;
+    }
+}
+
+func b_node_continue(node hir.HirNode) option.Option[hir.Continue] {
+    switch node.data {
+        case hir.NodeData.Continue(value): return option.Option[hir.Continue].Some(value);
+        default: return option.Option[hir.Continue].None;
+    }
+}

@@ -1,0 +1,7 @@
+package nativeemit;
+
+// This reduced fixture tests debug-off text emission. The full emitter and
+// its source-language types are exercised by the real compiler's GDB tests.
+func debug_type(type_id usize, state inout Emitter) string throws Error {
+    throw invalid("type descriptions require the full native emitter");
+}

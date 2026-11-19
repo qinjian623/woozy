@@ -1,0 +1,13 @@
+package app;
+import "std/async" as scheduler;
+
+async func delayed(seed i32) i32 {
+    let before = seed + 1;
+    await scheduler.sleep(1);
+    let difference = before - seed;
+    return before + difference; // BREAK_RESUMED
+}
+
+async func main() i32 {
+    return await delayed(40);
+}

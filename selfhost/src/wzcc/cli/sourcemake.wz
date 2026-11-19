@@ -47,6 +47,7 @@ struct MakeState {
     cache_dir string;
     fingerprint string;
     opt string;
+    debug_info bool;
     target string;
     hosted bool;
     packages Vec[MakePackage];
@@ -126,9 +127,10 @@ func fixed_id(value usize) string {
 
 func encode_state(state MakeState) Vec[u8] {
     let out = vec.empty[u8]();
-    put_string(out, "wz-source-make-state/1");
+    put_string(out, "wz-source-make-state/2");
     put_string(out, state.manifest); put_string(out, state.cache_dir);
     put_string(out, state.fingerprint); put_string(out, state.opt);
+    if state.debug_info { put_number(out, 1); } else { put_number(out, 0); }
     put_string(out, state.target);
     if state.hosted { put_number(out, 1); } else { put_number(out, 0); }
     put_number(out, u64(vec.len(state.packages)));
@@ -145,11 +147,12 @@ func encode_state(state MakeState) Vec[u8] {
 
 func decode_state(bytes Vec[u8]) MakeState throws os.Error {
     var cursor usize = 0;
-    if take_string(bytes, inout cursor) != "wz-source-make-state/1" { throw invalid_state(); }
+    if take_string(bytes, inout cursor) != "wz-source-make-state/2" { throw invalid_state(); }
     var state = MakeState(manifest: take_string(bytes, inout cursor),
         cache_dir: take_string(bytes, inout cursor),
         fingerprint: take_string(bytes, inout cursor),
         opt: take_string(bytes, inout cursor),
+        debug_info: take_bool(bytes, inout cursor),
         target: take_string(bytes, inout cursor),
         hosted: take_bool(bytes, inout cursor), packages: [],
         c_libraries: [], c_library_dirs: []);
@@ -373,13 +376,10 @@ func unsupported_ast(project_value model.Project, package_value MakePackage) opt
     return option.Option[string].None;
 }
 
-func check_toolchain(root string, stage_path string, optimization string, log inout string) bool throws os.Error {
-    let tools = vec.empty[string]();
-    for name in ["opt", "llc", "clang", "ld.lld"] { vec.push(tools, root + "/toolchain/" + name); }
-    if optimization == "2" {
-        for tool in resources.source_partition_tools(root) { vec.push(tools, tool); }
-    }
-    for tool in tools {
+func check_toolchain(root string, stage_path string, log inout string) bool throws os.Error {
+    let tools = resources.llvm_bin(root);
+    for name in ["opt", "llc", "clang", "ld.lld"] {
+        let tool = tools + "/" + name;
         let result = run_logged([tool, "--version"], stage_path + "/preflight-capture",
             inout log, false);
         if result.exit_code != 0 || result.signalled { return false; }
@@ -461,11 +461,11 @@ pub func source_make_build(input Options, original model.Project,
     fs.create_dir_all(stage.path + "/" + ".wz-source-make", 0o777);
     var preflight = "source-make preflight\nproject: " + input.project + "\ntarget: " + target + "\nopt: " + optimization + "\n";
     let root = resources.directory();
-    if !check_toolchain(root, stage.path, optimization, inout preflight) {
+    if !check_toolchain(root, stage.path, inout preflight) {
         write_log(stage.path + "/preflight.log", preflight);
         publish_failure_logs(inout stage);
         return fail(input, manager.snapshots, "E_TOOLCHAIN_MISSING", "codegen",
-            "LLVM 22.1.8 tools required for source make", model.FailureKind.Environment);
+            "LLVM 22.1.8 opt/llc/clang/ld.lld required", model.FailureKind.Environment);
     }
     write_log(stage.path + "/preflight.log", preflight);
     var cache_dir = input.cache_directory;
@@ -473,7 +473,7 @@ pub func source_make_build(input Options, original model.Project,
     var manifest = input.project;
     if !path.is_absolute(manifest) { manifest = path.join(os.getcwd(), manifest); }
     let state = MakeState(manifest: manifest, cache_dir: cache_dir,
-        fingerprint: cache.fingerprint, opt: optimization, target: target,
+        fingerprint: cache.fingerprint, opt: optimization, debug_info: input.debug_info, target: target,
         hosted: original.hosted, packages: packages,
         c_libraries: original.c_libraries, c_library_dirs: original.c_library_dirs);
     fs.write_file(stage.path + "/" + MAKE_STATE, encode_state(state), 0o600);
@@ -797,14 +797,12 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                 case option.Option.Some(native_value): {
                     status.lowered_functions = nativeverify.function_count(native_value);
                     var settings = nativeemit.default_options();
+                    settings.debug_info = state.debug_info;
                     if state.opt == "2" { settings.optimization = 2; }
                     settings.triple = state.target;
                     var entry usize = 0;
                     switch main_symbol { case option.Option.Some(value): entry = value; case option.Option.None: {} }
-                    let root = resources.directory();
-                    let partition_tools = source_object_partition_tools(root, state.opt, status.lowered_functions, inout log);
-                    let emitted = nativeemit.emit_package(native_value, entry, settings, package_value.id,
-                        vec.len(partition_tools) != 0);
+                    let emitted = nativeemit.emit_package(native_value, entry, settings, package_value.id);
                     if !render.succeeded(emitted.state, option.is_some(emitted.value), emitted.diagnostics) {
                         write_status(package_value, status);
                         write_log("module-" + package_value.fixed + ".log", log);
@@ -829,17 +827,39 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                             }
                             let object = object_name(package_value);
                             fs.create_dir_all(OBJECT_DIR, 0o777);
-                            let stem = OBJECT_DIR + "/pkg-" + package_value.fixed;
-                            write_sections(stem + ".ll", output.llvm_sections);
-                            let compiled = compile_source_object(root, stem, state.opt,
-                                output.triple, output.has_async, partition_tools, inout log);
-                            status.opt_jobs = compiled.opt_jobs;
-                            status.llc_jobs = compiled.llc_jobs;
-                            if compiled.code != "" {
+                            let llvm = OBJECT_DIR + "/pkg-" + package_value.fixed + ".ll";
+                            let verified_llvm = OBJECT_DIR + "/pkg-" + package_value.fixed + ".verified.ll";
+                            write_sections(llvm, output.llvm_sections);
+                            var passes = "verify";
+                            if state.opt == "2" { passes = "verify,default<O2>,verify"; }
+                            else if output.has_async { passes = "verify,default<O0>,verify"; }
+                            let tools = resources.llvm_bin(resources.directory());
+                            let opt = run_logged([tools + "/opt", "-S",
+                                "-passes=" + passes, "-verify-each", "-mtriple=" + output.triple,
+                                "-mcpu=generic", llvm, "-o", verified_llvm],
+                                OBJECT_DIR + "/pkg-" + package_value.fixed + ".opt-capture",
+                                inout log, true);
+                            status.opt_jobs = 1;
+                            if opt.exit_code != 0 || opt.signalled {
                                 write_status(package_value, status);
                                 write_log("module-" + package_value.fixed + ".log", log);
-                                return fail(options, manager.snapshots, compiled.code, "codegen",
-                                    compiled.message, model.FailureKind.Internal);
+                                return fail(options, manager.snapshots, "E_IR_INVALID", "codegen",
+                                    "LLVM opt failed with status " + strconv.format_i64(i64(opt.exit_code)),
+                                    model.FailureKind.Internal);
+                            }
+                            let llc = run_logged([tools + "/llc", "-filetype=obj",
+                                "-O=" + state.opt, "-mtriple=" + output.triple,
+                                "-mcpu=generic", "-relocation-model=pic",
+                                "-code-model=small", verified_llvm, "-o", object],
+                                OBJECT_DIR + "/pkg-" + package_value.fixed + ".llc-capture",
+                                inout log, true);
+                            status.llc_jobs = 1;
+                            if llc.exit_code != 0 || llc.signalled {
+                                write_status(package_value, status);
+                                write_log("module-" + package_value.fixed + ".log", log);
+                                return fail(options, manager.snapshots, "E_NATIVE_BUILD_FAILED", "codegen",
+                                    "LLVM llc failed with status " + strconv.format_i64(i64(llc.exit_code)),
+                                    model.FailureKind.Internal);
                             }
                             status.checked_bodies = cache.counters[5];
                             status.parse_hits = cache.counters[0]; status.parse_misses = cache.counters[1];

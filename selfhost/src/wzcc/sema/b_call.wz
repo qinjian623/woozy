@@ -1,6 +1,8 @@
 // Function values, calls, constructors and foreign/C call construction.
 package sema;
 
+import "app/wzcc/semaeffects" as effects;
+
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/valueops" as valueops;
@@ -46,8 +48,8 @@ func b_capture_walk(state inout Checker, r model.NodeRef, seen Vec[usize],
                 }
                 switch b_locals_find(inout state, environment) {
                     case option.Option.Some(local): {
-                        if !b_vec_contains(seen, id) {
-                            b_insert_sorted(seen, id);
+                        if !effects.b_vec_contains(seen, id) {
+                            effects.b_insert_sorted(seen, id);
                             vec.push(uses, CaptureUse(origin: id,
                                 environment: environment, type_id: local.type_id,
                                 first_use: r));
@@ -175,7 +177,7 @@ func make_function_value(state inout Checker, source_ref model.NodeRef,
                 hir.NodeData.Read(value: hir.Read(symbol: use.environment)), []));
         }
     }
-    let value = hir.FunctionValue(symbol: lambda, type_args: b_copy_ids(type_args),
+    let value = hir.FunctionValue(symbol: lambda, type_args: effects.b_copy_ids(type_args),
         captures: info.sources, move_capture: is_move,
         bound: option.Option[hir.BoundReceiver].None);
     b_closures_set(inout state, lambda, info);
@@ -224,7 +226,7 @@ func bound_method_value(state inout Checker, member_ref model.NodeRef,
     let signature = intern_type(inout state, trimmed);
     check_function_value_inout(inout state, member_ref, selected.method, signature);
     let data = hir.FunctionValue(symbol: selected.method,
-        type_args: b_copy_ids(type_args), captures: [], move_capture: false,
+        type_args: effects.b_copy_ids(type_args), captures: [], move_capture: false,
         bound: option.Option[hir.BoundReceiver].Some(hir.BoundReceiver(
             type_id: receiver.value.type_id, mode: self_parameter.mode)));
     return Expr(id: node(inout state, member_ref, signature,
@@ -352,7 +354,7 @@ func trait_object_call(state inout Checker, r model.NodeRef,
     let abi_id = intern_type(inout state, abi);
     check_call_borrows(inout state, r, arguments, children, false);
     let data = hir.TraitDispatch(trait_ref: hir.TraitRef(
-        declaration: dynamic.declaration, args: b_copy_ids(dynamic.type_args)),
+        declaration: dynamic.declaration, args: effects.b_copy_ids(dynamic.type_args)),
         method: prototype.symbol, signature: abi_id, index: u32(prototype_index),
         args: arguments);
     return Expr(id: node(inout state, r, full_type.result,
@@ -391,7 +393,7 @@ func find_field(state inout Checker, r model.NodeRef, type_id usize)
     hir.FieldDecl throws Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if !b_type_kind_is(lookup_type(inout state, type_id).kind,
+    if !effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
                        model.TypeKind.NominalStruct) {
         throw reject(inout state, r, "field receiver is not a struct",
             "E_TYPE_MISMATCH");
@@ -428,7 +430,7 @@ func method_value(state inout Checker, r model.NodeRef,
     switch qualifier { case option.Option.Some(value): qualifier_id = value; case option.Option.None: {} }
     let name = b_last_token_m(b_module, member_ref);
     let qualifier_type = lookup_type(inout state, qualifier_id);
-    if b_type_kind_is(qualifier_type.kind, model.TypeKind.TypeParameter) {
+    if effects.b_type_kind_is(qualifier_type.kind, model.TypeKind.TypeParameter) {
         let application = b_bound_value(inout state,
             qualifier_type.declaration);
         var application_value = hir.TraitRef(declaration: 0, args: []);
@@ -760,7 +762,7 @@ func peek_type(state inout Checker, r model.NodeRef)
         var base_id usize = 0;
         switch base_type { case option.Option.Some(value): base_id = value; case option.Option.None: {} }
         let member = b_last_token_m(b_module, r);
-        if b_type_kind_is(lookup_type(inout state, base_id).kind,
+        if effects.b_type_kind_is(lookup_type(inout state, base_id).kind,
                           model.TypeKind.ForeignOpaque) {
             switch foreign_property(inout state, base_id, member) {
                 case option.Option.Some(binding):
@@ -769,7 +771,7 @@ func peek_type(state inout Checker, r model.NodeRef)
                 case option.Option.None: {}
             }
         }
-        if b_type_kind_is(lookup_type(inout state, base_id).kind,
+        if effects.b_type_kind_is(lookup_type(inout state, base_id).kind,
                           model.TypeKind.NominalStruct) {
             let declaration = nominal(inout state, base_id);
             for field in declaration.fields {
@@ -790,7 +792,7 @@ func peek_type(state inout Checker, r model.NodeRef)
         var base_id usize = 0;
         switch base_type { case option.Option.Some(value): base_id = value; case option.Option.None: {} }
         let base_kind = lookup_type(inout state, base_id).kind;
-        if b_type_kind_is(base_kind, model.TypeKind.ForeignOpaque) {
+        if effects.b_type_kind_is(base_kind, model.TypeKind.ForeignOpaque) {
             switch foreign_indexer(inout state, base_id) {
                 case option.Option.Some(binding):
                     return option.Option[usize].Some(
@@ -798,11 +800,11 @@ func peek_type(state inout Checker, r model.NodeRef)
                 case option.Option.None: return option.Option[usize].None;
             }
         }
-        if b_type_kind_is(base_kind, model.TypeKind.Vec) ||
-           b_type_kind_is(base_kind, model.TypeKind.Slice) {
+        if effects.b_type_kind_is(base_kind, model.TypeKind.Vec) ||
+           effects.b_type_kind_is(base_kind, model.TypeKind.Slice) {
             return option.Option[usize].Some(b_type_args0(inout state, base_id));
         }
-        if b_type_kind_is(base_kind, model.TypeKind.String) {
+        if effects.b_type_kind_is(base_kind, model.TypeKind.String) {
             return option.Option[usize].Some(
                 scalar(inout state, model.TypeKind.UnsignedInt, 32));
         }
@@ -817,7 +819,7 @@ func peek_type(state inout Checker, r model.NodeRef)
         var base_id usize = 0;
         switch base_type { case option.Option.Some(value): base_id = value; case option.Option.None: {} }
         let base_kind = lookup_type(inout state, base_id).kind;
-        if b_type_kind_is(base_kind, model.TypeKind.ForeignOpaque) {
+        if effects.b_type_kind_is(base_kind, model.TypeKind.ForeignOpaque) {
             switch foreign_slice(inout state, base_id) {
                 case option.Option.Some(binding):
                     return option.Option[usize].Some(
@@ -825,9 +827,9 @@ func peek_type(state inout Checker, r model.NodeRef)
                 case option.Option.None: return option.Option[usize].None;
             }
         }
-        if b_type_kind_is(base_kind, model.TypeKind.Vec) ||
-           b_type_kind_is(base_kind, model.TypeKind.Slice) ||
-           b_type_kind_is(base_kind, model.TypeKind.String) {
+        if effects.b_type_kind_is(base_kind, model.TypeKind.Vec) ||
+           effects.b_type_kind_is(base_kind, model.TypeKind.Slice) ||
+           effects.b_type_kind_is(base_kind, model.TypeKind.String) {
             return option.Option[usize].Some(base_id);
         }
         return option.Option[usize].None;
@@ -863,7 +865,7 @@ func peek_type(state inout Checker, r model.NodeRef)
             if unresolved {
                 switch peek_type(inout state, b_child_m(b_module, callee, 0)) {
                     case option.Option.Some(base_id):
-                        if b_type_kind_is(lookup_type(inout state, base_id).kind,
+                        if effects.b_type_kind_is(lookup_type(inout state, base_id).kind,
                                           model.TypeKind.ForeignOpaque) {
                             let members_value = foreign_members(inout state, base_id,
                                 b_last_token_m(b_module, callee), "method");
@@ -877,11 +879,11 @@ func peek_type(state inout Checker, r model.NodeRef)
         switch peek_type(inout state, callee) {
             case option.Option.Some(callee_type): {
                 let kind = lookup_type(inout state, callee_type).kind;
-                if b_type_kind_is(kind, model.TypeKind.Function) {
+                if effects.b_type_kind_is(kind, model.TypeKind.Function) {
                     return option.Option[usize].Some(
                         lookup_type(inout state, callee_type).result);
                 }
-                if b_type_kind_is(kind, model.TypeKind.ForeignCallable) {
+                if effects.b_type_kind_is(kind, model.TypeKind.ForeignCallable) {
                     let binding_index = lookup_type(inout state, callee_type).binding;
                     let record = b_foreign_binding(inout state, binding_index);
                     switch record.signature {
@@ -891,7 +893,7 @@ func peek_type(state inout Checker, r model.NodeRef)
                         case option.Option.None: {}
                     }
                 }
-                if b_type_kind_is(kind, model.TypeKind.ForeignOpaque) {
+                if effects.b_type_kind_is(kind, model.TypeKind.ForeignOpaque) {
                     let members_value = foreign_members(inout state, callee_type,
                         "", "callable");
                     return b_foreign_result_type(inout state, members_value);
@@ -933,8 +935,8 @@ func c_assignable(state inout Checker, actual usize, expected usize) bool throws
     if actual == expected { return true; }
     let a = lookup_type(inout state, actual);
     let e = lookup_type(inout state, expected);
-    return (b_type_kind_is(e.kind, model.TypeKind.CForeignPointer) ||
-            b_type_kind_is(e.kind, model.TypeKind.CForeignBuffer)) &&
-        b_type_kind_is(a.kind, e.kind) && e.bits == 0 && a.bits == 1 &&
+    return (effects.b_type_kind_is(e.kind, model.TypeKind.CForeignPointer) ||
+            effects.b_type_kind_is(e.kind, model.TypeKind.CForeignBuffer)) &&
+        effects.b_type_kind_is(a.kind, e.kind) && e.bits == 0 && a.bits == 1 &&
         b_ids_equal(a.type_args, e.type_args);
 }

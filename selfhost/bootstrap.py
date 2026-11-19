@@ -31,7 +31,6 @@ STAGE0_MACROS = (
 )
 RUNTIME_ARCHIVES = ("liblang_native_runtime.a", "liblang_hosted_runtime.a")
 PYTHON_RUNTIME = ("langrt.py", "unicode18.py")
-SOURCE_MAKE_PARTITION_TOOLS = ("llvm-split", "llvm-objcopy")
 STAGE0_FILE_MACROS = (
     "LANG_NATIVE_HELPER",
     "LANG_NATIVE_RUNTIME",
@@ -640,20 +639,17 @@ def run(args):
         tools = resources / "toolchain"
         tools.mkdir()
         allowed_tools = set()
-        uses_source_make = getattr(args, "source_make", False) and args.stages > 1
-        partition_tools = SOURCE_MAKE_PARTITION_TOOLS if uses_source_make and args.opt == "2" else ()
-        for name in (*TOOL_NAMES, *partition_tools):
+        for name in TOOL_NAMES:
             executable = (toolchain / "bin" / name).resolve(strict=True)
             (tools / name).symlink_to(executable)
             allowed_tools.add(str(executable))
         environment = dict(os.environ)
         environment.pop("WOOZY_LLVM_BIN", None)
         source_make_tools = {}
-        if uses_source_make:
+        if getattr(args, "source_make", False) and args.stages > 1:
             source_make_tools = {name: Path(path) for name, path in {
                 "make": "/usr/bin/make", "shell": "/bin/sh",
                 "mkdir": "/usr/bin/mkdir"}.items()}
-            source_make_tools.update({name: tools / name for name in partition_tools})
             for name, path in source_make_tools.items():
                 _required_file(path, f"source-make {name}")
             # Do not inherit outer Make options, jobserver settings, extra

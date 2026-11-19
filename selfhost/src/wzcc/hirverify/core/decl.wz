@@ -1,7 +1,7 @@
 // Rebuild source types/signatures/generics and verify every declaration
 // arena.  This is the Verifier::source_type/source_signature/declarations
 // section of src/hir/hir.cpp without trusting checker caches.
-package hirverify;
+package core;
 
 import "app/wzcc/foreign" as foreign;
 import "app/wzcc/hir" as hir;
@@ -10,7 +10,7 @@ import "app/wzcc/types" as types;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func foreign_export(state Verifier, symbol_id usize)
+pub func foreign_export(state Verifier, symbol_id usize)
     option.Option[model.ForeignExport] throws Invalid {
     let symbol = verifier_symbol(state, symbol_id);
     switch symbol.foreign {
@@ -27,7 +27,7 @@ func foreign_export(state Verifier, symbol_id usize)
     }
 }
 
-func split_signature(file model.ParseResult, id usize) SplitSignature
+pub func split_signature(file model.ParseResult, id usize) SplitSignature
     throws Invalid {
     need(id < vec.len(file.nodes), "signature owner node");
     let owner = file.nodes[id];
@@ -66,7 +66,7 @@ func split_signature(file model.ParseResult, id usize) SplitSignature
     return result;
 }
 
-func source_signature(state inout Verifier, reference model.NodeRef) usize
+pub func source_signature(state inout Verifier, reference model.NodeRef) usize
     throws Invalid {
     let file = verifier_file(state, reference.module, reference.file);
     var signature = model.empty_type(model.TypeKind.Function);
@@ -130,7 +130,7 @@ func source_signature(state inout Verifier, reference model.NodeRef) usize
     return intern_type(inout state, signature);
 }
 
-func source_generics(state Verifier, source hir.HirSource) Vec[usize]
+pub func source_generics(state Verifier, source hir.HirSource) Vec[usize]
     throws Invalid {
     let file = verifier_file(state, source.node.module, source.node.file);
     let entries = vec.empty[GenericOffset]();
@@ -182,7 +182,7 @@ func source_generics(state Verifier, source hir.HirSource) Vec[usize]
     return result;
 }
 
-func source_parameters(state inout Verifier, source hir.HirSource)
+pub func source_parameters(state inout Verifier, source hir.HirSource)
     Vec[hir.GenericParam] throws Invalid {
     let result = vec.empty[hir.GenericParam]();
     let file = verifier_file(state, source.node.module, source.node.file);
@@ -214,7 +214,7 @@ func option_usize_span(value option.Option[model.Span]) model.Span {
     }
 }
 
-func source_type(state inout Verifier, reference model.NodeRef) usize
+pub func source_type(state inout Verifier, reference model.NodeRef) usize
     throws Invalid {
     let file = verifier_file(state, reference.module, reference.file);
     need(reference.node < vec.len(file.nodes), "type source node");
@@ -341,7 +341,7 @@ func source_type(state inout Verifier, reference model.NodeRef) usize
     return intern_type(inout state, value);
 }
 
-func option_foreign_export(value option.Option[model.ForeignExport])
+pub func option_foreign_export(value option.Option[model.ForeignExport])
     model.ForeignExport {
     switch value {
         case option.Option.Some(item): return item;
@@ -363,7 +363,7 @@ func option_c_type_ref(value option.Option[model.CTypeRef]) model.CTypeRef {
     }
 }
 
-func export_kind_is(value model.ForeignExportKind,
+pub func export_kind_is(value model.ForeignExportKind,
                     expected model.ForeignExportKind) bool {
     return foreign_export_kind_id(value) == foreign_export_kind_id(expected);
 }
@@ -531,7 +531,7 @@ func bool_text(value string, prefix string) bool {
     return value[0:1] == prefix;
 }
 
-func source_type_in_function(state inout Verifier, reference model.NodeRef,
+pub func source_type_in_function(state inout Verifier, reference model.NodeRef,
                              owner usize) usize throws Invalid {
     var result = source_type(inout state, reference);
     for instance in state.m.instances {
@@ -553,7 +553,7 @@ func source_type_in_function(state inout Verifier, reference model.NodeRef,
     return result;
 }
 
-func matches(state inout Verifier, pattern_id usize, actual usize,
+pub func matches(state inout Verifier, pattern_id usize, actual usize,
              sub Vec[model.Substitution]) bool throws Invalid {
     let pattern = resolve_substituted_type(state, pattern_id);
     let value = resolve_substituted_type(state, actual);
@@ -652,7 +652,7 @@ func matches_impl(state inout Verifier, pattern_id usize, actual usize,
     return true;
 }
 
-func mode_id_value(mode model.ParamMode) u32 {
+pub func mode_id_value(mode model.ParamMode) u32 {
     switch mode {
         case model.ParamMode.Ordinary: return 0;
         case model.ParamMode.Inout: return 1;
@@ -660,7 +660,7 @@ func mode_id_value(mode model.ParamMode) u32 {
     }
 }
 
-func resolve_substituted_type(state Verifier, id usize) model.Type
+pub func resolve_substituted_type(state Verifier, id usize) model.Type
     throws Invalid {
     switch types.find(state.substituted, id) {
         case option.Option.Some(value): return value;
@@ -668,7 +668,7 @@ func resolve_substituted_type(state Verifier, id usize) model.Type
     }
 }
 
-func satisfies(state inout Verifier, actual usize, trait_ref hir.TraitRef,
+pub func satisfies(state inout Verifier, actual usize, trait_ref hir.TraitRef,
                depth usize) bool throws Invalid {
     let cached = trait_result_find(state, actual, trait_ref.declaration,
         trait_ref.args);
@@ -812,7 +812,7 @@ func params_contain_bound(parameters Vec[hir.GenericParam], symbol usize,
     return false;
 }
 
-func substitution_index(values Vec[model.Substitution], symbol usize) i64 {
+pub func substitution_index(values Vec[model.Substitution], symbol usize) i64 {
     for var index usize = 0; index < vec.len(values); index += 1 {
         if values[index].symbol == symbol {
             return i64(index);
@@ -821,7 +821,7 @@ func substitution_index(values Vec[model.Substitution], symbol usize) i64 {
     return -1;
 }
 
-func constraints(state inout Verifier, parameters Vec[hir.GenericParam],
+pub func constraints(state inout Verifier, parameters Vec[hir.GenericParam],
                  args Vec[usize], outer Vec[model.Substitution])
     throws Invalid {
     need(vec.len(parameters) == vec.len(args),
@@ -864,7 +864,7 @@ func constraints(state inout Verifier, parameters Vec[hir.GenericParam],
     }
 }
 
-func source_declaration_signature(state Verifier, origin usize) usize
+pub func source_declaration_signature(state Verifier, origin usize) usize
     throws Invalid {
     let found = template_index(state, origin);
     if found >= 0 {
@@ -873,7 +873,7 @@ func source_declaration_signature(state Verifier, origin usize) usize
     return verifier_function(state, origin).signature;
 }
 
-func source_declaration(state Verifier, origin usize) hir.HirSource
+pub func source_declaration(state Verifier, origin usize) hir.HirSource
     throws Invalid {
     let found = template_index(state, origin);
     if found >= 0 {
@@ -882,7 +882,7 @@ func source_declaration(state Verifier, origin usize) hir.HirSource
     return verifier_function(state, origin).source;
 }
 
-func declaration(state inout Verifier, id usize, source hir.HirSource,
+pub func declaration(state inout Verifier, id usize, source hir.HirSource,
                  kind model.SymbolKind, ast_kind model.AstKind)
     throws Invalid {
     let symbol = verifier_symbol(state, id);
@@ -959,7 +959,7 @@ func source_entries_params(state Verifier, owner hir.HirSource,
     }
 }
 
-func parameter_set(state inout Verifier, parameters Vec[hir.GenericParam],
+pub func parameter_set(state inout Verifier, parameters Vec[hir.GenericParam],
                    outer_allowed Vec[usize]) Vec[usize] throws Invalid {
     let result = vec.empty[usize]();
     for parameter in parameters {
@@ -1066,7 +1066,7 @@ func impl_patterns_overlap(state inout Verifier, left hir.ImplDecl,
     }
 }
 
-func type_patterns_overlap_state(state inout Verifier, left usize,
+pub func type_patterns_overlap_state(state inout Verifier, left usize,
                                  right usize) bool throws Invalid {
     try {
         return types.patterns_overlap(left, right, state.substituted);
@@ -1076,7 +1076,7 @@ func type_patterns_overlap_state(state inout Verifier, left usize,
     }
 }
 
-func declarations(state inout Verifier) throws Invalid {
+pub func declarations(state inout Verifier) throws Invalid {
     for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
         let nominal = state.m.nominals[index];
         need(nominal_index(state, nominal.symbol) < 0,

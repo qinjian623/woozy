@@ -112,6 +112,7 @@ func build_native(options Options, original model.Project, resolved model.Resolv
                         return finish(options, sources, lowered.state, lowered.failure, false, lowered.diagnostics);
                     case option.Option.Some(native): {
                         var settings = nativeemit.default_options();
+                        settings.debug_info = options.debug_info;
                         if options.opt == "2" { settings.optimization = 2; }
                         if options.target != "" { settings.triple = options.target; }
                         if options.package_objects {
@@ -199,11 +200,18 @@ func project_command(input Options, manager inout source.Manager) i32 throws os.
         var original = loaded.value;
         if options.backend != "" { original.backend = options.backend; }
         options.backend = original.backend;
+        if options.debug_info && options.backend != "native" {
+            return fail(options, manager.snapshots, "E_DRIVER_ARGUMENT", "toolchain",
+                "-g requires native build", model.FailureKind.Environment);
+        }
         if options.command == "build" && options.backend == "python" && (options.opt != "" || options.target != "" || options.package_objects || options.source_make) {
             return fail(options, manager.snapshots, "E_DRIVER_ARGUMENT", "toolchain",
                 "--opt, --target, --package-objects and --source-make require native build", model.FailureKind.Environment);
         }
         if options.command == "build" && options.source_make {
+            if options.debug_info && frontcache.active(cache) {
+                cache.fingerprint = frontcache.debug_source_fingerprint(cache, original);
+            }
             return source_make_build(options, original, inout manager, cache);
         }
         let resolved = resolve.resolve_project(original);
