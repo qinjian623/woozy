@@ -1,4 +1,5 @@
 #include "lang/support/source.hpp"
+#include <algorithm>
 namespace lang {
 namespace {
 uint32_t decode(std::string_view s, size_t i, size_t &n) {
@@ -51,7 +52,7 @@ SourceSnapshot::SourceSnapshot(FileId f, RevisionId r, SourceSnapshotId s,
     size_t i = original.starts_with("\xef\xbb\xbf") ? 3 : 0;
     Position pos{0, 0};
     offsets_.push_back(i);
-    positions_[i] = pos;
+    positions_.push_back({i, pos});
     while (i < original.size()) {
       check_cancelled(token);
       size_t n;
@@ -76,7 +77,7 @@ SourceSnapshot::SourceSnapshot(FileId f, RevisionId r, SourceSnapshotId s,
         pos.character = 0;
       } else
         pos.character += cp > 65535 ? 2 : 1;
-      positions_[i] = pos;
+      positions_.push_back({i, pos});
     }
     check_cancelled(token);
   } catch (const SourceError &e) {
@@ -90,6 +91,12 @@ void SourceSnapshot::require_valid() const {
   if (error_)
     throw *error_;
 }
+const SourceSnapshot::Boundary *SourceSnapshot::find_boundary(uint64_t byte) const {
+  auto found = std::ranges::lower_bound(positions_, byte, {}, &Boundary::byte);
+  if (found != positions_.end() && found->byte == byte)
+    return &*found;
+  return nullptr;
+}
 const std::string &SourceSnapshot::normalized() const {
   require_valid();
   return text_;
@@ -101,20 +108,23 @@ SourceSpan SourceSnapshot::raw_span(uint64_t b, uint64_t e) const {
 }
 SourceSpan SourceSnapshot::span(uint64_t b, uint64_t e) const {
   require_valid();
-  if (b > e || e >= offsets_.size() || !positions_.contains(offsets_[b]) ||
-      !positions_.contains(offsets_[e]))
+  if (b > e || e >= offsets_.size() || !find_boundary(offsets_[b]) ||
+      !find_boundary(offsets_[e]))
     throw std::out_of_range("invalid span");
   return {id, offsets_[b], offsets_[e]};
 }
 Position SourceSnapshot::position(uint64_t b) const {
   require_valid();
-  return positions_.at(b);
+  if (auto found = find_boundary(b))
+    return found->position;
+  throw std::out_of_range("invalid original byte position");
 }
 uint64_t SourceSnapshot::byte(Position p) const {
   require_valid();
-  for (auto [b, v] : positions_)
-    if (v == p)
-      return b;
+  // Normalization emits a boundary only after consuming a scalar or newline.
+  auto found = std::ranges::lower_bound(positions_, p, {}, &Boundary::position);
+  if (found != positions_.end() && found->position == p)
+    return found->byte;
   throw std::out_of_range("invalid UTF-16 position");
 }
 FileId SourceManager::add_file(std::string p) {

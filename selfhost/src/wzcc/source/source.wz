@@ -216,7 +216,20 @@ pub func byte_at(source model.Source, where model.Position) u64 {
         let ignored = internal_error();
         return 0;
     }
-    for boundary in source.boundaries {
+    var low usize = 0;
+    var high = vec.len(source.boundaries);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        let position = source.boundaries[middle].position;
+        if position.line < where.line ||
+           (position.line == where.line && position.character < where.character) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if low < vec.len(source.boundaries) {
+        let boundary = source.boundaries[low];
         if boundary.position.line == where.line &&
            boundary.position.character == where.character {
             return boundary.byte;
