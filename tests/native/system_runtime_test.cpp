@@ -220,39 +220,39 @@ void check_two_path_errors(const char *label, Call call) {
 }
 
 void test_linux_substrate() {
-  namespace linux = lang::native::linux_x86_64;
+  namespace linux_abi = lang::native::linux_x86_64;
 
-  char destination[linux::kPathMax];
+  char destination[linux_abi::kPathMax];
   const char source[] = "substrate/path";
   const uint64_t source_length = sizeof source - 1;
-  CHECK_RESULT(linux::copy_path(source, source_length, destination), 0);
+  CHECK_RESULT(linux_abi::copy_path(source, source_length, destination), 0);
   CHECK_TRUE(std::memcmp(destination, source,
                          static_cast<size_t>(source_length)) == 0);
   CHECK_RESULT(destination[source_length], '\0');
 
   const char embedded_nul[] = {'a', 'b', '\0', 'c'};
-  CHECK_RESULT(linux::copy_path(embedded_nul, sizeof embedded_nul,
+  CHECK_RESULT(linux_abi::copy_path(embedded_nul, sizeof embedded_nul,
                                 destination),
                -EINVAL);
 
-  char oversized[linux::kPathMax];
+  char oversized[linux_abi::kPathMax];
   std::memset(oversized, 'x', sizeof oversized);
-  CHECK_RESULT(linux::copy_path(oversized, sizeof oversized, destination),
+  CHECK_RESULT(linux_abi::copy_path(oversized, sizeof oversized, destination),
                -ENAMETOOLONG);
-  CHECK_RESULT(linux::copy_path(nullptr, 4, destination), -EFAULT);
-  CHECK_RESULT(linux::copy_path(nullptr, 0, destination), 0);
+  CHECK_RESULT(linux_abi::copy_path(nullptr, 4, destination), -EFAULT);
+  CHECK_RESULT(linux_abi::copy_path(nullptr, 0, destination), 0);
   CHECK_RESULT(destination[0], '\0');
 
   // mmap takes six arguments, so this exercises the r10, r8, and r9 register
   // paths in syscall6, not just the first three arguments.
-  const int64_t mapped = linux::syscall6(9, 0, 4096, 3, 0x22, -1, 0);
+  const int64_t mapped = linux_abi::syscall6(9, 0, 4096, 3, 0x22, -1, 0);
   CHECK_TRUE(mapped > 0);
   if (mapped > 0)
-    CHECK_RESULT(linux::syscall6(11, mapped, 4096, 0, 0, 0, 0), 0);
+    CHECK_RESULT(linux_abi::syscall6(11, mapped, 4096, 0, 0, 0, 0), 0);
 
-  CHECK_RESULT(linux::syscall6(39, 0, 0, 0, 0, 0, 0),
+  CHECK_RESULT(linux_abi::syscall6(39, 0, 0, 0, 0, 0, 0),
                static_cast<int64_t>(getpid()));
-  CHECK_RESULT(linux::syscall6(3, -1, 0, 0, 0, 0, 0), -EBADF);
+  CHECK_RESULT(linux_abi::syscall6(3, -1, 0, 0, 0, 0, 0), -EBADF);
 }
 
 void test_stat(const char *directory) {

@@ -19,7 +19,7 @@
 
 namespace {
 
-namespace linux = lang::native::linux_x86_64;
+namespace linux_abi = lang::native::linux_x86_64;
 
 // Linux x86_64 syscall numbers used by this translation unit. They are kept
 // local so the runtime does not include kernel or libc headers.
@@ -143,24 +143,24 @@ inline long to_long(const void *pointer) noexcept {
 }
 
 inline int64_t sys0(long number) noexcept {
-  return linux::syscall6(number, 0, 0, 0, 0, 0, 0);
+  return linux_abi::syscall6(number, 0, 0, 0, 0, 0, 0);
 }
 
 inline int64_t sys1(long number, long arg1) noexcept {
-  return linux::syscall6(number, arg1, 0, 0, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, 0, 0, 0, 0, 0);
 }
 
 inline int64_t sys2(long number, long arg1, long arg2) noexcept {
-  return linux::syscall6(number, arg1, arg2, 0, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, 0, 0, 0, 0);
 }
 
 inline int64_t sys3(long number, long arg1, long arg2, long arg3) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, 0, 0, 0);
 }
 
 inline int64_t sys4(long number, long arg1, long arg2, long arg3,
                     long arg4) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, arg4, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, arg4, 0, 0);
 }
 
 // Converts a successfully filled kernel stat into the stable public layout.
@@ -188,10 +188,10 @@ inline void fill_file_stat(LangFileStat *out, const KernelStat &value) noexcept 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t stat_common(long number, const char *path, uint64_t length,
                     LangFileStat *out) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
-  if (out == nullptr) return linux::kErrorFault;
+  if (out == nullptr) return linux_abi::kErrorFault;
 
   KernelStat kernel;
   const int64_t result = sys2(number, to_long(prepared), to_long(&kernel));
@@ -219,7 +219,7 @@ int64_t lang_sys_lstat_v1(const char *path, uint64_t length,
 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_fstat_v1(int32_t fd, LangFileStat *out) noexcept {
-  if (out == nullptr) return linux::kErrorFault;
+  if (out == nullptr) return linux_abi::kErrorFault;
 
   KernelStat kernel;
   const int64_t result = sys2(kSysFstat, static_cast<long>(fd),
@@ -234,12 +234,12 @@ LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_rename_v1(const char *old_path, uint64_t old_length,
                            const char *new_path,
                            uint64_t new_length) noexcept {
-  char old_prepared[linux::kPathMax];
-  char new_prepared[linux::kPathMax];
+  char old_prepared[linux_abi::kPathMax];
+  char new_prepared[linux_abi::kPathMax];
 
-  int64_t prepared = linux::copy_path(old_path, old_length, old_prepared);
+  int64_t prepared = linux_abi::copy_path(old_path, old_length, old_prepared);
   if (prepared < 0) return prepared;
-  prepared = linux::copy_path(new_path, new_length, new_prepared);
+  prepared = linux_abi::copy_path(new_path, new_length, new_prepared);
   if (prepared < 0) return prepared;
 
   return sys2(kSysRename, to_long(old_prepared), to_long(new_prepared));
@@ -248,8 +248,8 @@ int64_t lang_sys_rename_v1(const char *old_path, uint64_t old_length,
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_chmod_v1(const char *path, uint64_t length,
                           uint32_t mode) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   return sys2(kSysChmod, to_long(prepared), static_cast<long>(mode));
@@ -262,8 +262,8 @@ int64_t lang_sys_fchmod_v1(int32_t fd, uint32_t mode) noexcept {
 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_chdir_v1(const char *path, uint64_t length) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   return sys1(kSysChdir, to_long(prepared));
@@ -274,9 +274,9 @@ int64_t lang_sys_getcwd_v1(char *buffer, uint64_t capacity) noexcept {
   // The kernel cannot produce a path into zero capacity. Check this before the
   // null-pointer rule so a zero-capacity call is deterministic and never
   // touches the buffer.
-  if (capacity == 0) return linux::kErrorInval;
-  if (capacity > kMaxSignedCount) return linux::kErrorInval;
-  if (buffer == nullptr) return linux::kErrorFault;
+  if (capacity == 0) return linux_abi::kErrorInval;
+  if (capacity > kMaxSignedCount) return linux_abi::kErrorInval;
+  if (buffer == nullptr) return linux_abi::kErrorFault;
 
   const int64_t result =
       sys2(kSysGetcwd, to_long(buffer), static_cast<long>(capacity));
@@ -292,8 +292,8 @@ int64_t lang_sys_getdents_v1(int32_t fd, void *buffer,
                              uint64_t capacity) noexcept {
   // A zero count is a successful no-op and must not touch the buffer.
   if (capacity == 0) return 0;
-  if (capacity > kMaxSignedCount) return linux::kErrorInval;
-  if (buffer == nullptr) return linux::kErrorFault;
+  if (capacity > kMaxSignedCount) return linux_abi::kErrorInval;
+  if (buffer == nullptr) return linux_abi::kErrorFault;
 
   return sys3(kSysGetdents64, static_cast<long>(fd), to_long(buffer),
               static_cast<long>(capacity));
@@ -302,15 +302,15 @@ int64_t lang_sys_getdents_v1(int32_t fd, void *buffer,
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_readlink_v1(const char *path, uint64_t length, void *buffer,
                              uint64_t capacity) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   // A zero count is a successful no-op and must not touch the buffer, even
   // when the pointer is null.
   if (capacity == 0) return 0;
-  if (capacity > kMaxSignedCount) return linux::kErrorInval;
-  if (buffer == nullptr) return linux::kErrorFault;
+  if (capacity > kMaxSignedCount) return linux_abi::kErrorInval;
+  if (buffer == nullptr) return linux_abi::kErrorFault;
 
   return sys3(kSysReadlink, to_long(prepared), to_long(buffer),
               static_cast<long>(capacity));
@@ -320,13 +320,13 @@ LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
                             const char *link_path,
                             uint64_t link_length) noexcept {
-  char target_prepared[linux::kPathMax];
-  char link_prepared[linux::kPathMax];
+  char target_prepared[linux_abi::kPathMax];
+  char link_prepared[linux_abi::kPathMax];
 
   int64_t prepared =
-      linux::copy_path(target, target_length, target_prepared);
+      linux_abi::copy_path(target, target_length, target_prepared);
   if (prepared < 0) return prepared;
-  prepared = linux::copy_path(link_path, link_length, link_prepared);
+  prepared = linux_abi::copy_path(link_path, link_length, link_prepared);
   if (prepared < 0) return prepared;
 
   return sys2(kSysSymlink, to_long(target_prepared), to_long(link_prepared));
@@ -336,12 +336,12 @@ LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_link_v1(const char *old_path, uint64_t old_length,
                          const char *new_path,
                          uint64_t new_length) noexcept {
-  char old_prepared[linux::kPathMax];
-  char new_prepared[linux::kPathMax];
+  char old_prepared[linux_abi::kPathMax];
+  char new_prepared[linux_abi::kPathMax];
 
-  int64_t prepared = linux::copy_path(old_path, old_length, old_prepared);
+  int64_t prepared = linux_abi::copy_path(old_path, old_length, old_prepared);
   if (prepared < 0) return prepared;
-  prepared = linux::copy_path(new_path, new_length, new_prepared);
+  prepared = linux_abi::copy_path(new_path, new_length, new_prepared);
   if (prepared < 0) return prepared;
 
   return sys2(kSysLink, to_long(old_prepared), to_long(new_prepared));
@@ -350,8 +350,8 @@ int64_t lang_sys_link_v1(const char *old_path, uint64_t old_length,
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_truncate_v1(const char *path, uint64_t length,
                              int64_t size) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   return sys2(kSysTruncate, to_long(prepared), static_cast<long>(size));
@@ -391,7 +391,7 @@ int64_t lang_sys_dup2_v1(int32_t fd, int32_t new_fd) noexcept {
 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_pipe_v1(int32_t descriptors[2], uint32_t flags) noexcept {
-  if (descriptors == nullptr) return linux::kErrorFault;
+  if (descriptors == nullptr) return linux_abi::kErrorFault;
 
   // pipe2 can fail after allocating a descriptor; keep the caller's array
   // untouched until both descriptors are known to be valid.
@@ -408,8 +408,8 @@ int64_t lang_sys_pipe_v1(int32_t descriptors[2], uint32_t flags) noexcept {
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_mkfifo_v1(const char *path, uint64_t length,
                            uint32_t mode) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   const uint32_t fifo_mode =
@@ -421,8 +421,8 @@ int64_t lang_sys_mkfifo_v1(const char *path, uint64_t length,
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_access_v1(const char *path, uint64_t length,
                            int32_t mode) noexcept {
-  char prepared[linux::kPathMax];
-  const int64_t prepared_result = linux::copy_path(path, length, prepared);
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result = linux_abi::copy_path(path, length, prepared);
   if (prepared_result < 0) return prepared_result;
 
   return sys2(kSysAccess, to_long(prepared), static_cast<long>(mode));
@@ -469,7 +469,7 @@ int64_t lang_sys_kill_v1(int32_t pid, int32_t signal) noexcept {
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_clock_gettime_v1(int32_t clock_id,
                                   LangTimespec *out) noexcept {
-  if (out == nullptr) return linux::kErrorFault;
+  if (out == nullptr) return linux_abi::kErrorFault;
 
   KernelTimespec kernel_result;
   const int64_t result =
@@ -485,7 +485,7 @@ int64_t lang_sys_clock_gettime_v1(int32_t clock_id,
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_nanosleep_v1(const LangTimespec *request,
                               LangTimespec *remaining) noexcept {
-  if (request == nullptr) return linux::kErrorFault;
+  if (request == nullptr) return linux_abi::kErrorFault;
 
   KernelTimespec kernel_request;
   kernel_request.seconds = request->seconds;
@@ -503,7 +503,7 @@ int64_t lang_sys_nanosleep_v1(const LangTimespec *request,
 
   // The kernel reports the leftover interval only for an interrupted sleep.
   // There is deliberately no retry loop here.
-  if (result == linux::kErrorInterrupted && remaining != nullptr) {
+  if (result == linux_abi::kErrorInterrupted && remaining != nullptr) {
     remaining->seconds = kernel_remaining.seconds;
     remaining->nanoseconds = kernel_remaining.nanoseconds;
   }
@@ -516,8 +516,8 @@ int64_t lang_sys_getrandom_v1(void *buffer, uint64_t count,
   // A zero count is a successful no-op and must not touch the buffer, even
   // when the pointer is null.
   if (count == 0) return 0;
-  if (count > kMaxSignedCount) return linux::kErrorInval;
-  if (buffer == nullptr) return linux::kErrorFault;
+  if (count > kMaxSignedCount) return linux_abi::kErrorInval;
+  if (buffer == nullptr) return linux_abi::kErrorFault;
 
   return sys3(kSysGetrandom, to_long(buffer), static_cast<long>(count),
               static_cast<long>(flags));

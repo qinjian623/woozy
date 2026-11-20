@@ -5,9 +5,9 @@
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t, uint64_t) noexcept;
 namespace {
-namespace linux = lang::native::linux_x86_64;
+namespace linux_abi = lang::native::linux_x86_64;
 int64_t sys(long n, long a=0, long b=0, long c=0, long d=0, long e=0, long f=0) noexcept {
-  return linux::syscall6(n,a,b,c,d,e,f);
+  return linux_abi::syscall6(n,a,b,c,d,e,f);
 }
 long address(const void *p) noexcept { return reinterpret_cast<long>(p); }
 struct Mapping { LangHandle handle; uint8_t *data; uint64_t length; int32_t protection; };

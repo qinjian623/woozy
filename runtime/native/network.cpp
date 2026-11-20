@@ -18,7 +18,7 @@
 
 namespace {
 
-namespace linux = lang::native::linux_x86_64;
+namespace linux_abi = lang::native::linux_x86_64;
 
 // Linux x86_64 syscall numbers used by this translation unit.
 constexpr long kSysPoll = 7;
@@ -74,30 +74,30 @@ inline long to_long(const void *pointer) noexcept {
 }
 
 inline int64_t sys1(long number, long arg1) noexcept {
-  return linux::syscall6(number, arg1, 0, 0, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, 0, 0, 0, 0, 0);
 }
 
 inline int64_t sys2(long number, long arg1, long arg2) noexcept {
-  return linux::syscall6(number, arg1, arg2, 0, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, 0, 0, 0, 0);
 }
 
 inline int64_t sys3(long number, long arg1, long arg2, long arg3) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, 0, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, 0, 0, 0);
 }
 
 inline int64_t sys4(long number, long arg1, long arg2, long arg3,
                     long arg4) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, arg4, 0, 0);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, arg4, 0, 0);
 }
 
 inline int64_t sys5(long number, long arg1, long arg2, long arg3, long arg4,
                     long arg5) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, arg4, arg5, 0);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, arg4, arg5, 0);
 }
 
 inline int64_t sys6(long number, long arg1, long arg2, long arg3, long arg4,
                     long arg5, long arg6) noexcept {
-  return linux::syscall6(number, arg1, arg2, arg3, arg4, arg5, arg6);
+  return linux_abi::syscall6(number, arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 inline void copy_bytes(uint8_t *destination, const uint8_t *source,
