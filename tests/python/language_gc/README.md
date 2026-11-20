@@ -30,6 +30,11 @@ The same `--out` may be reused.  Every invocation writes a new
 `out/runs/<timestamp>-<pid>/` directory, so previous helper/observer records
 and logs are kept instead of overwritten.
 
+Both modes check the original source and observer hashes before running.
+Legacy mode checks the original CMake registration for this test and records
+the current CMake file hash. Paired mode requires the complete historical
+CMake file to match its frozen hash.
+
 ## Paired public-API mode
 
 ```sh
