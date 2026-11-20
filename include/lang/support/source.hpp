@@ -84,11 +84,16 @@ public:
   uint64_t byte(Position) const;
 
 private:
+  struct Boundary {
+    uint64_t byte;
+    Position position;
+  };
   std::optional<SourceError> error_;
   void require_valid() const;
+  const Boundary *find_boundary(uint64_t byte) const;
   std::string text_;
   std::vector<uint64_t> offsets_;
-  std::map<uint64_t, Position> positions_;
+  std::vector<Boundary> positions_;
 };
 class SourceManager {
   std::vector<std::string> files_;
