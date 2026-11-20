@@ -534,6 +534,7 @@ class Runner:
         self.lifecycle_record = None
         self.archives_record = None
         self.core_record = None
+        self.resource_preflight = None
         self.generated_initial = {}
         self.generated_final = {}
         self.probe_record = None
@@ -590,15 +591,11 @@ class Runner:
             if not self.opts:
                 return False
 
-        if self.source_tests == "require" and self.strace is None:
-            if self.args.require_trace:
-                self.fail(
-                    "trace:required",
-                    "--source-tests require with --require-trace needs --strace",
-                )
         if self.strace is not None and not self.strace.is_file():
             self.fail("trace:missing", f"--strace does not exist: {self.strace}")
             self.strace = None
+        if self.args.require_trace and self.strace is None:
+            return self.fail("trace:required", "--require-trace needs --strace")
 
         if self.source_tests == "require" and self.fixture_test is None:
             self.fail(
@@ -628,6 +625,12 @@ class Runner:
                 )
                 self.fixture_test = None
 
+        # The fixture is role-private. The fixed LLVM/libxml paths follow it.
+        library_path = [str(self.fixture_dir), self.canonical_ld_library_path]
+        if existing := self.env.get("LD_LIBRARY_PATH"):
+            library_path.append(existing)
+        self.env["LD_LIBRARY_PATH"] = ":".join(library_path)
+
         if self.role == "candidate":
             if self.helper is not None:
                 self.fail(
@@ -637,7 +640,9 @@ class Runner:
                 self.helper = None
         else:
             if self.helper is None:
-                self.helper = self.detect_embedded_path("lang_native_helper")
+                self.helper = self.near_executable(
+                    self.cli, "native/lang_native_helper", "lang_native_helper"
+                ) or self.detect_embedded_path("lang_native_helper")
             if self.helper is None or not self.helper.is_file():
                 self.fail(
                     "role:reference",
@@ -685,21 +690,6 @@ class Runner:
                             "supplied archive differs from the CLI's "
                             f"actual runtime: {expected}",
                         )
-        if self.role == "reference" and self.helper is not None:
-            helper_bytes = self.helper.read_bytes()
-            for label, supplied, name in (
-                ("native", self.native_runtime, "liblang_native_runtime.a"),
-                ("hosted", self.hosted_runtime, "liblang_hosted_runtime.a"),
-            ):
-                if supplied is None:
-                    continue
-                if str(supplied).encode() not in helper_bytes:
-                    self.fail(
-                        "role:" + label + "-runtime",
-                        "supplied archive path is not embedded in the "
-                        f"matching helper: {supplied}",
-                    )
-
         for name in ("clang", "opt", "llc", "ld.lld"):
             path = self.toolchain / name
             if not path.is_file():
@@ -735,15 +725,6 @@ class Runner:
             str(self.ld.resolve()),
         }
 
-        # The role-private fixture is the first library path.  The fixed
-        # LLVM/libxml directory follows it so the compiler's tools resolve.
-        fixture_env = str(self.fixture_dir)
-        existing = self.env.get("LD_LIBRARY_PATH")
-        library_path = [fixture_env, self.canonical_ld_library_path]
-        if existing:
-            library_path.append(existing)
-        self.env["LD_LIBRARY_PATH"] = ":".join(library_path)
-
         self.out.mkdir(parents=True, exist_ok=True)
         if self.tests.exists():
             self.fail("prepare", f"working source copy already exists: {self.tests}")
@@ -762,6 +743,85 @@ class Runner:
         self.prepared = True
         self.snapshot_inputs("before")
         return True
+
+    def verify_reference_resources(self):
+        if self.inputs_before is None:
+            raise EvidenceError("reference query requires the before snapshot")
+        if not all((self.helper, self.stdlib, self.native_runtime, self.hosted_runtime)):
+            raise EvidenceError("reference resources must be identified before the query")
+        # The helper checks these exact LLVM binaries with --version.
+        tool_names = ("opt", "llc", "clang", "ld.lld")
+        tools = {name: (self.toolchain / name).resolve(strict=True) for name in tool_names}
+        allowed = {str(path) for path in (self.cli, self.helper, *tools.values())}
+        record = self.run_command(
+            "reference-resources", "role:reference-resources",
+            [self.cli, "--__resource-paths"], CHECK_TIMEOUT,
+            allowed,
+            "reference resource query: CLI, fixed helper and locked LLVM tools only",
+            preflight=True,
+        )
+        if not self.clean(record, "role:reference-resources"):
+            raise EvidenceError("reference resource query did not complete cleanly")
+        if self.strace and record["trace"]["status"] != "ok":
+            raise EvidenceError("reference resource query failed exec tracing")
+        stderr = Path(record["stderr_path"]).read_bytes()
+        # Old seeds did not implement the query. Preserve their embedded-path
+        # checks, but never fall back after a current seed's resolution error.
+        if record["exit"] == 2 and not record_stdout(record) and stderr.strip() == (
+            b"E_DRIVER_ARGUMENT: expected --help, --version, check, build, "
+            b"lsp or capabilities"
+        ):
+            if self.strace and record["trace"]["observed"] != [str(self.cli)]:
+                raise EvidenceError("legacy resource query started a subprocess")
+            helper_bytes = self.helper.read_bytes()
+            for path in (self.native_runtime, self.hosted_runtime):
+                if str(path).encode() not in helper_bytes:
+                    raise EvidenceError(
+                        f"supplied archive path is not embedded in the matching helper: {path}"
+                    )
+            return
+        if record["exit"]:
+            raise EvidenceError(
+                f"resource query exited {record['exit']}: "
+                + stderr.decode("utf-8", "replace").strip()
+            )
+        if self.strace and set(record["trace"]["observed"]) != allowed:
+            raise EvidenceError("reference resource query trace lacks an expected executable")
+        report = parse_json_bytes(record_stdout(record), "reference resource query")
+        try:
+            if type(report["schema_version"]) is not int or report["schema_version"] != 1:
+                raise EvidenceError("unsupported reference resource schema")
+            resources = {
+                "helper": Path(report["helper"]),
+                "stdlib": Path(report["stdlib"]),
+                "native_runtime": Path(report["runtime"]["native"]),
+                "hosted_runtime": Path(report["runtime"]["hosted"]),
+            }
+            reported_tools = {name: Path(report["toolchain"][name]) for name in tool_names}
+        except (KeyError, TypeError) as error:
+            raise EvidenceError("reference resource paths are incomplete") from error
+        expected = {name: getattr(self, name) for name in resources}
+        expected.update(tools)
+        for name, actual in (resources | reported_tools).items():
+            if not actual.is_absolute() or actual.resolve(strict=True) != expected[name]:
+                raise EvidenceError(
+                    f"expected reference {name} differs from the CLI resource: "
+                    f"{expected[name]} != {actual}"
+                )
+
+    @staticmethod
+    def near_executable(executable, *relatives):
+        directory = executable.parent
+        roots = [directory]
+        if directory.name in ("native", "bin", "libexec"):
+            roots.append(directory.parent)
+        for relative in relatives:
+            for root in roots:
+                for base in (root, root / "resources"):
+                    path = base / relative
+                    if path.exists():
+                        return path.resolve()
+        return None
 
     def detect_embedded_path(self, basename):
         try:
@@ -785,6 +845,10 @@ class Runner:
             candidate = self.cli.parent / "stdlib"
             if candidate.is_dir():
                 return candidate.resolve()
+        else:
+            candidate = self.near_executable(self.cli, "stdlib")
+            if candidate is not None:
+                return candidate
         try:
             data = self.cli.read_bytes()
         except OSError:
@@ -805,6 +869,10 @@ class Runner:
             if candidate.is_file():
                 return candidate.resolve()
         source = self.helper if self.helper is not None else self.cli
+        if self.role == "reference":
+            candidate = self.near_executable(source, "runtime/" + basename, basename)
+            if candidate is not None:
+                return candidate
         try:
             data = source.read_bytes()
         except OSError:
@@ -981,10 +1049,14 @@ class Runner:
         policy,
         forbid_helper=False,
         extra_env=None,
+        preflight=False,
     ):
         argv = [str(part) for part in argv]
         index = len(self.commands)
-        command_dir = self.out / "commands" / f"{index:03d}-{phase}"
+        command_dir = (
+            self.out / "preflight" / phase if preflight
+            else self.out / "commands" / f"{index:03d}-{phase}"
+        )
         if command_dir.exists():
             raise EvidenceError(f"command evidence already exists: {command_dir}")
         command_dir.mkdir(parents=True)
@@ -1007,6 +1079,7 @@ class Runner:
         env = self.env.copy()
         if extra_env:
             env.update(extra_env)
+        started_at = datetime.now(timezone.utc).isoformat() if preflight else None
         started = time.monotonic()
         spawn_error = None
         try:
@@ -1024,6 +1097,7 @@ class Runner:
             result = None
             spawn_error = "unexpected process error: " + repr(error)
         elapsed = round(time.monotonic() - started, 6)
+        finished_at = datetime.now(timezone.utc).isoformat() if preflight else None
         if result is None:
             exit_code = None
             timed_out = None
@@ -1061,7 +1135,7 @@ class Runner:
                 }
                 self.fail(label, "trace violation: " + str(error))
         record = {
-            "index": index,
+            "index": None if preflight else index,
             "phase": phase,
             "label": label,
             "argv": argv,
@@ -1088,7 +1162,12 @@ class Runner:
             "trace_path": str(trace_path) if self.strace is not None else None,
             "trace": trace,
         }
+        if preflight:
+            record.update(started_at=started_at, finished_at=finished_at)
         write_json(command_dir / "command.json", record)
+        if preflight:
+            self.resource_preflight = record
+            return record
         with self.commands_path.open("a", encoding="utf-8") as stream:
             stream.write(
                 json.dumps(jsonable(record), ensure_ascii=False, allow_nan=False)
@@ -2111,6 +2190,7 @@ class Runner:
             "actual_counts": actual,
             "command_count_complete": complete,
             "commands_path": str(self.commands_path),
+            "resource_preflight": self.resource_preflight,
             "commands": self.commands,
             "cases": self.cases,
             "case_summary": self.case_summary(),
@@ -2214,6 +2294,8 @@ def main():
         return 2
     report = {"status": "failed"}
     try:
+        if runner.role == "reference":
+            runner.verify_reference_resources()
         runner.git_identity()
         fixture_ok = runner.fixture_compile()
         if runner.fixture_test is not None:

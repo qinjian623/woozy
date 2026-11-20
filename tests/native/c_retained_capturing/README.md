@@ -149,6 +149,17 @@ have their own exact clang + linker set.  Program, nm and readelf executions
 have one-executable sets.  The observed process list and raw trace are saved
 for every command.
 
+After saving the before snapshot and before the 70 recorded workload commands,
+the reference runner queries `woozyc --__resource-paths`. It checks that the
+reported helper, standard library, archives and LLVM tools match the inputs
+identified before execution. The command, timestamps, exit and raw streams
+are saved separately under `preflight/reference-resources/` and linked from
+`report.json`. When tracing is requested, the probe may only execute the
+reference CLI, its known helper and the four locked LLVM tools whose
+`--version` the helper checks. A legacy seed can report the original
+unsupported-argument diagnostic, in which case the old embedded archive
+checks apply. Candidate runs do not call this query.
+
 Every command records its real argv, cwd, integer exit, exact
 `timed_out`/`cleanup_complete`/`abandoned_pipes` booleans, timeout, elapsed
 time, raw `stdout.bin`/`stderr.bin`, their SHA-256 values and the exec trace.
