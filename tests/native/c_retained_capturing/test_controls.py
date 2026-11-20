@@ -187,6 +187,17 @@ def test_reference_preflight():
         check("reference_helper_is_relative_to_package",
               rc.Runner.near_executable(executable, "native/lang_native_helper") == helper)
 
+        runner.role = "reference"
+        runner.helper = helper
+        name = "liblang_native_runtime.a"
+        local_archive = helper.parent / name
+        local_archive.touch()
+        package_archive = package / "runtime" / name
+        package_archive.parent.mkdir()
+        package_archive.touch()
+        check("reference_runtime_uses_helper_root_first",
+              runner.detect_runtime(name) == local_archive)
+
 
 def test_trace():
     allowed = {"/fixed/woozyc", "/fixed/clang-22", "/fixed/opt"}

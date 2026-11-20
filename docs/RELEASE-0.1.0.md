@@ -29,7 +29,9 @@ tar -xzf woozy-linux-x86_64.tar.gz
 ./woozy/woozyc --version
 ```
 
-`woozyc --version` reports the full release version and the source commit.
+The `v0.1.0` package reports its full version and source commit with
+`woozyc --version`. The published `v0.1.0-rc.1` package reports
+`woozyc 0.1.0-selfhost (compiler-dev/1)`.
 
 To put `woozyc` on your `PATH`, create a symbolic link into a directory that is already on your path, or add the extracted directory directly. For example:
 
