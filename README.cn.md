@@ -19,7 +19,7 @@ func main() throws os.Error {
 ## 学习 Woozy
 
 - [语言教程](docs/TUTORIAL.cn.md)：从一段程序开始，逐步学习类型、函数、容器、模式匹配、错误处理、模块和泛型。
-- [语言快速入门](docs/QUICKSTART.md)：面向有编程经验的读者，集中介绍写法和容易混淆的规则。
+- [语言快速入门](docs/QUICKSTART.cn.md)：面向有编程经验的读者，集中介绍写法和容易混淆的规则。
 - [语言规则](docs/SEMANTICS.md)：名称、求值顺序、数值、复制、所有权、错误和清理的详细定义。
 - [词法与语法](baseline/LEXICAL_SYNTAX.md)：关键字、字面量、表达式和声明形式。
 - [标准库](docs/STDLIB.md)：各模块的常用接口、完整示例、错误和资源关闭规则。
@@ -29,6 +29,32 @@ func main() throws os.Error {
 - [共享内存与 IPC](docs/IPC.md)：共享映射、跨进程互斥锁、条件变量和信号量。
 - [调用 C 库](docs/FFI.md)：有类型的 C 绑定、指针、缓冲区、资源和回调。
 - [示例](examples/)：函数、数值、错误处理和参数传递；另有可运行的 [TCP 聊天 server/client](examples/chat/README.md) 和 [异步 HTTP server](examples/http_server/README.md)。
+
+## 安装
+
+Woozy 0.1 提供面向 Linux x86_64 的预编译压缩包，已在 Ubuntu 24.04 x86_64 上验证。压缩包包含编译器、标准库、Native/hosted 运行库、Python 运行库和锁定版本的 LLVM 工具，不需要系统另装 LLVM。
+
+从[发布页](https://github.com/qinjian623/woozy/releases)获取压缩包和校验文件。当前公开预发布为 `v0.1.0-rc.1`，下面命令下载该版本：
+
+```sh
+curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz
+curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz.sha256
+sha256sum -c woozy-linux-x86_64.tar.gz.sha256
+tar -xzf woozy-linux-x86_64.tar.gz
+mkdir -p "$HOME/.local/bin"
+ln -s "$PWD/woozy/woozyc" "$HOME/.local/bin/woozyc"
+export PATH="$HOME/.local/bin:$PATH"   # 将这一行加入 shell 配置。
+woozyc --version
+```
+
+在仓库检出目录构建并运行 Hello World 示例。发行包不包含 `examples/`。
+
+```sh
+woozyc build --project examples/hello/lang.toml --backend native --out-dir build/hello
+./build/hello/program
+```
+
+输出 `Hello, world!`。Native 构建使用随包工具链；执行 Python 输出需要 Python 3.12；Native 分包构建仍使用系统的 Make 或 Ninja；TLS 支持需要单独构建附加库。环境要求和限制见 [0.1.0 发行说明](docs/RELEASE-0.1.0.md)。
 
 ## 编辑器配置
 
@@ -79,3 +105,7 @@ Native 程序可以声明并调用 C 库的有类型函数，传递自然布局�
 默认参数和模板特化尚未提供。
 
 编译器编译、实现、测试和开发协作资料统一放在 [development/](development/README.md)。
+
+## 许可证
+
+Woozy 的自有代码和文档采用 [Apache License 2.0](LICENSE)。第三方材料沿用各自的许可证。Woozy 名称和项目形象不在此授权范围内。

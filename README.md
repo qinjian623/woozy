@@ -32,6 +32,32 @@ Most of the guides below are in Chinese.
 - See [calling C libraries](docs/FFI.md) for typed C bindings, pointers, buffers, resources, and callbacks.
 - Browse the [examples](examples/) for functions, numbers, errors, and argument passing, or try the [TCP chat server and client](examples/chat/README.md) and the [async HTTP server](examples/http_server/README.md).
 
+## Install
+
+Woozy 0.1 provides a prebuilt Linux x86_64 archive, validated on Ubuntu 24.04 x86_64. It contains the compiler, standard library, native and hosted runtime archives, Python runtime, and pinned LLVM tools; a system LLVM installation is not required.
+
+Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). The current public pre-release is `v0.1.0-rc.1`, and the commands below use it:
+
+```sh
+curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz
+curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz.sha256
+sha256sum -c woozy-linux-x86_64.tar.gz.sha256
+tar -xzf woozy-linux-x86_64.tar.gz
+mkdir -p "$HOME/.local/bin"
+ln -s "$PWD/woozy/woozyc" "$HOME/.local/bin/woozyc"
+export PATH="$HOME/.local/bin:$PATH"   # Add this line to your shell profile.
+woozyc --version
+```
+
+Build and run the Hello World example from a repository checkout. The release archive does not include the examples.
+
+```sh
+woozyc build --project examples/hello/lang.toml --backend native --out-dir build/hello
+./build/hello/program
+```
+
+This prints `Hello, world!`. Native builds use the bundled LLVM tools. Executing Python output requires Python 3.12, advanced native package builds still use the system Make or Ninja, and TLS support requires a separately built addon. See the [0.1.0 release notes](docs/RELEASE-0.1.0.md) for requirements and limitations.
+
 ## Editor setup
 
 Neovim and Emacs can highlight `.wz` files and start the Woozy language server automatically. With the self-hosted compiler, the server adds completion, hover, definition lookup, and live project diagnostics. Run this from the checkout with `woozyc` on your `PATH`.
@@ -81,3 +107,7 @@ Native programs can declare and call typed C functions and pass C records with n
 Default arguments are not yet supported.
 
 Compiler build instructions, implementation notes, tests, and contributor guides are in [development/](development/README.md).
+
+## License
+
+Woozy's original code and documentation are licensed under [Apache License 2.0](LICENSE). Third-party material retains its own licenses. The Woozy name and mascot are outside this license grant.

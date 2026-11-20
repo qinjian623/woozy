@@ -82,27 +82,59 @@ jobs:
                 ;;
             esac
           done
+          release_version=0.1.0-selfhost
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            release_version="${GITHUB_REF_NAME#v}-selfhost"
+          fi
           python3.12 -B tools/build_release.py --out-dir "$RUNNER_TEMP/release" \
             --compiler "$RUNNER_TEMP/compiler/program" --runtime-dir "$RUNNER_TEMP/seed/native" \
-            --llvm-bin "$llvm/bin" --notice "$RUNNER_TEMP/LLVM-LICENSE.txt" "${extra[@]}"
+            --llvm-bin "$llvm/bin" --notice "$RUNNER_TEMP/LLVM-LICENSE.txt" \
+            --version "$release_version" --commit "$GITHUB_SHA" "${extra[@]}"
 
       - name: Test the extracted archive offline
         run: |
+          release_version=0.1.0-selfhost
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            release_version="${GITHUB_REF_NAME#v}-selfhost"
+          fi
           docker build --tag woozy-release-smoke - <<'DOCKERFILE'
           FROM ubuntu:24.04
-          RUN apt-get update && apt-get install --no-install-recommends -y python3.12 && rm -rf /var/lib/apt/lists/*
+          RUN apt-get update && apt-get install --no-install-recommends -y \
+              python3.12 gdb make ninja-build binutils g++ && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
           docker run --rm --network none \
             -v "$GITHUB_WORKSPACE:/source:ro" -v "$RUNNER_TEMP/release:/release:ro" \
+            -v "$RUNNER_TEMP/llvm/bin/llvm-dwarfdump:/usr/local/bin/llvm-dwarfdump:ro" \
             woozy-release-smoke sh -euc '
               cd /release
               sha256sum -c woozy-linux-x86_64.tar.gz.sha256
               tar -xzf woozy-linux-x86_64.tar.gz -C /tmp
+              cmp /source/LICENSE /tmp/woozy/LICENSE
+              expected_version=$1
+              expected_commit=$2
+              printf "version=%s\ncommit=%s\n" "$expected_version" "$expected_commit" |
+                cmp -s - /tmp/woozy/release-metadata
+              reported=$(/tmp/woozy/woozyc --version)
+              expected="woozyc ${expected_version} (compiler-dev/1, commit ${expected_commit})"
+              if [ "$reported" != "$expected" ]; then
+                printf "Unexpected packaged version: %s (expected %s)\n" "$reported" "$expected" >&2
+                exit 1
+              fi
               cd /tmp
               python3.12 -B /source/tests/tooling/installed_bundle_test.py /tmp/woozy/woozyc
               python3.12 -B /source/tests/tooling/dependency_lock_cli.py /tmp/woozy/woozyc
               python3.12 -B /source/tests/tooling/project_test_cli.py /tmp/woozy/woozyc
-            '
+              python3.12 -B /source/tests/tooling/editor_semantics_test.py --cli /tmp/woozy/woozyc
+              python3.12 -B /source/tests/native/debug_info/run.py --cli /tmp/woozy/woozyc \
+                --gdb /usr/bin/gdb --dwarfdump /usr/local/bin/llvm-dwarfdump --selfhost
+              python3.12 -B /source/tests/native/debug_info/extended.py --cli /tmp/woozy/woozyc \
+                --gdb /usr/bin/gdb --dwarfdump /usr/local/bin/llvm-dwarfdump --selfhost
+              python3.12 -B /source/tests/native/run_chat.py --cli /tmp/woozy/woozyc --root /source \
+                --out /tmp/chat --clang /tmp/woozy/toolchain/clang --lld /tmp/woozy/toolchain/ld.lld \
+                --runtime /tmp/woozy/runtime/liblang_native_runtime.a
+              python3.12 -B /source/tests/native/http_server/run_http_server.py \
+                --cli /tmp/woozy/woozyc --out /tmp/http
+            ' sh "$release_version" "$GITHUB_SHA"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
