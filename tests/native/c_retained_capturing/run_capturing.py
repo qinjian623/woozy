@@ -640,9 +640,11 @@ class Runner:
                 self.helper = None
         else:
             if self.helper is None:
-                self.helper = self.near_executable(
-                    self.cli, "native/lang_native_helper", "lang_native_helper"
-                ) or self.detect_embedded_path("lang_native_helper")
+                self.helper = (
+                    self.near_executable(self.cli, "native/lang_native_helper")
+                    or self.near_executable(self.cli, "lang_native_helper")
+                    or self.detect_embedded_path("lang_native_helper")
+                )
             if self.helper is None or not self.helper.is_file():
                 self.fail(
                     "role:reference",
@@ -815,8 +817,8 @@ class Runner:
         roots = [directory]
         if directory.name in ("native", "bin", "libexec"):
             roots.append(directory.parent)
-        for relative in relatives:
-            for root in roots:
+        for root in roots:
+            for relative in relatives:
                 for base in (root, root / "resources"):
                     path = base / relative
                     if path.exists():
