@@ -30,7 +30,7 @@ LISTENING 127.0.0.1 44677
 | `/hello` | any | `hello world` |
 | `/health` | any | `ok` |
 | `/echo` | any | request body, with `X-Method` set to the request method |
-| anything else | any | `404 not found\n` |
+| anything else | any | `not found\n` (HTTP 404) |
 
 ```sh
 curl -v http://127.0.0.1:8080/hello
