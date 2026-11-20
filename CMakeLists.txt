@@ -61,6 +61,8 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/editor_cli_test.py
       --cli $<TARGET_FILE:woozyc>)
     set_tests_properties(tooling.editor_cli PROPERTIES TIMEOUT 60)
+    add_test(NAME tooling.release_archive COMMAND ${LANG_TEST_PYTHON} -B
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/release_archive_test.py)
   endif()
   add_executable(lang_file_digest_probe tests/incremental/file_digest_probe.cpp)
   target_link_libraries(lang_file_digest_probe PRIVATE lang_frontend lang_driver_process)

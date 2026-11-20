@@ -1,0 +1,105 @@
+package cli;
+import "app/wzcc/manifest" as manifest;
+import "app/wzcc/paths" as paths;
+import "app/wzcc/source" as source;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/json" as json;
+import "std/os" as os;
+import "std/path" as path;
+import "std/sort" as sort;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct SuiteOutcome { status string; exit_code i32; output string; }
+
+func test_quote(value string) string {
+    try { return json.serialize(json.Value.String(value)); }
+    catch problem json.Error { return "\"encoding error\""; }
+}
+func failed_suite_run(status string, result toolio.ProcessResult) SuiteOutcome {
+    var output = "(output is not UTF-8)";
+    try { output = text.from_bytes(result.output); } catch problem text.Error {}
+    return SuiteOutcome(status:status, exit_code:result.exit_code, output:output);
+}
+func test_suite(directory string, compiler string) SuiteOutcome {
+    try {
+        let previous = os.getcwd();
+        os.chdir(directory);
+        defer { try { os.chdir(previous); } catch problem os.Error {} }
+        let stage = toolio.stage("/tmp", "test");
+        defer { toolio.cleanup(stage); }
+        let capture = stage.path + "/capture";
+        let built = toolio.run([compiler, "build", "--project", directory + "/lang.toml",
+            "--out-dir", stage.path], capture);
+        if built.exit_code != 0 { return failed_suite_run("build_failed", built); }
+        var argv = [stage.path + "/program"];
+        if fs.exists(stage.path + "/program.py") {
+            argv = ["/usr/bin/env", "python3.12", stage.path + "/program.py"];
+        }
+        let ran = toolio.run(argv, capture);
+        if ran.exit_code != 0 { return failed_suite_run("run_failed", ran); }
+        return SuiteOutcome(status:"passed", exit_code:0, output:"");
+    } catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error):
+                return SuiteOutcome(status:"io_failed", exit_code:2, output:os_text(error));
+            case toolio.Error.Rollback(backup, error):
+                return SuiteOutcome(status:"io_failed", exit_code:2, output:os_text(error));
+        }
+    } catch problem os.Error {
+        return SuiteOutcome(status:"io_failed", exit_code:2, output:os_text(problem));
+    }
+}
+func test_report(options Options, rows Vec[string], error string, code i32) i32 throws os.Error {
+    if options.json {
+        io.println("{\"suites\":[" + text.join(rows, ",") + "],\"error\":" + test_quote(error) + "}");
+    } else if error != "" { io.eprintln(error); }
+    return code;
+}
+func project_test_command(options Options, manager inout source.Manager) i32 throws os.Error {
+    let rows = vec.empty[string]();
+    try {
+        let main = paths.canonical(options.project);
+        let parent = manifest.load(main, true, inout manager);
+        if !parent.has_value {
+            var message = "invalid project manifest";
+            if vec.len(parent.diagnostics) != 0 { message = parent.diagnostics[0].message; }
+            return test_report(options, rows, message, 2);
+        }
+        let root = path.dir(main) + "/tests";
+        let suites = vec.empty[string]();
+        if fs.exists(root) {
+            for entry in fs.read_dir(root) {
+                let name = fs.name_text(entry);
+                let directory = root + "/" + name;
+                if fs.exists(directory + "/lang.toml") && fs.is_file(os.stat(directory + "/lang.toml")) {
+                    vec.push(suites, name);
+                }
+            }
+        }
+        if vec.len(suites) == 0 {
+            return test_report(options, rows, "no test projects found under tests/<suite>/lang.toml", 2);
+        }
+        sort.sort_by(suites, func(left string, right string) bool { return left < right; });
+        let compiler = os.readlink("/proc/self/exe");
+        var result i32 = 0;
+        for suite in suites {
+            let outcome = test_suite(root + "/" + suite, compiler);
+            if outcome.status != "passed" { result = 1; }
+            if options.json {
+                vec.push(rows, "{\"suite\":" + test_quote(suite) + ",\"status\":" +
+                    test_quote(outcome.status) + ",\"exit_code\":" +
+                    strconv.format_i64(i64(outcome.exit_code)) + ",\"output\":" + test_quote(outcome.output) + "}");
+            } else {
+                io.println(suite + ": " + outcome.status);
+                if outcome.output != "" { io.eprintln(outcome.output); }
+            }
+        }
+        return test_report(options, rows, "", result);
+    } catch problem os.Error {
+        return test_report(options, rows, "project test: " + os_text(problem), 2);
+    }
+}

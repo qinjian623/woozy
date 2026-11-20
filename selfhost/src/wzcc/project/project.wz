@@ -46,6 +46,11 @@ struct Claim { name string; identity string; }
 // Editor buffers replace the bytes at an absolute path. A path that cannot be
 // canonicalized (for example a new unsaved file) keeps its lexical spelling.
 pub struct Overlay { pub path string; pub content Vec[u8]; }
+pub struct LoadSnapshot {
+    pub result model.ProjectResult;
+    pub manifests Vec[model.ManifestConfig];
+    pub dependency_modules Vec[bool];
+}
 struct PreparedOverlay { path string; content Vec[u8]; }
 struct Loader {
     cache frontcache.Context;
@@ -55,6 +60,7 @@ struct Loader {
     diagnostics Vec[model.Diagnostic];
     failure model.FailureKind;
     configs Vec[model.ManifestConfig];
+    dependency_modules Vec[bool];
     identities Vec[model.PathIndex];
     claims Vec[Claim];
     overlays Vec[PreparedOverlay];
@@ -262,6 +268,7 @@ func known_identity(state Loader, identity string) option.Option[usize] {
 func new_module(state inout Loader, name string, identity string, package_name string) usize {
     let id=vec.len(state.project.modules);
     vec.push(state.identities,model.PathIndex(path:identity,index:id));
+    vec.push(state.dependency_modules,false);
     vec.push(state.project.modules,model.Module(id:id,logical_path:name,identity:identity,
         package_name:package_name,files:[],imports:[],foreign_exports:[],
         binding:option.Option[model.BindingModuleRef].None,c_binding:option.Option[usize].None));
@@ -430,7 +437,7 @@ func resolve(state inout Loader,manager inout source.Manager,name string,
             root=canonical_path(dependency.source);
             if exists(paths.join(root,"lang.toml")) {
                 config=configuration(inout state,inout manager,paths.join(root,"lang.toml"));root=config.root;
-            } else {config.root=root;config.dependencies=[];}
+            } else {config.manifest="";config.root=root;config.dependencies=[];}
             break;
         }
         if !found {fail(inout state,"E_IMPORT_NOT_FOUND","undeclared dependency "+head,where,model.FailureKind.Source);}
@@ -442,8 +449,16 @@ func resolve(state inout Loader,manager inout source.Manager,name string,
     var logical_name=name;
     if head=="app" {logical_name="app@"+config.root+":"+name;}
     claim(inout state,logical_name,identity,where);
-    switch known_identity(state,identity) {case option.Option.Some(id):return id;case option.Option.None:{}}
+    let dependency = head!="std" && (head!="app" || context.manifest!=state.configs[0].manifest);
+    switch known_identity(state,identity) {
+        case option.Option.Some(id): {
+            if dependency { state.dependency_modules[id]=true; }
+            return id;
+        }
+        case option.Option.None:{}
+    }
     let id=new_module(inout state,name,identity,"");
+    if dependency { state.dependency_modules[id]=true; }
     let files=vec.empty[string]();
     for entry in read_directory(directory) {
         // DT_REG uses the cached kind. DT_LNK and DT_UNKNOWN must query the
@@ -544,6 +559,9 @@ pub func load(options model.ProjectOptions,manager inout source.Manager) model.P
     return load_cached(options, inout manager, frontcache.context("", ""));
 }
 pub func load_cached(options model.ProjectOptions,manager inout source.Manager,cache frontcache.Context) model.ProjectResult {
+    return load_snapshot(options,inout manager,cache).result;
+}
+pub func load_snapshot(options model.ProjectOptions,manager inout source.Manager,cache frontcache.Context) LoadSnapshot {
     return load_with_overlays(options,inout manager,cache,[]);
 }
 // Editor overlays never use the on-disk frontend cache: buffer text must not be
@@ -551,13 +569,13 @@ pub func load_cached(options model.ProjectOptions,manager inout source.Manager,c
 // AST keyed by the previous file contents.
 pub func load_overlay(options model.ProjectOptions,manager inout source.Manager,
                       overlays Vec[Overlay]) model.ProjectResult {
-    return load_with_overlays(options,inout manager,frontcache.context("", ""),overlays);
+    return load_with_overlays(options,inout manager,frontcache.context("", ""),overlays).result;
 }
 func load_with_overlays(options model.ProjectOptions,manager inout source.Manager,
-                        cache frontcache.Context,overlays Vec[Overlay]) model.ProjectResult {
+                        cache frontcache.Context,overlays Vec[Overlay]) LoadSnapshot {
 
     var state=Loader(cache:cache,options:options,project:model.empty_project(),store:model.binding_store(),
-        diagnostics:[],failure:model.FailureKind.Source,configs:[],identities:[],claims:[],
+        diagnostics:[],failure:model.FailureKind.Source,configs:[],dependency_modules:[],identities:[],claims:[],
         overlays:prepare_overlays(overlays));
     var has_value=false;
     try {
@@ -579,5 +597,7 @@ func load_with_overlays(options model.ProjectOptions,manager inout source.Manage
     state.project.c_bindings=state.store.c_bindings;state.project.c_types=state.store.c_types;state.project.c_callables=state.store.c_callables;
     var phase=model.PhaseState.Failed;
     if has_value {phase=model.PhaseState.Complete;if vec.len(state.diagnostics)!=0 {phase=model.PhaseState.Recovered;}}
-    return model.ProjectResult(state:phase,failure:state.failure,diagnostics:state.diagnostics,has_value:has_value,value:state.project);
+    return LoadSnapshot(result:model.ProjectResult(state:phase,failure:state.failure,
+        diagnostics:state.diagnostics,has_value:has_value,value:state.project),
+        manifests:state.configs,dependency_modules:state.dependency_modules);
 }

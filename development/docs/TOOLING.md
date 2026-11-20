@@ -52,6 +52,23 @@ woozyc fmt [--check] FILE
 
 `--std-binding BUNDLE` 是可选的工具链标准声明文件，只用于 `check --project` 和 `build --project`。它通过现有 `ProjectOptions::std_binding_bundle` 交给项目加载器，不接受 `--syntax-only`，不读取项目依赖来猜标准库，也没有默认路径、环境变量或新配置格式。未传该参数时保持原行为；项目声明 `std` 依赖仍按清单规则拒绝。`build --backend native` 会把该参数转发给 `lang_native_helper`，helper 同样解析和加载它；Python 外部源在 native 下仍明确报 `E_CAPABILITY_UNAVAILABLE`，不会因该参数切换到 Python 后端。路径按 argv 原样传递，不做解释器探测或宿主包 import。
 
+### 项目测试与依赖锁
+
+以下命令由 Woozy 自举版提供。
+
+```sh
+woozyc test --project lang.toml
+woozyc test --project lang.toml --format json
+woozyc lock --project lang.toml
+woozyc lock --project lang.toml --check
+```
+
+项目测试按名称排序，发现清单目录下的 `tests/<suite>/lang.toml`。每套测试都是独立项目，使用自己的后端和 `main`。编译结果放在临时目录，测试程序的工作目录为该套件目录。Python 套件从 PATH 使用 `python3.12`。全部通过返回 0，套件构建或运行失败返回 1，清单无法读取或没有套件等发现错误返回 2。JSON 报告包含套件名、状态、退出码和失败时的合并输出。
+
+`lock` 在项目清单旁原子写入 `lang.lock`，保存声明的本地依赖位置和编译器实际加载的传递依赖文件及清单的 SHA-256。路径以清单目录为基准。项目自身源文件不记入锁中，导入新的依赖模块会改变已加载的文件集合。工具链自带的标准库也不记入此锁。
+
+有锁时，`check` 和 `build` 会对本次加载的源码快照进行校验。旧项目没有锁时仍可正常工作，`lock --check` 则要求锁存在。应检查锁文件差异后再提交。当前仅锁定本地 Woozy 源码依赖，遇到宿主 Python 包或原生 C 库依赖时会明确报错。
+
 ### 3.1 退出码
 
 | 命令状态 | woozyc 退出码 |

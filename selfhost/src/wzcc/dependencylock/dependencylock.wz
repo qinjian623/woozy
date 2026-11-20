@@ -1,0 +1,100 @@
+package dependencylock;
+import "app/wzcc/project" as project;
+import "app/wzcc/source" as source;
+import "app/wzcc/digest" as digest;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/path" as path;
+import "std/sort" as sort;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub enum Error { Missing; Changed; Io; Unsupported; }
+
+func relative(root string, filename string) string {
+    let base = text.split(root, "/");
+    let parts = text.split(filename, "/");
+    var common usize = 0;
+    for common < vec.len(base) && common < vec.len(parts) && base[common] == parts[common] {
+        common += 1;
+    }
+    return text.repeat("../", vec.len(base)-common) + text.join(parts[common:], "/");
+}
+func quote(value string) string throws Error {
+    try { return json.serialize(json.Value.String(value)); }
+    catch problem json.Error { throw Error.Io; }
+}
+func contents(loaded project.LoadSnapshot, manager source.Manager) string throws Error {
+    let input = loaded.result.value;
+    if vec.len(input.bindings) != 0 || vec.len(input.c_bindings) != 0 {
+        throw Error.Unsupported;
+    }
+    let rows = vec.empty[string]();
+    let main = loaded.manifests[0].manifest;
+    for config in loaded.manifests {
+        let config_name = quote(relative(input.root, config.manifest));
+        for dependency in config.dependencies {
+            if dependency.kind != "source" { throw Error.Unsupported; }
+            let location = quote(relative(input.root, path.clean(dependency.source)));
+            vec.push(rows, "dependency " + config_name + " " + quote(dependency.name) + " " + location);
+        }
+        if config.manifest != main {
+            let snapshot = source.get(manager, config.source.snapshot);
+            vec.push(rows, "manifest " + config_name + " " + digest.sha256(snapshot.original));
+        }
+    }
+    for module in input.modules {
+        if !loaded.dependency_modules[module.id] { continue; }
+        for file in module.files {
+            let snapshot = input.files[file].lexed.source;
+            vec.push(rows, "source " + quote(relative(input.root, snapshot.path)) +
+                " " + digest.sha256(snapshot.original));
+        }
+    }
+    sort.sort_by(rows, func(left string, right string) bool { return left < right; });
+    if vec.len(rows) == 0 { return "woozy-lock-v1\n"; }
+    return "woozy-lock-v1\n" + text.join(rows, "\n") + "\n";
+}
+
+pub func update(loaded project.LoadSnapshot, manager source.Manager) throws Error {
+    let value = contents(loaded, manager);
+    try {
+        let stage = toolio.stage(loaded.result.value.root, "dependency-lock");
+        defer { toolio.cleanup(stage); }
+        fs.write_text(stage.path + "/lang.lock", value, 0o644);
+        toolio.publish_file(stage, "lang.lock");
+    } catch problem toolio.Error { throw Error.Io; }
+    catch problem os.Error { throw Error.Io; }
+}
+
+func saved_lock(filename string) option.Option[Vec[u8]] throws Error {
+    try {
+        let file = os.open(filename, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, 0);
+        defer { try { os.close(file); } catch problem os.Error {} }
+        if !fs.is_file(os.fstat(file)) { throw Error.Io; }
+        return option.Option[Vec[u8]].Some(io.read_all(file));
+    } catch problem os.Error {
+        switch problem {
+            case os.Error.System(code, completed): {
+                if code == 2 { return option.Option[Vec[u8]].None; }
+            }
+            default: {}
+        }
+        throw Error.Io;
+    }
+}
+
+pub func check(loaded project.LoadSnapshot, manager source.Manager, required bool) throws Error {
+    switch saved_lock(loaded.result.value.root + "/lang.lock") {
+        case option.Option.None: { if required { throw Error.Missing; } }
+        case option.Option.Some(saved): {
+            try {
+                if text.from_bytes(saved) != contents(loaded, manager) { throw Error.Changed; }
+            } catch problem text.Error { throw Error.Changed; }
+        }
+    }
+}

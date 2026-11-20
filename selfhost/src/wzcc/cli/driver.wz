@@ -30,6 +30,7 @@ func finish(options Options, sources Vec[model.Source], state model.PhaseState,
             }
             io.println("build ok: " + output);
         } else if options.syntax { io.println("syntax ok: " + options.path); }
+        else if options.command == "lock" { io.println("lock ok: " + options.project); }
         else { io.println("check ok: " + options.project); }
     } else {
         for diagnostic in diagnostics {
@@ -66,6 +67,8 @@ func help_text() string {
         "       woozyc check --syntax-only [--format json] FILE\n" +
         "       woozyc fmt [--check] FILE|-\n" +
         "       woozyc lsp [--stdio]\n" +
+        "       woozyc test --project MANIFEST [--format json]\n" +
+        "       woozyc lock --project MANIFEST [--check] [--format json]\n" +
         "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       woozyc build --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       Native build also accepts -g (DWARF), --opt 0|2, --target TRIPLE and --package-objects\n" +
@@ -141,6 +144,7 @@ pub func run(args Vec[string]) i32 throws os.Error {
         return 1;
     }
     if options.command == "fmt" { return format_command(options, inout manager); }
+    if options.command == "test" { return project_test_command(options, inout manager); }
     if options.command == "__source_make_worker" {
         return source_make_worker(options, inout manager);
     }

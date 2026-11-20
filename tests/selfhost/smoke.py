@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,7 +63,10 @@ def main():
             expected = run([stage0, *arguments], expected=1 if arguments and
                            arguments[0] == "capabilities" else 2)
             actual = run([cli, *arguments], expected=expected.returncode)
-            assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr), arguments
+            if not arguments or arguments[0] == "unknown":
+                assert actual.stderr.startswith("E_DRIVER_ARGUMENT: expected"), actual.stderr
+            else:
+                assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr), arguments
         editor = run([sys.executable, ROOT / "tests/tooling/editor_cli_test.py", "--cli", cli])
         semantics = run([sys.executable, ROOT / "tests/tooling/editor_semantics_test.py", "--cli", cli])
         run([cli, "check", "--syntax-only"], expected=2)
@@ -75,9 +79,25 @@ def main():
         print(semantics.stdout.strip())
         print(syntax.stdout.strip())
         if sys.platform.startswith("linux"):
+            with tempfile.TemporaryDirectory(prefix="project-tools-", dir=work) as directory:
+                bundle = Path(directory)
+                executable = bundle / "woozyc"
+                shutil.copy2(cli, executable)
+                (bundle / "stdlib").symlink_to(ROOT / "stdlib", target_is_directory=True)
+                (bundle / "toolchain").symlink_to(stage0.parent / "toolchain", target_is_directory=True)
+                (bundle / "runtime").mkdir()
+                (bundle / "runtime/python").symlink_to(ROOT / "runtime/python", target_is_directory=True)
+                archive = "liblang_native_runtime.a"
+                (bundle / "runtime" / archive).symlink_to(stage0.parent / "native" / archive)
+                scripts = ROOT / "tests/tooling"
+                print(run([sys.executable, scripts / "dependency_lock_cli.py", executable]).stdout.strip())
+                if shutil.which("python3.12"):
+                    print(run([sys.executable, scripts / "project_test_cli.py", executable]).stdout.strip())
+                else:
+                    print("project test CLI not run: python3.12 unavailable")
             elf = run(["readelf", "-l", "-d", cli]).stdout
             assert "INTERP" not in elf and "NEEDED" not in elf, elf
-    print("PASS: selfhost source smoke O0/O2 (project/type checking and build not covered)")
+    print("PASS: selfhost source smoke O0/O2")
     return 0
 
 
