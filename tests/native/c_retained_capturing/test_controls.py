@@ -167,6 +167,27 @@ def test_documents():
     check("document_wrong_status_rejected", bool(problems))
 
 
+def test_reference_preflight():
+    runner = rc.Runner.__new__(rc.Runner)
+    runner.inputs_before = None
+    try:
+        runner.verify_reference_resources()
+    except rc.EvidenceError as error:
+        check("reference_preflight_requires_snapshot", "before snapshot" in str(error))
+    else:
+        check("reference_preflight_requires_snapshot", False)
+
+    with tempfile.TemporaryDirectory() as directory:
+        package = Path(directory)
+        executable = package / "bin" / "woozyc"
+        executable.parent.mkdir()
+        helper = package / "native" / "lang_native_helper"
+        helper.parent.mkdir()
+        helper.touch()
+        check("reference_helper_is_relative_to_package",
+              rc.Runner.near_executable(executable, "native/lang_native_helper") == helper)
+
+
 def test_trace():
     allowed = {"/fixed/woozyc", "/fixed/clang-22", "/fixed/opt"}
     rc.audit_trace_paths(
@@ -645,6 +666,7 @@ def main():
     test_process_guard()
     test_documents()
     test_trace()
+    test_reference_preflight()
     test_rejections()
     test_loader()
     test_legacy_auto()
