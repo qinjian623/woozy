@@ -8,6 +8,7 @@ pub struct Options {
     pub command string;
     pub syntax bool;
     pub format_check bool;
+    pub lock_check bool;
     pub package_objects bool;
     pub source_make bool;
     pub make_state string;
@@ -28,8 +29,8 @@ func not_flag(value string) bool { return text.len(value) > 0 && value[0] != 45;
 
 pub func arguments(args Vec[string]) Options {
     var options = Options(valid: false,
-        error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, lsp or capabilities",
-        command: "", syntax: false, format_check: false, package_objects: false, source_make: false,
+        error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, test, lock, fmt, lsp or capabilities",
+        command: "", syntax: false, format_check: false, lock_check: false, package_objects: false, source_make: false,
         make_state: "", make_package: "", cache_directory: "", json: false,
         path: "", project: "", output: "", opt: "", debug_info: false, target: "", std_binding: "", backend: "");
     if vec.len(args) < 2 { return options; }
@@ -66,6 +67,25 @@ pub func arguments(args Vec[string]) Options {
         options.path = argument;
         options.format_check = check;
         options.valid = true;
+        return options;
+    }
+    if options.command == "test" || options.command == "lock" {
+        options.error = "E_DRIVER_ARGUMENT: use " + options.command + " --project MANIFEST";
+        var index usize = 2;
+        for index < vec.len(args) {
+            let argument = args[index];
+            var next = "";
+            if index + 1 < vec.len(args) { next = args[index + 1]; }
+            if argument == "--project" && options.project == "" && not_flag(next) {
+                options.project = next; index += 1;
+            } else if argument == "--format" && next == "json" && !options.json {
+                options.json = true; index += 1;
+            } else if argument == "--check" && options.command == "lock" && !options.lock_check {
+                options.lock_check = true;
+            } else { return options; }
+            index += 1;
+        }
+        options.valid = options.project != "";
         return options;
     }
     if options.command == "__source_make_worker" ||

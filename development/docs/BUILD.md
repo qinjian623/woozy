@@ -60,6 +60,22 @@ python3.12 tests/tooling/installed_bundle_test.py "$HOME/.local/opt/woozy-curren
 
 如果 LLVM 提示缺少系统未提供的动态库，可用 `--compat-lib /path/to/libxml2.so.2` 等参数按所需文件名复制兼容库，可重复传入该选项。安装目录中的 LLVM 启动脚本会自行查找这些库，无需在 shell 配置中设置 `LD_LIBRARY_PATH`。目标机器仍需兼容已有二进制所用的 Linux x86_64 系统 ABI 和其他系统库。原生分包构建仍使用系统的 Make 或 Ninja，hosted 构建需要宿主 C 开发环境，执行 Python 输出需 Python 3.12，TLS 附加库单独构建。
 
+### 预编译发行包
+
+拿到压缩包和 SHA-256 文件后，在下载目录校验并解包。将整个 `woozy/` 目录放到希望安装的位置。
+
+```sh
+sha256sum -c woozy-linux-x86_64.tar.gz.sha256
+tar -xzf woozy-linux-x86_64.tar.gz
+./woozy/woozyc --version
+```
+
+制作发行包时，用 Python 3.11 或以上版本运行 `tools/build_release.py`。编译器、运行库和 LLVM 参数与安装器相同。将 `--prefix` 换成 `--out-dir`，两个文件会一并写入新目录。用可重复的 `--notice FILE` 放入 LLVM 及随包复制的兼容库的许可证文件。需要的库取决于 LLVM 的来源，例如上述 Arch libxml2 还依赖 ICU。验证时用无工具链环境变量的 Linux x86_64 环境解包并构建原生和 Python 示例。
+
+GitHub Actions 的 [Linux release](../../.github/workflows/release.yml) 在 Ubuntu 24.04 上从源码构建 C++ 种子和 Woozy 编译器。下载的 LLVM 先按工具链锁文件校验 SHA-256。压缩包和校验文件会在禁网容器中解包验证，运行原生与 Python 示例，并执行 `test` 和依赖锁用例。
+
+在 Actions 中手动运行，可从该次运行的 **Artifacts** 下载产物。推送 `v0.1.0` 这类标签后，同样的测试通过才会发布 GitHub Release。带后缀的标签，例如 `v0.1.0-rc.1`，会发布为预发行版。
+
 本机复查 LLVM 接入时，使用外层 toolchains/ 中的目录：
 
 ```sh

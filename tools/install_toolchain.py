@@ -135,14 +135,18 @@ def install(args):
         publish(staged, prefix)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prefix", required=True, type=Path, help="new installation directory")
+def add_bundle_inputs(parser):
     parser.add_argument("--compiler", required=True, type=Path, help="built self-hosted woozyc")
     parser.add_argument("--runtime-dir", type=Path, help="runtime archive directory, defaults to compiler sibling runtime/")
     parser.add_argument("--llvm-bin", required=True, type=Path, help="directory with the locked LLVM tools")
     parser.add_argument("--compat-lib", type=Path, action="append", default=[],
                         help="extra shared library under its requested name, may be repeated")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prefix", required=True, type=Path, help="new installation directory")
+    add_bundle_inputs(parser)
     args = parser.parse_args()
     try:
         install(args)

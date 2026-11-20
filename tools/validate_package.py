@@ -134,8 +134,8 @@ def check_markdown():
 def check_tasks():
     tasks = read_json("contracts/tasks.json")["tasks"]
     by_id = {t["id"]: t for t in tasks}
-    require(len(by_id) == len(tasks) == 13, "expected 13 unique tasks")
-    require(set(by_id) == {f"T{i:02d}" for i in range(13)}, "task ID range mismatch")
+    require(len(by_id) == len(tasks), "duplicate task ID")
+    require({f"T{i:02d}" for i in range(13)} <= by_id.keys(), "missing baseline task")
     visited, active = set(), set()
     def visit(tid):
         require(tid in by_id, f"unknown task {tid}")

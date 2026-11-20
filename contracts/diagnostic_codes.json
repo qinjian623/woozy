@@ -32,6 +32,14 @@
       "severity": "error"
     },
     {
+      "code": "E_DEPENDENCY_LOCK",
+      "severity": "error"
+    },
+    {
+      "code": "E_NATIVE_BUILD_FAILED",
+      "severity": "error"
+    },
+    {
       "code": "E_DRIVER_ARGUMENT",
       "severity": "error"
     },
