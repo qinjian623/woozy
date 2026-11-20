@@ -23,9 +23,9 @@ void lang_async_fork_child_v1(int32_t) noexcept __attribute__((weak));
 [[noreturn]] void lang_async_fork_refuse_v1() noexcept __attribute__((weak));
 }
 namespace {
-namespace linux = lang::native::linux_x86_64;
+namespace linux_abi = lang::native::linux_x86_64;
 int64_t sys(long n,long a=0,long b=0,long c=0,long d=0,long e=0,long f=0) noexcept {
-  return linux::syscall6(n,a,b,c,d,e,f);
+  return linux_abi::syscall6(n,a,b,c,d,e,f);
 }
 long addr(const void *p) noexcept {return reinterpret_cast<long>(p);}
 
