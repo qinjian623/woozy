@@ -5,6 +5,7 @@ import "std/option" as option;
 import "std/os" as os;
 import "std/sync" as sync;
 import "std/thread" as thread;
+import "std/time" as time;
 import "std/weak" as weak;
 
 func wait_flag(flag sync.AtomicI64) i64 {
@@ -32,18 +33,23 @@ func main() i32 throws os.Error {
             return 3;
         }
     }
-    // After completion the runner and this last handle are released. Poll a
-    // bounded number of times for the deterministic final detach.
+    // Completion can wake the joiner before the runner drops its handle.
+    let start = time.monotonic();
+    let deadline_seconds = start.seconds + 2;
     var settled = false;
-    for var i i32 = 0; i < 100000 && !settled; i += 1 {
-        let probe = weak.upgrade(weak_thread);
-        switch probe {
+    for !settled {
+        let now = time.monotonic();
+        if now.seconds > deadline_seconds ||
+           (now.seconds == deadline_seconds && now.nanoseconds >= start.nanoseconds) {
+            return 4;
+        }
+        switch weak.upgrade(weak_thread) {
         case option.Option.Some(handle):
         case option.Option.None:
             settled = true;
         }
+        if !settled { time.sleep_ms(1); }
     }
-    if !settled { return 4; }
 
     var weak_mutex Weak[sync.Mutex] = weak.empty[sync.Mutex]();
     {
