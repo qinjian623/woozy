@@ -1,0 +1,301 @@
+package app;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func some_u(value option.Option[usize], expected usize) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+func none_u(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+func some_s(value option.Option[string], expected string) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+func none_s(value option.Option[string]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+func same_strings(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func check_legacy() i32 {
+    if text.len("") != 0 || text.len("中😀a") != 3 { return 101; }
+    if text.byte_len("中😀a") != 8 { return 102; }
+    if !same_strings(text.split("中😀", ""), ["中","😀"]) { return 103; }
+    if !same_strings(text.split("a,中,,😀,", ","), ["a","中","","😀",""]) { return 104; }
+    if !same_strings(text.split("", ","), [""]) { return 105; }
+    if vec.len(text.split("", "")) != 0 { return 106; }
+    if text.join(["a","","中"], ",") != "a,,中" { return 107; }
+    if text.replace("a中a", "a", "😀") != "😀中😀" { return 108; }
+    if text.repeat("中", 3) != "中中中" { return 109; }
+    if text.trim(" \u{3000}中😀\r\n") != "中😀" { return 110; }
+    if !text.starts_with("中😀", "中") || !text.ends_with("中😀", "😀") { return 111; }
+    if !some_u(text.find("中😀中", "😀"), 1) { return 112; }
+    if !some_u(text.find_from("aaa", "a", 1), 1) { return 113; }
+    if !text.contains("a\0b", "\0") { return 114; }
+    if text.ascii_lower("AZ中") != "az中" { return 115; }
+    if text.ascii_upper("az中") != "AZ中" { return 116; }
+    let bytes = text.bytes("中\0😀");
+    try {
+        if text.from_bytes(bytes) != "中\0😀" { return 117; }
+        if text.from_rune(0x1f600) != "😀" { return 118; }
+    } catch error text.Error {
+        return 119;
+    }
+    let runes = text.runes("中😀");
+    if vec.len(runes) != 2 || runes[0] != 0x4e2d || runes[1] != 0x1f600 {
+        return 120;
+    }
+    return 0;
+}
+
+func check_find_last() i32 {
+    if !some_u(text.find_last("", ""), 0) { return 201; }
+    if !some_u(text.find_last("中😀a", ""), 3) { return 202; }
+    if !some_u(text.find_last("a\0b", ""), 3) { return 203; }
+    if !none_u(text.find_last("", "a")) { return 204; }
+    if !none_u(text.find_last("a", "ab")) { return 205; }
+    if !some_u(text.find_last("aaaa", "aa"), 2) { return 206; }
+    if !some_u(text.find_last("😀a😀b😀", "😀"), 4) { return 207; }
+    if !some_u(text.find_last("中😀中", "中"), 2) { return 208; }
+    if !some_u(text.find_last("abc", "abc"), 0) { return 209; }
+    if !some_u(text.find_last("a\0b\0c", "\0"), 3) { return 210; }
+    if !some_u(text.find_last("a\0b中\0😀", "\0😀"), 4) { return 211; }
+    if !none_u(text.find_last("中😀", "😀中")) { return 212; }
+    if !some_u(text.find_last("😀😀", "😀😀"), 0) { return 213; }
+    if !some_u(text.find_last("x中y中z", "中"), 3) { return 214; }
+    return 0;
+}
+
+func check_count() i32 {
+    if text.count("", "") != 1 { return 301; }
+    if text.count("中😀", "") != 3 { return 302; }
+    if text.count("a\0b\0", "\0") != 2 { return 303; }
+    if text.count("aaaa", "aa") != 2 { return 304; }
+    if text.count("aaaaa", "aa") != 2 { return 305; }
+    if text.count("😀😀😀", "😀😀") != 1 { return 306; }
+    if text.count("abc", "abcd") != 0 { return 307; }
+    if text.count("abc", "x") != 0 { return 308; }
+    if text.count("aaaa", "a") != 4 { return 309; }
+    if text.count("中😀中😀", "中😀") != 2 { return 310; }
+    if text.count("a\0b\0c", "\0b") != 1 { return 311; }
+    if text.count("", "中") != 0 { return 312; }
+    if text.count("中", "") != 2 { return 313; }
+    if text.count("a\0b", "") != 4 { return 314; }
+    return 0;
+}
+
+func check_split_n() i32 {
+    if vec.len(text.split_n("a,b", ",", 0)) != 0 { return 401; }
+    if vec.len(text.split_n("", "", 0)) != 0 { return 402; }
+    if vec.len(text.split_n("", ",", 0)) != 0 { return 403; }
+
+    if !same_strings(text.split_n("a,b", ",", 1), ["a,b"]) { return 404; }
+    if !same_strings(text.split_n("中😀", "", 1), ["中😀"]) { return 405; }
+    if !same_strings(text.split_n("", "", 1), [""]) { return 406; }
+    if !same_strings(text.split_n("", ",", 1), [""]) { return 407; }
+
+    if !same_strings(text.split_n("a,b,c,d", ",", 2), ["a","b,c,d"]) { return 408; }
+    if !same_strings(text.split_n("a,b,c,d", ",", 3), ["a","b","c,d"]) { return 409; }
+    if !same_strings(text.split_n("a,b,c,d", ",", 4), ["a","b","c","d"]) { return 410; }
+    if !same_strings(text.split_n("a,b,c,d", ",", 9), ["a","b","c","d"]) { return 411; }
+    if !same_strings(text.split_n("a,", ",", 2), ["a",""]) { return 412; }
+    if !same_strings(text.split_n(",a", ",", 2), ["","a"]) { return 413; }
+    if !same_strings(text.split_n(",", ",", 2), ["",""]) { return 414; }
+    if !same_strings(text.split_n("", ",", 2), [""]) { return 415; }
+    if !same_strings(text.split_n("abc", ",", 2), ["abc"]) { return 416; }
+    if !same_strings(text.split_n("中😀é中😀", "😀", 2), ["中","é中😀"]) { return 417; }
+    if !same_strings(text.split_n("中😀é中😀", "😀", 3), ["中","é中",""]) { return 418; }
+    if !same_strings(text.split_n("a\0b\0c", "\0", 2), ["a","b\0c"]) { return 419; }
+    if !same_strings(text.split_n("a\0b\0c", "\0", 3), ["a","b","c"]) { return 420; }
+
+    if !same_strings(text.split_n("a中😀", "", 2), ["a","中😀"]) { return 421; }
+    if !same_strings(text.split_n("a中😀", "", 3), ["a","中","😀"]) { return 422; }
+    if !same_strings(text.split_n("a中😀", "", 9), ["a","中","😀"]) { return 423; }
+    if vec.len(text.split_n("", "", 2)) != 0 { return 424; }
+    if !same_strings(text.split_n("a\0😀", "", 2), ["a","\0😀"]) { return 425; }
+    if !same_strings(text.split_n("a\0😀", "", 3), ["a","\0","😀"]) { return 426; }
+    return 0;
+}
+
+func check_split_n_consistency() i32 {
+    let values = ["", "a", "a,", ",a", "a,,b", ",", ",,", "a,b,c,d",
+        "中,😀,é", "a\0b,c\0d", "中😀", "😀,中", "aaaa"];
+    let separators = [",", "中", "😀", "\0", "a", ",,", "missing", "", "aa"];
+    for value in values {
+        for separator in separators {
+            let old = text.split(value, separator);
+            let old_length = vec.len(old);
+            if !same_strings(text.split_n(value, separator, old_length), old) {
+                return 501;
+            }
+            if old_length != 0 &&
+                !same_strings(text.split_n(value, separator, old_length+1), old) {
+                return 502;
+            }
+            for var limit usize = 1; limit <= old_length; limit += 1 {
+                let actual = text.split_n(value, separator, limit);
+                if limit == 1 {
+                    if !same_strings(actual, [value]) { return 503; }
+                } else {
+                    if vec.len(actual) != limit { return 504; }
+                    for var index usize = 0; index < limit-1; index += 1 {
+                        if actual[index] != old[index] { return 505; }
+                    }
+                    if actual[limit-1] != text.join(old[limit-1:], separator) {
+                        return 506;
+                    }
+                }
+            }
+            if old_length != 0 {
+                if !same_strings(text.split_n(value, separator, old_length+3), old) {
+                    return 507;
+                }
+            } else if !same_strings(text.split_n(value, separator, 2), old) {
+                return 508;
+            }
+        }
+    }
+    return 0;
+}
+
+func check_split_lines() i32 {
+    if vec.len(text.split_lines("")) != 0 { return 601; }
+    if !same_strings(text.split_lines("a"), ["a"]) { return 602; }
+    if !same_strings(text.split_lines("a\nb"), ["a","b"]) { return 603; }
+    if !same_strings(text.split_lines("a\n"), ["a"]) { return 604; }
+    if !same_strings(text.split_lines("\n"), [""]) { return 605; }
+    if !same_strings(text.split_lines("\n\n"), ["",""]) { return 606; }
+    if !same_strings(text.split_lines("a\n\nb\n"), ["a","","b"]) { return 607; }
+    if !same_strings(text.split_lines("a\r\nb\r\n"), ["a","b"]) { return 608; }
+    if !same_strings(text.split_lines("a\rb\r"), ["a","b"]) { return 609; }
+    if !same_strings(text.split_lines("\r\n"), [""]) { return 610; }
+    if !same_strings(text.split_lines("\r"), [""]) { return 611; }
+    if !same_strings(text.split_lines("a\r\n\rb"), ["a","","b"]) { return 612; }
+    if !same_strings(text.split_lines("中😀\r\né\rx\n"), ["中😀","é","x"]) { return 613; }
+    if !same_strings(text.split_lines("a\0b\nc\0"), ["a\0b","c\0"]) { return 614; }
+    if !same_strings(text.split_lines("a\0\r\n\0b"), ["a\0","\0b"]) { return 615; }
+    return 0;
+}
+
+func check_trim() i32 {
+    if text.trim_start("") != "" || text.trim_end("") != "" { return 701; }
+    if text.trim_start(" \t\r\n") != "" || text.trim_end(" \t\r\n") != "" { return 702; }
+    if text.trim_start(" \t\r\n中😀 ") != "中😀 " { return 703; }
+    if text.trim_end(" \t\r\n中😀 \t") != " \t\r\n中😀" { return 704; }
+    if text.trim_start("\u{85}\u{a0}\u{1680}\u{2000}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}中") != "中" {
+        return 705;
+    }
+    if text.trim_end("中\u{85}\u{a0}\u{1680}\u{2000}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}") != "中" {
+        return 706;
+    }
+    if text.trim_start("\0 中") != "\0 中" { return 707; }
+    if text.trim_end("中 \0") != "中 \0" { return 708; }
+    if text.trim_start(" 中 中 ") != "中 中 " { return 709; }
+    if text.trim_end(" 中 中 ") != " 中 中" { return 710; }
+    if text.trim_start("中\u{301} ") != "中\u{301} " { return 711; }
+    if text.trim_end(" 中\u{301}") != " 中\u{301}" { return 712; }
+    let samples = ["", " ", " \t\r\n", "abc", " abc ", "中 😀",
+        "\u{3000}中😀\n", "\0 a \0", " 中 中 "];
+    for sample in samples {
+        if text.trim_end(text.trim_start(sample)) != text.trim(sample) {
+            return 713;
+        }
+    }
+    return 0;
+}
+
+func check_strip() i32 {
+    if !some_s(text.strip_prefix("中😀tail", "中😀"), "tail") { return 801; }
+    if !some_s(text.strip_prefix("中😀", ""), "中😀") { return 802; }
+    if !some_s(text.strip_prefix("中😀", "中"), "😀") { return 803; }
+    if !none_s(text.strip_prefix("中😀", "😀")) { return 804; }
+    if !none_s(text.strip_prefix("中", "中😀")) { return 805; }
+    if !some_s(text.strip_prefix("a\0b", "a\0"), "b") { return 806; }
+    if !none_s(text.strip_prefix("a\0b", "\0")) { return 807; }
+    if !some_s(text.strip_prefix("", ""), "") { return 808; }
+    if !some_s(text.strip_prefix("abc", "abc"), "") { return 809; }
+    if !none_s(text.strip_prefix("abc", "abcd")) { return 810; }
+
+    if !some_s(text.strip_suffix("head中😀", "😀"), "head中") { return 811; }
+    if !some_s(text.strip_suffix("head中😀", ""), "head中😀") { return 812; }
+    if !some_s(text.strip_suffix("head中😀", "中😀"), "head") { return 813; }
+    if !none_s(text.strip_suffix("中😀", "中")) { return 814; }
+    if !some_s(text.strip_suffix("a\0b", "\0b"), "a") { return 815; }
+    if !none_s(text.strip_suffix("a\0b", "\0")) { return 816; }
+    if !some_s(text.strip_suffix("", ""), "") { return 817; }
+    if !some_s(text.strip_suffix("abc", "abc"), "") { return 818; }
+    if !none_s(text.strip_suffix("abc", "zabc")) { return 819; }
+    if !some_s(text.strip_suffix("aaa", "aa"), "a") { return 820; }
+    return 0;
+}
+
+func check_long_inputs() i32 {
+    let long_unicode = text.repeat("中", 5000);
+    if text.count(long_unicode, "中") != 5000 { return 901; }
+    if !some_u(text.find_last(long_unicode, "中"), 4999) { return 902; }
+    let pieces = text.split_n(long_unicode, "中", 5001);
+    if vec.len(pieces) != 5001 { return 903; }
+    if pieces[0] != "" || pieces[5000] != "" { return 904; }
+    if !same_strings(text.split_n(long_unicode, "中", 5000)[4999:], ["中"]) {
+        return 905;
+    }
+
+    let spaces = text.repeat(" ", 20000);
+    if text.trim_start(spaces + "中") != "中" { return 906; }
+    if text.trim_end("中" + spaces) != "中" { return 907; }
+
+    let lines = text.split_lines(text.repeat("x\n", 10000));
+    if vec.len(lines) != 10000 { return 908; }
+    if lines[0] != "x" || lines[9999] != "x" { return 909; }
+
+    let ascii = text.repeat("a", 20000);
+    if text.count(ascii, "a") != 20000 { return 910; }
+    let ascii_cut = text.split_n(ascii, "a", 3);
+    if vec.len(ascii_cut) != 3 || ascii_cut[0] != "" || ascii_cut[1] != "" ||
+        text.len(ascii_cut[2]) != 19998 { return 911; }
+    let nearly = text.repeat("a", 10000) + "b";
+    if !none_u(text.find_last(ascii, nearly)) { return 912; }
+    if text.count(ascii, nearly) != 0 { return 913; }
+    if !same_strings(text.split_n(ascii, nearly, 3), [ascii]) { return 914; }
+    if !some_u(text.find_last(ascii + "b", nearly), 10000) { return 915; }
+    if !some_u(text.find_last("中😀中😀中", "中😀中"), 2) { return 916; }
+    return 0;
+}
+
+func main() i32 {
+    var code = check_legacy();
+    if code != 0 { return code; }
+    code = check_find_last();
+    if code != 0 { return code; }
+    code = check_count();
+    if code != 0 { return code; }
+    code = check_split_n();
+    if code != 0 { return code; }
+    code = check_split_n_consistency();
+    if code != 0 { return code; }
+    code = check_split_lines();
+    if code != 0 { return code; }
+    code = check_trim();
+    if code != 0 { return code; }
+    code = check_strip();
+    if code != 0 { return code; }
+    return check_long_inputs();
+}

@@ -1,0 +1,394 @@
+// Behaviour checks for std/sort. main returns 0 on success and a unique
+// non-zero code identifying the first failing check.
+package app;
+
+import "std/option" as option;
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+struct Item {
+    key i32;
+    tag i32;
+}
+
+func less_i32(left i32, right i32) bool { return left < right; }
+func greater_i32(left i32, right i32) bool { return left > right; }
+func less_i64(left i64, right i64) bool { return left < right; }
+func less_u64(left u64, right u64) bool { return left < right; }
+func less_item(left Item, right Item) bool { return left.key < right.key; }
+func greater_item(left Item, right Item) bool { return left.key > right.key; }
+func less_string(left string, right string) bool { return left < right; }
+
+func found_at(value option.Option[usize], expected usize) bool {
+    switch value {
+        case option.Option.Some(at): return at == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func missing(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(at): return false;
+        case option.Option.None: return true;
+    }
+}
+
+// make_items has keys 2,1,2,1,3,2,1,3,2 and tags in creation order. Equal
+// keys are separated by other keys, so a stable sort must restore the tags in
+// ascending order inside every key group.
+func make_items() Vec[Item] {
+    let items = vec.make[Item](9, Item(key: 0, tag: 0));
+    items[0] = Item(key: 2, tag: 0);
+    items[1] = Item(key: 1, tag: 1);
+    items[2] = Item(key: 2, tag: 2);
+    items[3] = Item(key: 1, tag: 3);
+    items[4] = Item(key: 3, tag: 4);
+    items[5] = Item(key: 2, tag: 5);
+    items[6] = Item(key: 1, tag: 6);
+    items[7] = Item(key: 3, tag: 7);
+    items[8] = Item(key: 2, tag: 8);
+    return items;
+}
+
+func test_empty() i32 {
+    let values = vec.empty[i32]();
+    if !sort.is_sorted_by(values, less_i32) { return 10; }
+    sort.sort_by(values, less_i32);
+    if vec.len(values) != 0 { return 11; }
+    if sort.lower_bound_by(values, 4, less_i32) != 0 { return 12; }
+    if !missing(sort.binary_search_by(values, 4, less_i32)) { return 13; }
+    return 0;
+}
+
+func test_single() i32 {
+    let values = vec.make[i32](1, 42);
+    sort.sort_by(values, less_i32);
+    if values[0] != 42 { return 20; }
+    if !sort.is_sorted_by(values, less_i32) { return 21; }
+    if sort.lower_bound_by(values, 41, less_i32) != 0 { return 22; }
+    if sort.lower_bound_by(values, 42, less_i32) != 0 { return 23; }
+    if sort.lower_bound_by(values, 43, less_i32) != 1 { return 24; }
+    if !found_at(sort.binary_search_by(values, 42, less_i32), 0) { return 25; }
+    if !missing(sort.binary_search_by(values, 41, less_i32)) { return 26; }
+    if !missing(sort.binary_search_by(values, 43, less_i32)) { return 27; }
+    return 0;
+}
+
+func test_duplicates() i32 {
+    let values = vec.make[i32](7, 0);
+    values[0] = 3;
+    values[1] = 1;
+    values[2] = 2;
+    values[3] = 1;
+    values[4] = 3;
+    values[5] = 0;
+    values[6] = 2;
+    if sort.is_sorted_by(values, less_i32) { return 30; }
+    // Vec handles are shared, so sorting through an alias is visible through
+    // the original binding. This exercises the in-place result.
+    let alias = values;
+    sort.sort_by(alias, less_i32);
+    let expected = [0, 1, 1, 2, 2, 3, 3];
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] != i32(expected[index]) { return 31; }
+    }
+    if !sort.is_sorted_by(values, less_i32) { return 32; }
+    if sort.lower_bound_by(values, 0, less_i32) != 0 { return 33; }
+    if sort.lower_bound_by(values, 1, less_i32) != 1 { return 34; }
+    if sort.lower_bound_by(values, 2, less_i32) != 3 { return 35; }
+    if sort.lower_bound_by(values, 3, less_i32) != 5 { return 36; }
+    if sort.lower_bound_by(values, -1, less_i32) != 0 { return 37; }
+    if sort.lower_bound_by(values, 4, less_i32) != 7 { return 38; }
+    if !found_at(sort.binary_search_by(values, 0, less_i32), 0) { return 39; }
+    if !found_at(sort.binary_search_by(values, 1, less_i32), 1) { return 40; }
+    if !found_at(sort.binary_search_by(values, 2, less_i32), 3) { return 41; }
+    if !found_at(sort.binary_search_by(values, 3, less_i32), 5) { return 42; }
+    if !missing(sort.binary_search_by(values, -1, less_i32)) { return 43; }
+    if !missing(sort.binary_search_by(values, 4, less_i32)) { return 44; }
+    return 0;
+}
+
+func test_structure_stability() i32 {
+    let items = make_items();
+    if sort.is_sorted_by(items, less_item) { return 50; }
+    sort.sort_by(items, less_item);
+    let ascending_tags = [1, 3, 6, 0, 2, 5, 8, 4, 7];
+    for var index usize = 0; index < vec.len(items); index += 1 {
+        if items[index].tag != i32(ascending_tags[index]) { return 51; }
+    }
+    if !sort.is_sorted_by(items, less_item) { return 52; }
+    if sort.lower_bound_by(items, Item(key: 2, tag: 99), less_item) != 3 {
+        return 53;
+    }
+    if !found_at(sort.binary_search_by(items, Item(key: 2, tag: 99),
+                                      less_item), 3) { return 54; }
+    if sort.lower_bound_by(items, Item(key: 4, tag: 0), less_item) != 9 {
+        return 55;
+    }
+    if sort.lower_bound_by(items, Item(key: 0, tag: 0), less_item) != 0 {
+        return 56;
+    }
+
+    let reversed_items = make_items();
+    sort.sort_by(reversed_items, greater_item);
+    let descending_tags = [4, 7, 0, 2, 5, 8, 1, 3, 6];
+    for var index usize = 0; index < vec.len(reversed_items); index += 1 {
+        if reversed_items[index].tag != i32(descending_tags[index]) { return 57; }
+    }
+    if !sort.is_sorted_by(reversed_items, greater_item) { return 58; }
+    if sort.lower_bound_by(reversed_items, Item(key: 2, tag: 99),
+                           greater_item) != 2 { return 59; }
+    if !found_at(sort.binary_search_by(reversed_items,
+                                      Item(key: 2, tag: 99),
+                                      greater_item), 2) { return 60; }
+    if !missing(sort.binary_search_by(reversed_items,
+                                     Item(key: 4, tag: 0),
+                                     greater_item)) { return 61; }
+    if sort.lower_bound_by(reversed_items, Item(key: 1, tag: 99),
+                           greater_item) != 6 { return 62; }
+    if !found_at(sort.binary_search_by(reversed_items,
+                                      Item(key: 3, tag: 99),
+                                      greater_item), 0) { return 63; }
+    return 0;
+}
+
+func test_closure_comparators() i32 {
+    let descending = true;
+    let less = func(left i32, right i32) bool {
+        if descending { return left > right; }
+        return left < right;
+    };
+    let values = vec.make[i32](5, 0);
+    values[0] = 1;
+    values[1] = 5;
+    values[2] = 2;
+    values[3] = 4;
+    values[4] = 3;
+    sort.sort_by(values, less);
+    let expected = [5, 4, 3, 2, 1];
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] != i32(expected[index]) { return 70; }
+    }
+    if !sort.is_sorted_by(values, less) { return 71; }
+    if sort.lower_bound_by(values, 3, less) != 2 { return 72; }
+    if !found_at(sort.binary_search_by(values, 3, less), 2) { return 73; }
+    if !missing(sort.binary_search_by(values, 6, less)) { return 74; }
+    if !missing(sort.binary_search_by(values, 0, less)) { return 75; }
+
+    // A comparator capturing a modulus orders by residue classes. Elements in
+    // one class are equivalent, so their original order must survive.
+    let modulus i32 = 3;
+    let less_modulus = func(left i32, right i32) bool {
+        return left % modulus < right % modulus;
+    };
+    let residues = vec.make[i32](9, 0);
+    residues[0] = 8;
+    residues[1] = 1;
+    residues[2] = 7;
+    residues[3] = 4;
+    residues[4] = 2;
+    residues[5] = 6;
+    residues[6] = 3;
+    residues[7] = 5;
+    residues[8] = 0;
+    sort.sort_by(residues, less_modulus);
+    let residue_order = [6, 3, 0, 1, 7, 4, 8, 2, 5];
+    for var index usize = 0; index < vec.len(residues); index += 1 {
+        if residues[index] != i32(residue_order[index]) { return 76; }
+    }
+    if !sort.is_sorted_by(residues, less_modulus) { return 77; }
+    if sort.lower_bound_by(residues, 4, less_modulus) != 3 { return 78; }
+    if !found_at(sort.binary_search_by(residues, 4, less_modulus), 3) {
+        return 79;
+    }
+    if !found_at(sort.binary_search_by(residues, 9, less_modulus), 0) {
+        return 80;
+    }
+    return 0;
+}
+
+func test_integer_boundaries() i32 {
+    let minimum i64 = -9223372036854775808;
+    let maximum i64 = 9223372036854775807;
+    let values = vec.make[i64](7, 0);
+    values[0] = maximum;
+    values[1] = minimum;
+    values[2] = 0;
+    values[3] = -1;
+    values[4] = 1;
+    values[5] = maximum - 1;
+    values[6] = minimum + 1;
+    sort.sort_by(values, less_i64);
+    let expected = [minimum, minimum + 1, -1, 0, 1, maximum - 1, maximum];
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] != expected[index] { return 90; }
+    }
+    if sort.lower_bound_by(values, minimum, less_i64) != 0 { return 91; }
+    if sort.lower_bound_by(values, 2, less_i64) != 5 { return 92; }
+    if sort.lower_bound_by(values, maximum, less_i64) != 6 { return 93; }
+    if !found_at(sort.binary_search_by(values, maximum, less_i64), 6) {
+        return 94;
+    }
+    if !found_at(sort.binary_search_by(values, minimum, less_i64), 0) {
+        return 95;
+    }
+    if !missing(sort.binary_search_by(values, 2, less_i64)) { return 96; }
+
+    let largest u64 = 18446744073709551615;
+    let unsigned = vec.make[u64](4, 0);
+    unsigned[0] = largest;
+    unsigned[1] = 0;
+    unsigned[2] = 1;
+    unsigned[3] = largest - 1;
+    sort.sort_by(unsigned, less_u64);
+    let unsigned_expected = [0, 1, largest - 1, largest];
+    for var index usize = 0; index < vec.len(unsigned); index += 1 {
+        if unsigned[index] != unsigned_expected[index] { return 97; }
+    }
+    if sort.lower_bound_by(unsigned, 2, less_u64) != 2 { return 98; }
+    if sort.lower_bound_by(unsigned, largest, less_u64) != 3 { return 99; }
+    if !found_at(sort.binary_search_by(unsigned, 0, less_u64), 0) {
+        return 100;
+    }
+    if !found_at(sort.binary_search_by(unsigned, largest, less_u64), 3) {
+        return 101;
+    }
+    if !missing(sort.binary_search_by(unsigned, 2, less_u64)) { return 102; }
+    return 0;
+}
+
+func test_strings() i32 {
+    let values = vec.make[string](6, "");
+    values[0] = "b";
+    values[1] = "aa";
+    values[2] = "a";
+    values[3] = "";
+    values[4] = "ab";
+    values[5] = "a";
+    sort.sort_by(values, less_string);
+    let expected = ["", "a", "a", "aa", "ab", "b"];
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] != expected[index] { return 110; }
+    }
+    if !sort.is_sorted_by(values, less_string) { return 111; }
+    if sort.lower_bound_by(values, "a", less_string) != 1 { return 112; }
+    if sort.lower_bound_by(values, "ab", less_string) != 4 { return 113; }
+    if sort.lower_bound_by(values, "z", less_string) != 6 { return 114; }
+    if !found_at(sort.binary_search_by(values, "a", less_string), 1) {
+        return 115;
+    }
+    if !found_at(sort.binary_search_by(values, "b", less_string), 5) {
+        return 116;
+    }
+    if !missing(sort.binary_search_by(values, "c", less_string)) {
+        return 117;
+    }
+    return 0;
+}
+
+func test_large_stability() i32 {
+    let count usize = 1024;
+    let items = vec.make[Item](count, Item(key: 0, tag: 0));
+    for var index usize = 0; index < count; index += 1 {
+        items[index] = Item(key: i32(index * 37 % 11), tag: i32(index));
+    }
+    sort.sort_by(items, less_item);
+    if !sort.is_sorted_by(items, less_item) { return 130; }
+
+    let seen = vec.make[bool](count, false);
+    var previous_key i32 = -1;
+    var previous_tag i32 = -1;
+    for var index usize = 0; index < count; index += 1 {
+        let item = items[index];
+        if item.tag < 0 || usize(item.tag) >= count { return 131; }
+        if seen[usize(item.tag)] { return 132; }
+        seen[usize(item.tag)] = true;
+        if item.key != previous_key {
+            previous_key = item.key;
+            previous_tag = -1;
+        }
+        // Within one key class, tags are strictly increasing exactly when the
+        // original creation order was preserved.
+        if item.tag <= previous_tag { return 133; }
+        previous_tag = item.tag;
+    }
+    for var index usize = 0; index < count; index += 1 {
+        if !seen[index] { return 134; }
+    }
+    for var key i32 = 0; key < 11; key += 1 {
+        let probe = Item(key: key, tag: -1);
+        let at = sort.lower_bound_by(items, probe, less_item);
+        if at >= count || items[at].key != key { return 135; }
+        if !found_at(sort.binary_search_by(items, probe, less_item), at) {
+            return 136;
+        }
+    }
+    return 0;
+}
+
+func test_input_shapes() i32 {
+    let count usize = 256;
+    let ascending = vec.make[i32](count, 0);
+    for var index usize = 0; index < count; index += 1 {
+        ascending[index] = i32(index);
+    }
+    if !sort.is_sorted_by(ascending, less_i32) { return 140; }
+    sort.sort_by(ascending, less_i32);
+    for var index usize = 0; index < count; index += 1 {
+        if ascending[index] != i32(index) { return 141; }
+    }
+    if sort.lower_bound_by(ascending, 128, less_i32) != 128 { return 142; }
+    if !found_at(sort.binary_search_by(ascending, 128, less_i32), 128) {
+        return 143;
+    }
+
+    let backward = vec.make[i32](count, 0);
+    for var index usize = 0; index < count; index += 1 {
+        backward[index] = i32(count - index - 1);
+    }
+    sort.sort_by(backward, less_i32);
+    for var index usize = 0; index < count; index += 1 {
+        if backward[index] != i32(index) { return 144; }
+    }
+    for var index usize = 0; index < count; index += 1 {
+        if sort.lower_bound_by(backward, i32(index), less_i32) != index {
+            return 145;
+        }
+        if !found_at(sort.binary_search_by(backward, i32(index), less_i32),
+                     index) { return 146; }
+    }
+
+    let equal = vec.make[i32](64, 7);
+    sort.sort_by(equal, less_i32);
+    for var index usize = 0; index < vec.len(equal); index += 1 {
+        if equal[index] != 7 { return 147; }
+    }
+    if sort.lower_bound_by(equal, 7, less_i32) != 0 { return 148; }
+    if sort.lower_bound_by(equal, 8, less_i32) != 64 { return 149; }
+    if !found_at(sort.binary_search_by(equal, 7, less_i32), 0) { return 150; }
+    if !missing(sort.binary_search_by(equal, 6, less_i32)) { return 151; }
+    if !missing(sort.binary_search_by(equal, 8, less_i32)) { return 152; }
+    return 0;
+}
+
+func main() i32 {
+    var failure = test_empty();
+    if failure != 0 { return failure; }
+    failure = test_single();
+    if failure != 0 { return failure; }
+    failure = test_duplicates();
+    if failure != 0 { return failure; }
+    failure = test_structure_stability();
+    if failure != 0 { return failure; }
+    failure = test_closure_comparators();
+    if failure != 0 { return failure; }
+    failure = test_integer_boundaries();
+    if failure != 0 { return failure; }
+    failure = test_strings();
+    if failure != 0 { return failure; }
+    failure = test_large_stability();
+    if failure != 0 { return failure; }
+    failure = test_input_shapes();
+    if failure != 0 { return failure; }
+    return 0;
+}

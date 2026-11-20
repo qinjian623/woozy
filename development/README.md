@@ -4,6 +4,7 @@
 
 | 要做的事 | 入口 |
 | --- | --- |
+| 安装可整体移动的自举版 | [安装工具链](docs/BUILD.md#安装自举版工具链) |
 | 构建编译器、运行示例 | [构建与运行](docs/BUILD.md)、[自举检查](docs/SELFHOST_BOOTSTRAP.md) |
 | 配置编辑器、格式化和检查源码 | [编辑器配置](docs/EDITOR.md) |
 | 了解源码结构与开发约定 | [开发说明](DEVELOPMENT.md)、[前端](docs/FRONTEND.md)、[IR](docs/IR_CONTRACTS.md)、[后端](docs/BACKENDS.md) |

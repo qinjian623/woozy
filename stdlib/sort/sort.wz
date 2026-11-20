@@ -1,0 +1,121 @@
+// Ordering helpers for Vec[T] values.
+//
+// Every operation takes the caller's ordering as `less`. The comparator must
+// define a strict weak ordering: it is irreflexive, transitive, and
+// incomparable elements form equivalence classes. It must not mutate the Vec
+// being sorted or searched, because that invalidates the algorithm's
+// invariants. sort_by keeps equivalent elements in their relative order.
+package sort;
+
+import "std/option" as option;
+import "std/vec" as vec;
+
+// merge combines the sorted ranges [left, middle) and [middle, right) from
+// values into scratch, then copies the merged range back. When the right run
+// compares equivalent to the left run, the left element is emitted first;
+// that choice is what makes the sort stable.
+func merge[T](values Vec[T], scratch Vec[T], left usize, middle usize,
+    right usize, less func(T, T) bool) {
+    var lower usize = left;
+    var upper usize = middle;
+    var out usize = left;
+    for lower < middle && upper < right {
+        if less(values[upper], values[lower]) {
+            scratch[out] = values[upper];
+            upper += 1;
+        } else {
+            scratch[out] = values[lower];
+            lower += 1;
+        }
+        out += 1;
+    }
+    for lower < middle {
+        scratch[out] = values[lower];
+        lower += 1;
+        out += 1;
+    }
+    for upper < right {
+        scratch[out] = values[upper];
+        upper += 1;
+        out += 1;
+    }
+    for var index usize = left; index < right; index += 1 {
+        values[index] = scratch[index];
+    }
+}
+
+func sort_range[T](values Vec[T], scratch Vec[T], left usize, right usize,
+    less func(T, T) bool) {
+    if right - left <= 1 {
+        return;
+    }
+    let middle = left + (right - left) / 2;
+    sort_range(values, scratch, left, middle, less);
+    sort_range(values, scratch, middle, right, less);
+    // Adjacent runs that already order correctly need no merge, which keeps
+    // an already sorted Vec cheap without changing the worst-case bound.
+    if !less(values[middle], values[middle - 1]) {
+        return;
+    }
+    merge(values, scratch, left, middle, right, less);
+}
+
+// sort_by sorts values in place with a stable merge sort. The running time is
+// O(n log n) for every input. Already ordered adjacent runs are left untouched
+// instead of being copied through the scratch buffer. One scratch Vec of
+// length n is allocated while the sort runs, so the auxiliary space is O(n).
+// Empty and single-element Vecs are left untouched.
+pub func sort_by[T](values Vec[T], less func(T, T) bool) {
+    let length = vec.len(values);
+    if length <= 1 {
+        return;
+    }
+    // values[0] only supplies an initial element; merge overwrites every slot
+    // before it is read.
+    let scratch = vec.make[T](length, values[0]);
+    sort_range(values, scratch, 0, length, less);
+}
+
+// is_sorted_by reports whether values is ordered by less. Equivalent adjacent
+// elements are accepted. An empty or single-element Vec is sorted.
+pub func is_sorted_by[T](values Vec[T], less func(T, T) bool) bool {
+    for var index usize = 1; index < vec.len(values); index += 1 {
+        if less(values[index], values[index - 1]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// lower_bound_by returns the first position whose element is not less than
+// value in a Vec sorted by less. If every element is less than value, the
+// result is vec.len(values). With a strict weak order this is the first
+// position in the equivalence class of value.
+pub func lower_bound_by[T](values Vec[T], value T, less func(T, T) bool) usize {
+    var low usize = 0;
+    var high usize = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if less(values[middle], value) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+// binary_search_by returns the first equivalent position in a Vec sorted by
+// less. It returns option.None when no stored element is equivalent to value.
+// The comparator is called twice for the candidate element, so the running
+// time is O(log n) with O(1) auxiliary space.
+pub func binary_search_by[T](values Vec[T], value T,
+    less func(T, T) bool) option.Option[usize] {
+    let position = lower_bound_by(values, value, less);
+    // At position, less(values[position], value) is false. The reverse test
+    // distinguishes an equivalent element from one that only sorts later.
+    if position < vec.len(values) && !less(value, values[position]) {
+        return option.Option[usize].Some(position);
+    }
+    return option.Option[usize].None;
+}

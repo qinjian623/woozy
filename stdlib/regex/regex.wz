@@ -1,0 +1,500 @@
+// Small regular expression matcher for UTF-8 text.
+//
+// The pattern is compiled to a Thompson NFA and simulated with a state set.
+// Every input position visits each NFA state at most once, so pathological
+// repetition does not backtrack exponentially. find reports the earliest
+// match start and, for that start, the longest match end.
+//
+// Supported syntax:
+//   literals (including UTF-8), ., ^, $, ( ), |, *, +, ?,
+//   [a-z], [^x], and the escapes \\ \. \* \+ \? \( \) \[ \] \{ \} \| \^ \$ \- \n \r \t
+//
+// ^ and $ assert the beginning and end of the whole input. . does not match
+// U+000A. Offsets in Error are Unicode code point indices in the pattern.
+// Backreferences, lookaround, captures, {m,n} and flags are rejected.
+package regex;
+
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAX_PATTERN_BYTES usize = 65536;
+const MAX_PATTERN_CODEPOINTS usize = 4096;
+const MAX_NESTING usize = 128;
+const MAX_STATES usize = 16384;
+const MAX_CLASS_RANGES usize = 16384;
+const NO_STATE usize = 18446744073709551615;
+
+const KIND_CHAR u32 = 0;
+const KIND_ANY u32 = 1;
+const KIND_CLASS u32 = 2;
+const KIND_NEG_CLASS u32 = 3;
+const KIND_SPLIT u32 = 4;
+const KIND_JUMP u32 = 5;
+const KIND_START u32 = 6;
+const KIND_END u32 = 7;
+const KIND_MATCH u32 = 8;
+
+pub enum Error {
+    Syntax(offset usize);
+    PatternTooLarge(offset usize);
+    NestingTooDeep(offset usize);
+}
+
+pub struct Match {
+    pub start usize;
+    pub end usize;
+}
+
+struct Range {
+    low u32;
+    high u32;
+}
+
+struct Inst {
+    kind u32;
+    next usize;
+    alt usize;
+    value u32;
+    range_start usize;
+    range_end usize;
+}
+
+pub struct Pattern {
+    states Vec[Inst];
+    ranges Vec[Range];
+    start usize;
+}
+
+struct Patch {
+    state usize;
+    alt bool;
+}
+
+struct Frag {
+    start usize;
+    outs Vec[Patch];
+    repeatable bool;
+}
+
+struct Compiler {
+    pattern Vec[u32];
+    cursor Vec[usize];
+    states Vec[Inst];
+    ranges Vec[Range];
+}
+
+struct Runner {
+    compiled Pattern;
+    input Vec[u32];
+    starts Vec[usize];
+    touched Vec[usize];
+    active Vec[usize];
+}
+
+func at_end(c Compiler) bool {
+    return c.cursor[0] >= vec.len(c.pattern);
+}
+
+func peek(c Compiler) u32 {
+    if at_end(c) { return 0x110000; }
+    return c.pattern[c.cursor[0]];
+}
+
+func advance(c Compiler) {
+    c.cursor[0] += 1;
+}
+
+func emit(c Compiler, kind u32, next usize, alt usize, value u32,
+          range_start usize, range_end usize, offset usize) usize throws Error {
+    if vec.len(c.states) >= MAX_STATES {
+        throw Error.PatternTooLarge(offset);
+    }
+    vec.push(c.states, Inst(kind:kind, next:next, alt:alt, value:value,
+        range_start:range_start, range_end:range_end));
+    return vec.len(c.states) - 1;
+}
+
+func add_range(c Compiler, low u32, high u32, offset usize) throws Error {
+    if vec.len(c.ranges) >= MAX_CLASS_RANGES {
+        throw Error.PatternTooLarge(offset);
+    }
+    vec.push(c.ranges, Range(low:low, high:high));
+}
+
+func patch(c Compiler, outs Vec[Patch], target usize) {
+    for item in outs {
+        if item.alt {
+            c.states[item.state].alt = target;
+        } else {
+            c.states[item.state].next = target;
+        }
+    }
+}
+
+func empty_fragment(c Compiler, offset usize) Frag throws Error {
+    let state = emit(c, KIND_JUMP, NO_STATE, NO_STATE, 0, 0, 0, offset);
+    let outs = vec.empty[Patch]();
+    vec.push(outs, Patch(state:state, alt:false));
+    return Frag(start:state, outs:outs, repeatable:true);
+}
+
+func char_fragment(c Compiler, value u32, offset usize) Frag throws Error {
+    let state = emit(c, KIND_CHAR, NO_STATE, NO_STATE, value, 0, 0, offset);
+    let outs = vec.empty[Patch]();
+    vec.push(outs, Patch(state:state, alt:false));
+    return Frag(start:state, outs:outs, repeatable:true);
+}
+
+func simple_fragment(c Compiler, kind u32, offset usize) Frag throws Error {
+    let state = emit(c, kind, NO_STATE, NO_STATE, 0, 0, 0, offset);
+    let outs = vec.empty[Patch]();
+    vec.push(outs, Patch(state:state, alt:false));
+    return Frag(start:state, outs:outs, repeatable:true);
+}
+
+func concat_fragments(c Compiler, left Frag, right Frag) Frag {
+    patch(c, left.outs, right.start);
+    return Frag(start:left.start, outs:right.outs, repeatable:true);
+}
+
+func escaped_rune(c Compiler) u32 throws Error {
+    let slash = c.cursor[0];
+    advance(c);
+    if at_end(c) {
+        throw Error.Syntax(slash);
+    }
+    let offset = c.cursor[0];
+    let rune = peek(c);
+    advance(c);
+    if rune == 110 { return 10; }
+    if rune == 114 { return 13; }
+    if rune == 116 { return 9; }
+    if rune == 92 || rune == 46 || rune == 94 || rune == 36 ||
+       rune == 42 || rune == 43 || rune == 63 || rune == 40 ||
+       rune == 41 || rune == 91 || rune == 93 || rune == 123 ||
+       rune == 125 || rune == 124 || rune == 45 {
+        return rune;
+    }
+    throw Error.Syntax(offset);
+}
+
+func parse_class(c Compiler) Frag throws Error {
+    let open = c.cursor[0] - 1;
+    var negated = false;
+    if peek(c) == 94 {
+        negated = true;
+        advance(c);
+    }
+    let range_start = vec.len(c.ranges);
+    var items usize = 0;
+    for true {
+        if at_end(c) {
+            throw Error.Syntax(c.cursor[0]);
+        }
+        if peek(c) == 93 {
+            if items == 0 {
+                throw Error.Syntax(c.cursor[0]);
+            }
+            advance(c);
+            break;
+        }
+        let first_offset = c.cursor[0];
+        var first u32 = 0;
+        if peek(c) == 92 {
+            first = escaped_rune(c);
+        } else {
+            first = peek(c);
+            advance(c);
+        }
+        if peek(c) == 45 {
+            let dash = c.cursor[0];
+            advance(c);
+            if at_end(c) {
+                throw Error.Syntax(c.cursor[0]);
+            }
+            if peek(c) == 93 {
+                add_range(c, first, first, first_offset);
+                add_range(c, 45, 45, dash);
+                items += 2;
+                continue;
+            }
+            var second u32 = 0;
+            if peek(c) == 92 {
+                second = escaped_rune(c);
+            } else {
+                second = peek(c);
+                advance(c);
+            }
+            if second < first {
+                throw Error.Syntax(dash);
+            }
+            add_range(c, first, second, dash);
+            items += 1;
+        } else {
+            add_range(c, first, first, first_offset);
+            items += 1;
+        }
+    }
+    let range_end = vec.len(c.ranges);
+    var kind = KIND_CLASS;
+    if negated { kind = KIND_NEG_CLASS; }
+    let state = emit(c, kind, NO_STATE, NO_STATE, 0, range_start, range_end, open);
+    let outs = vec.empty[Patch]();
+    vec.push(outs, Patch(state:state, alt:false));
+    return Frag(start:state, outs:outs, repeatable:true);
+}
+
+func parse_atom(c Compiler, depth usize) Frag throws Error {
+    let offset = c.cursor[0];
+    let rune = peek(c);
+    if rune == 40 {
+        advance(c);
+        if depth >= MAX_NESTING {
+            throw Error.NestingTooDeep(offset);
+        }
+        let inner = parse_alternation(c, depth + 1);
+        if at_end(c) || peek(c) != 41 {
+            throw Error.Syntax(c.cursor[0]);
+        }
+        advance(c);
+        return Frag(start:inner.start, outs:inner.outs, repeatable:true);
+    }
+    if rune == 91 {
+        advance(c);
+        return parse_class(c);
+    }
+    if rune == 46 {
+        advance(c);
+        return simple_fragment(c, KIND_ANY, offset);
+    }
+    if rune == 94 {
+        advance(c);
+        let result = simple_fragment(c, KIND_START, offset);
+        return Frag(start:result.start, outs:result.outs, repeatable:false);
+    }
+    if rune == 36 {
+        advance(c);
+        let result = simple_fragment(c, KIND_END, offset);
+        return Frag(start:result.start, outs:result.outs, repeatable:false);
+    }
+    if rune == 92 {
+        let value = escaped_rune(c);
+        return char_fragment(c, value, offset);
+    }
+    if rune == 42 || rune == 43 || rune == 63 || rune == 41 ||
+       rune == 93 || rune == 123 || rune == 125 || rune == 124 {
+        throw Error.Syntax(offset);
+    }
+    if at_end(c) {
+        throw Error.Syntax(offset);
+    }
+    advance(c);
+    return char_fragment(c, rune, offset);
+}
+
+func parse_repetition(c Compiler, depth usize) Frag throws Error {
+    let atom = parse_atom(c, depth);
+    if at_end(c) {
+        return atom;
+    }
+    let rune = peek(c);
+    if rune != 42 && rune != 43 && rune != 63 {
+        return atom;
+    }
+    let offset = c.cursor[0];
+    if !atom.repeatable {
+        throw Error.Syntax(offset);
+    }
+    advance(c);
+    if !at_end(c) {
+        let after = peek(c);
+        if after == 42 || after == 43 || after == 63 {
+            throw Error.Syntax(c.cursor[0]);
+        }
+    }
+    if rune == 42 {
+        let split = emit(c, KIND_SPLIT, atom.start, NO_STATE, 0, 0, 0, offset);
+        patch(c, atom.outs, split);
+        let outs = vec.empty[Patch]();
+        vec.push(outs, Patch(state:split, alt:true));
+        return Frag(start:split, outs:outs, repeatable:true);
+    }
+    if rune == 43 {
+        let split = emit(c, KIND_SPLIT, atom.start, NO_STATE, 0, 0, 0, offset);
+        patch(c, atom.outs, split);
+        let outs = vec.empty[Patch]();
+        vec.push(outs, Patch(state:split, alt:true));
+        return Frag(start:atom.start, outs:outs, repeatable:true);
+    }
+    let split = emit(c, KIND_SPLIT, atom.start, NO_STATE, 0, 0, 0, offset);
+    vec.push(atom.outs, Patch(state:split, alt:true));
+    return Frag(start:split, outs:atom.outs, repeatable:true);
+}
+
+func parse_concat(c Compiler, depth usize) Frag throws Error {
+    var result = empty_fragment(c, c.cursor[0]);
+    for !at_end(c) && peek(c) != 124 && peek(c) != 41 {
+        let next = parse_repetition(c, depth);
+        result = concat_fragments(c, result, next);
+    }
+    return result;
+}
+
+func parse_alternation(c Compiler, depth usize) Frag throws Error {
+    var result = parse_concat(c, depth);
+    for peek(c) == 124 {
+        let offset = c.cursor[0];
+        advance(c);
+        let right = parse_concat(c, depth);
+        let split = emit(c, KIND_SPLIT, result.start, right.start, 0, 0, 0, offset);
+        for item in right.outs {
+            vec.push(result.outs, item);
+        }
+        result = Frag(start:split, outs:result.outs, repeatable:true);
+    }
+    return result;
+}
+
+pub func compile(pattern string) Pattern throws Error {
+    if text.byte_len(pattern) > MAX_PATTERN_BYTES {
+        throw Error.PatternTooLarge(0);
+    }
+    let runes = text.runes(pattern);
+    if vec.len(runes) > MAX_PATTERN_CODEPOINTS {
+        throw Error.PatternTooLarge(MAX_PATTERN_CODEPOINTS);
+    }
+    let c = Compiler(
+        pattern:runes,
+        cursor:vec.make[usize](1, 0),
+        states:vec.empty[Inst](),
+        ranges:vec.empty[Range]());
+    let root = parse_alternation(c, 0);
+    if !at_end(c) {
+        throw Error.Syntax(c.cursor[0]);
+    }
+    let match_state = emit(c, KIND_MATCH, NO_STATE, NO_STATE, 0, 0, 0, c.cursor[0]);
+    patch(c, root.outs, match_state);
+    return Pattern(states:c.states, ranges:c.ranges, start:root.start);
+}
+
+func class_matches(compiled Pattern, inst Inst, rune u32) bool {
+    var found = false;
+    for var index usize = inst.range_start; index < inst.range_end; index += 1 {
+        let range = compiled.ranges[index];
+        if rune >= range.low && rune <= range.high {
+            found = true;
+            break;
+        }
+    }
+    if inst.kind == KIND_NEG_CLASS {
+        return !found;
+    }
+    return found;
+}
+
+// Add one thread and its epsilon closure. starts holds the earliest start for
+// every state visited at this input position; earlier threads always run
+// first, so a later thread can never overwrite one.
+func add_thread(runner Runner, seed usize, start usize, position usize) {
+    if runner.starts[seed] != NO_STATE {
+        return;
+    }
+    let stack = vec.empty[usize]();
+    vec.push(stack, seed);
+    let count = vec.len(runner.input);
+    for vec.len(stack) != 0 {
+        let state = stack[vec.len(stack) - 1];
+        let discarded = vec.pop(stack);
+        if runner.starts[state] != NO_STATE {
+            continue;
+        }
+        runner.starts[state] = start;
+        vec.push(runner.touched, state);
+        let inst = runner.compiled.states[state];
+        if inst.kind == KIND_SPLIT {
+            vec.push(stack, inst.alt);
+            vec.push(stack, inst.next);
+        } else if inst.kind == KIND_JUMP {
+            vec.push(stack, inst.next);
+        } else if inst.kind == KIND_START {
+            if position == 0 {
+                vec.push(stack, inst.next);
+            }
+        } else if inst.kind == KIND_END {
+            if position == count {
+                vec.push(stack, inst.next);
+            }
+        } else {
+            vec.push(runner.active, state);
+        }
+    }
+}
+
+pub func find(compiled Pattern, value string) option.Option[Match] {
+    let runner = Runner(
+        compiled:compiled,
+        input:text.runes(value),
+        starts:vec.make[usize](vec.len(compiled.states), NO_STATE),
+        touched:vec.empty[usize](),
+        active:vec.empty[usize]());
+    let count = vec.len(runner.input);
+    var best_start = NO_STATE;
+    var best_end usize = 0;
+    var position usize = 0;
+    for true {
+        add_thread(runner, runner.compiled.start, position, position);
+        for var index usize = 0; index < vec.len(runner.active); index += 1 {
+            let state = runner.active[index];
+            if runner.compiled.states[state].kind == KIND_MATCH {
+                let start = runner.starts[state];
+                if start < best_start || (start == best_start && position > best_end) {
+                    best_start = start;
+                    best_end = position;
+                }
+            }
+        }
+        if position == count {
+            break;
+        }
+        let rune = runner.input[position];
+        let seed_states = vec.empty[usize]();
+        let seed_starts = vec.empty[usize]();
+        for state in runner.active {
+            let inst = runner.compiled.states[state];
+            var matched = false;
+            if inst.kind == KIND_CHAR {
+                matched = rune == inst.value;
+            } else if inst.kind == KIND_ANY {
+                matched = rune != 10;
+            } else if inst.kind == KIND_CLASS || inst.kind == KIND_NEG_CLASS {
+                matched = class_matches(runner.compiled, inst, rune);
+            }
+            if matched {
+                vec.push(seed_states, inst.next);
+                vec.push(seed_starts, runner.starts[state]);
+            }
+        }
+        for state in runner.touched {
+            runner.starts[state] = NO_STATE;
+        }
+        vec.clear(runner.touched);
+        vec.clear(runner.active);
+        for var index usize = 0; index < vec.len(seed_states); index += 1 {
+            add_thread(runner, seed_states[index], seed_starts[index], position + 1);
+        }
+        add_thread(runner, runner.compiled.start, position + 1, position + 1);
+        position += 1;
+    }
+    if best_start == NO_STATE {
+        return option.Option[Match].None;
+    }
+    return option.Option[Match].Some(Match(start:best_start, end:best_end));
+}
+
+pub func is_match(compiled Pattern, value string) bool {
+    switch find(compiled, value) {
+        case option.Option.Some(found): return true;
+        case option.Option.None: return false;
+    }
+}

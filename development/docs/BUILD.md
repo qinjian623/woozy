@@ -43,6 +43,23 @@ build/llvm/lang_llvm_probe
 
 已验证的独立工具链版本、来源和摘要见 contracts/toolchain.lock.json。本机的官方 Linux 包另外需要 libxml2.so.2 和静态 zstd：兼容库取自验证过发行签名的 Arch libxml2-legacy，zstd 1.5.7 从官方源码构建并核对发布的 SHA-256。系统库没有被替换。
 
+### 安装自举版工具链
+
+已有自举版编译器、对应的两份运行库和锁定版本的 LLVM 工具时，在仓库根目录运行以下命令。把示例中的编译器和 LLVM 路径替换为实际位置。默认从编译器旁的 `runtime/` 取得运行库，也可用 `--runtime-dir` 指定。
+
+```sh
+python3 tools/install_toolchain.py \
+  --prefix "$HOME/.local/opt/woozy-current" \
+  --compiler /path/to/selfhost/woozyc \
+  --runtime-dir /path/to/runtime-archives \
+  --llvm-bin /path/to/llvm-22.1.8/bin
+python3.12 tests/tooling/installed_bundle_test.py "$HOME/.local/opt/woozy-current/woozyc"
+```
+
+安装器把编译器、标准库、Native/hosted 运行库、Python 运行库、四个 LLVM 工具和 Clang 自带头文件放在同一目录。安装目标须尚不存在。搬动时移动整个目录，可以用指向其中 `woozyc` 的符号链接将命令加入 PATH。
+
+如果 LLVM 提示缺少系统未提供的动态库，可用 `--compat-lib /path/to/libxml2.so.2` 等参数按所需文件名复制兼容库，可重复传入该选项。安装目录中的 LLVM 启动脚本会自行查找这些库，无需在 shell 配置中设置 `LD_LIBRARY_PATH`。目标机器仍需兼容已有二进制所用的 Linux x86_64 系统 ABI 和其他系统库。原生分包构建仍使用系统的 Make 或 Ninja，hosted 构建需要宿主 C 开发环境，执行 Python 输出需 Python 3.12，TLS 附加库单独构建。
+
 本机复查 LLVM 接入时，使用外层 toolchains/ 中的目录：
 
 ```sh

@@ -20,9 +20,12 @@ pub func from_rune(value u32) string throws Error {
 pub func bytes(value string) Vec[u8] { return __woozy_text_bytes(value); }
 
 pub func runes(value string) Vec[u32] {
+    let data = bytes(value);
     let out = vec.empty[u32]();
     vec.reserve(out,len(value));
-    for rune in value { vec.push(out,rune); }
+    for var offset usize = 0; offset < vec.len(data); offset = utf8_next(data,offset) {
+        vec.push(out,utf8_decode(data,offset));
+    }
     return out;
 }
 pub func starts_with(value string, prefix string) bool {
@@ -136,4 +139,203 @@ pub func ascii_upper(value string) string {
         } else { out += value[index:index+1]; }
     }
     return out;
+}
+
+pub func find_last(value string, needle string) option.Option[usize] {
+    if needle == "" { return option.Option[usize].Some(len(value)); }
+    if byte_len(needle) > byte_len(value) { return option.Option[usize].None; }
+    let haystack = bytes(value);
+    let pattern = bytes(needle);
+    let pattern_bytes = vec.len(pattern);
+    let haystack_bytes = vec.len(haystack);
+    let fallback = match_table(pattern);
+    var matched usize = 0;
+    var last = haystack_bytes;
+    for var offset usize = 0; offset < haystack_bytes; offset += 1 {
+        matched = match_byte(pattern,fallback,matched,haystack[offset]);
+        if matched == pattern_bytes {
+            last = offset+1-pattern_bytes;
+            matched = fallback[matched-1];
+        }
+    }
+    if last == haystack_bytes { return option.Option[usize].None; }
+    var index usize = 0;
+    for var offset usize = 0; offset < last; offset = utf8_next(haystack,offset) {
+        index += 1;
+    }
+    return option.Option[usize].Some(index);
+}
+pub func count(value string, needle string) usize {
+    if needle == "" { return len(value)+1; }
+    if byte_len(needle) > byte_len(value) { return 0; }
+    let haystack = bytes(value);
+    let pattern = bytes(needle);
+    let pattern_bytes = vec.len(pattern);
+    let haystack_bytes = vec.len(haystack);
+    let fallback = match_table(pattern);
+    var matched usize = 0;
+    var total usize = 0;
+    for var offset usize = 0; offset < haystack_bytes; offset += 1 {
+        matched = match_byte(pattern,fallback,matched,haystack[offset]);
+        if matched == pattern_bytes {
+            total += 1;
+            matched = 0;
+        }
+    }
+    return total;
+}
+pub func split_n(value string, separator string, limit usize) Vec[string] {
+    let out = vec.empty[string]();
+    if limit == 0 { return out; }
+    if limit == 1 {
+        vec.push(out,value);
+        return out;
+    }
+    let haystack = bytes(value);
+    let haystack_bytes = vec.len(haystack);
+    if separator == "" {
+        var offset usize = 0;
+        var pieces usize = 0;
+        for offset < haystack_bytes && pieces+1 < limit {
+            let next = utf8_next(haystack,offset);
+            vec.push(out,text_from_span(haystack,offset,next));
+            pieces += 1;
+            offset = next;
+        }
+        if offset < haystack_bytes {
+            vec.push(out,text_from_span(haystack,offset,haystack_bytes));
+        }
+        return out;
+    }
+    let pattern = bytes(separator);
+    let pattern_bytes = vec.len(pattern);
+    if pattern_bytes > haystack_bytes {
+        vec.push(out,value);
+        return out;
+    }
+    let fallback = match_table(pattern);
+    var matched usize = 0;
+    var start usize = 0;
+    var pieces usize = 0;
+    for var offset usize = 0; offset < haystack_bytes && pieces+1 < limit; offset += 1 {
+        matched = match_byte(pattern,fallback,matched,haystack[offset]);
+        if matched == pattern_bytes {
+            vec.push(out,text_from_span(haystack,start,offset+1-pattern_bytes));
+            pieces += 1;
+            start = offset+1;
+            matched = 0;
+        }
+    }
+    vec.push(out,text_from_span(haystack,start,haystack_bytes));
+    return out;
+}
+pub func split_lines(value string) Vec[string] {
+    let out = vec.empty[string]();
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
+    if data_bytes == 0 { return out; }
+    var start usize = 0;
+    var offset usize = 0;
+    for offset < data_bytes {
+        if data[offset] == 10 {
+            vec.push(out,text_from_span(data,start,offset));
+            offset += 1;
+            start = offset;
+        } else if data[offset] == 13 {
+            vec.push(out,text_from_span(data,start,offset));
+            offset += 1;
+            if offset < data_bytes && data[offset] == 10 { offset += 1; }
+            start = offset;
+        } else {
+            offset = utf8_next(data,offset);
+        }
+    }
+    if start < data_bytes {
+        vec.push(out,text_from_span(data,start,data_bytes));
+    }
+    return out;
+}
+pub func trim_start(value string) string {
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
+    var offset usize = 0;
+    for offset < data_bytes {
+        if !is_space(utf8_decode(data,offset)) { break; }
+        offset = utf8_next(data,offset);
+    }
+    if offset == 0 { return value; }
+    return text_from_span(data,offset,data_bytes);
+}
+pub func trim_end(value string) string {
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
+    var end usize = data_bytes;
+    for end > 0 {
+        let start = utf8_prev(data,end);
+        if !is_space(utf8_decode(data,start)) { break; }
+        end = start;
+    }
+    if end == data_bytes { return value; }
+    return text_from_span(data,0,end);
+}
+pub func strip_prefix(value string, prefix string) option.Option[string] {
+    if !starts_with(value,prefix) { return option.Option[string].None; }
+    return option.Option[string].Some(value[len(prefix):]);
+}
+pub func strip_suffix(value string, suffix string) option.Option[string] {
+    if !ends_with(value,suffix) { return option.Option[string].None; }
+    return option.Option[string].Some(value[0:len(value)-len(suffix)]);
+}
+// A complete UTF-8 pattern begins with a leading byte, so byte matches
+// also begin and end on code point boundaries.
+func match_table(pattern Vec[u8]) Vec[usize] {
+    let length = vec.len(pattern);
+    let fallback = vec.make[usize](length,0);
+    var matched usize = 0;
+    for var index usize = 1; index < length; index += 1 {
+        matched = match_byte(pattern,fallback,matched,pattern[index]);
+        fallback[index] = matched;
+    }
+    return fallback;
+}
+func match_byte(pattern Vec[u8], fallback Vec[usize], matched usize, byte u8) usize {
+    var available = matched;
+    for available > 0 && pattern[available] != byte {
+        available = fallback[available-1];
+    }
+    if pattern[available] == byte { return available+1; }
+    return available;
+}
+func utf8_next(data Vec[u8], offset usize) usize {
+    let first = data[offset];
+    if first < 0x80 { return offset+1; }
+    if first < 0xe0 { return offset+2; }
+    if first < 0xf0 { return offset+3; }
+    return offset+4;
+}
+func utf8_prev(data Vec[u8], end usize) usize {
+    var start = end-1;
+    for start > 0 && (data[start] & 0xc0) == 0x80 { start -= 1; }
+    return start;
+}
+func utf8_decode(data Vec[u8], offset usize) u32 {
+    let first = u32(data[offset]);
+    if first < 0x80 { return first; }
+    if first < 0xe0 {
+        return ((first & 0x1f) << 6) | (u32(data[offset+1]) & 0x3f);
+    }
+    if first < 0xf0 {
+        return ((first & 0x0f) << 12) | ((u32(data[offset+1]) & 0x3f) << 6) |
+            (u32(data[offset+2]) & 0x3f);
+    }
+    return ((first & 0x07) << 18) | ((u32(data[offset+1]) & 0x3f) << 12) |
+        ((u32(data[offset+2]) & 0x3f) << 6) | (u32(data[offset+3]) & 0x3f);
+}
+func text_from_span(data Vec[u8], start usize, end usize) string {
+    // Callers pass complete UTF-8 code point spans from an existing string.
+    try {
+        return from_bytes(data[start:end]);
+    } catch error Error {
+        return "";
+    }
 }
