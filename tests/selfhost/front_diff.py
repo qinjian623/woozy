@@ -31,18 +31,12 @@ HERE = Path(__file__).resolve().parent
 ORACLE_SOURCE = HERE / "stage0_oracle.cpp"
 DRIVER_SOURCE = HERE / "front_driver.wz"
 SYNTAX_CASES = ROOT / "tests/syntax/cases.json"
+SELFHOST_SOURCE_BASELINE = HERE / "frontend_sources.txt"
 OPERATION_ID = "woozy-SH04-front-diff-one-correction-20261113"
 PROTOCOL = "woozy-selfhost-front/1"
 MODULE_NAMES = ("model", "source", "lexer", "parser")
 EXPECTED_SYNTAX_CASES = 80
 EXPECTED_EDGE_CASES = 28
-# Restored original frontend inventory: every live selfhost .wz file, including
-# selfhost/tests/** fixtures/corpora, plus the driver.  The count is fixed so a
-# silent inventory shrink fails; the complete path/SHA list is written to
-# inputs.json for the run report.
-EXPECTED_SELFHOST_SOURCES = 270
-EXPECTED_CASES = (EXPECTED_SYNTAX_CASES + EXPECTED_EDGE_CASES +
-                  EXPECTED_SELFHOST_SOURCES + 1)
 DEFAULT_JOBS = 4
 # Keep the original per-oracle command budget.  The restored inventory is run in
 # bounded parallel batches; the CTest command budget remains 1200 s and Wz
@@ -263,24 +257,27 @@ def load_cases(case_dir: Path) -> list[dict[str, Any]]:
             "expected_syntax": None,
         }
     )
-    if len(cases) != EXPECTED_CASES:
-        raise CheckFailure(
-            f"expected {EXPECTED_CASES} fixed frontend cases, found {len(cases)}"
-        )
     return cases
 
 
 def selfhost_source_paths() -> list[tuple[str, Path]]:
     """Read every live compiler/test source; stale copies cannot substitute."""
     root = ROOT / "selfhost"
-    paths = sorted(root.rglob("*.wz")) if root.is_dir() else []
-    if len(paths) != EXPECTED_SELFHOST_SOURCES:
+    # Additional sources enter the test automatically. Removing or renaming
+    # an existing source requires a corresponding baseline update.
+    baseline = SELFHOST_SOURCE_BASELINE.read_text(encoding="utf-8").splitlines()
+    if not baseline or baseline != sorted(set(baseline)):
+        raise CheckFailure("selfhost source baseline must be sorted and unique")
+    sources = {
+        path.relative_to(ROOT).as_posix(): path
+        for path in root.rglob("*.wz") if path.is_file()
+    }
+    missing = sorted(set(baseline) - sources.keys())
+    if missing:
         raise CheckFailure(
-            f"expected {EXPECTED_SELFHOST_SOURCES} selfhost sources under "
-            f"{root}, found {len(paths)}"
+            f"missing {len(missing)} baseline selfhost sources: {', '.join(missing)}"
         )
-    return [(f"selfhost/{path.relative_to(root)}", path)
-            for path in paths]
+    return sorted(sources.items())
 
 
 def edge_case_definitions() -> list[tuple[str, bytes]]:
@@ -952,7 +949,7 @@ def main() -> int:
             "jobs": args.jobs,
             "oracle_timeout": args.oracle_timeout,
             "wz_timeout": args.timeout,
-            "fixed_cases": EXPECTED_CASES,
+            "fixed_cases": None,
             "inputs_sha256": None,
         },
         "counts": {},
@@ -997,6 +994,7 @@ def main() -> int:
         "inputs_path": str(input_path), "inputs_sha256": input_sha,
     }
     summary["environment"]["inputs_sha256"] = input_sha
+    summary["environment"]["fixed_cases"] = len(cases)
 
     oracle_binary, oracle_build_failure = build_oracle(args, env)
     if oracle_build_failure:

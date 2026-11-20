@@ -21,6 +21,34 @@ def run(command, expected=0):
     return result
 
 
+def check_cli_errors(stage0, cli):
+    seed_usage = (
+        "E_DRIVER_ARGUMENT: expected --help, --version, check, build, lsp or capabilities\n"
+    )
+    selfhost_usage = (
+        "E_DRIVER_ARGUMENT: expected --help, --version, check, build, test, lock, fmt, "
+        "lsp or capabilities\n"
+    )
+    usage_cases = ([], ["unknown"], ["--help", "extra"], ["--version", "extra"])
+    for arguments in (*usage_cases, ["check"], ["build"],
+                      ["check", "--format"], ["check", "--format", "text"],
+                      ["check", "--project", ""],
+                      ["check", "--project", "-bad"],
+                      ["check", "--syntax-only", "one", "two"],
+                      ["build", "--syntax-only", "one", "--out-dir", "out"],
+                      ["check", "--project", "one", "--project", "two"],
+                      ["build", "--project", "one", "--out-dir", "out", "--opt", "3"],
+                      ["capabilities", "--format", "json"]):
+        code = 1 if arguments and arguments[0] == "capabilities" else 2
+        reference = run([stage0, *arguments], expected=code)
+        actual = run([cli, *arguments], expected=code)
+        if arguments in usage_cases:
+            assert (reference.stdout, reference.stderr) == ("", seed_usage), (arguments, reference)
+            assert (actual.stdout, actual.stderr) == ("", selfhost_usage), (arguments, actual)
+        else:
+            assert (actual.stdout, actual.stderr) == (reference.stdout, reference.stderr), arguments
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage0", type=Path, required=True)
@@ -50,23 +78,7 @@ def main():
         cli = programs["cli"]
         assert "selfhost" in run([cli, "--version"]).stdout
         run([cli, "--help"])
-        for arguments in ([], ["unknown"], ["--help", "extra"],
-                          ["--version", "extra"], ["check"], ["build"],
-                          ["check", "--format"], ["check", "--format", "text"],
-                          ["check", "--project", ""],
-                          ["check", "--project", "-bad"],
-                          ["check", "--syntax-only", "one", "two"],
-                          ["build", "--syntax-only", "one", "--out-dir", "out"],
-                          ["check", "--project", "one", "--project", "two"],
-                          ["build", "--project", "one", "--out-dir", "out", "--opt", "3"],
-                          ["capabilities", "--format", "json"]):
-            expected = run([stage0, *arguments], expected=1 if arguments and
-                           arguments[0] == "capabilities" else 2)
-            actual = run([cli, *arguments], expected=expected.returncode)
-            if not arguments or arguments[0] == "unknown":
-                assert actual.stderr.startswith("E_DRIVER_ARGUMENT: expected"), actual.stderr
-            else:
-                assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr), arguments
+        check_cli_errors(stage0, cli)
         editor = run([sys.executable, ROOT / "tests/tooling/editor_cli_test.py", "--cli", cli])
         semantics = run([sys.executable, ROOT / "tests/tooling/editor_semantics_test.py", "--cli", cli])
         run([cli, "check", "--syntax-only"], expected=2)

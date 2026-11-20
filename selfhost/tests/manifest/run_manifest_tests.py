@@ -132,13 +132,19 @@ def _stage_one(root: pathlib.Path, relative: str, work: pathlib.Path) -> dict:
         method = "nativelower.stage_helper_project"
     elif runner.endswith("nativeobs/run.py"):
         source_root = module.DEFAULT_SOURCE_ROOT
+        # Manifest tests stage the current compiler. Keep the historical
+        # fingerprint in the provenance for the separate nativeobs run.
         source_gate = _gate(module, source_root, "SOURCE116_MAP_SHA")
-        if source_gate.get("status") != "satisfied":
-            raise RuntimeError(
-                f"nativeobs parent source gate failed: {source_gate}")
+        compiler_source = source_root / "wzcc"
+        source_map = module.tree_map(compiler_source, ".wz")
         component = work / "component"
         (component / "src").mkdir(parents=True)
-        shutil.copytree(source_root / "wzcc", component / "src/wzcc")
+        staged_source = component / "src/wzcc"
+        shutil.copytree(compiler_source, staged_source)
+        if (not source_map or module.tree_map(staged_source, ".wz") != source_map
+                or module.tree_map(compiler_source, ".wz") != source_map):
+            raise RuntimeError("nativeobs manifest staging changed compiler sources")
+        source_gate["staged_current_wzcc_sha256"] = module.json_hash(source_map)
         shutil.copy2(module.HERE / "main.wz", component / "src/main.wz")
         shutil.copy2(module.HERE / "lang.toml", component / "lang.toml")
         method = "inline copy lines from nativeobs/run.py main()"
