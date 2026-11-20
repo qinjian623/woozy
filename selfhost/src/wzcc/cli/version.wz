@@ -1,0 +1,72 @@
+package cli;
+import "app/wzcc/resources" as resources;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/path" as path;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const DEV_VERSION_TEXT string = "woozyc 0.1.0-selfhost (compiler-dev/1)";
+const METADATA_FILE string = "release-metadata";
+const VERSION_PREFIX string = "version=";
+const COMMIT_PREFIX string = "commit=";
+const SELFHOST_SUFFIX string = "-selfhost";
+const CONTRACT_TEXT string = "compiler-dev/1";
+
+func ascii_digit(value u8) bool { return value >= 48 && value <= 57; }
+func ascii_hex(value u8) bool {
+    return ascii_digit(value) || (value >= 65 && value <= 70) ||
+        (value >= 97 && value <= 102);
+}
+func ascii_alnum(value u8) bool {
+    return ascii_digit(value) || (value >= 65 && value <= 90) ||
+        (value >= 97 && value <= 122);
+}
+func version_byte(value u8) bool {
+    return ascii_alnum(value) || value == 45 || value == 46;
+}
+func valid_number(value string) bool {
+    let bytes = text.bytes(value);
+    if vec.len(bytes) == 0 { return false; }
+    for byte in bytes { if !ascii_digit(byte) { return false; } }
+    return true;
+}
+// The packaged version follows the release tag's semantic version, with the
+// existing self-host suffix so toolchain consistency checks stay meaningful.
+func valid_version(value string) bool {
+    let bytes = text.bytes(value);
+    if vec.len(bytes) == 0 || vec.len(bytes) > 128 { return false; }
+    for byte in bytes { if !version_byte(byte) { return false; } }
+    if !text.ends_with(value, SELFHOST_SUFFIX) { return false; }
+    let core = value[:text.len(value)-text.len(SELFHOST_SUFFIX)];
+    let parts = text.split_n(core, "-", 2);
+    let numbers = text.split(parts[0], ".");
+    if vec.len(numbers) != 3 { return false; }
+    for number in numbers { if !valid_number(number) { return false; } }
+    if vec.len(parts) == 2 && text.len(parts[1]) == 0 { return false; }
+    return true;
+}
+func valid_commit(value string) bool {
+    let bytes = text.bytes(value);
+    if vec.len(bytes) != 40 { return false; }
+    for byte in bytes { if !ascii_hex(byte) { return false; } }
+    return true;
+}
+// A release package carries exactly the two validated lines. Anything else,
+// including unreadable files and extra data, keeps the development version.
+func metadata_text(value string) string {
+    let lines = text.split(value, "\n");
+    if vec.len(lines) != 3 || lines[2] != "" { return DEV_VERSION_TEXT; }
+    if !text.starts_with(lines[0], VERSION_PREFIX) ||
+       !text.starts_with(lines[1], COMMIT_PREFIX) { return DEV_VERSION_TEXT; }
+    let version = lines[0][text.len(VERSION_PREFIX):];
+    let commit = lines[1][text.len(COMMIT_PREFIX):];
+    if !valid_version(version) || !valid_commit(commit) { return DEV_VERSION_TEXT; }
+    return "woozyc " + version + " (" + CONTRACT_TEXT + ", commit " + commit + ")";
+}
+pub func version_text() string {
+    var content = "";
+    try { content = fs.read_text(path.join(resources.directory(), METADATA_FILE)); }
+    catch problem os.Error { return DEV_VERSION_TEXT; }
+    return metadata_text(content);
+}

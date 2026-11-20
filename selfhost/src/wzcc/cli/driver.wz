@@ -135,7 +135,7 @@ func format_command(options Options, manager inout source.Manager) i32 throws os
 pub func run(args Vec[string]) i32 throws os.Error {
     let options = arguments(args);
     if !options.valid { io.eprintln(options.error); return 2; }
-    if options.command == "--version" { io.println("woozyc 0.1.0-selfhost (compiler-dev/1)"); return 0; }
+    if options.command == "--version" { io.println(version_text()); return 0; }
     if options.command == "--help" { io.println(help_text()); return 0; }
     var manager = source.manager();
     if options.command == "lsp" { return editorlsp.run(); }

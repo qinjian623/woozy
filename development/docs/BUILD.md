@@ -72,7 +72,7 @@ tar -xzf woozy-linux-x86_64.tar.gz
 
 制作发行包时，用 Python 3.11 或以上版本运行 `tools/build_release.py`。编译器、运行库和 LLVM 参数与安装器相同。将 `--prefix` 换成 `--out-dir`，两个文件会一并写入新目录。用可重复的 `--notice FILE` 放入 LLVM 及随包复制的兼容库的许可证文件。需要的库取决于 LLVM 的来源，例如上述 Arch libxml2 还依赖 ICU。验证时用无工具链环境变量的 Linux x86_64 环境解包并构建原生和 Python 示例。
 
-GitHub Actions 的 [Linux release](../../.github/workflows/release.yml) 在 Ubuntu 24.04 上从源码构建 C++ 种子和 Woozy 编译器。下载的 LLVM 先按工具链锁文件校验 SHA-256。压缩包和校验文件会在禁网容器中解包验证，运行原生与 Python 示例，并执行 `test` 和依赖锁用例。
+GitHub Actions 的 [Linux release](../../.github/workflows/release.yml) 在 Ubuntu 24.04 上从源码构建 C++ 种子和 Woozy 编译器。下载的 LLVM 先按工具链锁文件校验 SHA-256。禁网容器会校验并解包，核对 `woozyc --version` 的完整版本及源码提交，执行 Native/Python 示例、`test`、依赖锁、LSP 和 GDB 测试，并在回环接口上测试聊天和 HTTP 服务。
 
 在 Actions 中手动运行，可从该次运行的 **Artifacts** 下载产物。推送 `v0.1.0` 这类标签后，同样的测试通过才会发布 GitHub Release。带后缀的标签，例如 `v0.1.0-rc.1`，会发布为预发行版。
 

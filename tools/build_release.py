@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -15,6 +16,10 @@ import install_toolchain
 
 
 ARCHIVE_NAME = "woozy-linux-x86_64.tar.gz"
+METADATA_NAME = "release-metadata"
+MAX_VERSION_BYTES = 128
+VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-selfhost")
+COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 VENDOR = install_toolchain.ROOT / "runtime/native"
 NOTICES = (
     VENDOR / "math/COPYRIGHT",
@@ -22,6 +27,28 @@ NOTICES = (
     *sorted((VENDOR / "vendor/fast_float").glob("LICENSE-*")),
     *sorted((VENDOR / "vendor/ryu").glob("LICENSE-*")),
 )
+
+
+def metadata_text(version, commit):
+    if version is None and commit is None:
+        return None
+    if version is None or commit is None:
+        raise ValueError("--version and --commit must be provided together")
+    if version.startswith("v"):
+        version = version[1:]
+    if not version.endswith("-selfhost"):
+        version += "-selfhost"
+    if (not version.isascii() or len(version) > MAX_VERSION_BYTES or
+            VERSION_PATTERN.fullmatch(version) is None):
+        raise ValueError(f"Invalid release version: {version}")
+    if COMMIT_PATTERN.fullmatch(commit) is None:
+        raise ValueError(f"Invalid release commit: {commit}")
+    return f"version={version}\ncommit={commit.lower()}\n"
+
+
+def write_metadata(bundle, text):
+    if text is not None:
+        (bundle / METADATA_NAME).write_text(text, encoding="ascii")
 
 
 def archive_bundle(bundle, destination):
@@ -43,6 +70,7 @@ def archive_bundle(bundle, destination):
 
 
 def build(args):
+    metadata = metadata_text(args.version, args.commit)
     output = args.out_dir.expanduser().absolute()
     if os.path.lexists(output):
         raise ValueError(f"Output directory already exists: {output}")
@@ -51,6 +79,8 @@ def build(args):
         temporary = Path(temporary)
         args.prefix = temporary / "bundle"
         install_toolchain.install(args)
+        write_metadata(args.prefix, metadata)
+        shutil.copyfile(install_toolchain.ROOT / "LICENSE", args.prefix / "LICENSE")
         notices = args.prefix / "licenses"
         notices.mkdir()
         for source in NOTICES:
@@ -76,6 +106,9 @@ def main():
     parser.add_argument("--out-dir", required=True, type=Path, help="new directory for the archive and checksum")
     parser.add_argument("--notice", type=Path, action="append", default=[],
                         help="license notice for bundled LLVM or compatibility libraries, may be repeated")
+    parser.add_argument("--version",
+                        help="release tag or version; a leading v and the -selfhost suffix are optional")
+    parser.add_argument("--commit", help="full 40-character source commit for the package")
     install_toolchain.add_bundle_inputs(parser)
     args = parser.parse_args()
     try:

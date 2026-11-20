@@ -1,6 +1,10 @@
-# Woozy 语言快速入门
+# Woozy Quick Start
 
-面向已经会编程的读者。先看一段完整的 Woozy 程序：
+[简体中文](QUICKSTART.cn.md)
+
+This guide is for programmers who already know another language. For installation, see the [0.1.0 release notes](RELEASE-0.1.0.md); to build from source, see the [build guide](../development/docs/BUILD.md).
+
+Start with a complete Woozy program:
 
 ```wz
 package main;
@@ -15,27 +19,27 @@ func main() i32 {
     for value in values {
         total += value;
     }
-    let answer = add(right: 1, left: total); // answer 是 7
+    let answer = add(right: 1, left: total); // answer is 7
     return 0;
 }
 ```
 
-Woozy 的几个规则值得先记住：
+A few Woozy rules are worth remembering first:
 
-| 项目 | 写法与行为 |
+| Item | Syntax and behavior |
 | --- | --- |
-| 声明 | 类型在名字后面；简单语句需要分号，换行不代替分号 |
-| 可变性 | `let` 不可重新绑定或修改值字段；`var` 可以；共享 Vec 的元素仍可修改 |
-| 调用 | 普通参数只读且不消耗实参；`move`、`inout` 要明确写出 |
-| 错误 | `throws E` 自动传播未捕获错误，不逐次写 `?` |
-| 清理 | `defer` 在当前词法块退出时执行，后注册先执行 |
-| 类型约束 | 泛型使用 `[T]`，trait 需要显式 `impl`；可使用静态调用或 `dyn Trait` |
+| Declarations | Types follow names; simple statements require a semicolon, and a newline does not replace one |
+| Mutability | `let` cannot rebind or modify value fields; `var` can; elements of a shared Vec can still be modified |
+| Calls | Ordinary parameters are read-only and do not consume arguments; write `move` and `inout` explicitly |
+| Errors | `throws E` propagates uncaught errors automatically; do not write `?` for every call |
+| Cleanup | `defer` runs when the current lexical block exits; the last registered action runs first |
+| Constraints | Generics use `[T]`, and traits require an explicit `impl`; use static calls or `dyn Trait` |
 
-下面分别标注“顶层声明”和“函数体片段”。顶层声明放在 `package` 之后；函数体片段放在 `main` 或其他函数内部，需要用到的声明在相邻代码块中给出。
+Examples below are marked as top-level declarations or function-body fragments. Put top-level declarations after `package`; put function-body fragments inside `main` or another function. Declarations needed by a fragment appear in the adjacent code block.
 
-## 标准输出
+## Standard output
 
-Linux x86_64 Native 程序可以这样输出文字；这是一个独立的完整文件：
+A Linux x86_64 Native program can print text like this. This is a complete, standalone file:
 
 ```wz
 package main;
@@ -47,35 +51,35 @@ func main() throws os.Error {
 }
 ```
 
-`std/io.println` 写出字符串并补一个换行，失败时抛出 `os.Error`。文件和系统接口使用 C 风格名称与参数顺序；文件读写、短写、中断和 File 生命周期见 [std/os](OS.md)，模块清单见 [标准库](STDLIB.md)。带系统调用的模块用于 Linux x86_64 Native 程序，Python 后端不支持。
+`std/io.println` writes a string and appends a newline, throwing `os.Error` on failure. Files and system interfaces use C-style names and argument order; file I/O, short writes, interruptions, and File lifetime are covered in [std/os](OS.md), and the module list is in the [standard library](STDLIB.md). Modules with system calls target Linux x86_64 Native programs; the Python backend does not support them.
 
-## 绑定与类型
+## Bindings and types
 
-函数体片段：
+Function-body fragment:
 
 ```wz
 let count i32 = 3;
-var total = count + 1;      // 从 count 得到 i32
+var total = count + 1;      // i32 inferred from count
 const step i32 = 2;
-total += step;             // total 是 6
-let default_integer = 10;  // 无其他约束时为 i64
-let ratio = 0.5;           // 无其他约束时为 f64
-let widened = i64(count);  // 显式数值转换
-let empty Vec[i32] = [];   // 空列表需要元素类型信息
+total += step;             // total is 6
+let default_integer = 10;  // i64 when unconstrained
+let ratio = 0.5;           // f64 when unconstrained
+let widened = i64(count);  // explicit numeric conversion
+let empty Vec[i32] = [];   // an empty list needs an element type
 let title string = "Woozy";
 ```
 
-参数和返回类型必须写明；省略返回类型表示 `Unit`。局部绑定可以推断类型。普通参数绑定只读，需要重新赋值时建立自己的 `var`。`const` 初始值必须在编译期确定，不执行普通函数调用，也不能创建 Vec 或外部对象。
+Parameters and return types must be written explicitly; omitting the return type means `Unit`. Local bindings can infer their types. Ordinary parameter bindings are read-only, so create your own `var` when you need to reassign. A `const` initializer must be known at compile time; it cannot call an ordinary function or create a Vec or foreign object.
 
-整数类型有 `i8/i16/i32/i64`、`u8/u16/u32/u64` 和目标字宽的 `isize/usize`；浮点类型为 `f32/f64`。不同具体数值类型不隐式混算，转换用 `T(value)`。字面量可以从上下文取得类型。
+Integer types are `i8/i16/i32/i64`, `u8/u16/u32/u64`, and the target-width `isize/usize`; floating-point types are `f32/f64`. Different concrete numeric types do not mix implicitly; convert with `T(value)`. Literals can take their type from context.
 
-定宽整数加减乘会回绕，整数除法向零截断；整数除零、动态转换为整数时越界、非法移位会产生 Panic，编译时已知失败的转换直接报错。浮点除零按 IEEE 规则得到无穷或 NaN。`bool` 不与整数互换。`string` 是不可变 UTF-8 值；`text.len`、索引和切片按 Unicode 码点计算，索引得到 `u32`。字符串支持 `+`、整体 `var` 上的 `+=`、`==` 和大小比较，比较按 UTF-8 字节内容进行，不做 Unicode 正规化。`std/text` 的 `bytes` 和 `from_bytes` 显式转换 `Vec[u8]`，后者严格检查 UTF-8 并抛出 `text.Error`。字符串插值仍未支持；`const` 字符串只接受编译期能确定的值。
+Fixed-width integer addition, subtraction, and multiplication wrap, and integer division truncates toward zero. Integer division by zero, out-of-range values in dynamic integer conversions, and invalid shifts panic; conversions known to fail at compile time are errors. Floating-point division by zero produces infinity or NaN according to IEEE rules. `bool` is not interchangeable with integers. A `string` is an immutable UTF-8 value; `text.len`, indexing, and slicing count Unicode code points, and indexing returns a `u32`. Strings support `+`, `+=` on a whole `var` binding, `==`, and ordering comparisons; comparisons use UTF-8 bytes without Unicode normalization. `std/text` provides `bytes` and `from_bytes` to convert explicitly to and from `Vec[u8]`; the latter validates UTF-8 strictly and throws `text.Error`. String interpolation is still unsupported, and `const` strings accept only values known at compile time.
 
-注释写 `// ...` 或 `/* ... */`，块注释不嵌套。常用运算符有 `+ - * / %`、`== != < <= > >=`、`! && ||` 和整数位运算；`%` 只用于整数。
+Comments start with `// ...` or `/* ... */`; block comments do not nest. Common operators are `+ - * / %`, `== != < <= > >=`, `! && ||`, and integer bitwise operators; `%` applies only to integers.
 
-## 函数、参数标签与函数值
+## Functions, argument labels, and function values
 
-顶层声明：
+Top-level declarations:
 
 ```wz
 func combine(first i32, second i32) i32 {
@@ -87,7 +91,7 @@ func apply(operation func(i32, i32) i32) i32 {
 }
 ```
 
-使用上述声明的函数体片段：
+Function-body fragment using the declarations above:
 
 ```wz
 let direct = combine(second: 3, first: 2); // 23
@@ -100,9 +104,9 @@ let twice = func(value i32) i32 {
 let doubled = twice(4);                  // 8
 ```
 
-直接调用可以使用参数名，位置实参必须在命名实参之前。实参始终按书写顺序求值，命名参数重排不会重排副作用。函数类型不保存参数标签，通过函数值调用只使用位置实参。
+Direct calls may use parameter names, and positional arguments must come before named arguments. Arguments are always evaluated in written order, so reordering named arguments does not reorder side effects. Function types do not retain parameter labels; calls through a function value use positional arguments only.
 
-函数字面量可以捕获创建时的外层局部绑定。捕获绑定只读，Vec、Box 等共享对象的内容仍可通过原有接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 移动实际捕获的拥有值；数值等直接值仍复制。
+Function literals can capture outer local bindings from creation time. Captured bindings are read-only, but shared objects such as Vec and Box can still be modified through their existing APIs. A plain `func` copies captured values, while `move func(...) { ... }` moves the owned values it actually captures; direct values such as numbers are still copied.
 
 ```wz
 func make_reader(seed i32) (func() i32) {
@@ -116,7 +120,7 @@ func read_value() i32 {
 }
 ```
 
-方法值 `value.method` 在创建时保存接收者的逻辑副本；之后重新绑定原变量或替换普通按值字段，不会改变保存的函数值，但 Vec 等引用字段仍共享对象内容。move-Self 方法的绑定值可以复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法；inout-Self 方法不能保存为函数值。
+A method value `value.method` saves a logical copy of the receiver when it is created. Rebinding the original variable or replacing ordinary by-value fields later does not change the saved function value, but reference fields such as Vec still share their object contents. A bound move-Self method can be copied and called repeatedly; each call copies the saved receiver first and passes the copy to the method. Methods with an `inout Self` receiver cannot be stored as function values.
 
 ```wz
 struct Counter {
@@ -135,9 +139,9 @@ func repeat_bound() i32 {
 }
 ```
 
-## 控制流
+## Control flow
 
-函数体片段：
+Function-body fragment:
 
 ```wz
 var total i32 = 0;
@@ -155,18 +159,18 @@ if total == 10 {
     total += 1;
 } else {
     total = 0;
-} // total 是 11
+} // total is 11
 ```
 
-条件必须是 `bool`，`&&` 和 `||` 短路；赋值不是表达式。循环统一使用 `for`，支持三段式、条件式、`for-in` 和无条件循环。`break`、`continue` 会执行实际离开词法块中的 `defer`。
+Conditions must be `bool`, and `&&` and `||` short-circuit; assignment is not an expression. All loops use `for`, supporting the three-clause form, a condition-only form, `for-in`, and an unconditional loop. `break` and `continue` run `defer` actions in the lexical blocks they actually leave.
 
-自定义 for-in 实现 `std/iter.Iterator[T]`，其 `next(cursor inout Self)` 返回 `std/option.Option[T]`，不抛错。循环对表达式只求值一次，推进私有迭代器副本；引用字段仍共享对象。Some 产生元素，None 结束。见[教程示例](TUTORIAL.cn.md#自定义迭代器)。
+Custom for-in types implement `std/iter.Iterator[T]`; `next(cursor inout Self)` returns `std/option.Option[T]` and does not throw. The loop evaluates its expression once and advances a private iterator copy; reference fields still share objects. `Some` yields an element, and `None` ends the loop. See the [tutorial example](TUTORIAL.md#custom-iterators).
 
-`switch` 没有分支穿透，必须覆盖全部可能值；无法列全时写 `default` 或 `_`。每个分支有自己的作用域。裸标识符模式会建立新绑定，即使外层有同名 `const`，也不会当作常量匹配。
+`switch` has no fallthrough and must cover every possible value; write `default` or `_` when the cases cannot be exhaustive. Each arm has its own scope. A bare identifier pattern creates a new binding; even if an outer `const` has the same name, it is not treated as a constant match.
 
-## struct、enum 与方法
+## structs, enums, and methods
 
-顶层声明：
+Top-level declarations:
 
 ```wz
 struct Point {
@@ -193,40 +197,40 @@ func unpack(reading Reading) i32 {
 }
 ```
 
-使用上述声明的函数体片段：
+Function-body fragment using the declarations above:
 
 ```wz
 let original = Point(x: 1, y: 2);
 var copy = original;
-copy.x = 9;                       // original.x 仍是 1
-let shifted = original.shifted(3); // shifted.x 是 4
+copy.x = 9;                       // original.x is still 1
+let shifted = original.shifted(3); // shifted.x is 4
 let reading = Reading.Value(value: shifted.x);
 let value = unpack(reading);       // 4
 ```
 
-struct 构造使用命名字段，必须提供全部字段；enum 变体可以带载荷。struct/enum 按字段递归复制，字段中的引用值仍遵守其自身的共享规则。
+Struct construction uses named fields and must provide every field; enum variants may carry payloads. Structs and enums copy field by field recursively, and reference-valued fields still follow their own sharing rules.
 
-`Self` 指当前 impl 或 trait 的类型。值方法调用会提供声明中的首位 Self 参数；`Point.shifted(original, 3)` 则明确传入全部参数。`Point.shifted` 得到未绑定接收者的函数值，`original.shifted` 得到保存了创建时接收者副本的绑定方法值。
+`Self` means the type of the current impl or trait. A value method call supplies the first Self parameter from the declaration; `Point.shifted(original, 3)` passes every argument explicitly. `Point.shifted` produces a function value with an unbound receiver; `original.shifted` produces a bound method value that saved a copy of the receiver made at creation.
 
-## Vec 共享与参数模式
+## Vec sharing and parameter modes
 
-函数体片段：
+Function-body fragment:
 
 ```wz
 let left Vec[i32] = [1, 2, 3];
 let right = left;
-right[0] = 9;              // left[0] 也变为 9
+right[0] = 9;              // left[0] also becomes 9
 let slice = left[0:2];
-slice[0] = 7;              // left[0] 仍是 9
+slice[0] = 7;              // left[0] is still 9
 ```
 
-Vec 赋值共享同一个容器，没有隐式深复制；`let` 不禁止修改元素。切片建立新的 Vec 并复制元素的逻辑值，引用元素仍可共享。下标必须非负，越界产生 Panic，不接受 Python 式负索引。
+Assigning a Vec shares the same container with no implicit deep copy; `let` does not prevent modifying elements. Slicing creates a new Vec and copies the logical values of elements, and reference elements can still be shared. Subscripts must be non-negative; out-of-bounds access panics, and Python-style negative indices are rejected.
 
-`std/vec` 提供 `empty`、`make`、`len`、`capacity`、`reserve`、`push`、`pop`、`resize` 和 `clear`。`pop` 返回 `Option[T]`；`resize` 变大时用给定值填充，变小时截断；`clear` 保留容量。Vec 赋值共享容器，这些调用会影响所有别名。遍历期间不要 push、pop、resize、clear 或 reserve，只修改已有元素。
+`std/vec` provides `empty`, `make`, `len`, `capacity`, `reserve`, `push`, `pop`, `resize`, and `clear`. `pop` returns `Option[T]`; `resize` fills with the given value when growing and truncates when shrinking; `clear` keeps the capacity. Assigning a Vec shares the container, so these calls affect every alias. During iteration, do not push, pop, resize, clear, or reserve; modify only existing elements.
 
-`std/box.Box[T]` 是共享的可变值单元；复制 Box 得到同一个单元，`box.get` 读取，`box.set` 替换。`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`，目标已无强引用时得到 `None`。Weak 可以放在 struct、enum、Vec 和泛型值中。接口见 [标准库](STDLIB.md)。
+`std/box.Box[T]` is a shared mutable value cell; copying a Box yields the same cell, `box.get` reads it, and `box.set` replaces it. `Weak[T]` is a built-in type that holds a weak reference without extending the target's lifetime; `std/weak` provides only `empty`, `downgrade`, and `upgrade`. Targets can be Vec, function values, `Box[T]`, or reference-counted shared handles; ordinary struct/enum values, string, file/socket descriptors, and foreign Python/C objects cannot be direct targets. `weak.empty[T]()` creates an empty weak reference, `weak.downgrade[T](value)` creates one from an existing strong reference, and `weak.upgrade(w)` returns `option.Option[T]`, yielding `None` when the target has no strong references left. Weak references can be stored in structs, enums, Vec, and generic values. See the [standard library](STDLIB.md) for the interface.
 
-顶层声明：
+Top-level declarations:
 
 ```wz
 func take(values move Vec[i32]) i32 {
@@ -238,23 +242,23 @@ func increment(value inout i32) {
 }
 ```
 
-使用上述声明的函数体片段：
+Function-body fragment using the declarations above:
 
 ```wz
 let values Vec[i32] = [9];
-var answer = take(move values); // values 此后不可读
-increment(inout answer);       // answer 是 10
+var answer = take(move values); // values is no longer readable
+increment(inout answer);       // answer is 10
 ```
 
-普通参数不消耗调用者的值；返回或保存参数时按其类型复制或保留共享引用。`move` 转移整个拥有值，原绑定在重新初始化前不可读；普通参数不能直接移动，要先建立本地副本。
+Ordinary parameters do not consume the caller's value; returning or saving a parameter copies it or retains a shared reference according to its type. `move` transfers the entire owned value, and the original binding is unreadable until reinitialized; an ordinary parameter cannot be moved directly, so create a local copy first.
 
-`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)`、`bump(inout items[0])` 或 `replace(inout holder.items)`。位置可以是数值、bool、只含平凡值的有限 struct/enum，也可以是纯 Woozy 拥有值：Vec、Slice、string、函数值、Weak、dyn trait object、线程/同步运行时句柄和含这些字段的 struct/enum。被调用方可以整体、按字段或按元素替换它们，旧值恰好释放一次；`Task` 和外部 C resource 的 `inout` 仍报 `E_CAPABILITY_UNAVAILABLE`。同一次调用中不同具名字段或可证明不同的字面量索引可以同时借用，重叠路径、整容器访问、动态索引冲突和不属于本地/参数的临时位置会被拒绝；从 `inout` 参数 `move` 出和闭包捕获 `inout` 参数也会拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象；元素 `inout` 借用期间，其他可能携带该容器的实参或未知间接 callee 会保守报错。
+`inout` accepts a writable `var`, an existing `inout` parameter, its field chain, and bindable container elements, for example `bump(inout obj.nested.value)`, `bump(inout items[0])`, or `replace(inout holder.items)`. The location may be a number, bool, a finite struct/enum containing only trivial values, or a pure Woozy owned value: Vec, Slice, string, function value, Weak, dyn trait object, thread/synchronization runtime handles, and structs/enums containing these fields. The callee may replace them as a whole, by field, or by element, and the old value is released exactly once; `inout` on `Task` and foreign C resources still reports `E_CAPABILITY_UNAVAILABLE`. In one call, distinct named fields or literal indices that are provably different may be borrowed at the same time; overlapping paths, whole-container access, dynamic index conflicts, and temporary locations that do not belong to a local or parameter are rejected. Moving out of an `inout` parameter and capturing an `inout` parameter in a closure are also rejected. After a Vec/Slice handle is copied to another binding, struct/enum, function return, or closure, it may still refer to the same object; while an element `inout` borrow is active, other arguments that might carry that container or unknown indirect callees are rejected conservatively.
 
-方法不会自动移动或取得可写访问。首位 Self 参数声明为 `move` 或 `inout` 时，值调用分别写 `(move value).take()`、`(inout value).change()`；类型名调用则继续明确传入全部参数。
+Methods do not automatically move or gain writable access. When the first Self parameter is declared `move` or `inout`, value calls are written `(move value).take()` and `(inout value).change()` respectively; type-name calls continue to pass all arguments explicitly.
 
-## throws 与 defer
+## throws and defer
 
-顶层声明：
+Top-level declarations:
 
 ```wz
 enum ReadError { Missing; }
@@ -265,11 +269,11 @@ func read_value(found bool) i32 throws ReadError {
 }
 
 func load(found bool) i32 throws ReadError {
-    return read_value(found); // 错误自动向外传播
+    return read_value(found); // error propagates outward automatically
 }
 ```
 
-使用上述声明的函数体片段：
+Function-body fragment using the declarations above:
 
 ```wz
 var cleaned i32 = 0;
@@ -281,16 +285,16 @@ try {
     switch error {
         case ReadError.Missing: result = -1;
     }
-} // cleaned 是 1，result 是 -1
+} // cleaned is 1, result is -1
 ```
 
-`throws E` 属于函数类型。未捕获的调用错误必须由当前函数声明兼容的 `throws`；不需要逐次写 `?`。自行定义的 `Result` 枚举只是普通数据，不自动传播。标准库 `std/result.Result[T,E]` 同样是普通 enum，构造时要写完整类型实参，例如 `result.Result[i32,i32].Ok(7)`。
+`throws E` is part of the function type. An uncaught call error must be covered by a compatible `throws` on the current function; no per-call `?` is needed. A custom `Result` enum is ordinary data and does not propagate automatically. The standard library's `std/result.Result[T,E]` is also an ordinary enum; write full type arguments when constructing it, for example `result.Result[i32,i32].Ok(7)`.
 
-`defer` 在当前词法块退出时执行，后注册先执行；它读取执行时的绑定值。`return value` 先保存返回值，再执行清理。defer 本身不能向外执行 `return/break/continue` 或传播错误。整数除零、越界等 Panic 不能由 typed `catch` 捕获，也不保证执行语言清理。
+`defer` runs when the current lexical block exits, with the most recently registered action first; it reads binding values at execution time. `return value` saves the return value first, then runs cleanup. A defer cannot itself `return`, `break`, or `continue` out of the deferred block or propagate an error. Panics such as integer division by zero and out-of-bounds access cannot be caught by typed `catch` and are not guaranteed to run language cleanup.
 
-## 泛型与 trait
+## Generics and traits
 
-顶层声明：
+Top-level declarations:
 
 ```wz
 func identity[T](value T) T { return value; }
@@ -310,34 +314,34 @@ func measure[T Measure](value T) i32 {
 }
 ```
 
-使用上述声明的函数体片段：
+Function-body fragment using the declarations above:
 
 ```wz
-let first = identity[i32](7);       // 显式类型实参
-let second = identity(first);       // 推断 T 为 i32
+let first = identity[i32](7);       // explicit type argument
+let second = identity(first);       // infers T as i32
 let counter = Counter(value: second);
 let measured = measure(counter);    // 7
 ```
 
-类型参数使用 `[T]`，约束写成 `[T Measure]`；泛型类型、泛型方法和带类型实参的 trait 也使用方括号。函数体按声明约束检查，使用具体类型时生成相应代码。
+Type parameters use `[T]`, and constraints are written `[T Measure]`; generic types, generic methods, and traits with type arguments also use square brackets. Function bodies are checked against the declared constraints, and code is generated for the concrete types in use.
 
-trait 是名义类型约束，需要显式实现，不按方法“长得像”自动满足。默认使用静态分派；需要运行时多态时写 `dyn Trait` 或 `dyn Trait[Args]`，对象安全的方法在运行时按具体实现分派，具体值在唯一实现下自动转换。不支持关联类型、特化、非类型或变参模板参数。类型参数和约束规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
+Traits are nominal constraints and require explicit implementations; methods that merely look alike do not satisfy them automatically. Static dispatch is the default; for runtime polymorphism write `dyn Trait` or `dyn Trait[Args]`, where object-safe methods dispatch to the concrete implementation at runtime and concrete values convert automatically when there is a unique implementation. Associated types, specialization, and non-type or variadic template parameters are not supported. See [generics and traits](SEMANTICS.md#6-泛型和-trait) for type parameter and constraint rules.
 
-## 线程与同步
+## Threads and synchronization
 
-Linux x86_64 Native 程序可以使用 `std/thread` 的 `spawn[A](func(A) i64, A)` 与 `join(Thread) i64`，二者都声明 `throws os.Error`。线程函数不捕获局部变量，入口内部自行处理 typed errors。Thread 按引用共享；未 join 就清理句柄不会取消线程，main 返回会结束整个进程。
+Linux x86_64 Native programs can use `spawn[A](func(A) i64, A)` and `join(Thread) i64` from `std/thread`; both declare `throws os.Error`. Thread functions do not capture local variables, and the entry function handles typed errors itself. Thread values are shared by reference; cleaning up a handle without joining does not cancel the thread, and returning from main ends the whole process.
 
-`std/sync` 提供非递归 Mutex、Condvar 和顺序一致的 AtomicI64。正常锁操作不抛错，错误解锁等误用 Panic。允许在线程间共享 Vec 等对象，由程序员同步读写；原子 ARC 只保证计数安全。示例见 [线程与同步](CONCURRENCY.md)。
+`std/sync` provides non-recursive Mutex, Condvar, and sequentially consistent AtomicI64. Normal locking does not throw; misuse such as unlocking incorrectly panics. Sharing objects such as Vec between threads is allowed, but the programmer must synchronize reads and writes; atomic ARC only makes the reference count safe. See [threads and synchronization](CONCURRENCY.md).
 
-## 异步函数
+## Async functions
 
-`async func` 调用返回 `Task[R,E]`，函数体在 `await` 或执行器运行时才执行。`await` 只能写在 async 函数里，用来等待 Task 并传播声明的错误；未 spawn 的任务会被直接启动，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、`readable`/`writable`、`spawn`/`run`、`cancel`、`shutdown`、`finished` 和 `join`/`join_all`。执行器是单线程的，目前只在 Linux x86_64 的 Native 后端可用。规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
+An `async func` call returns `Task[R,E]`, and the body does not run until `await` or the executor runs it. `await` may appear only in an async function; it waits for a Task and propagates declared errors. An unspawned task starts directly, and the same Task can be awaited repeatedly. `async func main` is a valid entry point. `std/async` provides `sleep`, `readable`/`writable`, `spawn`/`run`, `cancel`, `shutdown`, `finished`, and `join`/`join_all`. The executor is single-threaded and currently available only on the Linux x86_64 Native backend. See [async and await](CONCURRENCY.md#async-与-await) for the rules.
 
-## 包与导入
+## Packages and imports
 
-每个文件声明 `package`，同一个包中的顶层声明互相可见。`pub` 控制跨包访问，导入别名只在当前文件有效。下面两个文件组成一个小项目，`app` 表示项目源码根。
+Each file declares a `package`, and top-level declarations in the same package are visible to one another. `pub` controls cross-package access, and an import alias is valid only in the current file. The two files below form a small project, where `app` is the project source root.
 
-`src/geometry/point.wz`（完整文件）：
+`src/geometry/point.wz` (complete file):
 
 ```wz
 package geometry;
@@ -349,7 +353,7 @@ pub func horizontal(point Point) i32 {
 }
 ```
 
-`src/main.wz`（完整文件）：
+`src/main.wz` (complete file):
 
 ```wz
 package main;
@@ -363,8 +367,8 @@ func main() i32 {
 }
 ```
 
-模块由目录中的 `.wz` 文件组成，`app/geometry` 对应源码根下的 `geometry/`；包依赖不能循环。其他导入首段需要在项目清单声明；导入 Python 库也要有对应绑定声明，源码检查不会执行外部库。
+Modules consist of `.wz` files in directories; `app/geometry` corresponds to `geometry/` under the source root, and package dependencies cannot form cycles. The first segment of any other import must be declared in the project manifest; importing Python libraries also requires a matching binding declaration, and source checking does not execute foreign libraries.
 
-运行示例见 [BUILD.md](../development/docs/BUILD.md)。逐步讲解见 [教程](TUTORIAL.cn.md)，标准库接口和资源规则见 [标准库](STDLIB.md)，数值、共享、错误和清理的完整规则见 [SEMANTICS.md](SEMANTICS.md)。
+See [BUILD.md](../development/docs/BUILD.md) for running examples. The [tutorial](TUTORIAL.md) explains each step, the [standard library](STDLIB.md) covers APIs and resource rules, and [SEMANTICS.md](SEMANTICS.md) defines numbers, sharing, errors, and cleanup.
 
-本文的组织参考官方仓库中的 [Go Tour 基础章节](https://github.com/golang/website/blob/master/_content/tour/basics.article)、[Julia Getting Started](https://github.com/JuliaLang/julia/blob/master/doc/src/manual/getting-started.md)，以及 [Effective Go](https://go.dev/doc/effective_go)，具体语言规则以本仓库为准。
+This guide's organization draws on the [basics section of the Tour of Go](https://github.com/golang/website/blob/master/_content/tour/basics.article), [Julia Getting Started](https://github.com/JuliaLang/julia/blob/master/doc/src/manual/getting-started.md), and [Effective Go](https://go.dev/doc/effective_go). The language rules in this repository take precedence.

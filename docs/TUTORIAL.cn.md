@@ -4,7 +4,7 @@
 
 Woozy 使用静态类型，支持局部类型推断、泛型、结构体、枚举和可声明的错误。函数、值、作用域与容器的规则在不同后端保持一致。
 
-这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
+这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.cn.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
 
 ## 1. 先读一个程序
 
@@ -795,6 +795,6 @@ func main() throws os.Error {
 
 ## 继续阅读
 
-[快速入门](QUICKSTART.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作，[标准库](STDLIB.md) 按模块列出接口和资源规则。
+[快速入门](QUICKSTART.cn.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作，[标准库](STDLIB.md) 按模块列出接口和资源规则。
 
 章节组织参考了 [Rust Book](https://github.com/rust-lang/book/blob/main/src/SUMMARY.md) 与 [Go Tour 基础篇](https://github.com/golang/website/blob/master/_content/tour/basics.article)。示例和规则以 Woozy 为准。
