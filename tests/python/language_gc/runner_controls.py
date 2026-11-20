@@ -153,6 +153,30 @@ def check_fresh_output() -> None:
     print('paired --out must be fresh; legacy --out keeps old evidence')
 
 
+def check_cmake_inputs() -> None:
+    relative = Path('tests/python/CMakeLists.txt')
+    original = (runner.COMPILER_ROOT / relative).read_bytes()
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        cmake = root / relative
+        cmake.parent.mkdir(parents=True)
+        changed = original + b'\n# An unrelated CMake change.\n'
+        cmake.write_bytes(changed)
+        with patch.object(runner, 'COMPILER_ROOT', root):
+            inputs = runner.check_original_inputs(frozen_cmake=False)
+            if inputs[str(relative)] != hashlib.sha256(changed).hexdigest():
+                raise AssertionError('legacy run did not record the actual CMake SHA')
+            expect_raises(runner.check_original_inputs,
+                          'paired whole-file hash')
+            cmake.write_bytes(changed.replace(
+                b'python.language_gc_source PROPERTIES TIMEOUT 180',
+                b'python.language_gc_source PROPERTIES TIMEOUT 181'))
+            expect_raises(
+                lambda: runner.check_original_inputs(frozen_cmake=False),
+                'legacy language GC registration')
+    print('legacy checks its registration; paired checks the frozen CMake file')
+
+
 def valid_stats(last_collected: int = 1) -> dict:
     return {
         'runtime_version': runner.RUNTIME_VERSION,
@@ -386,6 +410,7 @@ def main() -> int:
         'metadata': check_metadata,
         'bytes': check_bytes,
         'fresh_output': check_fresh_output,
+        'cmake_inputs': check_cmake_inputs,
         'observation': check_observation,
         'generated_file_count': check_generated_file_count,
         'source_proof': check_source_proof,

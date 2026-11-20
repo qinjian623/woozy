@@ -72,11 +72,19 @@ PYTHON_VERSION = 'Python 3.12.15'
 PYTHON_VERSION_TIMEOUT_SECONDS = 20.0
 LEGACY_CMAKE_TIMEOUT_SECONDS = 180
 
-# The original Source/observer/CMake must not be edited by this migration.
+# The paired historical run requires the original fixture, observer and CMake file.
 SOURCE_SHA256 = '68956612b04e55f73b333d1ae467b200341aeb619f23811d75277a1320d98220'
 OBSERVER_SHA256 = '5d002023abfb2f6c78867c4cec81202bd652ec314b28daeed6cae57d184c73d1'
 CMAKE_SHA256 = 'e34a6ff04963dc39a074a9be76f28cadc1d9a8c07ee91dfda7d22e91090a52b8'
 SOURCE_BYTES = 2168
+LEGACY_CMAKE_REGISTRATION = b'''
+add_test(NAME python.language_gc_source COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/language_gc/run_language_gc.py"
+  --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"
+  --out "${CMAKE_CURRENT_BINARY_DIR}/language-gc"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.language_gc_source PROPERTIES TIMEOUT 180)
+'''
 
 COMPILER_TRACE_SCOPE = 'compiler_exec_whitelist'
 OBSERVER_TRACE_SCOPE = 'observer_execution_not_compiler_whitelist'
@@ -318,7 +326,7 @@ def load_strict_json(path: Path, label: str) -> dict:
     return document
 
 
-def check_original_inputs() -> dict:
+def check_original_inputs(*, frozen_cmake: bool = True) -> dict:
     source = HERE / 'source.wz'
     observer = HERE / 'observe_language_gc.py'
     cmake = COMPILER_ROOT / 'tests/python/CMakeLists.txt'
@@ -327,14 +335,18 @@ def check_original_inputs() -> dict:
             raise RuntimeError(f'missing original input: {path}')
     source_sha = digest(source)
     observer_sha = digest(observer)
-    cmake_sha = digest(cmake)
+    cmake_bytes = cmake.read_bytes()
+    cmake_sha = digest_bytes(cmake_bytes)
     if source_sha != SOURCE_SHA256 or source.stat().st_size != SOURCE_BYTES:
         raise RuntimeError(
             f'original source.wz changed: {source_sha} / {source.stat().st_size}')
     if observer_sha != OBSERVER_SHA256:
         raise RuntimeError(f'original observer changed: {observer_sha}')
-    if cmake_sha != CMAKE_SHA256:
-        raise RuntimeError(f'tests/python/CMakeLists.txt changed: {cmake_sha}')
+    if frozen_cmake:
+        if cmake_sha != CMAKE_SHA256:
+            raise RuntimeError(f'tests/python/CMakeLists.txt changed: {cmake_sha}')
+    elif cmake_bytes.count(LEGACY_CMAKE_REGISTRATION) != 1:
+        raise RuntimeError('python.language_gc_source CMake registration changed')
     observer_text = observer.read_text(encoding='utf-8')
     disable = observer_text.find('gc.disable()')
     forbid = observer_text.find('gc.collect = forbid_host_collection')
@@ -1293,7 +1305,7 @@ def run_legacy(args, cases: list[str]) -> int:
     prepare_output(args.out, strict=False)
     run_root = unique_run_dir(args.out, 'legacy')
     observer = HERE / 'observe_language_gc.py'
-    originals = check_original_inputs()
+    originals = check_original_inputs(frozen_cmake=False)
     env = environment(args.toolchain_root, run_root)
     log: list[dict] = []
     summary = {
@@ -1311,6 +1323,7 @@ def run_legacy(args, cases: list[str]) -> int:
         'legacy_cmake_timeout_seconds': LEGACY_CMAKE_TIMEOUT_SECONDS,
         'legacy_cmake_timeout_claimed_passed': False,
         'original_inputs': originals,
+        'cmake_input_check': 'language_gc_registration',
         'commands': log,
         'counts': {},
         'cases': {},
