@@ -39,7 +39,7 @@ Woozy 的几个规则值得先记住：
 
 ## 标准输出
 
-Linux x86_64 Native 程序可以这样输出文字；这是一个独立的完整文件：
+以下完整程序可以在 Linux x86_64 和 macOS arm64 上输出文字。
 
 ```wz
 package main;
@@ -51,7 +51,7 @@ func main() throws os.Error {
 }
 ```
 
-`std/io.println` 写出字符串并补一个换行，失败时抛出 `os.Error`。文件和系统接口使用 C 风格名称与参数顺序；文件读写、短写、中断和 File 生命周期见 [std/os](OS.md)，模块清单见 [标准库](STDLIB.md)。带系统调用的模块用于 Linux x86_64 Native 程序，Python 后端不支持。
+`std/io.println` 写出字符串并补一个换行，失败时抛出 `os.Error`。文件和系统接口使用 C 风格名称与参数顺序；文件读写、短写、中断和 File 生命周期见 [std/os](OS.md)，模块清单见 [标准库](STDLIB.md)。带系统调用的模块用于 Linux x86_64 和 macOS arm64 的原生程序。Python 后端不支持这些模块。
 
 ## 绑定与类型
 
@@ -329,13 +329,13 @@ trait 是名义类型约束，需要显式实现，不按方法“长得像”�
 
 ## 线程与同步
 
-Linux x86_64 Native 程序可以使用 `std/thread` 的 `spawn[A](func(A) i64, A)` 与 `join(Thread) i64`，二者都声明 `throws os.Error`。线程函数不捕获局部变量，入口内部自行处理 typed errors。Thread 按引用共享；未 join 就清理句柄不会取消线程，main 返回会结束整个进程。
+Linux x86_64 和 macOS arm64 的原生程序可以使用 `std/thread` 的 `spawn[A](func(A) i64, A)` 与 `join(Thread) i64`，二者都声明 `throws os.Error`。线程函数不捕获局部变量，入口内部自行处理 typed errors。Thread 按引用共享；未 join 就清理句柄不会取消线程，main 返回会结束整个进程。
 
 `std/sync` 提供非递归 Mutex、Condvar 和顺序一致的 AtomicI64。正常锁操作不抛错，错误解锁等误用 Panic。允许在线程间共享 Vec 等对象，由程序员同步读写；原子 ARC 只保证计数安全。示例见 [线程与同步](CONCURRENCY.md)。
 
 ## 异步函数
 
-`async func` 调用返回 `Task[R,E]`，函数体在 `await` 或执行器运行时才执行。`await` 只能写在 async 函数里，用来等待 Task 并传播声明的错误；未 spawn 的任务会被直接启动，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、`readable`/`writable`、`spawn`/`run`、`cancel`、`shutdown`、`finished` 和 `join`/`join_all`。执行器是单线程的，目前只在 Linux x86_64 的 Native 后端可用。规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
+`async func` 调用返回 `Task[R,E]`，函数体在 `await` 或执行器运行时才执行。`await` 只能写在 async 函数里，用来等待 Task 并传播声明的错误；未 spawn 的任务会被直接启动，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、`readable`/`writable`、`spawn`/`run`、`cancel`、`shutdown`、`finished` 和 `join`/`join_all`。执行器是单线程的，支持 Linux x86_64 和 macOS arm64 的 Native 后端。规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
 
 ## 包与导入
 

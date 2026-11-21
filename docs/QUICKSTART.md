@@ -39,7 +39,7 @@ Examples below are marked as top-level declarations or function-body fragments. 
 
 ## Standard output
 
-A Linux x86_64 Native program can print text like this. This is a complete, standalone file:
+This complete program prints text on Linux x86_64 and macOS arm64.
 
 ```wz
 package main;
@@ -51,7 +51,7 @@ func main() throws os.Error {
 }
 ```
 
-`std/io.println` writes a string and appends a newline, throwing `os.Error` on failure. Files and system interfaces use C-style names and argument order; file I/O, short writes, interruptions, and File lifetime are covered in [std/os](OS.md), and the module list is in the [standard library](STDLIB.md). Modules with system calls target Linux x86_64 Native programs; the Python backend does not support them.
+`std/io.println` writes a string and appends a newline, throwing `os.Error` on failure. Files and system interfaces use C-style names and argument order; file I/O, short writes, interruptions, and File lifetime are covered in [std/os](OS.md), and the module list is in the [standard library](STDLIB.md). Modules with system calls support native programs on Linux x86_64 and macOS arm64. The Python backend does not support these modules.
 
 ## Bindings and types
 
@@ -329,13 +329,13 @@ Traits are nominal constraints and require explicit implementations; methods tha
 
 ## Threads and synchronization
 
-Linux x86_64 Native programs can use `spawn[A](func(A) i64, A)` and `join(Thread) i64` from `std/thread`; both declare `throws os.Error`. Thread functions do not capture local variables, and the entry function handles typed errors itself. Thread values are shared by reference; cleaning up a handle without joining does not cancel the thread, and returning from main ends the whole process.
+Native programs on Linux x86_64 and macOS arm64 can use `spawn[A](func(A) i64, A)` and `join(Thread) i64` from `std/thread`; both declare `throws os.Error`. Thread functions do not capture local variables, and the entry function handles typed errors itself. Thread values are shared by reference; cleaning up a handle without joining does not cancel the thread, and returning from main ends the whole process.
 
 `std/sync` provides non-recursive Mutex, Condvar, and sequentially consistent AtomicI64. Normal locking does not throw; misuse such as unlocking incorrectly panics. Sharing objects such as Vec between threads is allowed, but the programmer must synchronize reads and writes; atomic ARC only makes the reference count safe. See [threads and synchronization](CONCURRENCY.md).
 
 ## Async functions
 
-An `async func` call returns `Task[R,E]`, and the body does not run until `await` or the executor runs it. `await` may appear only in an async function; it waits for a Task and propagates declared errors. An unspawned task starts directly, and the same Task can be awaited repeatedly. `async func main` is a valid entry point. `std/async` provides `sleep`, `readable`/`writable`, `spawn`/`run`, `cancel`, `shutdown`, `finished`, and `join`/`join_all`. The executor is single-threaded and currently available only on the Linux x86_64 Native backend. See [async and await](CONCURRENCY.md#async-与-await) for the rules.
+An `async func` call returns `Task[R,E]`, and the body does not run until `await` or the executor runs it. `await` may appear only in an async function; it waits for a Task and propagates declared errors. An unspawned task starts directly, and the same Task can be awaited repeatedly. `async func main` is a valid entry point. `std/async` provides `sleep`, `readable`/`writable`, `spawn`/`run`, `cancel`, `shutdown`, `finished`, and `join`/`join_all`. The executor is single-threaded and available on the Native backend for Linux x86_64 and macOS arm64. See [async and await](CONCURRENCY.md#async-与-await) for the rules.
 
 ## Packages and imports
 

@@ -86,7 +86,7 @@ python3 development/editor/setup.py
 
 已有整数与浮点、字符串值、函数值与捕获闭包、struct/enum、Vec、Slice、受约束泛型、trait 与 `dyn Trait`、模块、typed throws 和块级 defer。程序可以生成 Native 代码或 Python 代码；语言规则不会随所选后端改变。
 
-标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口面向 Linux x86_64 Native 程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
+标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口用于 Linux x86_64 和 macOS arm64 的原生程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
 
 `std/http` 支持 HTTP/1.1；`std/http_server` 提供支持 keep-alive、流水线、非阻塞背压、请求/正文/空闲/写超时、`Expect: 100-continue` 和优雅 stop/drain/abort 的异步 HTTP/1.1 服务器；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
 

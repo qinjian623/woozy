@@ -20,7 +20,7 @@ func main() throws os.Error {
 }
 ```
 
-`import "std/io" as io;` 导入输出函数。`io.println` 写出字符串并补一个换行。`throws os.Error` 声明输出可能失败，错误处理在后面的章节介绍。这个程序用于 Linux x86_64 Native 后端，运行时输出 `Hello, world!`。
+`import "std/io" as io;` 导入输出函数。`io.println` 写出字符串并补一个换行。`throws os.Error` 声明输出可能失败，错误处理在后面的章节介绍。这个原生程序在 Linux x86_64 和 macOS arm64 上运行时输出 `Hello, world!`。
 
 下面是另一个完整程序，用来计算一组分数的总和；与上例分别阅读和保存：
 
@@ -761,7 +761,7 @@ Vec 传给线程后仍共享容器。多个线程读写同一份可变数据时�
 
 ### 异步函数
 
-`async func` 返回 `Task[R,E]`，调用时不执行函数体。在另一个 async 函数里，`await task` 等待结果；任务尚未 `spawn` 时 `await` 会直接启动它，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、描述符等待、`spawn`/`run`、取消和 `shutdown`。执行器是单线程的，async 目前只在 Linux x86_64 的 Native 后端可用。完整规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
+`async func` 返回 `Task[R,E]`，调用时不执行函数体。在另一个 async 函数里，`await task` 等待结果；任务尚未 `spawn` 时 `await` 会直接启动它，同一个 Task 可以重复等待。`async func main` 可以作为入口。`std/async` 提供 `sleep`、描述符等待、`spawn`/`run`、取消和 `shutdown`。执行器是单线程的，async 支持 Linux x86_64 和 macOS arm64 的 Native 后端。完整规则见 [async 与 await](CONCURRENCY.md#async-与-await)。
 
 ## 16. 常用标准库
 

@@ -18,7 +18,8 @@ library_dirs = ["<directory containing libwoozy_tls.a>"]
 ```
 
 The addon archive and development build steps are documented in
-[`addon/README.md`](addon/README.md). The public API below is the language
+[`addon/README.md`](addon/README.md). On macOS arm64, use the generated Darwin
+bindings and link `c++` in place of `stdc++`. The public API below is the language
 surface; it does not expose raw OpenSSL objects.
 
 ## Public types

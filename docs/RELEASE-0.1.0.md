@@ -1,4 +1,6 @@
-# Woozy 0.1.0
+# Woozy 0.1.0 original release draft
+
+This draft records the original Linux release scope and the rc.1 checks. For rc.2 installation and supported platforms, see the [current README](../README.md#install).
 
 Woozy is a statically typed programming language with local type inference, structs, enums, generics, trait constraints, modules, typed `throws`, and block-scoped `defer`. This is the first user-facing release; the language and library APIs are still pre-1.0.
 
@@ -16,10 +18,10 @@ A system LLVM installation is not required. Keep the extracted `woozy/` director
 
 ## Install
 
-Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). This note is a draft for v0.1.0, so the command block uses a shell variable for the tag. The final tag for this draft is `v0.1.0`; use `v0.1.0-rc.1` for the current public pre-release, or set `tag` to the published tag when the final release is available.
+Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). This note is a draft for v0.1.0, so the command block uses a shell variable for the tag. The final tag for this draft is `v0.1.0`; use `v0.1.0-rc.1` for the original Linux pre-release, or set `tag` to the published tag when the final release is available.
 
 ```sh
-# Use v0.1.0 after publication; v0.1.0-rc.1 is the current public pre-release.
+# Use v0.1.0 after publication or v0.1.0-rc.1 for the original Linux package.
 tag=v0.1.0
 base="https://github.com/qinjian623/woozy/releases/download/$tag"
 curl -fLO "$base/woozy-linux-x86_64.tar.gz"
