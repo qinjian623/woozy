@@ -56,11 +56,33 @@ async func stopper(handle server.Server, signal Vec[u64]) i32 throws os.Error {
     return 0;
 }
 
+async func listener_reuse(
+    handler func(http.Request) http.Response throws http.Error,
+    serve_after_stop bool) bool throws os.Error {
+    let marker = os.open("/dev/null",os.O_RDONLY|os.O_CLOEXEC,0);
+    let descriptor = os.fd(marker);
+    os.close(marker);
+    let listener = server.listen(net.any4(0),handler);
+    server.stop(listener);
+    let replacement = os.open("/dev/null",os.O_RDONLY|os.O_CLOEXEC,0);
+    defer { try { os.close(replacement); } catch error os.Error {} }
+    if os.fd(replacement) != descriptor { return false; }
+    if serve_after_stop {
+        await server.serve(listener);
+    } else {
+        server.close(listener);
+    }
+    let info = os.fstat(replacement);
+    return true;
+}
+
 async func main() i32 throws os.Error {
     let signal = vec.make[u64](1,0);
     let handler = func(request http.Request) http.Response throws http.Error {
         return route(request,signal);
     };
+    if !await listener_reuse(handler,false) { return 1; }
+    if !await listener_reuse(handler,true) { return 2; }
     var settings = server.default_config();
     settings.drain_timeout_ms = 500;
     settings.timer_tick_ms = 25;
