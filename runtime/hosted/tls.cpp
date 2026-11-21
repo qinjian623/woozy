@@ -387,9 +387,11 @@ LangTlsStream *make_client_stream(LangTlsContext *context, int32_t fd,
     invalid_argument(error);
     return nullptr;
   }
-  // Bracketed authority syntax is a URL-layer concern, not a DNS/IP identity.
+  // Reject URL authority syntax and IPv6 zone suffixes before inet_pton;
+  // Darwin accepts a scoped address and discards its zone.
   if ((!text.empty() && text.front() == '[') ||
-      (!text.empty() && text.back() == ']')) {
+      (!text.empty() && text.back() == ']') ||
+      text.find('%') != std::string::npos) {
     invalid_argument(error);
     return nullptr;
   }
@@ -412,10 +414,8 @@ LangTlsStream *make_client_stream(LangTlsContext *context, int32_t fd,
     invalid_argument(error);
     return nullptr;
   }
-  if (!ip_literal &&
-      (text.find(':') != std::string::npos ||
-       text.find('%') != std::string::npos)) {
-    // Reject authority/port/zone syntax instead of sending it as SNI.
+  if (!ip_literal && text.find(':') != std::string::npos) {
+    // Reject authority/port syntax instead of sending it as SNI.
     invalid_argument(error);
     return nullptr;
   }

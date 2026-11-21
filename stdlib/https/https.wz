@@ -162,7 +162,7 @@ pub func close(connection Connection) throws Error {
 pub func listen(context tls.Context, address net.Address, backlog i32) Server throws Error {
     var socket = net.from_fd(-1);
     try {
-        socket = net.socket(address.family,net.SOCK_STREAM,0);
+        socket = net.socket(address.family,net.SOCK_STREAM | net.SOCK_NONBLOCK | net.SOCK_CLOEXEC,0);
     } catch error os.Error {
         throw Error.Net(error:error);
     }
@@ -196,7 +196,19 @@ pub func local_address(server Server) net.Address throws Error {
 pub func accept(server Server) Connection throws Error {
     var accepted = net.Accepted(socket:net.from_fd(-1),address:net.any4(0));
     try {
-        accepted = net.accept(server.listener,u32(net.SOCK_CLOEXEC));
+        let waiting = [net.PollFd(fd:net.fd(server.listener),events:net.POLLIN,revents:0)];
+        for true {
+            try {
+                accepted = net.accept(server.listener,u32(net.SOCK_CLOEXEC));
+                break;
+            } catch error os.Error {
+                switch error {
+                    case os.Error.WouldBlock(code,completed): {}
+                    default: throw error;
+                }
+            }
+            net.poll(waiting,-1);
+        }
     } catch error os.Error {
         throw Error.Net(error:error);
     }

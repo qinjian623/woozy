@@ -21,7 +21,8 @@ func main() i32 throws os.Error {
     var adapter = "";
     if arguments[6] != "" { adapter = fs.read_text(arguments[6]); }
     let output = nativeemit.Output(llvm_sections: sections, c_adapter_source: adapter,
-        triple: arguments[8], data_layout: nativeemit.DATA_LAYOUT, has_async: arguments[5] == "1");
+        triple: arguments[8], data_layout: nativeemit.DATA_LAYOUT, has_async: arguments[5] == "1",
+        debug_info: false);
     var project = model.empty_project();
     project.hosted = arguments[4] == "1";
     if arguments[7] != "" {

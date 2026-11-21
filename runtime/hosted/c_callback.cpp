@@ -49,7 +49,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <pthread.h>
+#ifdef __APPLE__
+#include "../native/darwin.hpp"
+#else
 #include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
@@ -109,7 +113,7 @@ struct Context {
   uint32_t accepting;   // callbacks admitted (cleared after unregister)
   uint32_t free_armed;  // a release participant wants the storage freed
   uint32_t detached;    // env ownership already moved out of the context
-  int32_t teardown_tid; // close/release leader identity
+  int64_t teardown_tid; // close/release leader identity
 };
 
 // One TLS stack shared by callback entries and foreign-call leases. Every
@@ -118,8 +122,14 @@ struct Context {
 // destructor and therefore no special teardown path.
 thread_local LangCCallbackToken *tls_top = nullptr;
 
-int32_t current_tid() noexcept {
+int64_t current_tid() noexcept {
+#ifdef __APPLE__
+  const auto result = lang::native::darwin::thread_id();
+  if (result <= 0) misuse(kMarkerSync);
+  return result;
+#else
   return static_cast<int32_t>(::syscall(SYS_gettid));
+#endif
 }
 
 int32_t current_pid() noexcept {
@@ -348,7 +358,7 @@ void close_or_release(void *handle, bool release) noexcept {
       return;
   }
   pin(context);
-  const int32_t tid = current_tid();
+  const int64_t tid = current_tid();
   lock(context);
   if (context->phase == kDone) {
     if (release)

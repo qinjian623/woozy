@@ -1,13 +1,25 @@
 #include "dns.hpp"
 
 #include "alloc.hpp"
+#if defined(__APPLE__) && defined(__aarch64__)
+#include "../darwin/posix.hpp"
+#include "gc_program.hpp"
+
+#include <cstring>
+#include <netdb.h>
+#include <sys/socket.h>
+
+#define LANG_NATIVE_NO_STACK_PROTECTOR __attribute__((no_stack_protector))
+#else
 #include "linux.hpp"
+#endif
 #include "os.hpp"
 #include "system.hpp"
 
 #include <cstdint>
 
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) && defined(__linux__)) || \
+    (defined(__APPLE__) && defined(__aarch64__))
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
@@ -16,10 +28,9 @@
 
 namespace {
 
-// Linux x86_64 constants. Production does not include host headers.
+// Woozy's private network ABI uses Linux x86_64 constants.
 constexpr int32_t kAfInet = 2;
 constexpr int32_t kAfInet6 = 10;
-constexpr uint16_t kDnsPort = 53;
 constexpr int32_t kSockStream = 1;
 constexpr int32_t kSockDgram = 2;
 constexpr int32_t kSockNonblock = 2048;
@@ -64,13 +75,15 @@ constexpr int64_t kErrIsConn = -106;
 
 constexpr uint64_t kMaxHostnameBytes = 253;
 constexpr uint64_t kMaxLabelBytes = 63;
-constexpr uint64_t kMaxNameBuffer = 256;
 constexpr uint64_t kMaxDnsMessage = 65535;
 constexpr uint64_t kMaxQueryBytes = 512;
 constexpr uint64_t kMaxResults = 64;
 constexpr uint64_t kMaxCnameHops = 8;
 constexpr uint64_t kMaxCnameRecords = 16;
 constexpr uint64_t kMaxAddressRecords = 64;
+#if defined(__linux__)
+constexpr uint16_t kDnsPort = 53;
+constexpr uint64_t kMaxNameBuffer = 256;
 constexpr uint64_t kMaxNameservers = 3;
 constexpr uint64_t kMaxSearchDomains = 4;
 constexpr uint64_t kMaxAttempts = 5;
@@ -81,9 +94,11 @@ constexpr uint32_t kDefaultAttempts = 2;
 constexpr uint32_t kDefaultNdots = 1;
 constexpr uint64_t kHostsBufferBytes = 16384;
 constexpr uint64_t kResolvBufferBytes = 8192;
+#endif
 
 struct Candidate {
   int32_t family;
+  uint32_t scope;
   uint8_t bytes[16];
 };
 
@@ -92,6 +107,7 @@ struct CandidateList {
   uint64_t count;
 };
 
+#if defined(__linux__)
 struct ResolverConfig {
   int32_t server_family[kMaxNameservers];
   uint8_t server_bytes[kMaxNameservers][16];
@@ -102,6 +118,7 @@ struct ResolverConfig {
   uint32_t attempts;
   uint32_t ndots;
 };
+#endif
 
 char ascii_lower(char byte) noexcept {
   if (byte >= 'A' && byte <= 'Z') return static_cast<char>(byte - 'A' + 'a');
@@ -172,10 +189,11 @@ void address_drop(void *element) noexcept {
 }
 
 bool candidate_add(CandidateList *list, int32_t family,
-                   const uint8_t *bytes) noexcept {
+                   const uint8_t *bytes, uint32_t scope = 0) noexcept {
   const uint64_t length = family == kAfInet ? 4 : 16;
   for (uint64_t index = 0; index < list->count; ++index) {
-    if (list->items[index].family != family) continue;
+    if (list->items[index].family != family || list->items[index].scope != scope)
+      continue;
     bool same = true;
     for (uint64_t byte = 0; byte < length; ++byte) {
       if (list->items[index].bytes[byte] != bytes[byte]) {
@@ -187,6 +205,7 @@ bool candidate_add(CandidateList *list, int32_t family,
   }
   if (list->count >= kMaxResults) return false;
   list->items[list->count].family = family;
+  list->items[list->count].scope = scope;
   for (uint64_t byte = 0; byte < length; ++byte)
     list->items[list->count].bytes[byte] = bytes[byte];
   for (uint64_t byte = length; byte < 16; ++byte)
@@ -199,7 +218,7 @@ void candidate_merge(CandidateList *destination,
                      const CandidateList &source) noexcept {
   for (uint64_t index = 0; index < source.count; ++index) {
     const Candidate &candidate = source.items[index];
-    candidate_add(destination, candidate.family, candidate.bytes);
+    candidate_add(destination, candidate.family, candidate.bytes, candidate.scope);
   }
 }
 
@@ -216,7 +235,7 @@ int64_t build_result(const CandidateList &list, uint16_t port,
     element.family = candidate.family;
     element.port = port;
     element.flags = 0;
-    element.scope = 0;
+    element.scope = candidate.scope;
     element.reserved = 0;
     element.data = make_bytes_vec(candidate.bytes, data_length);
     lang_vec_init_v1(result, &element);
@@ -234,6 +253,7 @@ void release_address(LangNetAddress *address) noexcept {
   }
 }
 
+#if defined(__linux__)
 int64_t read_file(const char *path, uint64_t path_length, char *buffer,
                   uint64_t capacity, uint64_t *length_out) noexcept {
   if (capacity < 1) return kErrInval;
@@ -319,6 +339,7 @@ bool parse_ip_literal(const char *text, uint64_t length, int32_t *family,
   }
   return false;
 }
+#endif
 
 int64_t normalize_name(const char *data, uint64_t length, char out[256],
                        uint64_t *out_length, bool *absolute) noexcept {
@@ -871,9 +892,15 @@ int64_t dns_exchange(const char *name, int32_t family,
   init_parsed_answer(answer);
 
   uint8_t id_bytes[2];
+  // Darwin getentropy has no flag argument.
+#if defined(__APPLE__)
+  constexpr uint32_t entropy_flags = 0;
+#else
   // GRND_NONBLOCK avoids an indefinite early-boot entropy wait.
+  constexpr uint32_t entropy_flags = 1;
+#endif
   int64_t result =
-      lang_sys_getrandom_v1(id_bytes, sizeof id_bytes, 1);
+      lang_sys_getrandom_v1(id_bytes, sizeof id_bytes, entropy_flags);
   if (result != static_cast<int64_t>(sizeof id_bytes))
     return result < 0 ? result : kErrIo;
   const uint16_t id = static_cast<uint16_t>(
@@ -1090,6 +1117,49 @@ void add_loopback_candidates(int32_t family, CandidateList *list) noexcept {
     candidate_add(list, kAfInet6, ipv6);
 }
 
+#if defined(__APPLE__)
+int64_t resolve_system_name(const char *name, int32_t family,
+                            CandidateList *list) noexcept {
+  addrinfo hints{};
+  hints.ai_family = family == kAfInet ? AF_INET :
+                    family == kAfInet6 ? AF_INET6 : AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo *addresses = nullptr;
+  const lang::native::gc_program::SafeGuard safe;
+  switch (getaddrinfo(name, nullptr, &hints, &addresses)) {
+    case 0: break;
+    case EAI_ADDRFAMILY:
+    case EAI_NODATA:
+    case EAI_NONAME: return kErrNoEnt;
+    case EAI_AGAIN: return kErrEagain;
+    case EAI_MEMORY: return kErrNoMem;
+    case EAI_FAMILY: return kErrAfNoSupport;
+    case EAI_SYSTEM: return lang::native::darwin::error(errno);
+    default: return kErrIo;
+  }
+
+  for (const auto *entry = addresses; entry && list->count < kMaxResults;
+       entry = entry->ai_next) {
+    if (!entry->ai_addr) continue;
+    if (entry->ai_family == AF_INET && family != kAfInet6 &&
+        entry->ai_addrlen >= sizeof(sockaddr_in)) {
+      sockaddr_in address;
+      std::memcpy(&address, entry->ai_addr, sizeof(address));
+      candidate_add(list, kAfInet,
+                    reinterpret_cast<const uint8_t *>(&address.sin_addr));
+    } else if (entry->ai_family == AF_INET6 && family != kAfInet &&
+               entry->ai_addrlen >= sizeof(sockaddr_in6)) {
+      sockaddr_in6 address;
+      std::memcpy(&address, entry->ai_addr, sizeof(address));
+      candidate_add(list, kAfInet6,
+                    reinterpret_cast<const uint8_t *>(&address.sin6_addr),
+                    address.sin6_scope_id);
+    }
+  }
+  if (addresses) freeaddrinfo(addresses);
+  return 0;
+}
+#else
 bool alias_matches(const char *alias, const char *name) noexcept {
   uint64_t alias_length = text_length(alias);
   if (alias_length != 0 && alias[alias_length - 1] == '.') --alias_length;
@@ -1324,6 +1394,7 @@ void build_search_candidates(const char *name, bool absolute,
   }
   if (!absolute_first) add_candidate_name(candidates, count, name);
 }
+#endif
 
 } // namespace
 
@@ -1394,6 +1465,15 @@ int64_t lang_net_lookup_v1(const LangText *hostname, uint16_t port,
                           hostname->bytes, name, &name_length, &absolute);
   if (result < 0) return result;
 
+#if defined(__APPLE__)
+  // Preserve absolute names when handing search policy to the system resolver.
+  if (absolute) {
+    name[name_length] = '.';
+    name[name_length + 1] = '\0';
+  }
+  result = resolve_system_name(name, family, &candidates);
+  return result < 0 ? result : build_result(candidates, port, out);
+#else
   result = parse_hosts(name, family, &candidates);
   if (result < 0) return result;
   if (candidates.count != 0) return build_result(candidates, port, out);
@@ -1445,6 +1525,7 @@ int64_t lang_net_lookup_v1(const LangText *hostname, uint16_t port,
     }
   }
   return last_error;
+#endif
 }
 
 } // extern "C"
@@ -1453,4 +1534,4 @@ int64_t lang_net_lookup_v1(const LangText *hostname, uint16_t port,
 #pragma GCC diagnostic pop
 #endif
 
-#endif // Linux x86_64
+#endif // Linux x86_64 or Darwin arm64

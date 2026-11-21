@@ -137,6 +137,7 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 76, name: "__woozy_os_getrandom", result: "i64", parameters: ["Vec[u8]", "usize", "u32"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", result: "Result[std/os.FileInfo,i32]", parameters: ["Vec[u8]"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 214, name: "__woozy_os_flock", result: "Result[Unit,i32]", parameters: ["i32", "i32"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 215, name: "__woozy_os_executable_path", result: "i64", parameters: ["Vec[u8]", "usize"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 85, name: "__woozy_net_socket", result: "Result[i32,i32]", parameters: ["i32", "i32", "i32"], owner: "std/net", type_arity: 0),
         OperationSpec(operation: 86, name: "__woozy_net_bind", result: "Result[Unit,i32]", parameters: ["i32", "std/net.Address"], owner: "std/net", type_arity: 0),
         OperationSpec(operation: 87, name: "__woozy_net_connect", result: "Result[Unit,i32]", parameters: ["i32", "std/net.Address"], owner: "std/net", type_arity: 0),

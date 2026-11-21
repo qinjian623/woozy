@@ -45,7 +45,8 @@ func emit_package_assembly(input nativeir.Module, entry usize, options Options,
     finalize_c_adapter(inout state);
     let output = sections(state);
     return Output(llvm_sections: output, c_adapter_source: state.e.adapter_source,
-        triple: options.triple, data_layout: state.data_layout, has_async: has_async);
+        triple: options.triple, data_layout: state.data_layout, has_async: has_async,
+        debug_info: options.debug_info);
 }
 
 pub func emit(input nativeverify.VerifiedModule, entry usize,
@@ -72,6 +73,14 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
         if module.hir.config.word_bits != 64 {
             return emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
                 "native scalars require native/64 HIR");
+        }
+        var c_target = "x86_64-linux-gnu";
+        if options.triple == DARWIN_ARM64_TRIPLE { c_target = "arm64-apple-darwin"; }
+        for binding in module.hir.resolved.project.c_bindings {
+            if binding.target != c_target {
+                return emit_failure("E_TARGET_UNSUPPORTED", model.FailureKind.Unsupported,
+                    "C binding " + binding.path + " targets " + binding.target + ", expected " + c_target);
+            }
         }
         switch package_id {
             case option.Option.Some(selected): {

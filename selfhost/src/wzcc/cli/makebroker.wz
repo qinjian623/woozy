@@ -34,28 +34,31 @@ func finish_make_broker(broker MakeBroker) {
 func start_make_broker(directory string, options Options, original model.Project,
                        state MakeState, prepared resolve.PreparedProject,
                        manager source.Manager) MakeBroker throws os.Error {
-    let dir = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, 0);
-    defer { broker_close(dir); }
-    let listener = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC, 0);
+    let listener = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC | net.SOCK_NONBLOCK, 0);
     defer { broker_close(net.file(listener)); }
-    // The stage is private and may have a name longer than sockaddr_un.
-    let socket_path = "/proc/self/fd/" + strconv.format_i64(i64(os.fd(dir))) +
-        "/" + MAKE_SOCKET;
-    net.bind(listener, net.unix_address(socket_path));
-    net.listen(listener, 128);
     let lifetime = os.pipe(u32(os.O_CLOEXEC));
     defer { broker_close(lifetime.read_end); }
     var keep = false;
     defer { if !keep { broker_close(lifetime.write_end); } }
-    let pid = process.fork();
+    let ready = os.pipe(u32(os.O_CLOEXEC));
+    defer { broker_close(ready.read_end); }
+    var pid i32 = 0;
+    try { pid = process.fork(); }
+    catch problem os.Error { broker_close(ready.write_end); throw problem; }
     if pid == 0 {
         broker_close(lifetime.write_end);
+        broker_close(ready.read_end);
         try {
+            // The private staging path itself may be longer than sockaddr_un.
             os.chdir(directory);
+            net.bind(listener, net.unix_address(MAKE_SOCKET));
+            net.listen(listener, 128);
             let quiet = os.open("/dev/null", os.O_WRONLY | os.O_CLOEXEC, 0);
             let output = os.dup2(quiet, 1);
             let error = os.dup2(quiet, 2);
             if os.fd(quiet) >= 3 { broker_close(quiet); }
+            os.write_all_text(ready.write_end, "1");
+            broker_close(ready.write_end);
             var declarations = option.Option[sema.PreparedPackages].None;
             if state.cache_dir == "" && vec.len(state.packages) > 1 {
                 declarations = sema.prepare_packages(resolve.resolve_prepared_project(prepared),
@@ -66,8 +69,16 @@ func start_make_broker(directory string, options Options, original model.Project
         } catch problem os.Error {}
         os.exit(0);
     }
+    broker_close(ready.write_end);
+    let broker = MakeBroker(pid: pid, lifetime: lifetime.write_end);
     keep = true;
-    return MakeBroker(pid: pid, lifetime: lifetime.write_end);
+    try {
+        if io.read_text(ready.read_end) != "1" { throw invalid_state(); }
+    } catch problem os.Error {
+        finish_make_broker(broker);
+        throw problem;
+    }
+    return broker;
 }
 
 func serve_make_broker(listener net.Socket, lifetime os.File, options Options,
@@ -97,7 +108,15 @@ func serve_make_broker(listener net.Socket, lifetime os.File, options Options,
         }
         if rows[0].revents != 0 { return; }
         if (rows[1].revents & net.POLLIN) == 0 { throw invalid_state(); }
-        let peer = net.accept(listener, u32(net.SOCK_CLOEXEC)).socket;
+        var peer = listener;
+        try { peer = net.accept(listener, u32(net.SOCK_CLOEXEC)).socket; }
+        catch problem os.Error {
+            switch problem {
+                case os.Error.Interrupted(code, completed): continue;
+                case os.Error.WouldBlock(code, completed): continue;
+                default: throw problem;
+            }
+        }
         var pid i32 = 0;
         try { pid = process.fork(); }
         catch problem os.Error { broker_close(net.file(peer)); throw problem; }

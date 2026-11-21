@@ -81,8 +81,13 @@ namespace {
 struct TokenMutex {
   std::atomic_flag held = ATOMIC_FLAG_INIT;
   void lock() noexcept {
-    while (held.test_and_set(std::memory_order_acquire))
+    while (held.test_and_set(std::memory_order_acquire)) {
+#if defined(__aarch64__)
+      __asm__ volatile("yield" ::: "memory");
+#else
       __asm__ volatile("pause" ::: "memory");
+#endif
+    }
   }
   void unlock() noexcept { held.clear(std::memory_order_release); }
 };

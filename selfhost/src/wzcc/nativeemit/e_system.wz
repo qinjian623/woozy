@@ -370,6 +370,7 @@ func e_extra_fs_name(operation u32) string {
         case 76: return "lang_sys_getrandom_vec_v1";
         case 213: return "lang_sys_stat_v1";
         case 214: return "lang_sys_flock_v1";
+        case 215: return "lang_sys_executable_path_vec_v1";
         default: return "";
     }
 }
@@ -381,7 +382,7 @@ func e_extra_fs_output(operation u32) bool {
 
 func e_extra_fs_raw(operation u32) bool {
     return operation == 50 || operation == 51 || operation == 52 ||
-        operation == 75 || operation == 76;
+        operation == 75 || operation == 76 || operation == 215;
 }
 
 func e_extra_fs_actual(operation u32, signature model.Type, args Vec[Value],
@@ -599,7 +600,7 @@ func e_extra_system_call(instruction nativeir.Instruction,
                 case option.Option.Some(value): return option.Option[Value].Some(value);
                 case option.Option.None: {}
             }
-            if (operation >= 43 && operation <= 76) || operation == 213 || operation == 214 {
+            if (operation >= 43 && operation <= 76) || (operation >= 213 && operation <= 215) {
                 return e_extra_fs(instruction, operation, args, inout state);
             }
             return e_process_system_call(instruction, args, inout state);
@@ -1038,7 +1039,7 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
                     case option.Option.None: {}
                 }
             }
-            if (operation >= 43 && operation <= 84) || operation == 213 || operation == 214 {
+            if (operation >= 43 && operation <= 84) || (operation >= 213 && operation <= 215) {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}

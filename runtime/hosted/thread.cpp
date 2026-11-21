@@ -13,23 +13,38 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__aarch64__) && defined(__APPLE__)
+#include "../darwin/posix.hpp"
+#include "../native/darwin.hpp"
+#endif
+
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
                                                  uint64_t) noexcept;
+#if defined(__linux__)
 #pragma weak lang_gc_runtime_defer_release_v1
+#endif
 
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) && defined(__linux__)) || \
+    (defined(__aarch64__) && defined(__APPLE__))
 namespace {
+#if defined(__APPLE__)
+namespace darwin = lang::native::darwin;
+#endif
 constexpr int64_t kDeadlock = -35; // EDEADLK
 constexpr int64_t kTimedOut = -110;
 constexpr int64_t kInvalidTimeout = -22;
+#if defined(__linux__)
 constexpr int64_t kNanoseconds = 1000000000;
+#endif
 constexpr uint64_t kContextAlignment = 16;
 
 struct alignas(16) HostedThreadState {
   LangHandle handle;
   pthread_t thread;
+#if defined(__linux__)
   pthread_mutex_t mutex;
   pthread_cond_t cond;
+#endif
   LangThreadEntry entry;
   LangValueOp context_drop;
   void *context;
@@ -37,8 +52,10 @@ struct alignas(16) HostedThreadState {
   int64_t error; // spawn/copy failure, immutable after return
   uint32_t done;
   uint32_t created;
+#if defined(__linux__)
   uint32_t mutex_ready;
   uint32_t cond_ready;
+#endif
   int32_t process_id;
   int32_t reserved;
 };
@@ -81,6 +98,14 @@ void drop_context(HostedThreadState *state) noexcept {
   if (state->context_drop) state->context_drop(context(state));
 }
 
+int64_t posix_error(int status) noexcept {
+#if defined(__APPLE__)
+  return darwin::error(status);
+#else
+  return -static_cast<int64_t>(status);
+#endif
+}
+
 LangHandle *fail_spawn(HostedThreadState *state, int64_t error,
                        LangValueOp drop) noexcept {
   state->context_drop = drop;
@@ -111,8 +136,10 @@ void destroy_thread_now(void *payload) noexcept {
       pthread_join(state->thread, nullptr);
     }
   }
+#if defined(__linux__)
   if (state->cond_ready) pthread_cond_destroy(&state->cond);
   if (state->mutex_ready) pthread_mutex_destroy(&state->mutex);
+#endif
   if (state->context) lang_free_v1(state->context);
   lang_free_v1(state);
 }
@@ -120,8 +147,13 @@ void destroy_thread_now(void *payload) noexcept {
 void destroy_thread(LangHandle *handle) noexcept {
   // The runner drops the Woozy context before its own reference. At refs=0
   // only host state remains; joining must wait until the GC world resumes.
-  if (lang_gc_runtime_defer_release_v1 &&
-      lang_gc_runtime_defer_release_v1(handle, &destroy_thread_now))
+#if defined(__linux__)
+  if (!lang_gc_runtime_defer_release_v1) {
+    destroy_thread_now(handle);
+    return;
+  }
+#endif
+  if (lang_gc_runtime_defer_release_v1(handle, &destroy_thread_now))
     return;
   destroy_thread_now(handle);
 }
@@ -143,10 +175,16 @@ void *run_thread(void *pointer) noexcept {
   gc_thread.release();
   state->result = result;
   __atomic_store_n(&state->done, 1u, __ATOMIC_RELEASE);
+#if defined(__APPLE__)
+  // A process-private address wait leaves no pthread lock or wait queue in
+  // the surviving runner's address space when it forks.
+  if (darwin::address_wake(&state->done, true) < 0) lang_handle_panic_v1();
+#else
   if (pthread_mutex_lock(&state->mutex) == 0) {
     pthread_cond_broadcast(&state->cond);
     pthread_mutex_unlock(&state->mutex);
   }
+#endif
   current_thread = nullptr;
   // This may destroy the state (and detach this pthread) if the user already
   // released the final handle.
@@ -212,27 +250,34 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
   }
   if (copy) copy(state->context);
 
-  int status = pthread_mutex_init(&state->mutex, nullptr);
-  if (status) return fail_spawn(state, -static_cast<int64_t>(status), drop);
+#if defined(__linux__)
+  int mutex_status = pthread_mutex_init(&state->mutex, nullptr);
+  if (mutex_status) return fail_spawn(state, posix_error(mutex_status), drop);
   state->mutex_ready = 1;
   pthread_condattr_t condition_attributes;
-  status = pthread_condattr_init(&condition_attributes);
-  if (status) return fail_spawn(state, -static_cast<int64_t>(status), drop);
-  status = pthread_condattr_setclock(&condition_attributes, CLOCK_MONOTONIC);
-  if (!status) status = pthread_cond_init(&state->cond, &condition_attributes);
+  mutex_status = pthread_condattr_init(&condition_attributes);
+  if (mutex_status) return fail_spawn(state, posix_error(mutex_status), drop);
+  mutex_status = pthread_condattr_setclock(&condition_attributes, CLOCK_MONOTONIC);
+  if (!mutex_status)
+    mutex_status = pthread_cond_init(&state->cond, &condition_attributes);
   pthread_condattr_destroy(&condition_attributes);
-  if (status) return fail_spawn(state, -static_cast<int64_t>(status), drop);
+  if (mutex_status) return fail_spawn(state, posix_error(mutex_status), drop);
   state->cond_ready = 1;
+#endif
 
   pthread_attr_t attributes;
-  status = pthread_attr_init(&attributes);
-  if (status) return fail_spawn(state, -static_cast<int64_t>(status), drop);
+  int status = pthread_attr_init(&attributes);
+  if (status) return fail_spawn(state, posix_error(status), drop);
   status = pthread_attr_setstacksize(&attributes, LANG_THREAD_STACK_BYTES);
+#if defined(__APPLE__)
+  if (!status) status = pthread_attr_setguardsize(&attributes, getpagesize());
+#else
   if (!status) pthread_attr_setguardsize(&attributes, 4096);
+#endif
   if (!status)
     status = pthread_create(&state->thread, &attributes, &run_thread, state);
   pthread_attr_destroy(&attributes);
-  if (status) return fail_spawn(state, -static_cast<int64_t>(status), drop);
+  if (status) return fail_spawn(state, posix_error(status), drop);
   __atomic_store_n(&state->created, 1u, __ATOMIC_RELEASE);
   return &state->handle;
 }
@@ -242,6 +287,7 @@ int64_t terminal_status(HostedThreadState *state) noexcept {
   return __atomic_load_n(&state->error, __ATOMIC_ACQUIRE);
 }
 
+#if defined(__linux__)
 int64_t make_deadline(int64_t timeout_ns, timespec &deadline) noexcept {
   if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0)
     return -static_cast<int64_t>(errno);
@@ -277,6 +323,7 @@ int64_t deadline_status(const timespec &deadline) noexcept {
              ? kTimedOut
              : 0;
 }
+#endif
 
 int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
   if (timeout_ns < -1) return kInvalidTimeout;
@@ -290,6 +337,29 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
   if (pthread_equal(pthread_self(), state->thread)) return kDeadlock;
   if (timeout_ns == 0) return kTimedOut;
 
+#if defined(__APPLE__)
+  uint64_t deadline = 0;
+  if (timeout_ns > 0) {
+    const int status =
+        darwin::monotonic_deadline(static_cast<uint64_t>(timeout_ns), deadline);
+    if (status < 0) return posix_error(-status);
+  }
+  while (!__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) {
+    int status;
+    {
+      lang::native::gc_program::SafeGuard safe;
+      status = timeout_ns < 0
+          ? darwin::address_wait(&state->done, 0)
+          : darwin::address_wait_until(&state->done, 0, deadline);
+    }
+    if (status == -ETIMEDOUT &&
+        __atomic_load_n(&state->done, __ATOMIC_ACQUIRE))
+      break;
+    if (status < 0 && status != -EINTR)
+      return posix_error(-status);
+  }
+  return terminal_status(state);
+#else
   timespec deadline{};
   if (timeout_ns > 0) {
     const int64_t status = make_deadline(timeout_ns, deadline);
@@ -326,6 +396,7 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
   pthread_mutex_unlock(&state->mutex);
   safe.release();
   return result ? result : terminal_status(state);
+#endif
 }
 } // namespace
 

@@ -32,20 +32,23 @@ extern "C" {
 //
 // `port` is copied into every result in host byte order.
 // `family` is 0 (both IPv4 and IPv6), 2 (IPv4 only), or 10 (IPv6 only).
-// Results are deduplicated. `localhost` and numeric IP literals are resolved
-// without reading resolver files.
+// Returns up to 64 distinct addresses. `localhost` and numeric IP literals
+// are resolved directly.
 //
 // Hostname input is ASCII DNS presentation form (punycode must already be
 // encoded as ASCII; no implicit IDNA), at most 253 bytes excluding a trailing
-// dot, with labels at most 63 bytes and no embedded NUL. The resolver reads
-// /etc/hosts and /etc/resolv.conf through the existing OS primitives, applies
+// dot, with labels at most 63 bytes and no embedded NUL.
+//
+// Linux reads /etc/hosts and /etc/resolv.conf, applies
 // search/domain/ndots ordering, and queries nameservers over UDP with bounded
 // attempts and monotonic-clock deadlines. A truncated UDP response is retried
 // over TCP with a length prefix. CNAME chains are followed for at most 8 hops.
 // Only answer records belonging to the query/CNAME chain are accepted.
+// Darwin queries the system resolver and preserves its ordering and IPv6 scope.
 //
 // Documented error values include -2 for NXDOMAIN/no data, -22 for malformed
-// hostnames or DNS messages, and -110 for a timeout. Resolver/network failures
+// hostnames or DNS messages, and -110 for a timeout. Darwin system resolver
+// failures that only indicate retry are returned as -11. Resolver/network failures
 // otherwise return the relevant negative errno (for example -ECONNREFUSED or
 // -ENETUNREACH). A missing/unreadable resolver file is reported rather than
 // being treated as a successful empty answer. DNS name length, label, response

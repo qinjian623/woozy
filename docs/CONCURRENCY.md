@@ -1,6 +1,6 @@
 # 线程与同步
 
-`std/thread` 创建线程，`std/sync` 提供互斥锁、条件变量和原子整数。当前用于 Linux x86_64 Native 程序。
+`std/thread` 创建线程，`std/sync` 提供互斥锁、条件变量和原子整数。用于 Linux x86_64 和 macOS arm64 的 Native 程序。
 
 ## 创建与等待
 
@@ -310,4 +310,4 @@ async func main() i32 throws os.Error {
 
 `std/http_server` 使用同一执行器实现 HTTP/1.1 服务器：每个连接一个任务，非阻塞读写，`WouldBlock` 后等待描述符，支持 keep-alive、流水线、`Expect: 100-continue`、header/body/idle/write 超时、`max_connections`/`max_requests` 上限，以及 stop/drain/abort 生命周期。单个 watchdog 任务扫描连接表并只对描述符 `shutdown`，连接任务仍负责关闭。handler 在单线程执行器中同步运行。示例见[标准库](STDLIB.md#stdhttp_server)。
 
-目前 async 只支持 Linux x86_64 Native，inout 参数会在编译时拒绝。async 的参数、局部值、结果或错误不能包含外部 C 资源句柄。对函数值和 dyn 的资源检查目前按程序中出现的类型保守处理，因此含同类值、但实际没有保存 C 资源的 async 函数也可能被拒绝。Python 后端暂不支持 async。
+async 支持 Linux x86_64 和 macOS arm64 的 Native 程序。`inout` 参数会在编译时拒绝。async 的参数、局部值、结果或错误不能包含外部 C 资源句柄。对函数值和 dyn 的资源检查目前按程序中出现的类型保守处理，因此含同类值、但实际没有保存 C 资源的 async 函数也可能被拒绝。Python 后端暂不支持 async。

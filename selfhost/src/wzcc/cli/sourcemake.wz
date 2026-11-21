@@ -202,17 +202,22 @@ func object_name(package_value MakePackage) string {
     return OBJECT_DIR + "/pkg-" + package_value.fixed + ".o";
 }
 
-func makefile_text(state MakeState) string {
-    var result = ".POSIX:\n.DEFAULT_GOAL := all\n\nall: program\n\nobj:\n\tmkdir -p " + OBJECT_DIR + "\n\n";
+func makefile_text(state MakeState, objects_only bool) string {
+    let archive = state.target == nativeemit.DARWIN_ARM64_TRIPLE;
+    var combined = "program.o";
+    var final_name = "program";
+    if archive { combined = "program.a"; }
+    if objects_only { final_name = combined; }
+    var result = ".POSIX:\n.DEFAULT_GOAL := all\n\nall: " + final_name + "\n\nobj:\n\tmkdir -p " + OBJECT_DIR + "\n\n";
     for package_value in state.packages {
         result += object_name(package_value) + ": | obj\n";
         result += "\t\"$$WOOZYC\" __source_make_worker --state " + MAKE_STATE +
             " --package " + package_value.fixed + "\n\n";
     }
-    result += "program.o:";
+    result += combined + ":";
     for package_value in state.packages { result += " " + object_name(package_value); }
     result += "\n\t\"$$WOOZYC\" __source_make_combine --state " + MAKE_STATE + "\n\n";
-    result += "program: program.o\n\t\"$$WOOZYC\" __source_make_link --state " + MAKE_STATE + "\n";
+    if !objects_only { result += "program: " + combined + "\n\t\"$$WOOZYC\" __source_make_link --state " + MAKE_STATE + "\n"; }
     return result;
 }
 
@@ -376,9 +381,9 @@ func unsupported_ast(project_value model.Project, package_value MakePackage) opt
     return option.Option[string].None;
 }
 
-func check_toolchain(root string, stage_path string, log inout string) bool throws os.Error {
+func check_toolchain(root string, stage_path string, names Vec[string], log inout string) bool throws os.Error {
     let tools = resources.llvm_bin(root);
-    for name in ["opt", "llc", "clang", "ld.lld"] {
+    for name in names {
         let tool = tools + "/" + name;
         let result = run_logged([tool, "--version"], stage_path + "/preflight-capture",
             inout log, false);
@@ -400,9 +405,13 @@ pub func source_make_build(input Options, original model.Project,
                            cache frontcache.Context) i32 throws os.Error {
     var target = "x86_64-unknown-linux-gnu";
     if input.target != "" { target = input.target; }
-    if target != "x86_64-unknown-linux-gnu" {
+    if input.objects_only && target != nativeemit.DARWIN_ARM64_TRIPLE {
         return fail(input, manager.snapshots, "E_TARGET_UNSUPPORTED", "codegen",
-            "source make supports Linux x86_64 only: " + target, model.FailureKind.Unsupported);
+            "--objects-only requires --target " + nativeemit.DARWIN_ARM64_TRIPLE, model.FailureKind.Unsupported);
+    }
+    if target != "x86_64-unknown-linux-gnu" && target != nativeemit.DARWIN_ARM64_TRIPLE {
+        return fail(input, manager.snapshots, "E_TARGET_UNSUPPORTED", "codegen",
+            "unsupported source Make target: " + target, model.FailureKind.Unsupported);
     }
     var optimization = "0";
     if input.opt == "2" { optimization = "2"; }
@@ -461,11 +470,26 @@ pub func source_make_build(input Options, original model.Project,
     fs.create_dir_all(stage.path + "/" + ".wz-source-make", 0o777);
     var preflight = "source-make preflight\nproject: " + input.project + "\ntarget: " + target + "\nopt: " + optimization + "\n";
     let root = resources.directory();
-    if !check_toolchain(root, stage.path, inout preflight) {
+    var tools = ["opt", "llc", "clang", "ld.lld"];
+    if target == nativeemit.DARWIN_ARM64_TRIPLE {
+        tools = ["opt", "llc", "llvm-ar"];
+        if !input.objects_only {
+            vec.push(tools, "clang"); vec.push(tools, "ld64.lld");
+            try {
+                let sdk = resources.darwin_sdk(stage.path + "/sdk-capture");
+                if !fs.is_file(os.stat(root + "/runtime/liblang_darwin_core.a")) { throw invalid_state(); }
+                process.setenv("SDKROOT", sdk, true);
+            } catch problem os.Error {
+                return fail(input, manager.snapshots, "E_TOOLCHAIN_MISSING", "link",
+                    "macOS SDK and runtime archive required: " + source_os_text(problem), model.FailureKind.Environment);
+            }
+        }
+    }
+    if !check_toolchain(root, stage.path, tools, inout preflight) {
         write_log(stage.path + "/preflight.log", preflight);
         publish_failure_logs(inout stage);
         return fail(input, manager.snapshots, "E_TOOLCHAIN_MISSING", "codegen",
-            "LLVM 22.1.8 opt/llc/clang/ld.lld required", model.FailureKind.Environment);
+            "LLVM 22.1.8 " + text.join(tools, "/") + " required", model.FailureKind.Environment);
     }
     write_log(stage.path + "/preflight.log", preflight);
     var cache_dir = input.cache_directory;
@@ -477,8 +501,8 @@ pub func source_make_build(input Options, original model.Project,
         hosted: original.hosted, packages: packages,
         c_libraries: original.c_libraries, c_library_dirs: original.c_library_dirs);
     fs.write_file(stage.path + "/" + MAKE_STATE, encode_state(state), 0o600);
-    write_log(stage.path + "/Makefile", makefile_text(state));
-    let executable = os.readlink("/proc/self/exe");
+    write_log(stage.path + "/Makefile", makefile_text(state, input.objects_only));
+    let executable = os.executable_path();
     process.setenv("WOOZYC", executable, true);
     let make = resources.make();
     var execution = toolio.ProcessResult(exit_code: 127, signalled: false, output: vec.empty[u8]());
@@ -500,9 +524,15 @@ pub func source_make_build(input Options, original model.Project,
         return finish(input, manager.snapshots, model.PhaseState.Failed,
             model.FailureKind.Source, false, diagnostics);
     }
-    write_reports(stage.path, packages, state, make_output, cache);
-    var names = ["Makefile", "make.log", "preflight.log", "combine.log", "link.log",
-        "make-report.json", "cache-statistics.json", "program.o", "program"];
+    write_reports(stage.path, packages, state, make_output, cache, input.objects_only);
+    var names = ["Makefile", "make.log", "preflight.log", "combine.log",
+        "make-report.json", "cache-statistics.json"];
+    if target == nativeemit.DARWIN_ARM64_TRIPLE { vec.push(names, "program.a"); }
+    else { vec.push(names, "program.o"); }
+    if !input.objects_only { vec.push(names, "link.log"); vec.push(names, "program"); }
+    if !input.objects_only && target == nativeemit.DARWIN_ARM64_TRIPLE && state.debug_info {
+        vec.push(names, "program.dwarf");
+    }
     for package_value in packages {
         vec.push(names, "module-" + package_value.fixed + ".log");
         vec.push(names, "module-" + package_value.fixed + ".json");
@@ -651,7 +681,7 @@ func read_counts(name string) Vec[usize] {
 }
 
 func write_reports(stage_path string, packages Vec[MakePackage], state MakeState,
-                   make_output string, cache frontcache.Context) throws os.Error {
+                   make_output string, cache frontcache.Context, objects_only bool) throws os.Error {
     var modules = "["; var first = true;
     var checked usize = 0; var lowered usize = 0; var opt_jobs usize = 0;
     var llc_jobs usize = 0; var object_hits usize = 0;
@@ -677,6 +707,8 @@ func write_reports(stage_path string, packages Vec[MakePackage], state MakeState
         json_string(state.cache_dir) + ",\"packages\":" + modules +
         ",\"make\":\n" + json_string(make_output) + "}\n";
     fs.write_text(stage_path + "/make-report.json", report, 0o666);
+    var link_jobs = "1";
+    if objects_only { link_jobs = "0"; }
     let statistics = "{\"schema_version\":1,\"build_fingerprint\":" +
         json_string(state.fingerprint) + ",\"package_jobs\":" +
         strconv.format_u64(u64(vec.len(packages))) + ",\"checked_bodies\":" +
@@ -687,7 +719,7 @@ func write_reports(stage_path string, packages Vec[MakePackage], state MakeState
         strconv.format_u64(u64(object_hits)) + ",\"parse_hits\":" +
         strconv.format_u64(u64(parse_hits)) + ",\"parse_misses\":" +
         strconv.format_u64(u64(parse_misses)) + ",\"string_tokens_checked\":" +
-        strconv.format_u64(u64(strings)) + ",\"link_jobs\":1}\n";
+        strconv.format_u64(u64(strings)) + ",\"link_jobs\":" + link_jobs + "}\n";
     fs.write_text(stage_path + "/cache-statistics.json", statistics, 0o666);
 }
 
@@ -717,7 +749,7 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
         checked_bodies: 0, lowered_functions: 0, opt_jobs: 0, llc_jobs: 0,
         object_hit: 0, parse_hits: cache.counters[0], parse_misses: cache.counters[1],
         string_tokens_checked: cache.counters[8]);
-    switch frontcache.load_object(cache, object_key) {
+    switch frontcache.load_target_object(cache, object_key, state.target) {
         case option.Option.Some(bytes): {
             fs.write_file(OBJECT_DIR + "/pkg-" + package_value.fixed + ".o", bytes, 0o644);
             status.action = "object-hit"; status.object_hit = 1;
@@ -847,10 +879,14 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                                     "LLVM opt failed with status " + strconv.format_i64(i64(opt.exit_code)),
                                     model.FailureKind.Internal);
                             }
-                            let llc = run_logged([tools + "/llc", "-filetype=obj",
+                            let llc_command = [tools + "/llc", "-filetype=obj",
                                 "-O=" + state.opt, "-mtriple=" + output.triple,
                                 "-mcpu=generic", "-relocation-model=pic",
-                                "-code-model=small", verified_llvm, "-o", object],
+                                "-code-model=small", verified_llvm, "-o", object];
+                            if output.triple == nativeemit.DARWIN_ARM64_TRIPLE {
+                                vec.push(llc_command, "-global-isel=0");
+                            }
+                            let llc = run_logged(llc_command,
                                 OBJECT_DIR + "/pkg-" + package_value.fixed + ".llc-capture",
                                 inout log, true);
                             status.llc_jobs = 1;
@@ -865,7 +901,7 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                             status.parse_hits = cache.counters[0]; status.parse_misses = cache.counters[1];
                             status.string_tokens_checked = cache.counters[8];
                             let bytes = fs.read_file(object);
-                            frontcache.store_object(cache, object_key, bytes);
+                            frontcache.store_target_object(cache, object_key, bytes, state.target);
                             write_status(package_value, status);
                             append_log(inout log, "object: " + object + " bytes=" +
                                 strconv.format_u64(u64(vec.len(bytes))) + " key=" + object_key);
@@ -890,22 +926,35 @@ func write_sections(name string, sections Vec[string]) throws os.Error {
 func link_arguments(state MakeState, compile_program_object bool) Vec[string] throws os.Error {
     let root = resources.directory();
     let tools = resources.llvm_bin(root);
-    let result = vec.empty[string]();
+    var result = vec.empty[string]();
     if compile_program_object {
+        if state.target == nativeemit.DARWIN_ARM64_TRIPLE {
+            vec.push(result, tools + "/llvm-ar"); vec.push(result, "--format=darwin");
+            vec.push(result, "rcs"); vec.push(result, "program.a");
+            for package_value in state.packages { vec.push(result, object_name(package_value)); }
+            return result;
+        }
         vec.push(result, tools + "/ld.lld"); vec.push(result, "-r");
         for package_value in state.packages { vec.push(result, object_name(package_value)); }
         vec.push(result, "-o"); vec.push(result, "program.o");
         return result;
     }
-    vec.push(result, tools + "/clang"); vec.push(result, "--target=" + state.target);
-    if state.hosted {
-        vec.push(result, "-Wl,-u,lang_hosted_startup_v1"); vec.push(result, "-pthread");
+    if state.target == nativeemit.DARWIN_ARM64_TRIPLE {
+        let sdk = resources.darwin_sdk("sdk-capture");
+        result = resources.darwin_linker(tools, sdk);
+        for argument in ["-Xlinker", "-force_load", "-Xlinker", "program.a",
+                         root + "/runtime/liblang_darwin_core.a"] { vec.push(result, argument); }
     } else {
-        vec.push(result, "-nostdlib"); vec.push(result, "-static");
+        vec.push(result, tools + "/clang"); vec.push(result, "--target=" + state.target);
+        if state.hosted {
+            vec.push(result, "-Wl,-u,lang_hosted_startup_v1"); vec.push(result, "-pthread");
+        } else {
+            vec.push(result, "-nostdlib"); vec.push(result, "-static");
+        }
+        vec.push(result, "--ld-path=" + tools + "/ld.lld"); vec.push(result, "program.o");
+        if state.hosted { vec.push(result, root + "/runtime/liblang_hosted_runtime.a"); }
+        else { vec.push(result, root + "/runtime/liblang_native_runtime.a"); }
     }
-    vec.push(result, "--ld-path=" + tools + "/ld.lld"); vec.push(result, "program.o");
-    if state.hosted { vec.push(result, root + "/runtime/liblang_hosted_runtime.a"); }
-    else { vec.push(result, root + "/runtime/liblang_native_runtime.a"); }
     for directory in state.c_library_dirs { vec.push(result, "-L" + directory); }
     for library in state.c_libraries { vec.push(result, "-l" + library); }
     vec.push(result, "-o"); vec.push(result, "program");
@@ -935,7 +984,15 @@ pub func source_make_link(options Options) i32 throws os.Error {
     var log = "source-make link\nworkdir: " + os.getcwd() + "\n";
     io.println("source-make link start");
     let state = read_state(MAKE_STATE);
-    let execution = run_logged(link_arguments(state, false), "link-capture", inout log, true);
+    if state.target != "x86_64-unknown-linux-gnu" && state.target != nativeemit.DARWIN_ARM64_TRIPLE {
+        return fail(options, [], "E_TARGET_UNSUPPORTED", "link",
+            "unsupported native executable target: " + state.target, model.FailureKind.Unsupported);
+    }
+    var execution = run_logged(link_arguments(state, false), "link-capture", inout log, true);
+    if execution.exit_code == 0 && !execution.signalled && state.target == nativeemit.DARWIN_ARM64_TRIPLE && state.debug_info {
+        let tools = resources.llvm_bin(resources.directory());
+        execution = run_logged(resources.darwin_debug_command(tools, "program"), "debug-capture", inout log, true);
+    }
     append_log(inout log, "link end");
     write_log("link.log", log);
     io.println("source-make link end");

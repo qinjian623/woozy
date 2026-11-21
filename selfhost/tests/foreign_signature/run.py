@@ -28,15 +28,10 @@ DEFAULT_WORK = ROOT / "build" / "foreign-signature-tests"
 DEFAULT_TIMEOUT = 1800.0
 MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
-# 0..212 were covered by the old 426-case (213 x 2) run.  SH30/SH31 appended
-# fs_stat_bytes (213) and fs_flock (214); both are in the C++ table and the
-# generated Wz system.operations() table.
-EXPECTED_OPERATIONS = 215
-NEW_OPERATIONS = {
-    213: ("__woozy_os_stat_bytes", "Result[std/os.FileInfo,i32]",
-          '["Vec[u8]"]'),
-    214: ("__woozy_os_flock", "Result[Unit,i32]", '["i32", "i32"]'),
-}
+# The operations added after the original 426 cases also get explicit
+# signature checks in the C++ and Wz registries.
+EXPECTED_OPERATIONS = 216
+NEW_OPERATIONS = (213, 214, 215)
 
 
 def fail(message: str) -> None:
@@ -174,7 +169,7 @@ def build_oracle(args: argparse.Namespace, work: pathlib.Path,
 
 
 def validate_registry_entries() -> None:
-    """Check the two real registries carry the same new signatures/identities."""
+    """Check both registries carry the expected new signatures and identities."""
     header = (ROOT / "include/lang/hir/system_operation.hpp").read_text(
         encoding="utf-8")
     system = (ROOT / "selfhost/src/wzcc/system/system.wz").read_text(
@@ -184,6 +179,8 @@ def validate_registry_entries() -> None:
               '"Result[std/os.FileInfo,i32]", {"Vec[u8]"}, 1},'),
         214: ('{SystemOperation::fs_flock, "__woozy_os_flock", '
               '"Result[Unit,i32]", {"i32", "i32"}, 2},'),
+        215: ('{SystemOperation::fs_executable_path, "__woozy_os_executable_path", '
+              '"i64", {"Vec[u8]", "usize"}, 2},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -191,6 +188,9 @@ def validate_registry_entries() -> None:
               'owner: "std/os", type_arity: 0)'),
         214: ('OperationSpec(operation: 214, name: "__woozy_os_flock", '
               'result: "Result[Unit,i32]", parameters: ["i32", "i32"], '
+              'owner: "std/os", type_arity: 0)'),
+        215: ('OperationSpec(operation: 215, name: "__woozy_os_executable_path", '
+              'result: "i64", parameters: ["Vec[u8]", "usize"], '
               'owner: "std/os", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
@@ -228,6 +228,11 @@ def validate_oracle(output: str) -> None:
                           if line.split()[1] == f"op.{operation}.none"), "")
         if not module_line.startswith(f"case op.{operation}.module ok "):
             fail(f"oracle: missing successful module case for op.{operation}")
+        if operation == 215:
+            # Its signature has no std/os type, so no module is required.
+            if none_line != module_line.replace(".module ", ".none ", 1):
+                fail(f"oracle: signature changed without a module for op.{operation}")
+            continue
         if not none_line.startswith(f"case op.{operation}.none invalid "):
             fail(f"oracle: missing module-boundary rejection for op.{operation}")
         if "invalid system operation requires its standard type module" not in none_line:

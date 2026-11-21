@@ -5,7 +5,18 @@
 #include "vec.hpp"
 #include "weak.hpp"
 
-#if defined(__x86_64__) && defined(__linux__)
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <cerrno>
+#include <unistd.h>
+
+static inline long sys_write(int fd, const void *buf, size_t count) noexcept {
+  const auto result = write(fd, buf, count);
+  return result < 0 ? -errno : result;
+}
+
+[[noreturn]] static inline void sys_exit(int code) noexcept { _exit(code); }
+
+#elif defined(__x86_64__) && defined(__linux__)
 
 static inline long sys_write(int fd, const void *buf, size_t count) noexcept {
   long ret;

@@ -242,6 +242,9 @@ extern "C" {
 int64_t lang_sys_getcwd_vec_v1(LangVec *, uint64_t) noexcept;
 int64_t lang_sys_getdents_vec_v1(int32_t, LangVec *, uint64_t) noexcept;
 int64_t lang_sys_readlink_vec_v1(const char *, uint64_t, LangVec *, uint64_t) noexcept;
+// Current executable's absolute path as bytes, without a trailing NUL.
+// Returns -ERANGE when the borrowed buffer is too small.
+int64_t lang_sys_executable_path_vec_v1(LangVec *, uint64_t) noexcept;
 int64_t lang_sys_getrandom_vec_v1(LangVec *, uint64_t, uint32_t) noexcept;
 int64_t lang_sys_nanosleep_vec_v1(const LangTimespec *, LangVec *) noexcept;
 }

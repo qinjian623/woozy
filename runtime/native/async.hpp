@@ -148,10 +148,10 @@
 // Internal `process.spawn` uses an exec-only fork: a cross-thread executor is
 // allowed, no tasks are continued or cleaned, and the child only does its
 // descriptor/exec handshake. Exec-only children do not rebuild epoll. Ordinary
-// fork children close only their inherited epoll descriptor (never a ctl DEL or
-// ADD on the parent's instance) and lazily create a private EPOLL_CLOEXEC
-// instance that re-adds exactly the pending descriptor waits whose
-// `kFdRegistered` intent survived. Timer deadlines, ready/all/await links,
+// fork children discard their inherited event queue (already absent on Darwin)
+// and lazily create a private close-on-exec queue that re-adds exactly the
+// pending descriptor waits whose `kFdRegistered` intent survived.
+// Timer deadlines, ready/all/await links,
 // references, frame GC ops and GC registration are retained unchanged.
 //
 // The final strong release is deliberately independent of the binding gate. It

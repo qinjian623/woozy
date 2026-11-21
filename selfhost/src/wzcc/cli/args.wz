@@ -11,6 +11,7 @@ pub struct Options {
     pub lock_check bool;
     pub package_objects bool;
     pub source_make bool;
+    pub objects_only bool;
     pub make_state string;
     pub make_package string;
     pub cache_directory string;
@@ -30,7 +31,7 @@ func not_flag(value string) bool { return text.len(value) > 0 && value[0] != 45;
 pub func arguments(args Vec[string]) Options {
     var options = Options(valid: false,
         error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, test, lock, fmt, lsp or capabilities",
-        command: "", syntax: false, format_check: false, lock_check: false, package_objects: false, source_make: false,
+        command: "", syntax: false, format_check: false, lock_check: false, package_objects: false, source_make: false, objects_only: false,
         make_state: "", make_package: "", cache_directory: "", json: false,
         path: "", project: "", output: "", opt: "", debug_info: false, target: "", std_binding: "", backend: "");
     if vec.len(args) < 2 { return options; }
@@ -117,6 +118,7 @@ pub func arguments(args Vec[string]) Options {
         if index + 1 < vec.len(args) { next = args[index + 1]; }
         if argument == "--package-objects" && options.command == "build" && !options.package_objects { options.package_objects = true; }
         else if argument == "--source-make" && options.command == "build" && !options.source_make { options.source_make = true; }
+        else if argument == "--objects-only" && options.command == "build" && !options.objects_only { options.objects_only = true; }
         else if argument == "--cache-dir" && options.command == "build" && options.cache_directory == "" && not_flag(next) { options.cache_directory = next; index += 1; }
         else if argument == "--syntax-only" { options.syntax = true; }
         else if argument == "--format" && next == "json" { options.json = true; index += 1; }
@@ -142,6 +144,7 @@ pub func arguments(args Vec[string]) Options {
     if options.cache_directory != "" && !options.package_objects && !options.source_make { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --cache-dir requires --package-objects or --source-make"; }
     if options.package_objects && options.source_make { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make cannot be combined with --package-objects"; }
     if options.source_make && options.command != "build" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make requires build"; }
+    if options.objects_only && !options.source_make { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --objects-only requires --source-make"; }
     if options.source_make && options.backend == "python" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: --source-make requires the native backend"; }
     if options.debug_info && options.backend == "python" { options.valid = false; options.error = "E_DRIVER_ARGUMENT: -g requires native build"; }
     return options;

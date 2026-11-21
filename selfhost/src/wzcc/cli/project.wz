@@ -61,9 +61,6 @@ func build_native_packages(options Options, original model.Project, native nativ
                            entry usize, settings nativeemit.Options, sources Vec[model.Source], cache frontcache.Context) i32 throws os.Error {
     try {
     let input = nativeverify.snapshot(native);
-    if settings.triple != "x86_64-unknown-linux-gnu" {
-        return fail(options, sources, "E_TARGET_UNSUPPORTED", "codegen", "package objects require Linux x86_64", model.FailureKind.Unsupported);
-    }
     let inputs = vec.empty[nativebuild.PackageInput]();
     let keys = interface.index(input.hir); let selected = vec.empty[usize]();
     for package_value in input.hir.resolved.project.modules {
@@ -83,7 +80,7 @@ func build_native_packages(options Options, original model.Project, native nativ
                 let digest = frontcache.llvm_digest(output.llvm_sections); var key = ""; var frontend_key = ""; var object = option.Option[Vec[u8]].None;
                 if frontcache.active(cache) {
                     frontend_key = frontcache.package_key(cache, input.hir, package_value.id);
-                    key = frontcache.object_key(cache, package_value.identity, digest); object = frontcache.load_object(cache, key);
+                    key = frontcache.object_key(cache, package_value.identity, digest); object = frontcache.load_target_object(cache, key, settings.triple);
                 }
                 vec.push(inputs, nativebuild.PackageInput(package_id: package_value.id, logical_path: package_value.logical_path,
                     identity: package_value.identity, object_key: key, frontend_key: frontend_key, llvm_digest: digest,
@@ -91,7 +88,7 @@ func build_native_packages(options Options, original model.Project, native nativ
             }
         }
     }
-    let built = nativebuild.build_cached_packages(inputs, original, options.output, settings.optimization, cache, emit_nanoseconds);
+    let built = nativebuild.build_cached_packages(inputs, original, options.output, settings, cache, emit_nanoseconds);
     return finish(options, sources, built.state, built.failure, built.has_value, built.diagnostics);
     } catch problem model.SupportError {
         return fail(options, sources, "E_INTERNAL_ERROR", "toolchain", support_text(problem), model.FailureKind.Internal);
@@ -209,8 +206,13 @@ func project_command(input Options, manager inout source.Manager) i32 throws os.
         let project_options = model.ProjectOptions(manifest: options.project,
             std_source_root: library, std_binding_bundle: binding);
         var cache = frontcache.context("", "");
-        if options.source_make { cache = frontcache.configure_source_make(options.cache_directory, options.opt, options.target); }
-        else { cache = frontcache.configure(options.cache_directory, options.opt, options.target); }
+        let darwin_default = options.command == "build" && options.target == "" && resources.host_is_darwin();
+        var cache_target = options.target;
+        if darwin_default { cache_target = nativeemit.DARWIN_ARM64_TRIPLE; }
+        if options.source_make {
+            cache = frontcache.configure_source_make(options.cache_directory, options.opt,
+                cache_target, options.objects_only);
+        } else { cache = frontcache.configure(options.cache_directory, options.opt, cache_target); }
         let snapshot = project.load_snapshot(project_options, inout manager, cache);
         let loaded = snapshot.result;
         if !render.succeeded(loaded.state, loaded.has_value, loaded.diagnostics) {
@@ -226,6 +228,7 @@ func project_command(input Options, manager inout source.Manager) i32 throws os.
         var original = loaded.value;
         if options.backend != "" { original.backend = options.backend; }
         options.backend = original.backend;
+        if options.backend == "native" && darwin_default { options.target = nativeemit.DARWIN_ARM64_TRIPLE; }
         if options.debug_info && options.backend != "native" {
             return fail(options, manager.snapshots, "E_DRIVER_ARGUMENT", "toolchain",
                 "-g requires native build", model.FailureKind.Environment);

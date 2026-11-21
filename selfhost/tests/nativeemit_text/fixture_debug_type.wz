@@ -5,3 +5,15 @@ package nativeemit;
 func debug_type(type_id usize, state inout Emitter) string throws Error {
     throw invalid("type descriptions require the full native emitter");
 }
+
+struct DebugTypeLayout {
+    pub known bool;
+    pub size usize;
+    pub alignment usize;
+    pub offsets Vec[usize];
+}
+
+func debug_storage_layout(type_id usize, depth usize,
+                          state inout Emitter) DebugTypeLayout throws Error {
+    throw invalid("debug storage layouts require the full native emitter");
+}

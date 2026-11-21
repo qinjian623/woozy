@@ -32,15 +32,15 @@ func main() throws os.Error {
 
 ## 安装
 
-Woozy 0.1 提供面向 Linux x86_64 的预编译压缩包，已在 Ubuntu 24.04 x86_64 上验证。压缩包包含编译器、标准库、Native/hosted 运行库、Python 运行库和锁定版本的 LLVM 工具，不需要系统另装 LLVM。
-
-从[发布页](https://github.com/qinjian623/woozy/releases)获取压缩包和校验文件。当前公开预发布为 `v0.1.0-rc.1`，下面命令下载该版本：
+`v0.1.0-rc.2` 的安装包面向 Linux x86_64 和 Apple Silicon，均包含 `woozyc`、标准库、运行库和锁定版本的 LLVM 工具。Mac 原生程序要求 macOS 14.4 或更新版本，编译时需要 Xcode Command Line Tools 或已安装的 macOS SDK。[发布页](https://github.com/qinjian623/woozy/releases)
 
 ```sh
-curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz
-curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz.sha256
-sha256sum -c woozy-linux-x86_64.tar.gz.sha256
-tar -xzf woozy-linux-x86_64.tar.gz
+archive=woozy-linux-x86_64.tar.gz   # Apple Silicon 改用 woozy-macos-arm64.tar.gz。
+base=https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.2
+curl -fLO "$base/$archive"
+curl -fLO "$base/$archive.sha256"
+sha256sum -c "$archive.sha256"     # macOS 改用 shasum -a 256 -c "$archive.sha256"。
+tar -xzf "$archive"
 mkdir -p "$HOME/.local/bin"
 ln -s "$PWD/woozy/woozyc" "$HOME/.local/bin/woozyc"
 export PATH="$HOME/.local/bin:$PATH"   # 将这一行加入 shell 配置。
@@ -54,7 +54,7 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-输出 `Hello, world!`。Native 构建使用随包工具链；执行 Python 输出需要 Python 3.12；Native 分包构建仍使用系统的 Make 或 Ninja；TLS 支持需要单独构建附加库。环境要求和限制见 [0.1.0 发行说明](docs/RELEASE-0.1.0.md)。
+输出 `Hello, world!`。执行 Python 输出需要 Python 3.12。分包构建使用系统的 Make 或 Ninja。TLS 需要单独构建附加库。[构建说明](development/docs/BUILD.md#安装自举版工具链) · [标准库说明](docs/STDLIB.md)
 
 ## 编辑器配置
 

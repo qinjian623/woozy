@@ -7,6 +7,20 @@ import "std/option" as option;
 import "std/text" as text;
 import "std/vec" as vec;
 
+const DARWIN_OBJECT_TARGET string = "arm64-apple-macosx11.0.0";
+
+func darwin_object_inputs(root string, tools string, scheduler string,
+                          objects_only bool) Vec[string] throws os.Error {
+    let inputs = [os.executable_path(), tools + "/opt", tools + "/llc",
+        tools + "/llvm-ar", scheduler];
+    if !objects_only {
+        vec.push(inputs, root + "/runtime/liblang_darwin_core.a");
+        vec.push(inputs, tools + "/clang");
+        vec.push(inputs, tools + "/ld64.lld");
+    }
+    return inputs;
+}
+
 pub func configure(directory string, optimization string, target string) Context throws os.Error {
     if directory == "" { return context("", ""); }
     var cache = context(directory, "");
@@ -14,26 +28,33 @@ pub func configure(directory string, optimization string, target string) Context
     put_string(bytes, optimization); put_string(bytes, target);
     let root = resources.directory();
     let tools = resources.llvm_bin(root);
-    for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a", root + "/runtime/liblang_hosted_runtime.a",
-        tools + "/opt", tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.ninja()] {
+    var paths Vec[string] = [];
+    if target == DARWIN_OBJECT_TARGET { paths = darwin_object_inputs(root, tools, resources.ninja(), false); }
+    else { paths = [os.executable_path(), root + "/runtime/liblang_native_runtime.a", root + "/runtime/liblang_hosted_runtime.a",
+        tools + "/opt", tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.ninja()]; }
+    for path in paths {
         put_string(bytes, file_digest(cache, path));
     }
     cache.fingerprint = hash_bytes(bytes); return cache;
 }
 
-// Source-make owns Make itself, not Ninja.  The key still binds the actual
-// compiler executable, LLVM tools, runtime archives, target and optimization.
+// The key binds the compiler, scheduler, target, optimization and LLVM tools.
+// Executable builds also include the runtime and link tools.
 pub func configure_source_make(directory string, optimization string,
-                               target string) Context throws os.Error {
+                               target string, objects_only bool) Context throws os.Error {
     if directory == "" { return context("", ""); }
     var cache = context(directory, "");
     let bytes = vec.empty[u8](); put_string(bytes, "wz-source-make-build/1");
     put_string(bytes, optimization); put_string(bytes, target);
     let root = resources.directory();
     let tools = resources.llvm_bin(root);
-    for path in ["/proc/self/exe", root + "/runtime/liblang_native_runtime.a",
+    var paths Vec[string] = [];
+    if target == DARWIN_OBJECT_TARGET {
+        paths = darwin_object_inputs(root, tools, resources.make(), objects_only);
+    } else { paths = [os.executable_path(), root + "/runtime/liblang_native_runtime.a",
         root + "/runtime/liblang_hosted_runtime.a", tools + "/opt",
-        tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.make()] {
+        tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.make()]; }
+    for path in paths {
         put_string(bytes, file_digest(cache, path));
     }
     cache.fingerprint = hash_bytes(bytes); return cache;
@@ -77,7 +98,7 @@ func terminated(bytes Vec[u8], offset u64, size u64, name u64) throws Error {
 }
 // Bounded ELF64 ET_REL structure validation before a cached object reaches lld.
 // Unknown/unsupported encodings fall back to the existing compiler path.
-func valid_object(bytes Vec[u8]) bool {
+func valid_elf_object(bytes Vec[u8]) bool {
     try {
         need(vec.len(bytes) >= 64 && bytes[0] == 127 && bytes[1] == 69 && bytes[2] == 76 && bytes[3] == 70);
         need(bytes[4] == 2 && bytes[5] == 1 && bytes[6] == 1);
@@ -122,7 +143,237 @@ func valid_object(bytes Vec[u8]) bool {
         return true;
     } catch problem Error { return false; }
 }
-pub func load_object(cache Context, key string) option.Option[Vec[u8]] {
+
+struct MachPayload { start u64; end u64; }
+struct MachSection { address u64; size u64; relocs u64; count u64; instructions bool; }
+
+func mach_payload(bytes Vec[u8], ranges Vec[MachPayload], floor u64,
+                 start u64, size u64) throws Error {
+    region(bytes, start, size);
+    if size == 0 { return; }
+    need(start >= floor);
+    let end = start + size;
+    for range in ranges { need(end <= range.start || start >= range.end); }
+    vec.push(ranges, MachPayload(start: start, end: end));
+}
+
+func mach_sections(bytes Vec[u8], ranges Vec[MachPayload], floor u64,
+                   command usize) Vec[MachSection] throws Error {
+    let address = little(bytes, command + 24, 8);
+    let size = little(bytes, command + 32, 8);
+    let offset = little(bytes, command + 40, 8);
+    let file_size = little(bytes, command + 48, 8);
+    let count_value = little(bytes, command + 64, 4);
+    region(bytes, offset, file_size);
+    need(size <= 18446744073709551615 - address);
+    need(file_size == 0 || offset >= floor);
+    let sections = vec.empty[MachSection]();
+    for var index usize = 0; index < usize(count_value); index += 1 {
+        let start = command + 72 + index * 80;
+        let section_address = little(bytes, start + 32, 8);
+        let section_size = little(bytes, start + 40, 8);
+        let section_offset = little(bytes, start + 48, 4);
+        let alignment = little(bytes, start + 52, 4);
+        let relocs = little(bytes, start + 56, 4);
+        let reloc_count = little(bytes, start + 60, 4);
+        let flags = little(bytes, start + 64, 4);
+        let section_type = flags & 255;
+        let instructions = (flags & 0x80000400) != 0;
+        need(section_address >= address && section_address - address <= size);
+        need(section_size <= size - (section_address - address));
+        need(alignment <= 31 && section_address % (u64(1) << alignment) == 0);
+        // Sections using indirect-symbol tables are not emitted by llc here.
+        let zero_fill = section_type == 1 || section_type == 12 || section_type == 18;
+        need(section_type <= 22 && section_type != 6 && section_type != 7 &&
+            section_type != 8 && section_type != 16 && section_type != 20);
+        if zero_fill { need(section_offset == 0 && reloc_count == 0 && !instructions); }
+        else if section_size != 0 {
+            need(section_offset >= offset && section_offset - offset <= file_size);
+            need(section_size <= file_size - (section_offset - offset));
+            mach_payload(bytes, ranges, floor, section_offset, section_size);
+        }
+        if section_size != 0 {
+            for section in sections {
+                need(section.size == 0 || section_address + section_size <= section.address ||
+                    section_address >= section.address + section.size);
+            }
+        }
+        mach_payload(bytes, ranges, floor, relocs, reloc_count * 8);
+        vec.push(sections, MachSection(address: section_address, size: section_size,
+            relocs: relocs, count: reloc_count, instructions: instructions));
+    }
+    return sections;
+}
+
+func mach_symbols(bytes Vec[u8], ranges Vec[MachPayload], sections Vec[MachSection],
+                  floor u64, symtab usize, dysymtab usize) u64 throws Error {
+    let offset = little(bytes, symtab + 8, 4);
+    let count_value = little(bytes, symtab + 12, 4);
+    let names = little(bytes, symtab + 16, 4); let names_size = little(bytes, symtab + 20, 4);
+    mach_payload(bytes, ranges, floor, offset, count_value * 16);
+    mach_payload(bytes, ranges, floor, names, names_size);
+    need(names_size != 0 && bytes[usize(names + names_size - 1)] == 0);
+    let locals = little(bytes, dysymtab + 12, 4);
+    let exports = little(bytes, dysymtab + 20, 4);
+    let undefined = little(bytes, dysymtab + 28, 4);
+    need(little(bytes, dysymtab + 8, 4) == 0 && little(bytes, dysymtab + 16, 4) == locals &&
+        little(bytes, dysymtab + 24, 4) == locals + exports);
+    need(locals + exports + undefined == count_value);
+    for var later usize = dysymtab + 32; later < dysymtab + 80; later += 4 {
+        need(little(bytes, later, 4) == 0);
+    }
+    for var index u64 = 0; index < count_value; index += 1 {
+        let item = usize(offset + index * 16);
+        need(little(bytes, item, 4) < names_size);
+        let flags = bytes[item + 4]; let section = usize(bytes[item + 5]);
+        need((flags & 224) == 0 && section <= vec.len(sections));
+        let value = little(bytes, item + 8, 8);
+        let kind = flags & 14;
+        if kind == 14 {
+            need(section != 0);
+            let definition = sections[section - 1];
+            need(value >= definition.address && value - definition.address <= definition.size);
+        } else {
+            need(section == 0 && (kind == 0 || kind == 2 || kind == 10));
+            if kind == 10 { need((flags & 1) != 0 && value < names_size); }
+        }
+    }
+    return count_value;
+}
+
+func mach_relocations(bytes Vec[u8], sections Vec[MachSection], symbols u64) throws Error {
+    for section in sections {
+        for var index u64 = 0; index < section.count; index += 1 {
+            let start = usize(section.relocs + index * 8);
+            let address = little(bytes, start, 4);
+            let flags = little(bytes, start + 4, 4);
+            let kind = flags >> 28; let target = flags & 0xffffff;
+            let width = u64(1) << ((flags >> 25) & 3);
+            let external = ((flags >> 27) & 1) != 0;
+            let pc_relative = ((flags >> 24) & 1) != 0;
+            need(address < 0x80000000 && address <= section.size && width <= section.size - address);
+            need(kind <= 10);
+            if kind == 10 {
+                // ARM64_RELOC_ADDEND uses this field for a signed addend.
+                need(!external && !pc_relative && width == 4);
+            } else {
+                need(pc_relative == (kind == 2 || kind == 3 || kind == 5 || kind == 7 || kind == 8));
+                if kind <= 1 { need(width == 4 || width == 8); }
+                else { need(width == 4); }
+                if external { need(target < symbols); }
+                else { need(kind == 0 && target != 0 && target <= u64(vec.len(sections))); }
+            }
+            if kind == 1 || kind == 10 {
+                need(index + 1 < section.count && little(bytes, start + 8, 4) == address);
+                let next_flags = little(bytes, start + 12, 4);
+                let companion = next_flags >> 28;
+                if kind == 1 { need(companion == 0 && ((next_flags >> 25) & 3) == ((flags >> 25) & 3)); }
+                else { need(companion == 2 || companion == 3 || companion == 4); }
+            }
+        }
+    }
+}
+
+func mach_uleb(bytes Vec[u8], cursor inout u64, end u64) u64 throws Error {
+    var value u64 = 0;
+    for var shift u64 = 0; shift < 64; shift += 7 {
+        need(cursor < end);
+        let byte = bytes[usize(cursor)]; cursor += 1;
+        need(shift < 63 || byte <= 1);
+        value |= u64(byte & 127) << shift;
+        if (byte & 128) == 0 { return value; }
+    }
+    throw Error.Invalid;
+}
+
+func mach_optimization_hints(bytes Vec[u8], ranges Vec[MachPayload], sections Vec[MachSection],
+                             floor u64, command usize) throws Error {
+    let start = little(bytes, command + 8, 4);
+    let size = little(bytes, command + 12, 4);
+    mach_payload(bytes, ranges, floor, start, size);
+    let end = start + size; var cursor = start;
+    for cursor < end {
+        let kind = mach_uleb(bytes, inout cursor, end);
+        if kind == 0 {
+            // LLVM may pad the payload with zeros up to its alignment.
+            for cursor < end { need(bytes[usize(cursor)] == 0); cursor += 1; }
+            return;
+        }
+        need(kind <= 8);
+        let count_value = mach_uleb(bytes, inout cursor, end);
+        if kind >= 3 && kind <= 6 { need(count_value == 3); } else { need(count_value == 2); }
+        let first = mach_uleb(bytes, inout cursor, end);
+        var low u64 = 0; var high u64 = 0;
+        for section in sections {
+            if section.instructions && section.size >= 4 && first >= section.address &&
+                first - section.address <= section.size - 4 {
+                low = section.address; high = section.address + section.size;
+                break;
+            }
+        }
+        need(high != 0 && first % 4 == 0);
+        for var index u64 = 1; index < count_value; index += 1 {
+            let address = mach_uleb(bytes, inout cursor, end);
+            need(address >= low && address <= high - 4 && address % 4 == 0);
+        }
+    }
+}
+
+// Accept the thin, little-endian arm64 MH_OBJECT records emitted by LLVM.
+// Bounds and reference checks happen before any cached byte reaches the linker.
+func valid_mach_object(bytes Vec[u8]) bool {
+    try {
+        need(vec.len(bytes) >= 32 && little(bytes, 0, 4) == 0xfeedfacf &&
+            little(bytes, 4, 4) == 0x0100000c && little(bytes, 8, 4) == 0 &&
+            little(bytes, 12, 4) == 1 && little(bytes, 28, 4) == 0);
+        let header_flags = little(bytes, 24, 4); need(header_flags == 0 || header_flags == 0x2000);
+        let commands = little(bytes, 16, 4); let command_size = little(bytes, 20, 4);
+        let end = 32 + command_size;
+        region(bytes, 32, command_size);
+        need(commands <= command_size / 8);
+        var segment usize = 0; var symtab usize = 0; var dysymtab usize = 0; var version usize = 0;
+        var hints usize = 0;
+        var cursor usize = 32;
+        for var index u64 = 0; index < commands; index += 1 {
+            need(u64(cursor) <= end && end - u64(cursor) >= 8);
+            let command = little(bytes, cursor, 4); let size = little(bytes, cursor + 4, 4);
+            need(size >= 8 && size % 8 == 0 && size <= end - u64(cursor));
+            if command == 0x19 {
+                need(segment == 0 && size >= 72);
+                let count_value = little(bytes, cursor + 64, 4);
+                need(count_value <= 255 && size == 72 + count_value * 80);
+                segment = cursor;
+            } else if command == 2 {
+                need(symtab == 0 && size == 24); symtab = cursor;
+            } else if command == 0x0b {
+                need(dysymtab == 0 && size == 80); dysymtab = cursor;
+            } else if command == 0x32 {
+                need(version == 0 && size >= 24);
+                need(little(bytes, cursor + 8, 4) == 1 && little(bytes, cursor + 12, 4) == 0x000b0000);
+                need(size == 24 + little(bytes, cursor + 20, 4) * 8);
+                version = cursor;
+            } else if command == 0x2e {
+                need(hints == 0 && size == 16); hints = cursor;
+            } else { throw Error.Invalid; }
+            cursor += usize(size);
+        }
+        need(u64(cursor) == end && segment != 0 && symtab != 0 && dysymtab != 0 && version != 0);
+        let ranges = vec.empty[MachPayload]();
+        let sections = mach_sections(bytes, ranges, end, segment);
+        let symbols = mach_symbols(bytes, ranges, sections, end, symtab, dysymtab);
+        mach_relocations(bytes, sections, symbols);
+        if hints != 0 { mach_optimization_hints(bytes, ranges, sections, end, hints); }
+        return true;
+    } catch problem Error { return false; }
+}
+
+func valid_target_object(bytes Vec[u8], target string) bool {
+    if target == DARWIN_OBJECT_TARGET { return valid_mach_object(bytes); }
+    if target == "x86_64-unknown-linux-gnu" { return valid_elf_object(bytes); }
+    return false;
+}
+
+pub func load_target_object(cache Context, key string, target string) option.Option[Vec[u8]] {
     if !active(cache) { return option.Option[Vec[u8]].None; }
     switch get(cache.directory + "/frontend", key) {
         case option.Option.Some(bytes): {
@@ -130,15 +381,15 @@ pub func load_object(cache Context, key string) option.Option[Vec[u8]] {
                 var reader = Reader(bytes: bytes, cursor: 0); need(string_value(inout reader) == "wz-native-object/1");
                 need(string_value(inout reader) == key); let size = number(inout reader);
                 need(size == u64(vec.len(bytes) - reader.cursor)); let object = bytes[reader.cursor:];
-                if valid_object(object) { cache.counters[6] += 1; return option.Option[Vec[u8]].Some(object); }
+                if valid_target_object(object, target) { cache.counters[6] += 1; return option.Option[Vec[u8]].Some(object); }
             } catch problem Error {}
         }
         case option.Option.None: {}
     }
     cache.counters[7] += 1; return option.Option[Vec[u8]].None;
 }
-pub func store_object(cache Context, key string, bytes Vec[u8]) {
-    if !active(cache) || !valid_object(bytes) { return; }
+pub func store_target_object(cache Context, key string, bytes Vec[u8], target string) {
+    if !active(cache) || !valid_target_object(bytes, target) { return; }
     let record = vec.empty[u8](); put_string(record, "wz-native-object/1"); put_string(record, key);
     put_number(record, u64(vec.len(bytes))); for byte in bytes { vec.push(record, byte); }
     put(cache.directory + "/frontend", key, record);
