@@ -200,10 +200,9 @@ pub func listen_with(
 pub func stop(server Server) {
     if server.state[SERVER_CLOSED] != 0 { return; }
     if server.state[SERVER_STOPPING] != 0 { return; }
-    server.state[SERVER_STOPPING] = 1;
     server.state[SERVER_DRAIN_DEADLINE] =
         deadline_after(server.config.drain_timeout_ms);
-    close_listener(server);
+    stop_listener(server);
     for var index usize = 0; index < vec.len(server.connections); index += 1 {
         if !server.connections[index].active { continue; }
         let phase = server.connections[index].phase;
@@ -220,9 +219,8 @@ pub func stop(server Server) {
 // Close the listener and every active connection immediately.
 pub func abort(server Server) {
     if server.state[SERVER_CLOSED] != 0 { return; }
-    server.state[SERVER_STOPPING] = 1;
     server.state[SERVER_CLOSED] = 1;
-    close_listener(server);
+    stop_listener(server);
     for var index usize = 0; index < vec.len(server.connections); index += 1 {
         if server.connections[index].active {
             shutdown_fd(server.connections[index].fd,net.SHUT_RDWR);
@@ -286,16 +284,16 @@ pub func config(server Server) Config {
 // this once per Server. Dropping the returned Task handle does not stop the
 // server. Returning closes the listener and starts graceful drain.
 pub async func serve(server Server) Unit throws os.Error {
+    if server.state[SERVER_CLOSED] != 0 || server.state[SERVER_STOPPING] != 0 {
+        return;
+    }
+    server.state[SERVER_SERVING] = 1;
     defer {
         if server.state[SERVER_CLOSED] == 0 { stop(server); }
         server.state[SERVER_SERVING] = 0;
         try { net.close(server.listener); }
         catch error os.Error {}
     }
-    if server.state[SERVER_CLOSED] != 0 || server.state[SERVER_STOPPING] != 0 {
-        return;
-    }
-    server.state[SERVER_SERVING] = 1;
     tasks.spawn(watchdog(server));
     var batch usize = 0;
     for true {
@@ -356,7 +354,9 @@ pub async func serve(server Server) Unit throws os.Error {
 // A running serve task owns the listener close: shutdown wakes its fd wait,
 // then serve closes the descriptor after it returns. Otherwise stop/abort
 // close it directly.
-func close_listener(server Server) {
+func stop_listener(server Server) {
+    if server.state[SERVER_STOPPING] != 0 { return; }
+    server.state[SERVER_STOPPING] = 1;
     try { net.shutdown(server.listener,net.SHUT_RDWR); }
     catch error os.Error {}
     if server.state[SERVER_SERVING] == 0 {
