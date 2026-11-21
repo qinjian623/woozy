@@ -20,7 +20,7 @@ func main() throws os.Error {
 }
 ```
 
-`import "std/io" as io;` makes the output functions available as `io`. `io.println` writes the string followed by a newline. `throws os.Error` declares that output can fail. The error handling section shows how to handle that case. On the native Linux x86_64 backend, this program prints `Hello, world!`.
+`import "std/io" as io;` makes the output functions available as `io`. `io.println` writes the string followed by a newline. `throws os.Error` declares that output can fail. The error handling section shows how to handle that case. The native program prints `Hello, world!`.
 
 The next program adds a list of scores. Save it separately from the first example.
 
@@ -759,7 +759,7 @@ Passing a Vec to a thread shares the same container. When multiple threads acces
 
 ### Async functions
 
-An `async func` returns `Task[R,E]` instead of its declared result, and calling it does not run the body. Inside another async function, `await task` starts the task if it was never spawned and returns its result; a task can be awaited more than once. `async func main` is a valid entry point. `std/async` provides `sleep`, descriptor waits, `spawn`/`run`, cancellation, and `shutdown`. The executor runs on one thread, and async is currently available only on the Native backend for Linux x86_64. See [threads and async](CONCURRENCY.md#async-与-await) for the full rules.
+An `async func` returns `Task[R,E]` instead of its declared result, and calling it does not run the body. Inside another async function, `await task` starts the task if it was never spawned and returns its result; a task can be awaited more than once. `async func main` is a valid entry point. `std/async` provides `sleep`, descriptor waits, `spawn`/`run`, cancellation, and `shutdown`. The executor runs on one thread, and async is available on the Native backend for Linux x86_64 and macOS arm64. See [threads and async](CONCURRENCY.md#async-与-await) for the full rules.
 
 ## 16. Common standard library modules
 

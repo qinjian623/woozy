@@ -1,8 +1,8 @@
 # std/http_server
 
 Async HTTP/1.1 server built on `std/http`, `std/net`, and the native executor.
-This module is Linux x86_64 Native only; the Python backend rejects async
-functions before this module can run. TLS is not part of this module.
+This module supports native Linux x86_64 and macOS arm64 programs. The
+Python backend rejects async functions. TLS is not part of this module.
 
 ## Public model
 

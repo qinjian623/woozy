@@ -88,7 +88,7 @@ Declare generics with `[T]` or `[T Trait]` and implement traits explicitly. The 
 
 Woozy supports integers and floating-point numbers, strings, function values and capturing closures, structs and enums, Vec and Slice, constrained generics, traits and `dyn Trait`, modules, typed `throws`, and block-scoped `defer`. It can generate native code or Python code. Both backends follow the same language rules.
 
-The [standard library](docs/STDLIB.md) covers I/O, filesystems, text and collections, JSON, math, time, random numbers, networking, processes, and concurrency. The system interfaces target native Linux x86_64 programs. Their names and argument order follow C conventions. Calls throw declared errors on failure, and incorrect lock operations panic. Woozy has no raw syscall API.
+The [standard library](docs/STDLIB.md) covers I/O, filesystems, text and collections, JSON, math, time, random numbers, networking, processes, and concurrency. The system interfaces support native programs on Linux x86_64 and macOS arm64. Their names and argument order follow C conventions. Calls throw declared errors on failure, and incorrect lock operations panic. Woozy has no raw syscall API.
 
 `std/http` supports HTTP/1.1. `std/http_server` provides an async HTTP/1.1 server with keep-alive, pipelining, nonblocking backpressure, request/body/idle/write timeouts, `Expect: 100-continue`, and graceful stop/drain/abort. `std/unicode` provides Unicode 18 normalization, case folding, and grapheme clusters. `std/timezone` supports named time zones, daylight saving time, and local-time conversion.
 
