@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package a built Linux x86_64 Woozy toolchain and its SHA-256 checksum."""
+"""Package a built Woozy toolchain for its host and write its SHA-256 checksum."""
 
 import argparse
 import gzip
@@ -15,7 +15,6 @@ import tempfile
 import install_toolchain
 
 
-ARCHIVE_NAME = "woozy-linux-x86_64.tar.gz"
 METADATA_NAME = "release-metadata"
 MAX_VERSION_BYTES = 128
 VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-selfhost")
@@ -51,6 +50,15 @@ def write_metadata(bundle, text):
         (bundle / METADATA_NAME).write_text(text, encoding="ascii")
 
 
+def checksum_text(directory, names):
+    rows = []
+    for name in names:
+        with (directory / name).open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        rows.append(f"{digest}  {name}\n")
+    return "".join(rows)
+
+
 def archive_bundle(bundle, destination):
     with destination.open("xb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
@@ -69,8 +77,27 @@ def archive_bundle(bundle, destination):
                         archive.addfile(member)
 
 
+def copy_guides(bundle, target):
+    root = install_toolchain.ROOT
+    ignore = shutil.ignore_patterns(".git", "build", "__pycache__", ".DS_Store")
+    shutil.copytree(root / "docs", bundle / "docs", ignore=ignore)
+    editor = Path("development/editor")
+    for directory in ("emacs", "nvim"):
+        shutil.copytree(root / editor / directory, bundle / editor / directory, ignore=ignore)
+    shutil.copy2(root / editor / "setup.py", bundle / editor / "setup.py")
+    debuggers = [Path("tools/gdb/woozy.py")]
+    lldb = Path("tools/lldb/woozy.py")
+    if target == "macos-arm64" and (root / lldb).is_file():
+        debuggers.append(lldb)
+    for script in debuggers:
+        (bundle / script.parent).mkdir(parents=True)
+        shutil.copy2(root / script, bundle / script)
+
+
 def build(args):
     metadata = metadata_text(args.version, args.commit)
+    target = install_toolchain.host_target()
+    archive_name = f"woozy-{target}.tar.gz"
     output = args.out_dir.expanduser().absolute()
     if os.path.lexists(output):
         raise ValueError(f"Output directory already exists: {output}")
@@ -81,6 +108,7 @@ def build(args):
         install_toolchain.install(args)
         write_metadata(args.prefix, metadata)
         shutil.copyfile(install_toolchain.ROOT / "LICENSE", args.prefix / "LICENSE")
+        copy_guides(args.prefix, target)
         notices = args.prefix / "licenses"
         notices.mkdir()
         for source in NOTICES:
@@ -92,13 +120,12 @@ def build(args):
             shutil.copyfile(source, destination)
         staged = temporary / "release"
         staged.mkdir()
-        asset = staged / ARCHIVE_NAME
+        asset = staged / archive_name
         archive_bundle(args.prefix, asset)
-        with asset.open("rb") as data:
-            digest = hashlib.file_digest(data, "sha256").hexdigest()
-        (staged / (ARCHIVE_NAME + ".sha256")).write_text(f"{digest}  {ARCHIVE_NAME}\n")
+        (staged / (archive_name + ".sha256")).write_text(checksum_text(staged, (archive_name,)),
+                                                      encoding="ascii")
         install_toolchain.publish(staged, output)
-    return output / ARCHIVE_NAME
+    return output / archive_name
 
 
 def main():

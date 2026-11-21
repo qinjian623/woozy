@@ -1,6 +1,6 @@
 # 调用 C 库
 
-Woozy 程序可以按声明的 C 签名调用本机 C 库。当前只支持 Linux x86_64 Native 后端，目标为 `x86_64-linux-gnu`；C 库是已经安装好的 `.a` 或 `.so`。Python 后端不支持这类 C 绑定。
+Woozy 程序可以按声明的 C 签名调用目标平台的 C 库。Linux x86_64 的绑定目标是 `x86_64-linux-gnu`，库可以是 `.a` 或 `.so`。Wz 版编译器在 macOS arm64 上用 `arm64-apple-darwin` 绑定 `.a` 或 `.dylib`。Python 后端不支持 C 绑定。
 
 构建环境见 [构建说明](../development/docs/BUILD.md)，编译器实现和开发协作见 [开发资料](../development/README.md)。
 
@@ -99,7 +99,7 @@ woozyc build --project lang.toml --backend native --out-dir build/native
 
 native 依赖只接受 `kind`、`binding`、`libraries`、`library_dirs`。库名只写 `wz_cadd`，不能写 `-lwz_cadd`、文件路径、含 `/` 或 `\` 的名字，也不能以 `-` 开头；`library_dirs` 相对清单所在目录，目录必须存在。清单只接受经过校验的库名和目录，不提供任意链接器参数入口。
 
-绑定 JSON 顶层必须正好包含 `schema_version`、`contract`、`abi`、`target`、`requires_hosted`、`modules`、`types`、`callables`，嵌套对象也不接受未知键。`schema_version` 为 `2`、`contract` 为 `compiler-dev/1`、`abi` 为 `c`、`target` 为 `x86_64-linux-gnu`。
+绑定 JSON 顶层必须正好包含 `schema_version`、`contract`、`abi`、`target`、`requires_hosted`、`modules`、`types`、`callables`，嵌套对象也不接受未知键。`schema_version` 为 `2`、`contract` 为 `compiler-dev/1`、`abi` 为 `c`。`target` 必须与输出程序的 C ABI 匹配。
 
 每个 callable 的 `id` 是点分标识，`name` 和 `symbol` 都是标识符，`parameters` 是固定顺序的 `{name,type}`，`result` 是 `{type,ownership}`。声明必须与 C 库的真实原型一致；编译器不读取 C 头文件。C 调用只能传普通位置参数，每个形参一个实参，不接受命名参数、可选参数或 C 可变参数。
 
@@ -165,12 +165,12 @@ let sub = events.subscribe(func(value i32) i32 {
 
 资源声明不填写 `release_symbol` 或 `retain_symbol`。两处 userdata 都必须是 `PtrMut[Unit]`，可以位于各自参数列表的任意位置。回调不能 `throws`。注册失败以空指针表示；此时 C 必须已停止并等待所有回调结束。正常注销也必须保证返回后再无回调，包括尚未进入 Woozy 的派发。绑定声明不能替代 C 库的这些保证。C 注册仍保留捕获图时，GC 不会替程序注销；这类外部注册形成的强引用循环需要保留句柄并显式 close，之后才能由 Woozy 回收。
 
-在 hosted 程序中，若 async 执行器属于另一线程，外部 C 库直接调用 libc `fork` 会产生 Panic；C 的 atfork 回调不能返回 Woozy 的 typed error。需要通过 `throws os.Error` 处理这项限制时，调用 `std/process.fork`。启动其他程序可用 `std/process.spawn`。
+在 Linux hosted 程序中，若 async 执行器属于另一线程，外部 C 库直接调用 libc `fork` 会产生 Panic。在 macOS 上，C 库需要调用导出的 Woozy 函数，由它通过 `std/process.fork` 创建子进程，让运行库在子进程中恢复自己的状态。`std/process.fork` 失败时抛出 `os.Error`。启动其他程序可用 `std/process.spawn`。
 
 ## 5 当前限制
 
 - 不支持 C 可变参数、数组/union/packed/bitfield record，也不支持在 Woozy 中构造 record 或修改 record 字段。
-- 只接受 C 符号；C++ 库可先提供 `extern "C"` 接口，再按 C 声明使用；当前不直接支持 C++ ABI、名称修饰符号或 C++ 类型。Windows、macOS 和 ARM 目标也未提供。
+- 只接受 C 符号。C++ 库可以提供 `extern "C"` 接口，再按 C 声明使用。当前支持 Linux x86_64 和 macOS arm64 的 C ABI。直接调用 C++ ABI、名称修饰符号或 C++ 类型不受支持。
 - 保存捕获闭包仅支持上述带 userdata、返回指针句柄的注册接口；不支持抛错 callback、状态码加输出参数的注册接口，或没有 userdata 的 C API。TLS 专用 ABI 不作为公共库接口提供。
 - 清单不提供任意链接器参数，也没有跳过库名或目录校验的入口；能链接什么由经过校验的 native 依赖决定。
 

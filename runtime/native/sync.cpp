@@ -8,7 +8,13 @@
 #include "alloc.hpp"
 #include "weak.hpp"
 
-#if defined(__x86_64__) && defined(__linux__)
+#if defined(__aarch64__) && defined(__APPLE__)
+#include "darwin.hpp"
+#include "../darwin/posix.hpp"
+#endif
+
+#if (defined(__x86_64__) && defined(__linux__)) || \
+    (defined(__aarch64__) && defined(__APPLE__))
 
 // Actual runtime Panic entry from panic.cpp. It is terminal and reports the
 // cause plus a source span; synchronization misuse has no source span.
@@ -19,6 +25,7 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
 
 namespace {
 
+#if defined(__linux__)
 // Local Linux x86_64 syscall numbers, keeping kernel/libc headers out of the
 // freestanding runtime.
 constexpr long kSysFutex = 202;
@@ -27,13 +34,21 @@ constexpr long kSysClockGettime = 228;
 constexpr long kClockMonotonic = 1;
 constexpr long kFutexWait = 128; // FUTEX_WAIT_PRIVATE
 constexpr long kFutexWake = 129; // FUTEX_WAKE_PRIVATE
+using OwnerId = uint32_t;
+#else
+namespace darwin = lang::native::darwin;
+using OwnerId = int64_t;
+#endif
+
 constexpr long kErrIntr = -4;
 constexpr long kErrAgain = -11;
 constexpr int64_t kTimedOut = -110;
 constexpr int64_t kInvalidTimeout = -22;
+#if defined(__linux__)
 constexpr int64_t kNanoseconds = 1000000000;
 constexpr int64_t kMaxSeconds = 0x7fffffffffffffffLL;
 constexpr int64_t kMaxWaitSeconds = 9000000000LL;
+#endif
 
 // Mutex word values. A waiter always leaves the word at 2 while it sleeps, so
 // an unlock that observes anything other than 1 must wake a sleeper.
@@ -50,16 +65,21 @@ constexpr uint32_t kMutexContended = 2;
   lang_native_panic_v1(5, 0, 0, 0);
 }
 
-inline uint32_t current_tid() noexcept {
+inline OwnerId current_tid() noexcept {
+#if defined(__APPLE__)
+  const OwnerId result = darwin::thread_id();
+#else
   long result;
   __asm__ volatile("syscall"
                    : "=a"(result)
                    : "a"(kSysGettid)
                    : "rcx", "r11", "memory", "cc");
+#endif
   if (result <= 0) misuse_panic();
-  return static_cast<uint32_t>(result);
+  return static_cast<OwnerId>(result);
 }
 
+#if defined(__linux__)
 // futex(uaddr, op, val, timeout, uaddr2, val3). The timeout, second address
 // and third value are always null/zero here, but x86_64 still requires their
 // registers.
@@ -162,23 +182,48 @@ struct Deadline {
     return 0;
   }
 };
+#else
+struct Deadline {
+  bool finite;
+  uint64_t ticks;
+  int64_t init(int64_t timeout_ns) noexcept {
+    if (timeout_ns < -1) return kInvalidTimeout;
+    finite = timeout_ns >= 0;
+    if (timeout_ns <= 0) return 0;
+    return darwin::monotonic_deadline(static_cast<uint64_t>(timeout_ns), ticks);
+  }
+};
+#endif
 
 // Restart only on EINTR. EAGAIN means the futex word changed before sleep and
 // the caller's predicate loop must re-check it.
 inline void futex_wait(uint32_t *address, uint32_t expected) noexcept {
   for (;;) {
+#if defined(__APPLE__)
+    const int status = darwin::address_wait(address, expected);
+    const int64_t result = status < 0 ? darwin::error(-status) : 0;
+#else
     const long result = sys_futex(address, kFutexWait, expected);
-    if (result >= 0 || result == -11) return;
+#endif
+    if (result >= 0 || result == kErrAgain) return;
     if (result != kErrIntr) misuse_panic();
   }
 }
 
-inline void futex_wake(uint32_t *address, uint32_t count) noexcept {
-  if (sys_futex(address, kFutexWake, count) < 0) misuse_panic();
+inline void futex_wake(uint32_t *address) noexcept {
+#if defined(__APPLE__)
+  if (darwin::address_wake(address, false) < 0) misuse_panic();
+#else
+  if (sys_futex(address, kFutexWake, 1u) < 0) misuse_panic();
+#endif
 }
 
 inline void cpu_relax() noexcept {
+#if defined(__APPLE__)
+  darwin::cpu_pause();
+#else
   __asm__ volatile("pause" ::: "memory");
+#endif
 }
 
 // A notifier keeps this lock through wake so the waiter's stack stays alive.
@@ -199,8 +244,8 @@ inline void spin_release(SpinLock &lock) noexcept {
 struct MutexState {
   // 0 free, 1 held, 2 held with waiters.
   uint32_t lock;
-  // Linux thread id of the owner, or 0 when unlocked.
-  uint32_t owner;
+  // Kernel thread ID of the owner, or 0 when unlocked.
+  OwnerId owner;
 };
 
 struct Waiter {
@@ -311,7 +356,7 @@ LangHandle *lang_mutex_new_v1() noexcept {
 void lang_mutex_lock_v1(LangHandle *handle) noexcept {
   auto *object = require<MutexObject>(handle, LangHandleKind::mutex);
   MutexState &state = object->state;
-  const uint32_t self = current_tid();
+  const OwnerId self = current_tid();
 
   uint32_t expected = kMutexFree;
   if (__atomic_compare_exchange_n(&state.lock, &expected, kMutexHeld, false,
@@ -346,7 +391,7 @@ void lang_mutex_lock_v1(LangHandle *handle) noexcept {
 void lang_mutex_unlock_v1(LangHandle *handle) noexcept {
   auto *object = require<MutexObject>(handle, LangHandleKind::mutex);
   MutexState &state = object->state;
-  const uint32_t self = current_tid();
+  const OwnerId self = current_tid();
 
   if (__atomic_load_n(&state.owner, __ATOMIC_RELAXED) != self)
     misuse_panic();
@@ -357,7 +402,7 @@ void lang_mutex_unlock_v1(LangHandle *handle) noexcept {
   __atomic_store_n(&state.owner, 0u, __ATOMIC_RELAXED);
   if (__atomic_exchange_n(&state.lock, kMutexFree, __ATOMIC_RELEASE) !=
       kMutexHeld)
-    futex_wake(&state.lock, 1u);
+    futex_wake(&state.lock);
 }
 
 LangHandle *lang_condvar_new_v1() noexcept {
@@ -376,7 +421,7 @@ bool condvar_wait(LangHandle *condvar_handle, LangHandle *mutex_handle,
   auto *condvar =
       require<CondvarObject>(condvar_handle, LangHandleKind::condvar);
   auto *mutex = require<MutexObject>(mutex_handle, LangHandleKind::mutex);
-  const uint32_t self = current_tid();
+  const OwnerId self = current_tid();
 
   if (__atomic_load_n(&mutex->state.owner, __ATOMIC_RELAXED) != self ||
       __atomic_load_n(&mutex->state.lock, __ATOMIC_RELAXED) == kMutexFree)
@@ -412,6 +457,16 @@ bool condvar_wait(LangHandle *condvar_handle, LangHandle *mutex_handle,
     if (__atomic_load_n(&waiter.signalled, __ATOMIC_ACQUIRE)) break;
     if (timeout_ns == 0) break;
     long result;
+#if defined(__APPLE__)
+    {
+      lang::native::gc_program::SafeGuard safe;
+      result = deadline.finite
+          ? darwin::address_wait_until(&waiter.signalled, 0u, deadline.ticks)
+          : darwin::address_wait(&waiter.signalled, 0u);
+    }
+    if (result == -ETIMEDOUT) break;
+    if (result < 0) result = darwin::error(static_cast<int>(-result));
+#else
     if (deadline.finite) {
       KernelTime remaining;
       const int64_t status = deadline.remaining(remaining);
@@ -426,6 +481,7 @@ bool condvar_wait(LangHandle *condvar_handle, LangHandle *mutex_handle,
       lang::native::gc_program::SafeGuard safe;
       result = sys_futex(&waiter.signalled, kFutexWait, 0u);
     }
+#endif
     if (result >= 0 || result == kErrIntr || result == kErrAgain ||
         result == kTimedOut)
       continue;
@@ -498,7 +554,7 @@ void lang_condvar_notify_one_v1(LangHandle *handle) noexcept {
     // waiter cannot return before reacquiring this lock, so this stack node is
     // still alive for the wakeup.
     __atomic_store_n(&waiter->signalled, 1u, __ATOMIC_RELEASE);
-    futex_wake(&waiter->signalled, 1u);
+    futex_wake(&waiter->signalled);
   }
 
   spin_release(condvar->state.queue_lock);
@@ -516,7 +572,7 @@ void lang_condvar_notify_all_v1(LangHandle *handle) noexcept {
     waiter->next = nullptr;
     if (__atomic_load_n(&waiter->signalled, __ATOMIC_RELAXED) == 0) {
       __atomic_store_n(&waiter->signalled, 1u, __ATOMIC_RELEASE);
-      futex_wake(&waiter->signalled, 1u);
+      futex_wake(&waiter->signalled);
     }
     waiter = next;
   }

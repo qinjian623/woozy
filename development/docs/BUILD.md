@@ -60,6 +60,8 @@ python3.12 tests/tooling/installed_bundle_test.py "$HOME/.local/opt/woozy-curren
 
 如果 LLVM 提示缺少系统未提供的动态库，可用 `--compat-lib /path/to/libxml2.so.2` 等参数按所需文件名复制兼容库，可重复传入该选项。安装目录中的 LLVM 启动脚本会自行查找这些库，无需在 shell 配置中设置 `LD_LIBRARY_PATH`。目标机器仍需兼容已有二进制所用的 Linux x86_64 系统 ABI 和其他系统库。原生分包构建仍使用系统的 Make 或 Ninja，hosted 构建需要宿主 C 开发环境，执行 Python 输出需 Python 3.12，TLS 附加库单独构建。
 
+在 Apple Silicon 上用同一条安装命令，将 `--compiler` 指向原生 Wz 编译器，将 `--runtime-dir` 指向含 `liblang_darwin_core.a` 的目录，将 `--llvm-bin` 指向 macOS arm64 的 LLVM 22.1.8。链接程序还需要 macOS SDK。先用 [Mac 自举说明](SELFHOST_BOOTSTRAP.md#macos-arm64) 构建原生编译器。打包工具在 Mac 上生成 `woozy-macos-arm64.tar.gz` 和对应的 SHA-256 文件。
+
 ### 预编译发行包
 
 拿到压缩包和 SHA-256 文件后，在下载目录校验并解包。将整个 `woozy/` 目录放到希望安装的位置。
@@ -72,7 +74,11 @@ tar -xzf woozy-linux-x86_64.tar.gz
 
 制作发行包时，用 Python 3.11 或以上版本运行 `tools/build_release.py`。编译器、运行库和 LLVM 参数与安装器相同。将 `--prefix` 换成 `--out-dir`，两个文件会一并写入新目录。用可重复的 `--notice FILE` 放入 LLVM 及随包复制的兼容库的许可证文件。需要的库取决于 LLVM 的来源，例如上述 Arch libxml2 还依赖 ICU。验证时用无工具链环境变量的 Linux x86_64 环境解包并构建原生和 Python 示例。
 
-GitHub Actions 的 [Linux release](../../.github/workflows/release.yml) 在 Ubuntu 24.04 上从源码构建 C++ 种子和 Woozy 编译器。下载的 LLVM 先按工具链锁文件校验 SHA-256。禁网容器会校验并解包，核对 `woozyc --version` 的完整版本及源码提交，执行 Native/Python 示例、`test`、依赖锁、LSP 和 GDB 测试，并在回环接口上测试聊天和 HTTP 服务。
+GitHub Actions 的 [日常检查](../../.github/workflows/ci.yml) 在 PR 和 `main` 更新时运行。Linux 构建前端和 Python 后端并执行对应回归，Apple Silicon 构建 Darwin 运行库并执行系统、网络、IPC、信号和异步等测试。
+
+[发布工作流](../../.github/workflows/release.yml) 在版本标签推送或手动运行时构建 Linux x86_64 和 macOS arm64 两个包。Ubuntu 24.04 从源码构建 C++ 种子和 Woozy 编译器，并用后者按源码包生成 Mac 编译器的 Mach-O 对象，保留 LLVM 逐步校验。Mac 任务校验对象归档，在 Apple Silicon 上用本机 Xcode SDK 和 Darwin 运行库链接。两个平台都按 [工具链锁文件](../../contracts/toolchain.lock.json) 校验下载的 LLVM。
+
+两个包都要解包检查 SHA-256、版本和源码提交，并使用解包后的编译器运行示例、标准库、Python、编辑器和本机网络用例。Linux 在禁网容器中运行，源码调试分别用 GDB 和 LLDB 测试。手动运行只生成 Actions 附件。版本标签推送时，两个包都通过验证后才会一起发布到同一个 GitHub Release。
 
 在 Actions 中手动运行，可从该次运行的 **Artifacts** 下载产物。推送 `v0.1.0` 这类标签后，同样的测试通过才会发布 GitHub Release。带后缀的标签，例如 `v0.1.0-rc.1`，会发布为预发行版。
 
@@ -171,5 +177,17 @@ DWARF 中的项目源码路径相对于 `lang.toml` 所在目录。移动项目�
 
 `-g` 可以与 `--package-objects` 一起用，Woozy 版也可以和 `--source-make` 一起用。含有异步函数的项目可以用整包或 `--package-objects` 构建。源码单步和变量检查使用 `--opt 0` 较方便。`--opt 2` 下，内联和代码消除可能让行号跳跃，GDB 也可能显示 `<optimized out>`。C 外部类型和运行库内部对象的字段暂未完整描述。
 
-简单结构体、枚举、静态字符串、泛型、ARC和外部绑定仍需后续工作；
-T05整项在简单结构体与常量字符串补齐前保留in_progress。细节见[NATIVE_SCALARS.md](NATIVE_SCALARS.md)。
+## 用 LLDB 调试 Woozy 程序
+
+Linux 上，LLDB 和 GDB 可打开同一个用 `-g` 生成的 ELF 文件。进入 `lang.toml` 所在目录，运行 `lldb /path/to/build/core/debug/program`。
+
+macOS 上加 `-g` 会在 `program` 旁写出 `program.dwarf`。用 `--symfile` 载入符号。需要单步或查看局部变量时用 `--opt 0`。
+
+```sh
+woozyc build --project examples/hello/lang.toml --opt 0 -g --out-dir build/hello
+lldb -o 'target create --symfile build/hello/program.dwarf build/hello/program'
+```
+
+在 LLDB 中用 `breakpoint set -f main.wz -l 行号` 设置断点，`run` 启动，`next` 单步，`frame variable` 查看当前帧的参数和局部变量。源码移动后用 `settings set target.source-map 原目录 新目录` 指定位置。
+
+用 `command script import /path/to/woozy/tools/lldb/woozy.py` 加载字符串、Vec 和 Slice 的显示脚本。Vec 在调试信息中是指针，`frame variable *numbers` 可查看名为 `numbers` 的 Vec 的元素。

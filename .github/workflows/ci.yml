@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  linux-frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential ca-certificates cmake ninja-build pkg-config curl jq \
+            libtomlplusplus-dev libjson-c-dev libgmp-dev
+      - name: Verify and extract locked Python
+        run: |
+          lock=contracts/toolchain.lock.json
+          url=$(jq -er .artifact_sources.python "$lock")
+          sha=$(jq -er .artifact_hashes.python_archive_sha256 "$lock")
+          curl -fLsS --retry 3 "$url" -o "$RUNNER_TEMP/python.tar.gz"
+          printf '%s  %s\n' "$sha" "$RUNNER_TEMP/python.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$RUNNER_TEMP"
+          executable_sha=$(jq -er .artifact_hashes.python_executable_sha256 "$lock")
+          printf '%s  %s\n' "$executable_sha" "$RUNNER_TEMP/python/bin/python3.12" | sha256sum -c -
+      - name: Build and test the frontend and Python backend
+        run: |
+          build="$RUNNER_TEMP/build"
+          python="$RUNNER_TEMP/python/bin/python3.12"
+          cmake -S . -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON -DLANG_ENABLE_LLVM=OFF \
+            "-DLANG_TEST_PYTHON=$python" "-DLANG_PYTHON312=$python"
+          cmake --build "$build" --parallel 2
+          ctest --test-dir "$build" --output-on-failure --no-tests=error
+
+  macos-arm64-runtime:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and test the Darwin runtime
+        run: |
+          test "$(uname -m)" = arm64
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          build="$RUNNER_TEMP/build"
+          cmake -S runtime/darwin -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4 "-DCMAKE_OSX_SYSROOT=$sdk" \
+            -DCMAKE_C_FLAGS=-Werror=unguarded-availability-new \
+            -DCMAKE_CXX_FLAGS=-Werror=unguarded-availability-new
+          cmake --build "$build" --parallel 2
+          ctest --test-dir "$build" --output-on-failure --no-tests=error --timeout 60

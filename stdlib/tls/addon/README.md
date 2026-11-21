@@ -27,8 +27,14 @@ cmake --build build/tls-addon --target woozy_tls_header_probe -j4
 build/tls-addon/woozy_tls_header_probe
 ```
 
-The result is `build/tls-addon/libwoozy_tls.a`. The header probe compiles the
+The build produces `build/tls-addon/libwoozy_tls.a` and a matching `tls.json`
+binding. The header probe compiles the
 public helper header as C11 and checks the frozen `LangTlsError` size.
+
+On macOS arm64, configure with `-DCMAKE_OSX_ARCHITECTURES=arm64`,
+`-DCMAKE_OSX_DEPLOYMENT_TARGET=14.4`, and `-DOPENSSL_ROOT_DIR=<OpenSSL prefix>`.
+The OpenSSL binaries determine any higher minimum macOS version for programs
+that link them.
 
 ## Project manifest
 
@@ -42,7 +48,7 @@ runtime = "hosted"
 
 [dependencies.woozy_tls]
 kind = "native"
-binding = "<repo>/stdlib/tls/bindings/tls.json"
+binding = "<repo>/build/tls-addon/tls.json"
 libraries = ["ssl", "crypto", "stdc++"]
 library_dirs = ["<repo>/build/tls-addon"]
 ```
@@ -51,6 +57,10 @@ library_dirs = ["<repo>/build/tls-addon"]
 `stdc++` is an explicit addon dependency. OpenSSL is provided by `ssl` and
 `crypto`. The compiler's hosted link mode does not add TLS or C++ libraries
 implicitly for programs that do not declare these dependencies.
+
+On macOS arm64, use the generated Darwin binding with
+`libraries = ["ssl", "crypto", "c++"]`. Add the OpenSSL `lib` directory to
+`library_dirs` alongside the addon directory.
 
 ## Binding ownership
 

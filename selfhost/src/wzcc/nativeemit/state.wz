@@ -9,8 +9,10 @@ import "std/vec" as vec;
 
 pub const RUNTIME_ABI string = "lang-native-scalars/1";
 pub const OWNERSHIP_RUNTIME_ABI string = "lang-native-values/1";
-// Captured from the fixed Clang 22.1.8 Linux x86_64 probe, not host sizeof.
+// Captured from fixed Clang 22.1.8 target probes, not host sizeof.
 pub const DATA_LAYOUT string = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+pub const DARWIN_ARM64_TRIPLE string = "arm64-apple-macosx11.0.0";
+const DARWIN_ARM64_LAYOUT string = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32";
 pub const VEC_TYPE string = "%\"lang.vec\"";
 pub const FN_TYPE string = "%\"lang.fn\"";
 pub const WEAK_TYPE string = "%\"lang.weak\"";
@@ -33,6 +35,7 @@ pub struct Output {
     pub triple string;
     pub data_layout string;
     pub has_async bool;
+    pub debug_info bool;
 }
 pub struct EmitResult {
     pub state model.PhaseState;
@@ -292,14 +295,21 @@ pub func empty_frame() FunctionFrame {
 }
 
 pub func new_emitter(input nativeir.Module, options Options) Emitter throws Error {
-    if options.triple != "x86_64-unknown-linux-gnu" || options.cpu != "generic" ||
-       options.features != "" || (options.optimization != 0 && options.optimization != 2) {
+    if options.cpu != "generic" || options.features != "" ||
+       (options.optimization != 0 && options.optimization != 2) {
         throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
-            "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only");
+            "native LLVM emission requires a generic CPU, no extra features, and O0 or O2");
+    }
+    var data_layout = DATA_LAYOUT;
+    if options.triple == DARWIN_ARM64_TRIPLE {
+        data_layout = DARWIN_ARM64_LAYOUT;
+    } else if options.triple != "x86_64-unknown-linux-gnu" {
+        throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+            "native LLVM emission supports x86_64-unknown-linux-gnu and arm64-apple-macosx11.0.0");
     }
     let source_order = vec.empty[usize]();
     for var index usize = 0; index < vec.len(input.functions); index += 1 { vec.push(source_order, index); }
-    return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: DATA_LAYOUT,
+    return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: data_layout,
         type_definitions: [], declarations: [], globals: [], metadata: [], debug: option.Option[DebugState].None, functions: [],
         cursor: Cursor(function_index: option.Option[usize].None, block_index: option.Option[usize].None),
         frame: empty_frame(),

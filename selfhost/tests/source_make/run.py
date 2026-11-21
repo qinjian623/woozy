@@ -109,12 +109,41 @@ def check_large_source_packages(woozyc, root, env, failures):
     check(executed.returncode == 61, "large source packages changed program value", failures)
 
 
+def check_darwin_objects(woozyc, llvm_bin, root, env, failures):
+    target = "arm64-apple-macosx11.0.0"
+    cross_env = dict(env, WOOZY_LLVM_BIN=str(llvm_bin))
+    command = [str(woozyc), "build", "--project", str(HERE / "lang.toml"),
+               "--source-make", "--target", target, "--format", "json"]
+    missing_sdk_env = dict(cross_env, SDKROOT=str(root / "no-sdk"))
+    rejected = run(command + ["--out-dir", str(root / "darwin-exe")], root, missing_sdk_env)
+    check(rejected.returncode != 0 and "E_TOOLCHAIN_MISSING" in rejected.stdout,
+          "Darwin executable build did not report the missing SDK", failures)
+    for opt in ("0", "2"):
+        out_dir = root / f"darwin-O{opt}"
+        result = run(command + ["--objects-only", "--opt", opt, "--out-dir", str(out_dir)],
+                     root, cross_env)
+        check(result.returncode == 0, f"Darwin O{opt} failed to build objects", failures)
+        if result.returncode != 0:
+            continue
+        header = run([str(llvm_bin / "llvm-readobj"), "--file-headers", str(out_dir / "program.a")],
+                     root, cross_env)
+        check(header.returncode == 0 and header.stdout.count("Format: Mach-O arm64") == 3,
+              f"Darwin O{opt} archive does not contain three arm64 Mach-O modules", failures)
+        for name in ("program", "program.o", "link.log"):
+            check(not (out_dir / name).exists(), f"Darwin O{opt} unexpectedly published {name}", failures)
+        report = json.loads((out_dir / "make-report.json").read_text())
+        check(all(p["opt_jobs"] == 1 and p["llc_jobs"] == 1 for p in report["packages"]),
+              f"Darwin O{opt} did not verify and compile every package", failures)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--woozyc", type=Path,
         default=Path(os.environ.get("WOOZYC", ROOT / "build/woozy-stdlib-native/woozyc")),
     )
+    parser.add_argument("--darwin-llvm-bin", type=Path,
+                        help="also check the arm64 Mach-O archive using LLVM 22.1.8 tools")
     args = parser.parse_args()
     woozyc = args.woozyc.resolve()
     env = os.environ.copy()
@@ -265,6 +294,8 @@ def main():
 
         check_nominal(woozyc, root, cache_dir, env, failures)
         check_large_source_packages(woozyc, root, env, failures)
+        if args.darwin_llvm_bin:
+            check_darwin_objects(woozyc, args.darwin_llvm_bin.resolve(), root, env, failures)
 
     if failures:
         for failure in failures:

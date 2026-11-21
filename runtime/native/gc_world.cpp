@@ -1,47 +1,44 @@
 #include "gc_world.hpp"
 
 #include "alloc.hpp"
-#include "linux.hpp"
+#include "gc_system.hpp"
 
-#if !defined(__x86_64__) || !defined(__linux__)
-#error "lang-gc-world/1 is implemented only for Linux x86_64"
-#endif
-
-// Private per-thread tid cache hooks. start.cpp provides strong hidden
-// definitions in the core link; a hosted CRT link leaves these weak
-// references null and current_tid keeps using the raw syscall.
+#if defined(__linux__)
+// Linux core startup caches the kernel ID in its own TCB.
 extern "C" uintptr_t lang_native_cached_tid() noexcept
     __attribute__((weak, visibility("hidden")));
 extern "C" void lang_native_clear_tid_cache() noexcept
     __attribute__((weak, visibility("hidden")));
+#endif
 
 // lang-gc-world/1. See tests/native/gc_world/CONTRACT.md for the protocol and
 // for the integration work that this translation unit deliberately does not
-// perform. Nothing here uses libc, libstdc++, pthreads, TLS, or dynamic
-// initialization. Registry nodes come from lang_alloc_v1 so the runtime can be
-// linked into the freestanding native program.
+// perform. The Linux implementation uses direct syscalls.
 
 namespace {
 
+#if defined(__linux__)
 using lang::native::linux_x86_64::syscall6;
+constexpr long kSysFutex = 202;
+constexpr long kSysClockGettime = 228;
+constexpr int kClockMonotonic = 1;
+constexpr int kFutexWaitPrivate = 128;
+constexpr int kFutexWakePrivate = 129;
+constexpr int kFutexWaitBitsetPrivate = 9 | 128;
+constexpr uint32_t kFutexBitsetAny = 0xffffffffu;
+constexpr int kEagain = -11;
+#endif
+
+namespace system = lang::native::gc_system;
+using system::cpu_pause;
+using system::ThreadId;
 
 constexpr uint32_t kRequestBit = LANG_GC_WORLD_REQUEST_BIT;
 constexpr uint32_t kStateActive = 0;
 constexpr uint32_t kStateSafe = 1;
 constexpr uint32_t kStateParked = 2;
 
-constexpr long kSysGettid = 186;
-constexpr long kSysFutex = 202;
-constexpr long kSysClockGettime = 228;
-
-constexpr int kClockMonotonic = 1;
-constexpr int kFutexWaitPrivate = 128;
-constexpr int kFutexWakePrivate = 129;
-constexpr int kFutexWaitBitsetPrivate = 9 | 128;
-constexpr uint32_t kFutexBitsetAny = 0xffffffffu;
-
 constexpr int kEintr = -4;
-constexpr int kEagain = -11;
 constexpr int kEtimedout = -110;
 constexpr int kEbusy = -16;
 constexpr int kEinval = -22;
@@ -65,7 +62,7 @@ static_assert(sizeof(LangGcWorldCallbackToken) == 32,
 
 struct Node {
   Node *next;
-  int32_t tid;
+  ThreadId tid;
   uint32_t refs;
   uint32_t state;
   uint32_t safe_depth;
@@ -78,14 +75,16 @@ struct Node {
   void *callback_token;
 };
 
-struct KernelTimespec {
-  long tv_sec;
-  long tv_nsec;
-};
-
 struct Deadline {
   bool infinite;
-  KernelTimespec when;
+#if defined(__APPLE__)
+  uint64_t when;
+#else
+  struct KernelTimespec {
+    long tv_sec;
+    long tv_nsec;
+  } when;
+#endif
 };
 
 // Registry nodes are protected by this ticket lock. The lock never spans an
@@ -101,10 +100,10 @@ uint32_t g_lock_serving = 0;
 uint32_t g_epoch = 0;
 
 uint32_t g_stop_active = 0;
-int32_t g_collector_tid = 0;
+ThreadId g_collector_tid = 0;
 
 uint32_t g_fork_prepared = 0;
-int32_t g_fork_tid = 0;
+ThreadId g_fork_tid = 0;
 
 } // namespace
 
@@ -113,10 +112,6 @@ uint32_t lang_gc_world_request_word_v1 = 0;
 }
 
 namespace {
-
-inline void cpu_pause() noexcept {
-  __asm__ volatile("pause" ::: "memory");
-}
 
 void registry_lock() noexcept {
   const uint32_t ticket =
@@ -129,15 +124,9 @@ void registry_unlock() noexcept {
   __atomic_fetch_add(&g_lock_serving, 1u, __ATOMIC_RELEASE);
 }
 
-int64_t raw_current_tid() noexcept {
-  return syscall6(kSysGettid, 0, 0, 0, 0, 0, 0);
-}
-
 void write_all(int fd, const char *bytes, uint64_t size) noexcept {
   while (size) {
-    const int64_t result =
-        syscall6(1 /* SYS_write */, fd, reinterpret_cast<long>(bytes),
-                 static_cast<long>(size), 0, 0, 0);
+    const int64_t result = system::write(fd, bytes, size);
     if (result == kEintr)
       continue;
     if (result <= 0)
@@ -179,8 +168,7 @@ gc_panic_with_tid(const char *reason, int64_t tid) noexcept {
   append_unsigned(tid > 0 ? static_cast<uint64_t>(tid) : 0u);
   append(":0:0\n");
   write_all(2, record, length);
-  syscall6(231 /* SYS_exit_group */, 101, 0, 0, 0, 0, 0);
-  __builtin_unreachable();
+  system::exit_panic();
 }
 
 // General terminal Panic. It may attempt a raw gettid for diagnostic context,
@@ -188,17 +176,21 @@ gc_panic_with_tid(const char *reason, int64_t tid) noexcept {
 // current_tid.
 [[noreturn]] __attribute__((no_stack_protector)) void
 gc_panic(const char *reason) noexcept {
-  const int64_t tid = raw_current_tid();
+  const int64_t tid = system::raw_current_tid();
   gc_panic_with_tid(reason, tid > 0 ? tid : 0);
 }
 
-int32_t current_tid() noexcept {
+ThreadId current_tid() noexcept {
+#if defined(__APPLE__)
+  const int64_t tid = system::raw_current_tid();
+#else
   const int64_t tid = lang_native_cached_tid
                           ? static_cast<int64_t>(lang_native_cached_tid())
-                          : raw_current_tid();
+                          : system::raw_current_tid();
+#endif
   if (tid <= 0)
     gc_panic_with_tid("gettid-failed", 0);
-  return static_cast<int32_t>(tid);
+  return static_cast<ThreadId>(tid);
 }
 
 bool request_active_locked() noexcept {
@@ -209,18 +201,18 @@ bool request_active_locked() noexcept {
 
 bool stop_active_locked() noexcept { return g_stop_active != 0; }
 
-bool is_active_collector_locked(int32_t tid) noexcept {
+bool is_active_collector_locked(ThreadId tid) noexcept {
   return g_stop_active != 0 && g_collector_tid == tid;
 }
 
-Node *find_locked(int32_t tid) noexcept {
+Node *find_locked(ThreadId tid) noexcept {
   for (Node *node = g_nodes; node; node = node->next)
     if (node->tid == tid)
       return node;
   return nullptr;
 }
 
-Node *find_and_acquire(int32_t tid) noexcept {
+Node *find_and_acquire(ThreadId tid) noexcept {
   registry_lock();
   Node *node = find_locked(tid);
   if (node)
@@ -236,7 +228,7 @@ void node_release(Node *node) noexcept {
     destroy_node(node);
 }
 
-Node *allocate_node(int32_t tid) noexcept {
+Node *allocate_node(ThreadId tid) noexcept {
   void *storage = lang_alloc_v1(sizeof(Node), alignof(Node));
   if (!storage)
     gc_panic("allocation-failed");
@@ -257,9 +249,13 @@ Node *allocate_node(int32_t tid) noexcept {
 void notify_waiters() noexcept {
   __atomic_add_fetch(&g_epoch, 1u, __ATOMIC_RELEASE);
   for (;;) {
+#if defined(__APPLE__)
+    const int result = lang::native::darwin::address_wake(&g_epoch, true);
+#else
     const int64_t result =
         syscall6(kSysFutex, reinterpret_cast<long>(&g_epoch),
                  kFutexWakePrivate, 0x7fffffff, 0, 0, 0);
+#endif
     if (result >= 0)
       return; // The value is the number woken, including a valid zero.
     if (result == kEintr)
@@ -272,7 +268,12 @@ void notify_waiters() noexcept {
 
 void make_deadline(int64_t timeout_ns, Deadline *deadline) noexcept {
   deadline->infinite = false;
-  KernelTimespec now{0, 0};
+#if defined(__APPLE__)
+  if (lang::native::darwin::monotonic_deadline(
+          static_cast<uint64_t>(timeout_ns), deadline->when))
+    gc_panic("clock-failed");
+#else
+  Deadline::KernelTimespec now{0, 0};
   const int64_t clock_result =
       syscall6(kSysClockGettime, kClockMonotonic,
                reinterpret_cast<long>(&now), 0, 0, 0, 0);
@@ -287,6 +288,7 @@ void make_deadline(int64_t timeout_ns, Deadline *deadline) noexcept {
   }
   deadline->when.tv_sec = seconds;
   deadline->when.tv_nsec = nanoseconds;
+#endif
 }
 
 // Returns false only on an expired absolute deadline. EINTR and EAGAIN retry
@@ -294,6 +296,18 @@ void make_deadline(int64_t timeout_ns, Deadline *deadline) noexcept {
 // positive stop timeout.
 bool wait_on_epoch(uint32_t expected, const Deadline &deadline) noexcept {
   for (;;) {
+#if defined(__APPLE__)
+    const int result = deadline.infinite
+        ? lang::native::darwin::address_wait(&g_epoch, expected)
+        : lang::native::darwin::address_wait_until(&g_epoch, expected,
+                                                   deadline.when);
+    if (result >= 0)
+      return true;
+    if (result == -EINTR)
+      continue;
+    if (result == -ETIMEDOUT)
+      return false;
+#else
     int result;
     if (deadline.infinite) {
       result = static_cast<int>(syscall6(
@@ -311,6 +325,7 @@ bool wait_on_epoch(uint32_t expected, const Deadline &deadline) noexcept {
       continue;
     if (result == kEtimedout)
       return false;
+#endif
     gc_panic("futex-failed");
   }
 }
@@ -319,7 +334,7 @@ bool wait_on_epoch(uint32_t expected, const Deadline &deadline) noexcept {
 // PARKED. Becoming ACTIVE again is serialized by the registry lock with the
 // collector's scan, so a resume cannot race a new stop into an active window.
 void wait_until_resumed(Node *node) noexcept {
-  const Deadline infinite{true, {0, 0}};
+  const Deadline infinite{true, {}};
   for (;;) {
     registry_lock();
     const bool exempt =
@@ -341,7 +356,7 @@ void wait_until_resumed(Node *node) noexcept {
 // thread that was already in SAFE when a stop was pending. The registry lock is
 // not held while sleeping; the collector may complete its stop and later resume.
 void wait_while_world_request_active() noexcept {
-  const Deadline infinite{true, {0, 0}};
+  const Deadline infinite{true, {}};
   for (;;) {
     registry_lock();
     if (!request_active_locked()) {
@@ -355,7 +370,7 @@ void wait_while_world_request_active() noexcept {
   }
 }
 
-bool all_stopped_locked(int32_t collector_tid) noexcept {
+bool all_stopped_locked(ThreadId collector_tid) noexcept {
   for (Node *node = g_nodes; node; node = node->next) {
     if (node->tid == collector_tid)
       continue;
@@ -373,7 +388,7 @@ bool all_stopped_locked(int32_t collector_tid) noexcept {
   return true;
 }
 
-void retract_stop(int32_t owner_tid) noexcept {
+void retract_stop(ThreadId owner_tid) noexcept {
   bool changed = false;
   registry_lock();
   if (g_stop_active && g_collector_tid == owner_tid) {
@@ -394,7 +409,7 @@ extern "C" int lang_gc_world_request_pending_v1(void) noexcept {
 }
 
 extern "C" bool lang_gc_world_register_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   for (;;) {
     bool wait = false;
     bool notify = false;
@@ -460,7 +475,7 @@ extern "C" bool lang_gc_world_register_v1(void) noexcept {
 }
 
 extern "C" bool lang_gc_world_unregister_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     return false;
@@ -523,7 +538,7 @@ extern "C" void lang_gc_world_poll_v1(void) noexcept {
   if (!lang_gc_world_poll_required_v1())
     return;
 
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("poll-unregistered");
@@ -587,7 +602,7 @@ extern "C" void lang_gc_world_poll_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_enter_safe_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("safe-unregistered");
@@ -635,7 +650,7 @@ extern "C" void lang_gc_world_enter_safe_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_leave_safe_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("safe-unregistered");
@@ -686,7 +701,7 @@ extern "C" void lang_gc_world_leave_safe_v1(void) noexcept {
 }
 
 extern "C" uint32_t lang_gc_world_suspend_safe_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("suspend-safe-unregistered");
@@ -717,7 +732,7 @@ extern "C" void lang_gc_world_restore_safe_v1(uint32_t safe_depth) noexcept {
 }
 
 extern "C" void lang_gc_world_enter_fork_stable_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("fork-stable-unregistered");
@@ -749,7 +764,7 @@ extern "C" void lang_gc_world_enter_fork_stable_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_leave_fork_stable_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("fork-stable-unregistered");
@@ -813,7 +828,7 @@ extern "C" void lang_gc_world_leave_fork_stable_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_enter_critical_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   // Find, pin and validate the node under the same registry lock that publishes
   // the new depth. The pin keeps the node alive after the unlock; no other
   // transition can be interleaved with this critical entry.
@@ -851,7 +866,7 @@ extern "C" void lang_gc_world_enter_critical_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_leave_critical_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   // The depth decrement and the ACTIVE/PARKED decision happen under the same
   // registry lock that finds and pins the node. If the outermost leave parks,
   // the pin is held across notify/wait and released after the wakeup.
@@ -920,7 +935,7 @@ extern "C" void lang_gc_world_callback_enter_v1(
   token->magic = 0;
   token->reserved = 0;
 
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   bool created = false;
   if (!node) {
@@ -1049,7 +1064,7 @@ extern "C" void lang_gc_world_callback_leave_v1(
     LangGcWorldCallbackToken *token) noexcept {
   if (!token || token->magic != kCallbackTokenMagic || !token->node)
     gc_panic("callback-token-invalid");
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = static_cast<Node *>(token->node);
 
   bool park = false;
@@ -1151,7 +1166,7 @@ extern "C" void lang_gc_world_callback_leave_v1(
 }
 
 extern "C" bool lang_gc_world_can_collect_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     return false; // The query never auto-registers an unknown thread.
@@ -1174,8 +1189,8 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
   if (timeout_ns < -1)
     return kEinval;
 
-  const int32_t tid = current_tid();
-  Deadline deadline{true, {0, 0}};
+  const ThreadId tid = current_tid();
+  Deadline deadline{true, {}};
   if (timeout_ns > 0)
     make_deadline(timeout_ns, &deadline);
 
@@ -1260,7 +1275,7 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
 }
 
 extern "C" void lang_gc_world_resume_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   Node *node = find_and_acquire(tid);
   if (!node)
     gc_panic("resume-unregistered");
@@ -1283,7 +1298,7 @@ extern "C" void lang_gc_world_resume_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_fork_prepare_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   registry_lock();
   Node *node = find_locked(tid);
   if (!node) {
@@ -1316,7 +1331,7 @@ extern "C" void lang_gc_world_fork_prepare_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_fork_parent_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   // The lock is already held by prepare. On correct usage tid is still the
   // forking thread and no state change is needed.
   if (!g_fork_prepared || g_fork_tid != tid)
@@ -1327,10 +1342,12 @@ extern "C" void lang_gc_world_fork_parent_v1(void) noexcept {
 }
 
 extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
+#if defined(__linux__)
   // The child inherits the forking thread's cached parent tid. Clear only an
   // owned TCB before current_tid obtains and caches the new child tid.
   if (lang_native_clear_tid_cache) lang_native_clear_tid_cache();
-  const int32_t child_tid = current_tid();
+#endif
+  const ThreadId child_tid = current_tid();
   if (!g_fork_prepared)
     gc_panic("fork-hook-misuse");
   // In the child gettid is the new child tid. If it is still the parent tid,
@@ -1338,7 +1355,7 @@ extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
   if (g_fork_tid == child_tid)
     gc_panic("fork-hook-misuse");
 
-  const int32_t parent_tid = g_fork_tid;
+  const ThreadId parent_tid = g_fork_tid;
   Node *keep = nullptr;
   Node *free_list = nullptr;
   for (Node *node = g_nodes; node;) {

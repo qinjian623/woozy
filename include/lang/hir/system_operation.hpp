@@ -47,7 +47,8 @@ enum class SystemOperation : uint16_t {
   // Raw byte-path stat. Appending after async_shutdown keeps every existing
   // operation number stable; the operation is owned by std/os.
   fs_stat_bytes,
-  fs_flock
+  fs_flock,
+  fs_executable_path
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -195,7 +196,7 @@ inline constexpr std::array<SystemOperationSpec, 57> value_system_operations{{
   {SystemOperation::math_isfinite, "__woozy_math_isfinite", "bool", {"f64"}, 1, "std/math"},
   {SystemOperation::math_signbit, "__woozy_math_signbit", "bool", {"f64"}, 1, "std/math"},
 }};
-inline constexpr std::array<SystemOperationSpec, 36> os_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 37> os_system_operations{{
   {SystemOperation::fs_stat, "__woozy_os_stat", "Result[std/os.FileInfo,i32]", {"string"}, 1},
   {SystemOperation::fs_lstat, "__woozy_os_lstat", "Result[std/os.FileInfo,i32]", {"string"}, 1},
   {SystemOperation::fs_fstat, "__woozy_os_fstat", "Result[std/os.FileInfo,i32]", {"i32"}, 1},
@@ -234,6 +235,7 @@ inline constexpr std::array<SystemOperationSpec, 36> os_system_operations{{
   // so this operation reuses lang_sys_stat_v1 instead of widening the ABI.
   {SystemOperation::fs_stat_bytes, "__woozy_os_stat_bytes", "Result[std/os.FileInfo,i32]", {"Vec[u8]"}, 1},
   {SystemOperation::fs_flock, "__woozy_os_flock", "Result[Unit,i32]", {"i32", "i32"}, 2},
+  {SystemOperation::fs_executable_path, "__woozy_os_executable_path", "i64", {"Vec[u8]", "usize"}, 2},
 }};
 inline constexpr std::array<SystemOperationSpec, 21> network_system_operations{{
   {SystemOperation::net_socket, "__woozy_net_socket", "Result[i32,i32]", {"i32", "i32", "i32"}, 3, "std/net"},

@@ -2,25 +2,19 @@
 
 #include "alloc.hpp"
 #include "gc_world.hpp"
-#include "linux.hpp"
-
-#if !defined(__x86_64__) || !defined(__linux__)
-#error "lang-gc-runtime/1 is implemented only for Linux x86_64"
-#endif
+#include "gc_system.hpp"
 
 // Automatic controller for lang-gc/1 + lang-gc-world/1.
 //
-// This translation unit uses only atomics, lang_alloc_v1/lang_free_v1, direct
-// Linux syscalls, and the two accepted runtime layers. There is no libc,
-// libstdc++, pthread, thread_local, or dynamic initialization.
+// The platform supplies thread IDs and panic I/O. Controller state uses atomics
+// and the two accepted runtime layers, with no dynamic initialization.
 
 namespace {
 
-using lang::native::linux_x86_64::syscall6;
+namespace system = lang::native::gc_system;
+using system::cpu_pause;
+using system::ThreadId;
 
-constexpr long kSysWrite = 1;
-constexpr long kSysGettid = 186;
-constexpr long kSysExitGroup = 231;
 constexpr int kEintr = -4;
 
 constexpr int64_t kAutoStopNs = 10 * 1000 * 1000; // 10 ms
@@ -37,7 +31,7 @@ struct DeferredRelease {
 uint32_t g_phase = LANG_GC_RUNTIME_PHASE_IDLE;
 uint32_t g_busy = 0;
 uint32_t g_enqueue_open = 0;
-int32_t g_collector_tid = 0;
+ThreadId g_collector_tid = 0;
 uint64_t g_generation = 0;
 
 uint64_t g_pressure_accum = 0;
@@ -61,15 +55,9 @@ uint64_t g_kernel_busy = 0;
 uint64_t g_total_registered_scanned = 0;
 uint64_t g_total_traced_edges = 0;
 
-inline void cpu_pause() noexcept {
-  __asm__ volatile("pause" ::: "memory");
-}
-
 void write_all(int fd, const char *bytes, uint64_t size) noexcept {
   while (size) {
-    const int64_t result =
-        syscall6(kSysWrite, fd, reinterpret_cast<long>(bytes),
-                 static_cast<long>(size), 0, 0, 0);
+    const int64_t result = system::write(fd, bytes, size);
     if (result == kEintr)
       continue;
     if (result <= 0)
@@ -108,21 +96,20 @@ controller_panic_with_tid(const char *reason, int64_t tid) noexcept {
   append_unsigned(tid > 0 ? static_cast<uint64_t>(tid) : 0u);
   append(":0:0\n");
   write_all(2, record, length);
-  syscall6(kSysExitGroup, 101, 0, 0, 0, 0, 0);
-  __builtin_unreachable();
+  system::exit_panic();
 }
 
 [[noreturn]] __attribute__((no_stack_protector)) void
 controller_panic(const char *reason) noexcept {
-  const int64_t tid = syscall6(kSysGettid, 0, 0, 0, 0, 0, 0);
+  const int64_t tid = system::raw_current_tid();
   controller_panic_with_tid(reason, tid > 0 ? tid : 0);
 }
 
-int32_t current_tid() noexcept {
-  const int64_t tid = syscall6(kSysGettid, 0, 0, 0, 0, 0, 0);
+ThreadId current_tid() noexcept {
+  const int64_t tid = system::raw_current_tid();
   if (tid <= 0)
     controller_panic_with_tid("gettid-failed", 0);
-  return static_cast<int32_t>(tid);
+  return static_cast<ThreadId>(tid);
 }
 
 void queue_lock() noexcept {
@@ -155,7 +142,7 @@ void saturating_increment(uint64_t *value) noexcept {
   }
 }
 
-void begin_enqueue(int32_t tid) noexcept {
+void begin_enqueue(ThreadId tid) noexcept {
   queue_lock();
   __atomic_store_n(&g_collector_tid, tid, __ATOMIC_RELAXED);
   __atomic_store_n(&g_enqueue_open, 1u, __ATOMIC_RELEASE);
@@ -273,7 +260,7 @@ extern "C" int64_t lang_gc_runtime_collect_v1(
     return -16;
   }
 
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   const uint64_t pressure_snapshot =
       __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
 
@@ -342,7 +329,7 @@ extern "C" bool lang_gc_runtime_defer_release_v1(
   if (!__atomic_load_n(&g_enqueue_open, __ATOMIC_ACQUIRE))
     return false;
 
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   if (tid != __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE))
     return false;
 
@@ -403,14 +390,14 @@ extern "C" void lang_gc_runtime_stats_v1(LangGcRuntimeStats *out) noexcept {
   out->generation = __atomic_load_n(&g_generation, __ATOMIC_RELAXED);
   out->phase = __atomic_load_n(&g_phase, __ATOMIC_ACQUIRE);
   out->busy = __atomic_load_n(&g_busy, __ATOMIC_ACQUIRE);
-  out->collector_tid =
-      __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE);
+  out->collector_tid = system::diagnostic_tid(
+      __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE));
   out->enqueue_open =
       __atomic_load_n(&g_enqueue_open, __ATOMIC_ACQUIRE);
 }
 
 extern "C" void lang_gc_runtime_fork_prepare_v1(void) noexcept {
-  const int32_t tid = current_tid();
+  const ThreadId tid = current_tid();
   queue_lock();
   if (__atomic_load_n(&g_phase, __ATOMIC_ACQUIRE) ==
           LANG_GC_RUNTIME_PHASE_KERNEL &&

@@ -94,8 +94,8 @@ func version_is_fixed(value string) bool {
     }
     return false;
 }
-func check_versions(directory string, capture string) throws Failure {
-    for name in ["opt", "llc", "clang", "ld.lld"] {
+func check_versions(directory string, capture string, linker string) throws Failure {
+    for name in ["opt", "llc", "clang", linker] {
         let tool = directory + "/" + name;
         let result = run([tool, "--version"], capture, "codegen");
         let note = output_text(result.output);
@@ -114,6 +114,13 @@ func require_runtime(name string) throws Failure {
     } catch problem os.Error {
         throw abort("E_TOOLCHAIN_MISSING", "link", model.FailureKind.Environment,
             "cannot read runtime archive " + name + ": " + os_text(problem), []);
+    }
+}
+func require_darwin_sdk(capture string) string throws Failure {
+    try { return resources.darwin_sdk(capture); }
+    catch problem os.Error {
+        throw abort("E_TOOLCHAIN_MISSING", "link", model.FailureKind.Environment,
+            "macOS SDK required; install Xcode Command Line Tools or set SDKROOT", [os_text(problem)]);
     }
 }
 func write_sections(name string, sections Vec[string]) throws Failure {
@@ -161,9 +168,18 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     let program = stage.path + "/program";
     let native_runtime = root + "/runtime/liblang_native_runtime.a";
     let hosted_runtime = root + "/runtime/liblang_hosted_runtime.a";
-    check_versions(tools, capture);
-    require_runtime(native_runtime);
-    if project.hosted { require_runtime(hosted_runtime); }
+    let darwin = output.triple == nativeemit.DARWIN_ARM64_TRIPLE;
+    var sdk = "";
+    let darwin_runtime = root + "/runtime/liblang_darwin_core.a";
+    if darwin {
+        check_versions(tools, capture, "ld64.lld");
+        sdk = require_darwin_sdk(capture);
+        require_runtime(darwin_runtime);
+    } else {
+        check_versions(tools, capture, "ld.lld");
+        require_runtime(native_runtime);
+        if project.hosted { require_runtime(hosted_runtime); }
+    }
     write_sections(source, output.llvm_sections);
     var passes = "verify";
     if optimization == 2 { passes = "verify,default<O2>,verify"; }
@@ -177,35 +193,52 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     for argument in ["-passes=" + passes, "-verify-each", "-mtriple=" + output.triple,
                      "-mcpu=generic", source, "-o", optimized] { vec.push(opt_command, argument); }
     llvm_tool(opt_command, capture, "opt");
-    llvm_tool([tools + "/llc", "-filetype=obj", "-O=" + strconv.format_u64(u64(optimization)),
+    let llc_command = [tools + "/llc", "-filetype=obj", "-O=" + strconv.format_u64(u64(optimization)),
         "-mtriple=" + output.triple, "-mcpu=generic", "-relocation-model=pic",
-        "-code-model=small", optimized, "-o", object], capture, "llc");
+        "-code-model=small", optimized, "-o", object];
+    // LLVM 22 GlobalISel can assign different stack offsets on the two sides
+    // of a Darwin call that passes a large aggregate by value.
+    if darwin { vec.push(llc_command, "-global-isel=0"); }
+    llvm_tool(llc_command, capture, "llc");
     let adapter_source = stage.path + "/c_adapter.c";
     let adapter_object = stage.path + "/c_adapter.o";
     let adapter = output.c_adapter_source != "";
     if adapter {
         write_sections(adapter_source, [output.c_adapter_source]);
-        link_tool([tools + "/clang", "--target=" + output.triple, "-std=c11", "-O2", "-fPIC", "-c",
-            adapter_source, "-o", adapter_object], capture, true);
+        var arguments = [tools + "/clang", "--target=" + output.triple];
+        if darwin { arguments = resources.darwin_clang(tools, sdk); }
+        for argument in ["-std=c11", "-O2", "-fPIC", "-c", adapter_source, "-o", adapter_object] {
+            vec.push(arguments, argument);
+        }
+        link_tool(arguments, capture, true);
     }
     var arguments = [tools + "/clang", "--target=" + output.triple];
-    if project.hosted {
-        vec.push(arguments, "-Wl,-u,lang_hosted_startup_v1");
-        vec.push(arguments, "-pthread");
+    var runtime = native_runtime;
+    if darwin {
+        arguments = resources.darwin_linker(tools, sdk);
+        runtime = darwin_runtime;
     } else {
-        vec.push(arguments, "-nostdlib");
-        vec.push(arguments, "-static");
+        if project.hosted {
+            vec.push(arguments, "-Wl,-u,lang_hosted_startup_v1");
+            vec.push(arguments, "-pthread");
+            runtime = hosted_runtime;
+        } else {
+            vec.push(arguments, "-nostdlib");
+            vec.push(arguments, "-static");
+        }
+        vec.push(arguments, "--ld-path=" + tools + "/ld.lld");
     }
-    vec.push(arguments, "--ld-path=" + tools + "/ld.lld");
     vec.push(arguments, object);
     if adapter { vec.push(arguments, adapter_object); }
-    if project.hosted { vec.push(arguments, hosted_runtime); }
-    else { vec.push(arguments, native_runtime); }
+    vec.push(arguments, runtime);
     for directory in project.c_library_dirs { vec.push(arguments, "-L" + directory); }
     for library in project.c_libraries { vec.push(arguments, "-l" + library); }
     vec.push(arguments, "-o");
     vec.push(arguments, program);
     link_tool(arguments, capture, false);
+    if darwin && output.debug_info {
+        link_tool(resources.darwin_debug_command(tools, program), capture, false);
+    }
 }
 
 func shell_quote(value string) string { return "'" + text.replace(value, "'", "'\\''") + "'"; }
@@ -216,23 +249,43 @@ func ninja_escape(value string) string throws Failure {
     return text.replace(text.replace(text.replace(value, "$", "$$"), " ", "$ "), ":", "$:");
 }
 func compile_packages(inputs Vec[PackageInput], project model.Project, stage toolio.Stage,
-                      optimization u32, root string, cache frontcache.Context, emit_nanoseconds u64) throws Failure {
+                      settings nativeemit.Options, root string, cache frontcache.Context, emit_nanoseconds u64) throws Failure {
     try {
     let tools = llvm_tools(root);
     let capture = stage.path + "/tool-output";
-    check_versions(tools, capture);
+    let darwin = settings.triple == nativeemit.DARWIN_ARM64_TRIPLE;
     var archive = root + "/runtime/liblang_native_runtime.a";
-    if project.hosted { archive = root + "/runtime/liblang_hosted_runtime.a"; }
+    var combine = ninja_escape(shell_quote(tools + "/ld.lld")) + " -r $in -o $out";
+    var combined = "program.o";
+    var link = shell_quote(tools + "/clang") + " --target=" + settings.triple + " --ld-path=" + shell_quote(tools + "/ld.lld");
+    if darwin {
+        check_versions(tools, capture, "ld64.lld");
+        let sdk = require_darwin_sdk(capture);
+        archive = root + "/runtime/liblang_darwin_core.a";
+        combine = ninja_escape(shell_quote(tools + "/llvm-ar")) + " --format=darwin rcsD $out $in";
+        combined = "program.a";
+        link = "";
+        for argument in resources.darwin_linker(tools, sdk) { link += shell_quote(argument) + " "; }
+    } else {
+        check_versions(tools, capture, "ld.lld");
+        if project.hosted {
+            archive = root + "/runtime/liblang_hosted_runtime.a";
+            link += " -Wl,-u,lang_hosted_startup_v1 -pthread";
+        } else { link += " -nostdlib -static"; }
+    }
     require_runtime(archive);
     let opt = ninja_escape(shell_quote(tools + "/opt"));
-    let opt_arguments = " -passes='verify,default<O" + strconv.format_u64(u64(optimization)) +
-        ">,verify' -verify-each -mtriple=x86_64-unknown-linux-gnu -mcpu=generic $in -o $out\n";
+    let opt_arguments = " -passes='verify,default<O" + strconv.format_u64(u64(settings.optimization)) +
+        ">,verify' -verify-each -mtriple=" + settings.triple + " -mcpu=generic $in -o $out\n";
     var plan = "rule opt\n  command = " + opt + " -S" + opt_arguments;
     // Like the whole-module build, preserve CoroSplit's zero-line debug labels in bitcode.
     plan += "rule opt_bitcode\n  command = " + opt + opt_arguments;
+    var target_flags = "";
+    if darwin { target_flags = " -global-isel=0"; }
     plan += "rule object\n  command = " + ninja_escape(shell_quote(tools + "/llc")) +
-        " -filetype=obj -O=" + strconv.format_u64(u64(optimization)) +
-        " -mtriple=x86_64-unknown-linux-gnu -mcpu=generic -relocation-model=pic -code-model=small $in -o $out\n";
+        " -filetype=obj -O=" + strconv.format_u64(u64(settings.optimization)) +
+        " -mtriple=" + settings.triple + " -mcpu=generic -relocation-model=pic -code-model=small" +
+        target_flags + " $in -o $out\n";
     var objects = "";
     var misses usize = 0; var records = "["; var first = true;
     for input in inputs {
@@ -262,16 +315,12 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
             ",\"llvm_ir_sha256\":" + quote_json(input.llvm_digest) + ",\"object\":" + quote_json(name + ".o") + ",\"object_cache_hit\":" + hit_text + "}";
     }
     records += "]\n";
-    plan += "rule combine\n  command = " + ninja_escape(shell_quote(tools + "/ld.lld")) +
-        " -r $in -o $out\nbuild program.o: combine" + objects + "\n";
-    var link = shell_quote(tools + "/clang") + " --target=x86_64-unknown-linux-gnu --ld-path=" + shell_quote(tools + "/ld.lld");
-    if project.hosted { link += " -Wl,-u,lang_hosted_startup_v1 -pthread"; }
-    else { link += " -nostdlib -static"; }
+    plan += "rule combine\n  command = " + combine + "\nbuild " + combined + ": combine" + objects + "\n";
     var libraries = "";
     for directory in project.c_library_dirs { libraries += " -L" + shell_quote(directory); }
     for library in project.c_libraries { libraries += " -l" + shell_quote(library); }
     plan += "rule link\n  command = " + ninja_escape(link) + " $in" + ninja_escape(libraries) +
-        " -o $out\nbuild program: link" + objects + " " + ninja_escape(archive) + "\ndefault program program.o\n";
+        " -o $out\nbuild program: link" + objects + " " + ninja_escape(archive) + "\ndefault program " + combined + "\n";
     write_sections(stage.path + "/build.ninja", [plan]);
     var ninja = "";
     try { ninja = resources.ninja(); }
@@ -286,10 +335,13 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
             "Ninja package build failed with status " + strconv.format_i64(i64(execution.exit_code)),
             [output_text(execution.output)]);
     }
+    if darwin && settings.debug_info {
+        link_tool(resources.darwin_debug_command(tools, stage.path + "/program"), capture, false);
+    }
     for input in inputs {
         if input.object_key != "" && !option.is_some(input.object) {
             let bytes = fs.read_file(stage.path + "/package-" + strconv.format_u64(u64(input.package_id)) + ".o");
-            frontcache.store_object(cache, input.object_key, bytes);
+            frontcache.store_target_object(cache, input.object_key, bytes, settings.triple);
         }
     }
     write_sections(stage.path + "/package-records.json", [records]);
@@ -309,8 +361,8 @@ func statistics(cache frontcache.Context, misses usize, emitted usize, emit_nano
 }
 
 pub func build_cached_packages(inputs Vec[PackageInput], project model.Project, out_directory string,
-    optimization u32, cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
-    return build_all([], project, out_directory, optimization, true, inputs, cache, emit_nanoseconds);
+    settings nativeemit.Options, cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
+    return build_all([], project, out_directory, settings, true, inputs, cache, emit_nanoseconds);
 }
 pub func build_packages(outputs Vec[nativeemit.Output], project model.Project, out_directory string,
                         optimization u32) model.UnitResult {
@@ -319,33 +371,46 @@ pub func build_packages(outputs Vec[nativeemit.Output], project model.Project, o
         vec.push(inputs, PackageInput(package_id: index, logical_path: "", identity: "", object_key: "", frontend_key: "", llvm_digest: "",
             object: option.Option[Vec[u8]].None, output: option.Option[nativeemit.Output].Some(outputs[index])));
     }
-    return build_all([], project, out_directory, optimization, true, inputs, frontcache.context("", ""), 0);
+    var settings = nativeemit.default_options();
+    settings.optimization = optimization;
+    if vec.len(outputs) != 0 { settings.triple = outputs[0].triple; settings.debug_info = outputs[0].debug_info; }
+    return build_all([], project, out_directory, settings, true, inputs, frontcache.context("", ""), 0);
 }
 pub func build(output nativeemit.Output, project model.Project, out_directory string,
                optimization u32) model.UnitResult {
-    return build_all([output], project, out_directory, optimization, false, [], frontcache.context("", ""), 0);
+    var settings = nativeemit.default_options();
+    settings.optimization = optimization; settings.triple = output.triple; settings.debug_info = output.debug_info;
+    return build_all([output], project, out_directory, settings, false, [], frontcache.context("", ""), 0);
 }
 func build_all(outputs Vec[nativeemit.Output], project model.Project, out_directory string,
-               optimization u32, packages bool, inputs Vec[PackageInput], cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
-    for output in outputs {
-    if output.triple != "x86_64-unknown-linux-gnu" {
+               settings nativeemit.Options, packages bool, inputs Vec[PackageInput], cache frontcache.Context, emit_nanoseconds u64) model.UnitResult {
+    let darwin = settings.triple == nativeemit.DARWIN_ARM64_TRIPLE;
+    if settings.triple != "x86_64-unknown-linux-gnu" && !darwin {
         return failed(model.FailureKind.Unsupported, diagnostic("E_TARGET_UNSUPPORTED", "codegen",
-            "native executable target only supports Linux x86_64: " + output.triple, []));
+            "unsupported native executable target: " + settings.triple, []));
     }
-    }
-    if optimization != 0 && optimization != 2 {
+    if settings.optimization != 0 && settings.optimization != 2 {
         return failed(model.FailureKind.Unsupported, diagnostic("E_CAPABILITY_UNAVAILABLE", "codegen",
-            "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only", []));
+            "native executable build supports O0 and O2 only", []));
     }
     try {
         var stage = toolio.stage(out_directory, "native");
         defer { toolio.cleanup(stage); }
         try {
             let root = resources.directory();
-            if packages { compile_packages(inputs, project, stage, optimization, root, cache, emit_nanoseconds); }
-            else { compile(outputs[0], project, stage, optimization, root); }
-            if packages { toolio.publish_files(inout stage, ["package-build.log", "package-records.json", "cache-statistics.json", "program.o", "program"]); }
-            else { toolio.publish_pair(inout stage, "program.o", "program"); }
+            if packages {
+                compile_packages(inputs, project, stage, settings, root, cache, emit_nanoseconds);
+                let names = ["package-build.log", "package-records.json", "cache-statistics.json"];
+                if darwin { vec.push(names, "program.a"); } else { vec.push(names, "program.o"); }
+                if darwin && settings.debug_info { vec.push(names, "program.dwarf"); }
+                vec.push(names, "program");
+                toolio.publish_files(inout stage, names);
+            } else {
+                compile(outputs[0], project, stage, settings.optimization, root);
+                if darwin && settings.debug_info {
+                    toolio.publish_files(inout stage, ["program.o", "program.dwarf", "program"]);
+                } else { toolio.publish_pair(inout stage, "program.o", "program"); }
+            }
         } catch problem Failure {
             switch problem { case Failure.Abort(kind, value): return failed(kind, value); }
         } catch problem os.Error {

@@ -1,5 +1,7 @@
 # 自举检查
 
+## Linux x86_64
+
 `selfhost/bootstrap.py` 把同一份编译器和标准库源码复制到固定目录，再依次构建 stage1、stage2、stage3。stage1 使用现有 C++ 编译器；后两代只能使用上一代 Woozy 编译器，以及指定目录里的 opt、llc、Clang 和 LLD。运行库使用构建目录中已有的两个静态库。
 
 用 Make 按源码包自举时，执行 `make -C selfhost bootstrap`。第一代用 C++ 种子生成分包对象，第二、三代用上一代 Woozy 编译器执行 `--source-make`。GNU Make 为每个源码包编译对象，再合并对象和链接。执行检查也会核对 Make、shell 和 mkdir 的路径。
@@ -51,3 +53,21 @@ python3 selfhost/bootstrap.py \
 2026-11-13 已实际检查：当时的部分 CLI 可由 stage0 构建，但 stage1 尝试生成 stage2 时按预期报 `E_CAPABILITY_UNAVAILABLE`，exec 记录只有该 stage1，没有旧 C++ helper。此检查证明脚本会拒绝未完成的编译器，完整自举尚未通过。
 
 2026-11-18 已实跑完整 Make 自举。第二、三代均实际编译 57 个源码包并链接，两个可执行文件及各自合并后的 `program.o` 均逐字节相同。此次完整构建使用 `OPT=0` 和 `JOBS=6`。
+
+## macOS arm64
+
+使用已经能在 Mac 上运行的 Wz 版 `woozyc` 作为第一代。准备好 GNU Make、LLVM 22.1.8、macOS SDK，以及 [Darwin 运行库](INCREMENTAL_COMPILATION.md#macos-arm64-构建)。以下命令从仓库根目录运行。
+
+```sh
+python3 selfhost/bootstrap_macos.py \
+  --seed /path/to/seed/woozyc \
+  --llvm-bin /path/to/llvm-22.1.8/bin \
+  --runtime-archive build-darwin-runtime/liblang_darwin_core.a \
+  --out-dir build/macos-bootstrap-o0 --opt 0 --jobs 4
+```
+
+输出目录必须是新目录。标准库默认取自种子旁的 `stdlib/`，也可用 `--stdlib` 指定。脚本只在本次自举的进程内将栈上限提高到至少 16 MiB。即使选了 `--opt 2`，输入的种子也可能是 O0 编译出来的。
+
+第二、三代各由上一代通过源码 Make 构建。每个包保留 LLVM 校验，生成的 Mach-O 归档用 SDK 链接。脚本运行两个新编译器检查项目，最后逐字节比较两代可执行文件。每代日志及 `result.json` 在输出目录内。
+
+Apple Silicon 实机用移植期间的固定源码快照完成了 O0 和 O2 两轮自举。每轮的第二、三代各编译 76 个源码包，两个可执行文件逐字节相同。

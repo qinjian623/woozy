@@ -339,7 +339,7 @@ func run_native(args Arguments, original model.Project,
     }
     var output = nativeemit.Output(llvm_sections: [], c_adapter_source: "",
         triple: "x86_64-unknown-linux-gnu", data_layout: nativeemit.DATA_LAYOUT,
-        has_async: false);
+        has_async: false, debug_info: false);
     switch emitted.value {
         case option.Option.Some(value): output = value;
         case option.Option.None: return 3;

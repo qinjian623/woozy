@@ -4,7 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) && defined(__linux__)) || \
+    (defined(__aarch64__) && defined(__APPLE__))
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
                                                    uint64_t snapshot,
@@ -94,6 +95,8 @@ static void remove_entry_locked(Entry *entry) noexcept {
 static inline void cpu_pause() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
   __asm__ volatile("pause" ::: "memory");
+#elif defined(__aarch64__)
+  __asm__ volatile("yield" ::: "memory");
 #endif
 }
 

@@ -205,6 +205,15 @@ pub func getcwd_bytes() Vec[u8] throws Error {
     }
 }
 pub func getcwd() string throws Error { return decode(getcwd_bytes()); }
+pub func executable_path_bytes() Vec[u8] throws Error {
+    let buffer = vec.make[u8](256,0);
+    for true {
+        let count = __woozy_os_executable_path(buffer,vec.len(buffer));
+        if count == -34 { vec.resize(buffer,vec.len(buffer)*2,0); continue; }
+        return buffer[0:checked(count,0)];
+    }
+}
+pub func executable_path() string throws Error { return decode(executable_path_bytes()); }
 pub func readlink_bytes(path string) Vec[u8] throws Error {
     let buffer = vec.make[u8](256,0);
     for true {

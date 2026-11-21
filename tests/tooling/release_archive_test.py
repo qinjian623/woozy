@@ -1,6 +1,9 @@
 import argparse
+import errno
+import hashlib
 import os
 from pathlib import Path
+import platform
 import sys
 import tarfile
 import tempfile
@@ -10,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import build_release
+import install_toolchain
 from build_release import METADATA_NAME, archive_bundle, metadata_text, write_metadata
 
 
@@ -71,28 +75,69 @@ class ReleaseArchiveTest(unittest.TestCase):
 
     def test_build_includes_metadata_and_licenses(self):
         commit = "fedcba9876543210" * 2 + "fedcba98"
+        for target in ("linux-x86_64", "macos-arm64"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+
+                def install(args):
+                    args.prefix.mkdir()
+                    (args.prefix / "woozyc").write_bytes(b"compiler")
+
+                args = argparse.Namespace(out_dir=root / "release", notice=[],
+                                          version="v0.1.0-rc.1", commit=commit)
+                with mock.patch.object(install_toolchain, "install", side_effect=install), \
+                     mock.patch.object(install_toolchain, "host_target", return_value=target):
+                    archive_path = build_release.build(args)
+                name = f"woozy-{target}.tar.gz"
+                self.assertEqual(archive_path.name, name)
+                digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+                self.assertEqual(archive_path.with_name(name + ".sha256").read_text(),
+                                 f"{digest}  {name}\n")
+                with tarfile.open(archive_path, "r:gz") as archive:
+                    item = archive.getmember("woozy/" + METADATA_NAME)
+                    self.assertEqual(
+                        archive.extractfile(item).read().decode("ascii"),
+                        f"version=0.1.0-rc.1-selfhost\ncommit={commit}\n")
+                    for relative in ("LICENSE", "docs/QUICKSTART.md", "tools/gdb/woozy.py",
+                                     "development/editor/setup.py",
+                                     "development/editor/nvim/plugin/woozy.lua",
+                                     "development/editor/emacs/woozy-mode.el"):
+                        self.assertEqual(archive.extractfile("woozy/" + relative).read(),
+                                         (install_toolchain.ROOT / relative).read_bytes())
+                    self.assertEqual(archive.getmember("woozy/development/editor/setup.py").mode,
+                                     0o755)
+                    lldb = "tools/lldb/woozy.py"
+                    if target == "macos-arm64" and (install_toolchain.ROOT / lldb).is_file():
+                        self.assertEqual(archive.extractfile("woozy/" + lldb).read(),
+                                         (install_toolchain.ROOT / lldb).read_bytes())
+                    for notice in build_release.NOTICES:
+                        entry = f"woozy/licenses/{notice.parent.name}-{notice.name}"
+                        self.assertEqual(archive.extractfile(entry).read(), notice.read_bytes())
+
+    def test_compiler_binary_header_is_native(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            compiler = Path(temporary) / "woozyc"
+            compiler.write_bytes(b"\xcf\xfa\xed\xfe\x0c\0\0\x01" + b"\0" * 4 + b"\x02\0\0\0")
+            install_toolchain.check_native_binary(compiler, True, "compiler binary")
+            with self.assertRaisesRegex(ValueError, "ELF"):
+                install_toolchain.check_native_binary(compiler, False, "compiler binary")
+            compiler.write_bytes(b"\xcf\xfa\xed\xfe\x07\0\0\x01" + b"\0" * 4 + b"\x02\0\0\0")
+            with self.assertRaisesRegex(ValueError, "Mach-O arm64"):
+                install_toolchain.check_native_binary(compiler, True, "LLVM executable")
+
+    @unittest.skipUnless(platform.system() in {"Darwin", "Linux"}, "native installer hosts")
+    def test_publish_does_not_clobber_even_empty_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-
-            def install(args):
-                args.prefix.mkdir()
-                (args.prefix / "woozyc").write_bytes(b"compiler")
-
-            args = argparse.Namespace(out_dir=root / "release", notice=[],
-                                      version="v0.1.0-rc.1", commit=commit)
-            with mock.patch.object(build_release.install_toolchain, "install",
-                                   side_effect=install):
-                archive_path = build_release.build(args)
-            with tarfile.open(archive_path, "r:gz") as archive:
-                item = archive.getmember("woozy/" + METADATA_NAME)
-                self.assertEqual(
-                    archive.extractfile(item).read().decode("ascii"),
-                    f"version=0.1.0-rc.1-selfhost\ncommit={commit}\n")
-                license_file = build_release.install_toolchain.ROOT / "LICENSE"
-                self.assertEqual(archive.extractfile("woozy/LICENSE").read(), license_file.read_bytes())
-                for notice in build_release.NOTICES:
-                    entry = f"woozy/licenses/{notice.parent.name}-{notice.name}"
-                    self.assertEqual(archive.extractfile(entry).read(), notice.read_bytes())
+            old, staged = root / "existing", root / "staged"
+            old.mkdir()
+            staged.mkdir()
+            (staged / "preserved").write_text("staged content")
+            with self.assertRaises(OSError) as failure:
+                install_toolchain.publish(staged, old)
+            self.assertEqual(failure.exception.errno, errno.EEXIST)
+            self.assertEqual(list(old.iterdir()), [])
+            self.assertEqual((staged / "preserved").read_text(), "staged content")
 
     def test_invalid_or_missing_metadata_is_rejected(self):
         self.assertIsNone(metadata_text(None, None))

@@ -1,19 +1,43 @@
 #include "ipc.hpp"
 #include "gc_program.hpp"
+#if defined(__APPLE__) && defined(__aarch64__)
+#include "darwin.hpp"
+#include "../darwin/posix.hpp"
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#else
 #include "linux.hpp"
+#endif
 #include <cstddef>
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t, uint64_t) noexcept;
 namespace {
+#if defined(__APPLE__)
+namespace darwin = lang::native::darwin;
+#else
 namespace linux_abi = lang::native::linux_x86_64;
 int64_t sys(long n, long a=0, long b=0, long c=0, long d=0, long e=0, long f=0) noexcept {
   return linux_abi::syscall6(n,a,b,c,d,e,f);
 }
 long address(const void *p) noexcept { return reinterpret_cast<long>(p); }
-struct Mapping { LangHandle handle; uint8_t *data; uint64_t length; int32_t protection; };
+#endif
+struct Mapping {
+  LangHandle handle;
+  uint8_t *data;
+  uint64_t length;
+  int32_t protection;
+#if defined(__APPLE__)
+  uint64_t page_prefix;
+#endif
+};
 void destroy(LangHandle *handle) noexcept {
   auto *m = reinterpret_cast<Mapping *>(handle);
+#if defined(__APPLE__)
+  if (munmap(m->data - m->page_prefix, m->length + m->page_prefix) < 0) lang_handle_panic_v1();
+#else
   if (sys(11,address(m->data),m->length)<0) lang_handle_panic_v1();
+#endif
   lang_free_v1(m);
 }
 Mapping *mapping(LangHandle *h) noexcept {
@@ -40,15 +64,31 @@ int64_t create(LangHandle **out, int32_t fd, uint64_t bytes, uint64_t offset,
                int32_t protection, bool anonymous) noexcept {
   if (!out) return -14;
   if (!bytes || offset%4096 || offset>0x7fffffffffffffffULL || (protection&~3)) return -22;
+#if defined(__APPLE__)
+  const uint64_t page_prefix = offset % static_cast<uint64_t>(getpagesize());
+  if (bytes > SIZE_MAX - page_prefix) return -22;
+  const int prot = ((protection & 1) ? PROT_READ : 0) | ((protection & 2) ? PROT_WRITE : 0);
+  void *base = mmap(nullptr, bytes + page_prefix, prot, MAP_SHARED | (anonymous ? MAP_ANON : 0),
+                    anonymous ? -1 : fd, static_cast<off_t>(offset - page_prefix));
+  if (base == MAP_FAILED) return darwin::error(errno);
+  auto *m = static_cast<Mapping *>(lang_alloc_v1(sizeof(Mapping), alignof(Mapping)));
+  if (!m) {
+    munmap(base, bytes + page_prefix);
+    lang_native_panic_v1(5, 0, 0, 0);
+  }
+  *m = {{1, LangHandleKind::ipc, destroy, nullptr}, static_cast<uint8_t *>(base) + page_prefix,
+        bytes, protection, page_prefix};
+#else
   auto result=sys(9,0,bytes,protection,anonymous?0x21:1,anonymous?-1:fd,offset);
   if (result<0 && result>=-4095) return result;
   auto *m=static_cast<Mapping *>(lang_alloc_v1(sizeof(Mapping),alignof(Mapping)));
   if (!m) {sys(11,result,bytes);lang_native_panic_v1(5,0,0,0);}
   *m={{1,LangHandleKind::ipc,destroy,nullptr},reinterpret_cast<uint8_t *>(result),bytes,protection};
+#endif
   *out=&m->handle;
   return 0;
 }
-int64_t shm_name(const LangText *name, char (&out)[256]) noexcept {
+int64_t shm_name(const LangText *name, char *out) noexcept {
   if (!name || !name->data || name->bytes<2 || name->data[0]!='/') return -22;
   if (name->bytes>256) return -36;
   const uint64_t size=name->bytes-1;
@@ -73,6 +113,34 @@ template<class T> int64_t write(LangHandle *h, uint64_t offset, T value) noexcep
   return status;
 }
 struct Time {int64_t seconds,nanoseconds;};
+#if defined(__APPLE__)
+struct Deadline {
+  bool finite;
+  uint64_t end;
+  int64_t init(int64_t ns) noexcept {
+    if (ns < -1) return -22;
+    finite = ns >= 0;
+    if (!finite) return 0;
+    const auto status = darwin::monotonic_deadline(static_cast<uint64_t>(ns), end);
+    return status < 0 ? darwin::error(-status) : 0;
+  }
+};
+int64_t wait(uint32_t *word, uint32_t value, Deadline &deadline) noexcept {
+  if (deadline.finite && mach_absolute_time() >= deadline.end) return -110;
+  lang::native::gc_program::SafeGuard safe;
+  const auto status = deadline.finite
+      ? os_sync_wait_on_address_with_deadline(word, value, sizeof(*word), OS_SYNC_WAIT_ON_ADDRESS_SHARED,
+                                              OS_CLOCK_MACH_ABSOLUTE_TIME, deadline.end)
+      : os_sync_wait_on_address(word, value, sizeof(*word), OS_SYNC_WAIT_ON_ADDRESS_SHARED);
+  return darwin::result(status);
+}
+int64_t wake(uint32_t *word, uint32_t count) noexcept {
+  const auto status = count == 1
+      ? os_sync_wake_by_address_any(word, sizeof(*word), OS_SYNC_WAKE_BY_ADDRESS_SHARED)
+      : os_sync_wake_by_address_all(word, sizeof(*word), OS_SYNC_WAKE_BY_ADDRESS_SHARED);
+  return status == 0 || errno == ENOENT ? 0 : darwin::error(errno);
+}
+#else
 struct Deadline {
   bool finite;
   Time end;
@@ -111,12 +179,23 @@ int64_t wake(uint32_t *word, uint32_t count) noexcept {
   auto result=sys(202,address(word),1,count);
   return result<0?result:0;
 }
+#endif
+void cpu_pause() noexcept {
+#if defined(__APPLE__)
+  darwin::cpu_pause();
+#else
+  __asm__ volatile("pause");
+#endif
+}
 void spin_lock(uint32_t &lock) noexcept {
   while(__atomic_exchange_n(&lock,1u,__ATOMIC_ACQUIRE))
-    while(__atomic_load_n(&lock,__ATOMIC_RELAXED)) __asm__ volatile("pause");
+    while(__atomic_load_n(&lock,__ATOMIC_RELAXED)) cpu_pause();
 }
 void spin_unlock(uint32_t &lock) noexcept {__atomic_store_n(&lock,0u,__ATOMIC_RELEASE);}
 constexpr uint32_t kMutex=0x575a4d31, kCondition=0x575a4331, kSemaphore=0x575a5331;
+#if defined(__APPLE__)
+constexpr uint32_t kOwnerGuard = 1u << 31;
+#endif
 struct Mutex {uint32_t magic,state,owner,reserved;};
 struct Condition {uint32_t magic,lock,sequence,waiters;};
 struct Semaphore {uint32_t magic,value,waiters,reserved;};
@@ -125,7 +204,11 @@ template<class T> int64_t object(LangHandle *h,uint64_t offset,uint32_t magic,T 
   uint8_t *p;auto result=range(h,offset,sizeof(T),4,3,p);
   if(result<0) return result;
   out=reinterpret_cast<T *>(p);
-  if(__atomic_load_n(&out->magic,__ATOMIC_ACQUIRE)!=magic) lang_handle_panic_v1();
+  auto found = __atomic_load_n(&out->magic, __ATOMIC_ACQUIRE);
+#if defined(__APPLE__)
+  if (magic == kMutex) found &= ~kOwnerGuard;
+#endif
+  if (found != magic) lang_handle_panic_v1();
   return 0;
 }
 template<class T> int64_t init(LangHandle *h,uint64_t offset,uint32_t magic,uint32_t value=0) noexcept {
@@ -139,12 +222,51 @@ template<class T> int64_t init(LangHandle *h,uint64_t offset,uint32_t magic,uint
   __atomic_store_n(&out->magic,magic,__ATOMIC_RELEASE);
   return 0;
 }
-uint32_t tid() noexcept {
+#if defined(__APPLE__)
+using ThreadId = uint64_t;
+ThreadId tid() noexcept {
+  const auto id = darwin::thread_id();
+  if (id <= 0) lang_handle_panic_v1();
+  return static_cast<ThreadId>(id);
+}
+
+class OwnerGuard {
+ public:
+  explicit OwnerGuard(Mutex &mutex) noexcept : mutex_(mutex) {
+    while (__atomic_fetch_or(&mutex_.magic, kOwnerGuard, __ATOMIC_ACQUIRE) & kOwnerGuard) cpu_pause();
+  }
+  ~OwnerGuard() noexcept { __atomic_fetch_and(&mutex_.magic, ~kOwnerGuard, __ATOMIC_RELEASE); }
+
+ private:
+  Mutex &mutex_;
+};
+
+// The shared ABI guarantees only 4-byte alignment, while Darwin thread ids
+// occupy 64 bits. Guard the two owner words with the high bit of the magic.
+bool owned_by(Mutex &m, ThreadId id) noexcept {
+  OwnerGuard guard(m);
+  return m.owner == static_cast<uint32_t>(id) && m.reserved == static_cast<uint32_t>(id >> 32);
+}
+void set_owner(Mutex &m, ThreadId id) noexcept {
+  OwnerGuard guard(m);
+  m.owner = static_cast<uint32_t>(id);
+  m.reserved = static_cast<uint32_t>(id >> 32);
+}
+#else
+using ThreadId = uint32_t;
+ThreadId tid() noexcept {
   auto id=sys(186);if(id<=0) lang_handle_panic_v1();return static_cast<uint32_t>(id);
 }
+bool owned_by(Mutex &m, ThreadId id) noexcept {
+  return __atomic_load_n(&m.owner, __ATOMIC_RELAXED) == id;
+}
+void set_owner(Mutex &m, ThreadId id) noexcept {
+  __atomic_store_n(&m.owner, id, __ATOMIC_RELAXED);
+}
+#endif
 int64_t mutex_lock(Mutex &m) noexcept {
   auto self=tid();
-  if(__atomic_load_n(&m.owner,__ATOMIC_RELAXED)==self) lang_handle_panic_v1();
+  if(owned_by(m,self)) lang_handle_panic_v1();
   uint32_t expected=0;
   if(!__atomic_compare_exchange_n(&m.state,&expected,1u,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) {
     Deadline infinite{false,{}};
@@ -153,12 +275,12 @@ int64_t mutex_lock(Mutex &m) noexcept {
       if(result<0 && result!= -4 && result!= -11) return result;
     }
   }
-  __atomic_store_n(&m.owner,self,__ATOMIC_RELAXED);
+  set_owner(m,self);
   return 0;
 }
 int64_t mutex_unlock(Mutex &m) noexcept {
-  if(__atomic_load_n(&m.owner,__ATOMIC_RELAXED)!=tid()) lang_handle_panic_v1();
-  __atomic_store_n(&m.owner,0u,__ATOMIC_RELAXED);
+  if(!owned_by(m,tid())) lang_handle_panic_v1();
+  set_owner(m,0);
   auto previous=__atomic_exchange_n(&m.state,0u,__ATOMIC_RELEASE);
   if(!previous) lang_handle_panic_v1();
   return previous==2?wake(&m.state,1):0;
@@ -202,17 +324,35 @@ extern "C" int64_t lang_ipc_map_anon_v1(LangHandle **out,uint64_t n,int32_t p) n
 extern "C" int64_t lang_ipc_map_file_v1(LangHandle **out,int32_t fd,uint64_t n,uint64_t off,int32_t p) noexcept {return create(out,fd,n,off,p,false);}
 extern "C" uint64_t lang_ipc_length_v1(LangHandle *h) noexcept {return mapping(h)->length;}
 extern "C" int64_t lang_ipc_shm_open_v1(const LangText *name,int32_t flags,uint32_t mode) noexcept {
+#if defined(__APPLE__)
+  char path[257] = {'/'};
+  auto status = shm_name(name, path + 1);
+  if (status < 0) return status;
+  if ((flags & ~(2 | 64 | 128 | 512 | 524288)) || (flags & 3) == 1 || ((flags & 512) && !(flags & 2)))
+    return -22;
+  const int open_flags = ((flags & 2) ? O_RDWR : O_RDONLY) | ((flags & 64) ? O_CREAT : 0) |
+      ((flags & 128) ? O_EXCL : 0) | ((flags & 512) ? O_TRUNC : 0);
+  // POSIX shm_open marks the descriptor close-on-exec.
+  return darwin::result(shm_open(path, open_flags, static_cast<mode_t>(mode)));
+#else
   char path[256];auto status=shm_name(name,path);if(status<0)return status;
   if((flags&~(2|64|128|512|524288)) || (flags&3)==1 || ((flags&512) && !(flags&2)))return -22;
   auto directory=sys(257,-100,address("/dev/shm"),0x90000,0);
   if(directory<0)return directory;
   auto result=sys(257,directory,address(path),flags|0xa0000,mode);
   sys(3,directory);return result;
+#endif
 }
 extern "C" int64_t lang_ipc_shm_unlink_v1(const LangText *name) noexcept {
+#if defined(__APPLE__)
+  char path[257] = {'/'};
+  const auto status = shm_name(name, path + 1);
+  return status < 0 ? status : darwin::result(shm_unlink(path));
+#else
   char path[256];auto status=shm_name(name,path);if(status<0)return status;
   auto directory=sys(257,-100,address("/dev/shm"),0x90000,0);if(directory<0)return directory;
   auto result=sys(263,directory,address(path),0);sys(3,directory);return result;
+#endif
 }
 extern "C" int64_t lang_ipc_read_bytes_v1(LangVec **out,LangHandle *h,uint64_t off,uint64_t count) noexcept {
   if(!out)return -14;
@@ -273,7 +413,7 @@ extern "C" int64_t lang_ipc_cond_wait_v1(LangHandle *h,uint64_t off,LangHandle *
   Condition *c;Mutex *m;
   auto status=object(h,off,kCondition,c);if(status<0)return status;
   status=object(mh,moff,kMutex,m);if(status<0)return status;
-  if(__atomic_load_n(&m->owner,__ATOMIC_RELAXED)!=tid())lang_handle_panic_v1();
+  if(!owned_by(*m,tid()))lang_handle_panic_v1();
   Deadline deadline;status=deadline.init(timeout);if(status<0)return status;
   uint32_t sequence;
   for(;;) {

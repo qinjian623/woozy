@@ -3,16 +3,10 @@
 #include "alloc.hpp"
 #include "gc_runtime.hpp"
 #include "gc_world.hpp"
-#include "linux.hpp"
+#include "gc_system.hpp"
 
-#if !defined(__x86_64__) || !defined(__linux__)
-#error "lang-gc-program/1 is implemented only for Linux x86_64"
-#endif
-
-// Program lifecycle/guard layer. It uses only atomics and the three accepted
-// GC layers; there is no libc, libstdc++, pthread, TLS, or dynamic
-// initialization. The default disabled path is a single atomic load (and, for
-// runtime hooks, one null-pointer check).
+// Program lifecycle and guards use atomics and the three GC layers. The
+// disabled path is a single atomic load (and one null-pointer check for hooks).
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
                                                    uint64_t) noexcept;
@@ -20,6 +14,8 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
 namespace {
 
 using lang::native::gc_program::hooks_v1;
+namespace system = lang::native::gc_system;
+using system::ThreadId;
 
 constexpr uint32_t kStateNew = 0;
 constexpr uint32_t kStateActive = 1;
@@ -28,7 +24,7 @@ constexpr uint32_t kForkTokenMagic = 0x47435046u; // "GCPF"
 
 uint32_t g_state = kStateNew;
 uint32_t g_main_finished = 0;
-int32_t g_main_tid = 0;
+ThreadId g_main_tid = 0;
 
 [[noreturn]] __attribute__((no_stack_protector)) void
 program_panic(const char *reason) noexcept {
@@ -39,10 +35,9 @@ program_panic(const char *reason) noexcept {
   lang_native_panic_v1(10, 0, 0, 0);
 }
 
-int32_t raw_current_tid() noexcept {
-  const int64_t tid =
-      lang::native::linux_x86_64::syscall6(186, 0, 0, 0, 0, 0, 0);
-  return tid > 0 ? static_cast<int32_t>(tid) : 0;
+ThreadId raw_current_tid() noexcept {
+  const int64_t tid = system::raw_current_tid();
+  return tid > 0 ? static_cast<ThreadId>(tid) : 0;
 }
 
 // After main finish the main thread is unregistered, while detached language
@@ -135,7 +130,7 @@ extern "C" int64_t lang_gc_program_init_v1(void) noexcept {
   // word until the end of this function, so a registration-time allocation or
   // safepoint cannot enter a half-initialized guard.
   install_hooks();
-  const int32_t main_tid = raw_current_tid();
+  const ThreadId main_tid = raw_current_tid();
   if (!main_tid)
     program_panic("gettid-failed");
   __atomic_store_n(&g_main_tid, main_tid, __ATOMIC_RELEASE);
@@ -246,11 +241,10 @@ extern "C" void lang_gc_program_fork_enter_v1(
   token->magic = kForkTokenMagic;
   token->active = 0;
   token->safe_depth = 0;
-  token->caller_tid = raw_current_tid();
+  const ThreadId tid = raw_current_tid();
+  token->caller_tid = system::diagnostic_tid(tid);
   token->main_caller =
-      token->caller_tid != 0 &&
-              token->caller_tid ==
-                  __atomic_load_n(&g_main_tid, __ATOMIC_ACQUIRE)
+      tid != 0 && tid == __atomic_load_n(&g_main_tid, __ATOMIC_ACQUIRE)
           ? 1u
           : 0u;
   token->reserved = 0;
@@ -288,7 +282,7 @@ extern "C" void lang_gc_program_fork_leave_v1(
   if (main_caller) {
     // This same logical main thread may be the fork child with a new tid. Keep
     // post-finish main-hook detection accurate in that child.
-    const int32_t now = raw_current_tid();
+    const ThreadId now = raw_current_tid();
     if (now > 0 &&
         now != __atomic_load_n(&g_main_tid, __ATOMIC_ACQUIRE))
       __atomic_store_n(&g_main_tid, now, __ATOMIC_RELEASE);

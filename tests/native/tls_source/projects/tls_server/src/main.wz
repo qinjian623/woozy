@@ -88,7 +88,7 @@ func main() i32 throws os.Error {
     let size = parse_size(arguments[5]);
     let context = make_context(certificate,key);
     let address = net.ip(host,port);
-    let listener = net.socket(address.family,net.SOCK_STREAM | net.SOCK_CLOEXEC,0);
+    let listener = net.socket(address.family,net.SOCK_STREAM | net.SOCK_NONBLOCK | net.SOCK_CLOEXEC,0);
     try {
         net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
         net.bind(listener,address);
@@ -101,6 +101,8 @@ func main() i32 throws os.Error {
     say("LISTENING "+strconv.format_u64(u64(bound.port)));
     var accepted = net.Accepted(socket:net.from_fd(-1),address:net.any4(0));
     try {
+        let pending = [net.PollFd(fd:net.fd(listener),events:net.POLLIN,revents:0)];
+        net.poll(pending,-1);
         accepted = net.accept(listener,u32(net.SOCK_CLOEXEC));
     } catch error os.Error {
         close_quiet(listener);

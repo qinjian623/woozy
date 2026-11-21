@@ -40,12 +40,15 @@
   },
   "artifact_sources": {
     "llvm": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz",
+    "llvm_macos_arm64": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-macOS-ARM64.tar.xz",
     "python": "https://releases.astral.sh/github/python-build-standalone/releases/download/20261013/cpython-3.12.15%2B20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
     "libxml2_legacy": "https://stable-mirror.omarchy.org/extra/os/x86_64/libxml2-legacy-2.13.9-2-x86_64.pkg.tar.zst",
     "zstd": "https://github.com/meta/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
   },
   "artifact_hashes": {
     "llvm_archive_sha256": "df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384",
+    "llvm_macos_arm64_archive_sha256": "f260f4f7c0d430828a81ae8a3826a1d63fc0963ec2459489308cc23b1f7eab4f",
+    "python_archive_sha256": "178d3d83b6e8e99285a65d3fce9c16b87952cc5efdb4d1a0e3ff3be18ff0fc9c",
     "python_executable_sha256": "eaaa308032c4aa063df5880c4c293cd458b4629d503fbc2c03ec163d71f7f790",
     "libxml2_archive_sha256": "aac28a52e81422935e3bfa44044030640c5d525ad8f65a9672a3ab7139974652",
     "zstd_archive_sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",

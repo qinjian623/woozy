@@ -34,15 +34,15 @@ Most of the guides below are in Chinese.
 
 ## Install
 
-Woozy 0.1 provides a prebuilt Linux x86_64 archive, validated on Ubuntu 24.04 x86_64. It contains the compiler, standard library, native and hosted runtime archives, Python runtime, and pinned LLVM tools; a system LLVM installation is not required.
-
-Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). The current public pre-release is `v0.1.0-rc.1`, and the commands below use it:
+The `v0.1.0-rc.2` release packages target Linux x86_64 and Apple Silicon. Both include `woozyc`, the standard library, runtime files, and pinned LLVM tools. On a Mac, native programs target macOS 14.4 or later and compiling them requires the Xcode Command Line Tools or another installed macOS SDK. See the [releases page](https://github.com/qinjian623/woozy/releases).
 
 ```sh
-curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz
-curl -fLO https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.1/woozy-linux-x86_64.tar.gz.sha256
-sha256sum -c woozy-linux-x86_64.tar.gz.sha256
-tar -xzf woozy-linux-x86_64.tar.gz
+archive=woozy-linux-x86_64.tar.gz   # On Apple Silicon, use woozy-macos-arm64.tar.gz.
+base=https://github.com/qinjian623/woozy/releases/download/v0.1.0-rc.2
+curl -fLO "$base/$archive"
+curl -fLO "$base/$archive.sha256"
+sha256sum -c "$archive.sha256"     # On macOS, use shasum -a 256 -c "$archive.sha256".
+tar -xzf "$archive"
 mkdir -p "$HOME/.local/bin"
 ln -s "$PWD/woozy/woozyc" "$HOME/.local/bin/woozyc"
 export PATH="$HOME/.local/bin:$PATH"   # Add this line to your shell profile.
@@ -56,7 +56,7 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-This prints `Hello, world!`. Native builds use the bundled LLVM tools. Executing Python output requires Python 3.12, advanced native package builds still use the system Make or Ninja, and TLS support requires a separately built addon. See the [0.1.0 release notes](docs/RELEASE-0.1.0.md) for requirements and limitations.
+This prints `Hello, world!`. Executing Python output requires Python 3.12. Package builds use the system Make or Ninja, and TLS requires a separately built addon. See the [build guide](development/docs/BUILD.md#安装自举版工具链) and the [standard library guide](docs/STDLIB.md).
 
 ## Editor setup
 

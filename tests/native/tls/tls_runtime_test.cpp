@@ -203,6 +203,24 @@ struct Arguments {
   }
 };
 
+#if defined(__APPLE__)
+int close_on_exec(int fd) noexcept {
+  if (fd < 0 || ::fcntl(fd, F_SETFD, FD_CLOEXEC) == 0) return fd;
+  const int saved = errno;
+  ::close(fd);
+  errno = saved;
+  return -1;
+}
+#endif
+
+int open_socket(const addrinfo &entry) noexcept {
+#if defined(__APPLE__)
+  return close_on_exec(::socket(entry.ai_family, entry.ai_socktype, entry.ai_protocol));
+#else
+  return ::socket(entry.ai_family, entry.ai_socktype | SOCK_CLOEXEC, entry.ai_protocol);
+#endif
+}
+
 int open_listener(const std::string &host, uint16_t *port) {
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
@@ -215,8 +233,7 @@ int open_listener(const std::string &host, uint16_t *port) {
 
   int listener = -1;
   for (addrinfo *entry = results; entry != nullptr; entry = entry->ai_next) {
-    listener = ::socket(entry->ai_family,
-                        entry->ai_socktype | SOCK_CLOEXEC, entry->ai_protocol);
+    listener = open_socket(*entry);
     if (listener < 0) continue;
     const int enabled = 1;
     (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled,
@@ -256,8 +273,7 @@ int connect_to(const std::string &host, uint16_t port) {
 
   int fd = -1;
   for (addrinfo *entry = results; entry != nullptr; entry = entry->ai_next) {
-    fd = ::socket(entry->ai_family, entry->ai_socktype | SOCK_CLOEXEC,
-                  entry->ai_protocol);
+    fd = open_socket(*entry);
     if (fd < 0) continue;
     if (::connect(fd, entry->ai_addr, entry->ai_addrlen) == 0) break;
     ::close(fd);
@@ -276,8 +292,13 @@ int accept_with_timeout(int listener, int timeout_ms) {
   } while (ready < 0 && errno == EINTR);
   need(ready > 0, "accept poll timed out");
   need((row.revents & POLLNVAL) == 0, "accept poll reported POLLNVAL");
+#if defined(__APPLE__)
+  const int fd = close_on_exec(::accept(listener, nullptr, nullptr));
+  need(fd >= 0, std::string("accept or fcntl(FD_CLOEXEC) failed: ") + std::strerror(errno));
+#else
   const int fd = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
   need(fd >= 0, std::string("accept4 failed: ") + std::strerror(errno));
+#endif
   return fd;
 }
 
@@ -756,6 +777,23 @@ void scenario_nonblocking(const Arguments &arguments) {
   if (server_error) std::rethrow_exception(server_error);
 }
 
+int drain_stopped_alarm(const sigset_t &alarms) noexcept {
+#if defined(__APPLE__)
+  // The timer has stopped and no other thread consumes this blocked signal.
+  sigset_t pending;
+  if (::sigpending(&pending) != 0) return errno;
+  if (sigismember(&pending, SIGALRM) != 1) return 0;
+  int signal = 0;
+  const int status = ::sigwait(&alarms, &signal);
+  return status ? status : (signal == SIGALRM ? 0 : EINVAL);
+#else
+  timespec no_wait{};
+  while (::sigtimedwait(&alarms, nullptr, &no_wait) == SIGALRM) {
+  }
+  return 0;
+#endif
+}
+
 void scenario_eintr(const Arguments &arguments) {
   const std::string certificate = arguments.required("cert");
   const std::string key = arguments.required("key");
@@ -841,11 +879,9 @@ void scenario_eintr(const Arguments &arguments) {
     itimerval stopped{};
     need(::setitimer(ITIMER_REAL, &stopped, nullptr) == 0,
          "setitimer(stop) failed");
+    need(drain_stopped_alarm(alarm_set) == 0, "draining pending SIGALRM failed");
     need(::sigaction(SIGALRM, &old_action, nullptr) == 0,
          "sigaction(SIGALRM restore) failed");
-    timespec no_wait{};
-    while (::sigtimedwait(&alarm_set, nullptr, &no_wait) == SIGALRM) {
-    }
     need(::pthread_sigmask(SIG_SETMASK, &old_mask, nullptr) == 0,
          "pthread_sigmask(restore) failed");
 
@@ -863,7 +899,9 @@ void scenario_eintr(const Arguments &arguments) {
     drive_shutdown(stream.get(), fd.get(), nullptr);
   } catch (...) {
     itimerval stopped{};
+    (void)::pthread_sigmask(SIG_BLOCK, &alarm_set, nullptr);
     (void)::setitimer(ITIMER_REAL, &stopped, nullptr);
+    (void)drain_stopped_alarm(alarm_set);
     (void)::sigaction(SIGALRM, &old_action, nullptr);
     (void)::pthread_sigmask(SIG_SETMASK, &old_mask, nullptr);
     send_data.set();
@@ -1016,10 +1054,19 @@ void scenario_validation(const Arguments &arguments) {
   require_category(error, LANG_TLS_ERROR_CERTIFICATE, "mismatched key");
 
   int pair[2] = {-1, -1};
+#if defined(__APPLE__)
+  need(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0, "socketpair failed");
+#else
   need(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) == 0,
        "socketpair failed");
+#endif
   FdRef left(pair[0]);
   FdRef right(pair[1]);
+#if defined(__APPLE__)
+  need(::fcntl(left.get(), F_SETFD, FD_CLOEXEC) == 0 &&
+           ::fcntl(right.get(), F_SETFD, FD_CLOEXEC) == 0,
+       "socketpair fcntl(FD_CLOEXEC) failed");
+#endif
 
   error = {};
   need(lang_tls_stream_client_v1(client_context.get(), left.get(),
@@ -1064,13 +1111,13 @@ void scenario_validation(const Arguments &arguments) {
                    "DNS kind with IPv4 literal");
 
   const uint8_t zoned_ip[] = {'f', 'e', '8', '0', ':', ':', '1', '%', 'x'};
-  error = {};
-  need(lang_tls_stream_client_v1(client_context.get(), left.get(),
-                                 LANG_TLS_NAME_AUTO, zoned_ip,
-                                 sizeof(zoned_ip), &error) == nullptr,
-       "AUTO accepted zone syntax as a DNS name");
-  require_category(error, LANG_TLS_ERROR_INVALID_ARGUMENT,
-                   "zone syntax as DNS");
+  for (const auto kind : {LANG_TLS_NAME_AUTO, LANG_TLS_NAME_IP}) {
+    error = {};
+    need(lang_tls_stream_client_v1(client_context.get(), left.get(), kind,
+                                   zoned_ip, sizeof(zoned_ip), &error) == nullptr,
+         "client stream accepted an IPv6 zone suffix");
+    require_category(error, LANG_TLS_ERROR_INVALID_ARGUMENT, "IPv6 zone suffix");
+  }
 
   const uint8_t host_port[] = {'l', 'o', 'c', 'a', 'l', 'h', 'o', 's',
                                't', ':', '4', '4', '3'};

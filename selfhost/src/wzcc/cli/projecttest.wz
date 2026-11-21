@@ -84,7 +84,7 @@ func project_test_command(options Options, manager inout source.Manager) i32 thr
             return test_report(options, rows, "no test projects found under tests/<suite>/lang.toml", 2);
         }
         sort.sort_by(suites, func(left string, right string) bool { return left < right; });
-        let compiler = os.readlink("/proc/self/exe");
+        let compiler = os.executable_path();
         var result i32 = 0;
         for suite in suites {
             let outcome = test_suite(root + "/" + suite, compiler);

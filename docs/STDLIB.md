@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/unicode`、`std/vec`、`std/sort`、`std/slice`、`std/box`、`std/weak`、`std/iter`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 在 Native 和 Python 后端都可以使用。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 用于 Linux x86_64 和 macOS arm64 的 Native 程序。`std/text`、`std/unicode`、`std/vec`、`std/sort`、`std/slice`、`std/box`、`std/weak`、`std/iter`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 在 Native 和 Python 后端都可以使用。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -72,7 +72,7 @@ Writer 必须显式 `flush`。丢弃 Writer 不会自动写出 pending；只用 
 
 ## std/os
 
-Linux 系统接口。函数名和参数顺序接近 C，不提供原始 syscall 编号。常用接口：
+有类型的系统接口。函数名和参数顺序接近 C。常用接口：
 
 | 接口 | 说明 |
 | --- | --- |
@@ -136,7 +136,7 @@ pub enum Error {
 | `name_text(entry DirEntry) string throws os.Error` | 把目录项名称按 UTF-8 解码 |
 | `is_dir(info os.FileInfo)`、`is_file(info)`、`is_symlink(info)` | 判断 `stat` 结果的类型 |
 
-`DirEntry.name` 是 `Vec[u8]`，因为 Linux 文件名不保证是 UTF-8。需要字符串时调用 `name_text`，非 UTF-8 名称会抛出 `os.Error`。目录项的 `kind` 是系统给出的类型字节，跨文件系统时不要只依赖它。
+`DirEntry.name` 是 `Vec[u8]`，用于保留系统返回的文件名字节。需要字符串时调用 `name_text`，非 UTF-8 名称会抛出 `os.Error`。目录项的 `kind` 是系统给出的类型字节，跨文件系统时不要只依赖它。
 
 `exists` 只在系统返回“不存在”或“路径中间不是目录”时返回 `false`，其他错误继续抛出。`copy_file` 在截断目标前比较源和目标，源和目标指向同一 inode 时抛出 `os.Error.System(22,0)`。
 
@@ -300,7 +300,7 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 
 ## std/async
 
-异步函数返回 `Task[R,E]`，调用时不执行函数体。`spawn` 把任务加入就绪队列，`run`/`run_until` 推进执行器；`await` 只能写在 async 函数里，等待并驱动目标任务，未 spawn 的任务会直接启动，同一个 Task 可重复等待。`sleep`、`readable` 和 `writable` 返回可等待任务，`cancel`、`shutdown`、`finished`、`join` 和 `join_all` 控制等待与取消。完整规则见[async 与 await](CONCURRENCY.md#async-与-await)。当前仅支持 Linux x86_64 Native。
+异步函数返回 `Task[R,E]`，调用时不执行函数体。`spawn` 把任务加入就绪队列，`run`/`run_until` 推进执行器；`await` 只能写在 async 函数里，等待并驱动目标任务，未 spawn 的任务会直接启动，同一个 Task 可重复等待。`sleep`、`readable` 和 `writable` 返回可等待任务，`cancel`、`shutdown`、`finished`、`join` 和 `join_all` 控制等待与取消。完整规则见[async 与 await](CONCURRENCY.md#async-与-await)。
 
 ## std/option 和 std/result
 
@@ -443,7 +443,7 @@ func main() throws os.Error {
 
 ## std/timezone
 
-从 TZif 时区文件读取转换规则，在 POSIX 时间戳和当地日期之间换算。`load(name)` 使用系统的 `/usr/share/zoneinfo`，不内嵌一份时区数据库；程序运行的机器需要安装所需数据。此模块目前用于 Linux x86_64 Native。
+从 TZif 时区文件读取转换规则，在 POSIX 时间戳和当地日期之间换算。`load(name)` 使用系统的 `/usr/share/zoneinfo`，不内嵌一份时区数据库；程序运行的机器需要安装所需数据。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -520,6 +520,10 @@ func epoch_in_shanghai() timezone.Local throws timezone.Error {
 
 `send` 和 `recv` 只执行一次；`send_all` 会继续发送剩余字节，遇到中断时重试。`recvfrom` 返回 `Received`，其中 `count` 是实际收到的字节数，`address` 是发送方地址。`Socket` 复制只复制描述符，不会自动关闭；`net.file` 和 `Socket` 指向同一个描述符，不能分别关闭。
 
+macOS 上用 `unix_address` 创建文件路径形式的 Unix socket。抽象地址需要 Linux。把 `SOCK_CLOEXEC` 传给 `accept` 时，macOS 要求监听 socket 设置 `SOCK_NONBLOCK`。
+
+`getaddrinfo` 在两端都直接处理数字 IP 和 `localhost`。解析其他主机名时，Linux 读取 `/etc/hosts` 和 `/etc/resolv.conf`，macOS 交给系统解析器，按系统配置选择 DNS，包括 VPN 的按域名分流规则。返回的地址和顺序取决于主机的解析器配置。
+
 下面的完整程序用 `socketpair` 在两个端点之间传四个字节：
 
 ```wz
@@ -545,7 +549,7 @@ func main() throws os.Error {
 
 ## std/http
 
-HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读写。目前用于 Linux x86_64 Native；建立连接、监听和关闭仍使用 `std/net`。
+HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读写。建立连接、监听和关闭使用 `std/net`。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -594,7 +598,7 @@ func serve_once(socket net.Socket) throws http.Error {
 
 ## std/http_server
 
-基于 `std/http`、`std/net` 和 Native 异步执行器的 HTTP/1.1 服务器。仅用于 Linux x86_64 Native；Python 后端不支持 async。TLS 不在此模块内。
+基于 `std/http`、`std/net` 和 Native 异步执行器的 HTTP/1.1 服务器。Python 后端不支持 async。TLS 不在此模块内。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -637,7 +641,7 @@ async func main() i32 throws os.Error {
 
 ## std/tls 和 std/https
 
-这两个模块用于 Linux x86_64 Native，使用 OpenSSL 3。项目须选择 hosted 运行库，并明确声明 TLS 附加库；普通 freestanding 程序不会因此依赖 OpenSSL 或 C++ 运行库：
+这两个模块在 Native 后端使用 OpenSSL 3。项目须选择 hosted 运行库，并明确声明 TLS 附加库；普通 freestanding 程序不会因此依赖 OpenSSL 或 C++ 运行库：
 
 ```toml
 [build.native]
@@ -645,12 +649,12 @@ runtime = "hosted"
 
 [dependencies.woozy_tls]
 kind = "native"
-binding = "<Woozy目录>/stdlib/tls/bindings/tls.json"
+binding = "<包含libwoozy_tls.a的目录>/tls.json"
 libraries = ["ssl", "crypto", "stdc++"]
 library_dirs = ["<包含libwoozy_tls.a的目录>"]
 ```
 
-TLS 附加库的编译方法见 [stdlib/tls/addon/README.md](../stdlib/tls/addon/README.md)。它单独编译，不加入默认运行库。
+macOS arm64 上用生成的 Darwin 绑定，将 `stdc++` 换成 `c++`，并把 OpenSSL 的 `lib` 目录加入 `library_dirs`。TLS 附加库的编译方法见 [stdlib/tls/addon/README.md](../stdlib/tls/addon/README.md)。它单独编译，不加入默认运行库。
 
 `std/tls` 包装调用方已有的 Socket。`Context` 和 `Stream` 的普通复制共享同一个对象，最后一份释放 TLS 对象；Socket 始终由调用方关闭，包括调用 `tls.close` 之后。
 
@@ -733,7 +737,7 @@ func await_ready(ready Vec[bool], m sync.Mutex, changed sync.Condvar) bool {
 
 ## std/rwlock 和 std/cancel
 
-`std/rwlock` 提供进程内、写者优先的读写锁，目前用于 Linux x86_64 Native。`new() ReadWriteLock` 创建锁；`read_lock`/`read_unlock` 和 `write_lock`/`write_unlock` 分别取得和释放读锁、写锁，参数都是 ReadWriteLock，不抛 typed error。锁的副本共享同一状态。
+`std/rwlock` 提供进程内、写者优先的读写锁。`new() ReadWriteLock` 创建锁；`read_lock`/`read_unlock` 和 `write_lock`/`write_unlock` 分别取得和释放读锁、写锁，参数都是 ReadWriteLock，不抛 typed error。锁的副本共享同一状态。
 
 多个线程可同时持读锁，写锁独占访问；已有写者等待时，新读者也要等待。它不可递归，不支持持锁升级或降级。同一线程重复取得读锁或写锁、持读锁再取写锁、持写锁再取读锁，以及非持有线程解锁，都产生 Panic。取得锁后可以用块级 defer 保证释放。以下只有函数声明，需导入 `std/rwlock` 为 `rwlock`：
 
@@ -745,7 +749,7 @@ func first(lock rwlock.ReadWriteLock, values Vec[i64]) i64 {
 }
 ```
 
-`std/cancel` 提供合作式取消，也用于 Linux x86_64 Native：
+`std/cancel` 提供合作式取消。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -760,7 +764,7 @@ Token 的副本共享状态。`request` 标记取消并唤醒在这个 token 上
 
 ## std/channel
 
-进程内的泛型 FIFO 队列，支持多个发送和接收线程，目前用于 Linux x86_64 Native。Channel 的副本共享队列和关闭状态；发送值按普通复制规则保存，struct 的值字段独立，Vec 字段仍共享。发送后继续修改共享 Vec 时仍须自行同步。
+进程内的泛型 FIFO 队列，支持多个发送和接收线程。Channel 的副本共享队列和关闭状态；发送值按普通复制规则保存，struct 的值字段独立，Vec 字段仍共享。发送后继续修改共享 Vec 时仍须自行同步。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -921,7 +925,7 @@ func main() i32 throws os.Error {
 
 ## std/task
 
-固定工作线程数的有类型线程池和 Future，建立在 `std/thread`、`std/sync` 与 `std/channel` 上，目前用于 Linux x86_64 Native。工作线程入口必须是无捕获的 `func(A) R`；`A` 和 `R` 在创建池时确定，所有任务共用同一个入口。多个参数放进 struct，捕获闭包仍不受支持。
+固定工作线程数的有类型线程池和 Future，建立在 `std/thread`、`std/sync` 与 `std/channel` 上。工作线程入口必须是无捕获的 `func(A) R`；`A` 和 `R` 在创建池时确定，所有任务共用同一个入口。多个参数放进 struct，捕获闭包仍不受支持。
 
 | 接口 | 说明 |
 | --- | --- |

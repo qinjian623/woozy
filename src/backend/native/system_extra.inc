@@ -122,6 +122,7 @@
     case SystemOperation::fs_getcwd: name = "lang_sys_getcwd_vec_v1"; raw = true; break;
     case SystemOperation::fs_getdents: name = "lang_sys_getdents_vec_v1"; raw = true; break;
     case SystemOperation::fs_readlink: name = "lang_sys_readlink_vec_v1"; raw = true; break;
+    case SystemOperation::fs_executable_path: name = "lang_sys_executable_path_vec_v1"; raw = true; break;
     case SystemOperation::fs_symlink: name = "lang_sys_symlink_v1"; break;
     case SystemOperation::fs_link: name = "lang_sys_link_v1"; break;
     case SystemOperation::fs_truncate: name = "lang_sys_truncate_v1"; break;

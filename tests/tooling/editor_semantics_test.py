@@ -753,7 +753,8 @@ def run(cli):
         support_path.write_text(SUPPORT, encoding='utf-8')
         check(
             cli, root, main_path, support_path,
-            main_path.as_uri(), support_path.as_uri()
+            # Unopened targets use canonical paths; open files retain their client URI.
+            main_path.as_uri(), support_path.resolve(strict=True).as_uri()
         )
 
 

@@ -46,6 +46,7 @@ pub struct DebugSlot {
     pub visibility_scope string;
     pub capture bool;
     pub dynamic_storage bool;
+    pub value_bytes usize;
 }
 pub struct DebugScope {
     pub hir_scope usize;
@@ -482,7 +483,8 @@ func debug_function(function nativeir.Function, source SourceFunction, state ino
         }
         let entry = DebugSlot(slot: slot_index, variable: "", location: "",
             parameter: option.is_some(slot.parameter), declared: false, binding: binding,
-            hir_scope: owner_scope, visible: start, visibility_scope: "", capture: capture, dynamic_storage: false);
+            hir_scope: owner_scope, visible: start, visibility_scope: "", capture: capture,
+            dynamic_storage: false, value_bytes: 0);
         // Stable order matters for sequential bindings within one lexical block.
         var at = vec.len(state.frame.debug_slots);
         vec.push(state.frame.debug_slots, entry);
@@ -534,8 +536,14 @@ func debug_function(function nativeir.Function, source SourceFunction, state ino
         }
         let local_scope = debug_scope_at(entry.hir_scope, entry.visible, inout state);
         if local_scope == "" { continue; }
-        let type = debug_type(function.slots[entry.slot].type_id, inout state);
+        let type_id = function.slots[entry.slot].type_id;
+        let type = debug_type(type_id, inout state);
         if type == "null" { continue; }
+        if function.is_async && state.options.triple == DARWIN_ARM64_TRIPLE && state.options.optimization == 0 {
+            let layout = debug_storage_layout(type_id, 0, inout state);
+            if !layout.known || layout.size == 0 { continue; }
+            state.frame.debug_slots[at].value_bytes = layout.size;
+        }
         var file_id usize = 0;
         switch debug_source(span, state) { case option.Option.Some(value): file_id = value; case option.Option.None: continue; }
         var argument = "";
@@ -577,7 +585,23 @@ func debug_declare(index usize, state inout Emitter) throws Error {
     let slot = state.frame.debug_slots[index];
     if slot.variable == "" || slot.location == "" { return; }
     let address = state.frame.slots[slot.slot].address;
-    if slot.dynamic_storage {
+    if slot.value_bytes != 0 {
+        // At AArch64 O0, CoroSplit's saved frame pointer occupies a stack slot.
+        // LLVM drops the load from that slot for an indirect location unless
+        // the expression describes a value. Read the actual object bytes.
+        for var offset usize = 0; offset < slot.value_bytes; {
+            var width = slot.value_bytes - offset;
+            if width > 8 { width = 8; }
+            var expr = "DW_OP_deref_size, " + number(width) + ", DW_OP_stack_value";
+            if offset != 0 { expr = "DW_OP_plus_uconst, " + number(offset) + ", " + expr; }
+            if width != slot.value_bytes {
+                expr += ", DW_OP_LLVM_fragment, " + number(offset * 8) + ", " + number(width * 8);
+            }
+            append("#dbg_value(ptr " + address.reference + ", " + slot.variable +
+                ", !DIExpression(" + expr + "), " + slot.location + ")", inout state);
+            offset += width;
+        }
+    } else if slot.dynamic_storage {
         // An address-valued record can end at a move or be reissued after
         // suspension. A fixed declaration cannot describe either change.
         append("#dbg_value(ptr " + address.reference + ", " + slot.variable +

@@ -1,6 +1,6 @@
 # 系统接口：std/os
 
-`std/os` 提供有类型的系统接口，函数名称和参数顺序接近 C，失败时抛出 `os.Error`。当前用于 Linux x86_64 Native 程序，Python 后端不支持这个模块；不提供原始 syscall 编号或裸地址接口。
+`std/os` 提供有类型的系统接口，函数名称和参数顺序接近 C，失败时抛出 `os.Error`。用于 Linux x86_64 和 macOS arm64 的 Native 程序。Python 后端不支持这个模块。`getrandom` 在 macOS 上只接受 `flags = 0`，`std/random` 使用这一设置。
 
 ## 输出 Hello World
 
@@ -93,7 +93,7 @@ pub enum Error {
 }
 ```
 
-`code` 保留 Linux 错误码，`completed` 表示本次高级操作在失败前已完成的字节数。一次读写在失败时为 0；`write_all` 可能已经完成一部分。NoProgress 没有对应的内核错误码，因此只携带已完成字节数。
+`code` 使用 Linux 错误码编号。macOS 运行库将对应的 Darwin 错误转成相同编号。`completed` 表示本次高级操作在失败前已完成的字节数。一次读写在失败时为 0；`write_all` 可能已经完成一部分。NoProgress 只携带已完成字节数。
 
 用 `try/catch` 捕获 `os.Error`，再用 `switch` 区分错误类别并取出 `code` 和 `completed`；写法见 [教程的错误处理一节](TUTORIAL.cn.md#11-可声明的错误)。需要继续发送时，从已完成字节之后开始，不能把整段数据重新写一遍。
 

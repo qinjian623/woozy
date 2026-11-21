@@ -1,17 +1,35 @@
 package resources;
 
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
 import "std/os" as os;
 import "std/process" as process;
 import "std/option" as option;
 import "std/text" as text;
 import "std/path" as path;
+import "std/vec" as vec;
 
 pub func directory() string throws os.Error {
-    return path.dir(os.readlink("/proc/self/exe"));
+    return path.dir(os.executable_path());
 }
 
 pub func standard_library() string throws os.Error {
     return path.join(directory(),"stdlib");
+}
+
+pub func host_is_darwin() bool throws os.Error {
+    let file = os.open(os.executable_path(), os.O_RDONLY | os.O_CLOEXEC, 0);
+    defer { try { os.close(file); } catch problem os.Error {} }
+    let reader = io.reader(file);
+    // MH_MAGIC_64 and CPU_TYPE_ARM64 in the running compiler's file header.
+    for expected in [u8(0xcf), 0xfa, 0xed, 0xfe, 0x0c, 0, 0, 1] {
+        switch io.read_byte(reader) {
+            case option.Option.Some(actual): if actual != expected { return false; }
+            case option.Option.None: return false;
+        }
+    }
+    return true;
 }
 
 pub func llvm_bin(bundle string) string throws os.Error {
@@ -22,6 +40,53 @@ pub func llvm_bin(bundle string) string throws os.Error {
         case option.Option.None: {}
     }
     return path.join(bundle, "toolchain");
+}
+
+pub func darwin_sdk(capture string) string throws os.Error {
+    var sdk = "";
+    switch process.getenv("SDKROOT") {
+        case option.Option.Some(value): sdk = value;
+        case option.Option.None: {}
+    }
+    if sdk == "" {
+        let command = ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"];
+        try {
+            let result = toolio.run(command, capture);
+            if result.exit_code != 0 || result.signalled { throw os.Error.System(2, 0); }
+            try { sdk = text.trim(text.from_bytes(result.output)); }
+            catch problem text.Error { throw os.Error.System(84, 0); }
+        } catch problem toolio.Error {
+            switch problem {
+                case toolio.Error.System(error): throw error;
+                case toolio.Error.Rollback(backup, error): throw error;
+            }
+        }
+    }
+    if !path.is_absolute(sdk) || !fs.is_file(os.stat(path.join(sdk, "usr/lib/libSystem.tbd"))) {
+        throw os.Error.System(2, 0);
+    }
+    return sdk;
+}
+
+pub func darwin_clang(tools string, sdk string) Vec[string] {
+    return [tools + "/clang", "--target=arm64-apple-macosx14.4", "-isysroot", sdk];
+}
+
+pub func darwin_linker(tools string, sdk string) Vec[string] {
+    let args = darwin_clang(tools, sdk);
+    // A Linux-hosted Clang otherwise uses the legacy Darwin linker flags.
+    for flag in ["--ld-path=" + tools + "/ld64.lld", "-mlinker-version=520", "-nostdlib++", "-Wl,-dead_strip",
+                 "-Wl,-u,_lang_darwin_startup_v1", "-Wl,-U,_lang_vec_observe_v1"] {
+        vec.push(args, flag);
+    }
+    return args;
+}
+
+pub func darwin_debug_command(tools string, program string) Vec[string] {
+    var dsymutil = tools + "/dsymutil";
+    try { os.access(dsymutil, os.X_OK); }
+    catch problem os.Error { dsymutil = "/usr/bin/dsymutil"; }
+    return [dsymutil, "--flat", program, "-o", program + ".dwarf"];
 }
 
 // Ninja is a build tool selected by configuration or the caller's PATH.

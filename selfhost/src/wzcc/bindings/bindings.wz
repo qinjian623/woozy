@@ -1986,7 +1986,7 @@ func parse_c(state inout Context, snapshot model.Source,
         contract_values());
     bundle.abi = choice(inout state, field(root, "abi"), ["c"]);
     bundle.target = choice(inout state, field(root, "target"),
-        ["x86_64-linux-gnu"]);
+        ["x86_64-linux-gnu", "arm64-apple-darwin"]);
     bundle.requires_hosted = boolean_of(inout state,
         field(root, "requires_hosted"));
 

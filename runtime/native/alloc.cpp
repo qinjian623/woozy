@@ -1,16 +1,30 @@
 #include "alloc.hpp"
 
-#if defined(__x86_64__) && defined(__linux__)
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <sys/mman.h>
+#include <unistd.h>
 
-static inline void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) noexcept {
+static inline void *map_private_pages(size_t length) noexcept {
+  return mmap(nullptr, length, PROT_READ | PROT_WRITE,
+              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+
+static inline int sys_munmap(void *addr, size_t length) noexcept {
+  return munmap(addr, length);
+}
+
+#elif defined(__x86_64__) && defined(__linux__)
+
+static inline void *map_private_pages(size_t length) noexcept {
   long ret;
-  register long r10 __asm__("r10") = flags;
-  register long r8 __asm__("r8") = fd;
-  register long r9 __asm__("r9") = offset;
+  register long r10 __asm__("r10") = 0x02 | 0x20; // MAP_PRIVATE | MAP_ANONYMOUS
+  register long r8 __asm__("r8") = -1;
+  register long r9 __asm__("r9") = 0;
   __asm__ volatile (
     "syscall"
     : "=a"(ret)
-    : "a"(9 /* SYS_mmap */), "D"(addr), "S"(length), "d"(prot), "r"(r10), "r"(r8), "r"(r9)
+    : "a"(9 /* SYS_mmap */), "D"(0L), "S"(length),
+      "d"(0x1L | 0x2L /* PROT_READ | PROT_WRITE */), "r"(r10), "r"(r8), "r"(r9)
     : "rcx", "r11", "memory"
   );
   if (ret < 0 && ret >= -4095)
@@ -28,6 +42,9 @@ static inline int sys_munmap(void *addr, size_t length) noexcept {
   );
   return static_cast<int>(ret);
 }
+#else
+#error "Woozy native allocator requires Linux x86_64 or macOS arm64"
+#endif
 
 namespace {
 
@@ -83,6 +100,8 @@ uint32_t g_lock_serving;
 static inline void cpu_pause() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
   __asm__ volatile ("pause" ::: "memory");
+#elif defined(__aarch64__)
+  __asm__ volatile ("yield" ::: "memory");
 #endif
 }
 
@@ -144,9 +163,7 @@ static inline uint32_t class_for(uint64_t size) noexcept {
 // shared-state updates, and the empty-page budget is checked under the lock.
 static PoolPage *new_pool_page(uint32_t class_index) noexcept {
   const uint64_t slot_size = kSmallClassSizes[class_index];
-  void *base = sys_mmap(nullptr, kPoolPageSize,
-                        0x1 | 0x2 /* PROT_READ|PROT_WRITE */,
-                        0x02 | 0x20 /* MAP_PRIVATE|MAP_ANONYMOUS */, -1, 0);
+  void *base = map_private_pages(kPoolPageSize);
   if (base == reinterpret_cast<void *>(-1))
     return nullptr;
 
@@ -231,17 +248,20 @@ extern "C" void *lang_alloc_v1(uint64_t size, uint64_t align) noexcept {
     return nullptr;
   uint64_t needed = header_space + size;
 
-  uint64_t page_mask = 4096 - 1;
-  if (needed > 0xFFFFFFFFFFFFFFFFULL - page_mask)
-    return nullptr;
-
   if (align <= kSmallAlignMax && size <= kMaxSmallPayload)
     return small_alloc(size);
 
+#if defined(__APPLE__)
+  const uint64_t page_mask = static_cast<uint64_t>(getpagesize()) - 1;
+#else
+  constexpr uint64_t page_mask = 4096 - 1;
+#endif
+  if (needed > 0xFFFFFFFFFFFFFFFFULL - page_mask)
+    return nullptr;
+
   uint64_t mmap_size = (needed + page_mask) & ~page_mask;
 
-  void *base = sys_mmap(nullptr, mmap_size, 0x1 | 0x2 /* PROT_READ|PROT_WRITE */,
-                        0x02 | 0x20 /* MAP_PRIVATE|MAP_ANONYMOUS */, -1, 0);
+  void *base = map_private_pages(mmap_size);
   if (base == reinterpret_cast<void *>(-1))
     return nullptr;
 
@@ -294,5 +314,3 @@ extern "C" void lang_alloc_fork_child_v1() noexcept {
   __atomic_store_n(&g_lock_next, 0u, __ATOMIC_RELAXED);
   __atomic_store_n(&g_lock_serving, 0u, __ATOMIC_RELAXED);
 }
-
-#endif

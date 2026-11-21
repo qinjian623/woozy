@@ -7,11 +7,43 @@ MAKEFLAGS=-j4 woozyc build --project lang.toml --source-make \
   --out-dir build --opt 2
 ```
 
-此入口适用于 Linux x86_64 Native/64，需要 GNU Make 和 LLVM 22.1.8。一个逻辑包可以包含多个 `.wz` 文件。主进程只加载一次源码和项目声明。Make 为每个包安排独立的任务，编译进程从主进程已准备的源码和符号开始。未启用对象缓存且声明检查通过时，各包共享已检查的声明，分别检查本包函数体和用到的外包泛型模板，再校验 IR 并生成该包的 `.o`。全部成功后合并对象并链接。命中时直接取出该包的对象，跳过函数体解析、检查和 LLVM 处理。
+此入口适用于 Linux x86_64 和 macOS arm64 的 Native/64，需要 GNU Make 和 LLVM 22.1.8。一个逻辑包可以包含多个 `.wz` 文件。主进程只加载一次源码和项目声明。Make 为每个包安排独立的任务，编译进程从主进程已准备的源码和符号开始。未启用对象缓存且声明检查通过时，各包共享已检查的声明，分别检查本包函数体和用到的外包泛型模板，再校验 IR 并生成该包的 `.o`。全部成功后合并对象并链接。命中时直接取出该包的对象，跳过函数体解析、检查和 LLVM 处理。
 
 需要增量编译时，加上 `--cache-dir .woozy-cache`。三包用例首次构建重编 3 包，重复构建重编 0 包。改私有函数体只重编本包。改公开签名或影响跨包传值的类型布局，会重编本包和调用方。构建失败时保留上次成功的程序。可在输出目录查看 `Makefile`、`make.log` 和 `make-report.json`。
 
 已验证标量跨包调用、struct 和 enum 跨包传值，以及自举编译器实际用到的泛型和 `std/` 导入。用这个入口编译完整工程时，第二、三代各生成 57 个包对象，链接得到的 Woozy 编译器逐字节相同。入口和运行条件见 [自举说明](SELFHOST_BOOTSTRAP.md)。
+
+### macOS arm64 构建
+
+Mac 上的 Wz 编译器默认生成 Mach-O arm64 可执行文件。普通 `build`、`--source-make` 和 `--package-objects` 都会链接 `program`。安装 Xcode Command Line Tools，或将 `SDKROOT` 指向 macOS SDK。把 `liblang_darwin_core.a` 放在编译器旁的 `runtime/` 目录。程序要求 macOS 14.4 或更新版本，核心运行库只链接系统的 `libSystem`。
+
+需要在 Linux 上只生成 Mac 对象时，使用以下命令。
+
+```sh
+WOOZY_LLVM_BIN=/path/to/llvm-22.1.8/bin \
+  woozyc build --project lang.toml --out-dir build-macos --source-make \
+  --objects-only --target arm64-apple-macosx11.0.0 --opt 2
+```
+
+GNU Make 按源码包分别检查并编译，LLVM `opt` 校验每个包，`llvm-ar` 把 Mach-O arm64 对象归档到 `program.a`。`--cache-dir` 可用于生成对象或链接程序。包含 async 的项目使用普通 `build` 或 `--package-objects`。C 绑定项目使用普通 `build`。
+
+对象归档、完整程序、带调试信息的程序各用独立的 `--out-dir`。构建只更新本次输出的文件。
+
+将归档放到安装了 macOS SDK 的 Apple Silicon 主机上，即可手动链接使用这些运行库接口的程序。
+
+```sh
+cmake -S runtime/darwin -B build-darwin-runtime -DCMAKE_BUILD_TYPE=Release
+cmake --build build-darwin-runtime
+xcrun --sdk macosx clang -target arm64-apple-macosx14.4 -nostdlib++ \
+  -Wl,-dead_strip -Wl,-force_load,build-macos/program.a \
+  build-darwin-runtime/liblang_darwin_core.a -Wl,-U,_lang_vec_observe_v1 \
+  -Wl,-u,_lang_darwin_startup_v1 \
+  -o program
+```
+
+链接参数允许可选的 Vec 测试观察函数缺省，并保留读取参数和环境的 Darwin 启动函数。需要在 Linux 上直接链接 Mac 程序时，去掉 `--objects-only`，指定 `SDKROOT`，并在编译器资源目录中放入 Darwin 运行库。
+
+在 macOS 主机启动 O0 自举前，将本次 shell 的栈上限设为至少 16 MiB，例如 `ulimit -S -s 16384`。默认 8176 KiB 时，`nativeverify` 编译进程实测写到了栈保护页；16 MiB 下该包通过 LLVM 校验，第二、三代各编译了 76 个包，两个编译器逐字节相同。
 
 ## 原有的分包对象入口（SH31）
 

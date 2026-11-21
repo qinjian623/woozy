@@ -1,6 +1,6 @@
 # 进程与信号
 
-`std/process` 创建、替换和等待进程，`std/signal` 屏蔽及同步等待信号。两者用于 Linux x86_64 Native 程序，系统错误通过 `throws os.Error` 返回。
+`std/process` 创建、替换和等待进程，`std/signal` 屏蔽及同步等待信号。两者用于 Linux x86_64 和 macOS arm64 的 Native 程序，系统错误通过 `throws os.Error` 返回。
 
 ## 启动程序并读取输出
 
@@ -116,6 +116,8 @@ io.println(received.number); // 输出 10
 
 `sigtimedwait` 超时抛出 `os.Error.WouldBlock(11,0)`。`Info` 包含 `number`、`code`、`pid`、`uid`、`status` 和 `value`；后两个字段的含义依信号种类而定，例如 SIGCHLD 的退出状态和排队信号携带的值。
 
+macOS arm64 用 `sigwait` 同步接收信号。这个接口只返回信号编号，因此 `Info.number` 按 Woozy 的编号返回，其余字段为 `0`。需要取得子进程退出状态时，用 `std/process.waitpid` 或 `std/process.wait`。`sigwaitinfo` 等待进程收到的信号，带超时的 `sigtimedwait` 只检查调用线程上待处理的信号。需要对发送给进程的信号限时等待时，在主线程调用。Darwin 不支持的 Linux 信号，以及对 `SIGCONT`、`SIGTSTP`、`SIGTTIN`、`SIGTTOU` 的限时等待，返回 `os.Error.System(95,0)`。 [Darwin sigwait](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/sigwait.2.html)
+
 屏蔽集合属于调用线程，Default/Ignore 的动作属于整个进程。多线程程序通常在创建线程前屏蔽相关信号，让新线程继承屏蔽集合，再由一个线程同步等待。Linux 的信号规则见 [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html)。
 
 可用常量包括 `SIGINT`、`SIGTERM`、`SIGUSR1`、`SIGUSR2`、`SIGCHLD`、`SIGPIPE` 等；`SIG_BLOCK` 添加屏蔽，`SIG_UNBLOCK` 解除指定屏蔽，`SIG_SETMASK` 替换集合。SIGKILL 和 SIGSTOP 不能改成忽略。
@@ -131,6 +133,8 @@ io.println(received.number); // 输出 10
 多线程 fork 后，子进程只保留调用 fork 的线程。其他线程持有的业务锁状态仍被复制，不会自动解锁；这些线程在子进程也不会回来解锁。调用方要在 fork 前安排好业务锁和数据访问。这个线程保留规则与 [Linux fork](https://man7.org/linux/man-pages/man2/fork.2.html) 相同。
 
 Woozy 会修复自己的分配器等内部锁，使子进程可以使用运行库；它不会重置用户 Mutex 或 Condvar。继承的 ARC 引用计数不会减去已消失线程持有的引用，部分引用可能一直保留到 exec 或进程退出。子进程通常应尽快调用 exec，优先用 `spawn` 完成“启动另一个程序”的需求。
+
+macOS arm64 上，C 代码需要创建子进程时，可调用导出的 Woozy 函数，由该函数使用 `std/process.fork` 或 `std/process.spawn`。直接调用 libc 的 `fork()` 会绕过 Woozy 的文件描述符继承保护，以及子进程的分配器、GC 和 async 状态恢复。
 
 子进程中，对已消失线程的未完成 Thread 调用 `thread.join` 会抛出 `os.Error.System(3,0)`；等待当前调用线程仍抛出代码 35。fork 前已经完成的 Thread 可以返回其缓存结果。
 

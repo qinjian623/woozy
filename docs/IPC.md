@@ -1,6 +1,6 @@
 # 共享内存与跨进程同步
 
-`std/ipc` 提供共享内存，以及放在其中的 Mutex、Condvar 和 Semaphore，用于 Linux x86_64 Native 程序。映射只保存字节和数值，不保存 string、Vec、函数值或其他 ARC 对象的指针。
+`std/ipc` 提供共享内存，以及放在其中的 Mutex、Condvar 和 Semaphore，用于 Linux x86_64 和 macOS arm64 的 Native 程序。映射只保存字节和数值，不保存 string、Vec、函数值或其他 ARC 对象的指针。
 
 ## 一个单元素通道
 
@@ -79,7 +79,7 @@ func main() i32 throws os.Error {
 
 ## 命名共享内存
 
-`shm_open(name string, flags i32, mode u32) os.File throws os.Error` 创建或打开 Linux 的命名共享对象；`shm_unlink(name string) throws os.Error` 删除其名称。名称形如 `/woozy-job`，斜杠后只有一个非空名称；名称部分不能为 `.` 或 `..`，不能再含 `/` 或 NUL。flags 使用 `os.O_RDONLY` 或 `os.O_RDWR`，可组合 `O_CREAT`、`O_EXCL`、`O_TRUNC`、`O_CLOEXEC`。
+`shm_open(name string, flags i32, mode u32) os.File throws os.Error` 创建或打开命名共享对象。`shm_unlink(name string) throws os.Error` 删除其名称。名称形如 `/woozy-job`，斜杠后只有一个非空名称。名称部分不能为 `.` 或 `..`，不能再含 `/` 或 NUL。flags 使用 `os.O_RDONLY` 或 `os.O_RDWR`，可组合 `O_CREAT`、`O_EXCL`、`O_TRUNC`、`O_CLOEXEC`。
 
 下面是辅助函数；与上例一样导入 ipc 和 os 后即可使用。它只供创建方调用，返回的区域还需要由创建方初始化数据和同步对象。
 
@@ -106,6 +106,8 @@ func create_shared(name string) ipc.Memory throws os.Error {
 创建方使用 `O_EXCL` 避免覆盖已有对象。打开方不要传 `O_TRUNC`，也不要重新执行 `mutex_init`、`cond_init` 或 `sem_init`；已有同步对象用 `mutex_at(memory, offset)`、`cond_at`、`sem_at` 取得包装值。
 
 所有参与者都打开对象后，可以调用 `shm_unlink(name)` 删除名称；已有映射仍然可用，后来的进程无法再按这个名称打开它。只关闭 File 或清理 Memory 不会删除名称。名称的删除与已有映射的生命周期见 [shm_open(3)](https://man7.org/linux/man-pages/man3/shm_open.3.html)。
+
+macOS arm64 保留 4096 字节的 `map_file` 偏移对齐。命名共享对象沿用 Darwin 内核的限制，名称连同开头的 `/` 最多 31 字节。对象只能用 `ftruncate` 设置一次大小，给已分配的对象再次设定大小或以 `O_TRUNC` 打开会报 `os.Error.System(22,0)`。
 
 ## Mutex 和 Condvar
 
