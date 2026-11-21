@@ -1,4 +1,5 @@
 #include "lang/support/publish.hpp"
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -9,6 +10,7 @@
 
 namespace fs = std::filesystem;
 const std::vector<std::string> names{"build.log", "records.json", "statistics.json", "program.o", "program"};
+constexpr unsigned publications_per_writer = 180;
 void write(const fs::path &path, const std::string &bytes) {
   std::ofstream output(path, std::ios::binary); output << bytes; output.close();
   if (!output) throw std::runtime_error("write failed");
@@ -18,12 +20,16 @@ std::string read(const fs::path &path) {
   if (!input) throw std::runtime_error("read failed");
   return std::string((std::istreambuf_iterator<char>(input)), {});
 }
-void writer(const fs::path &directory, char tag) {
-  for (unsigned index = 0; index < 180; ++index) {
+void writer(const fs::path &directory, char tag, int progress) {
+  for (unsigned index = 0; index < publications_per_writer; ++index) {
     lang::StagingDir stage(directory);
     const auto bytes = std::string(8192, tag) + std::to_string(index);
     for (const auto &name : names) write(stage.path() / name, bytes);
     lang::publish_staged_files(stage, directory, names);
+    ssize_t notified;
+    do { notified = ::write(progress, &tag, 1); }
+    while (notified < 0 && errno == EINTR);
+    if (notified != 1) throw std::runtime_error("notify observer failed");
   }
 }
 int main(int argc, char **argv) {
@@ -48,34 +54,53 @@ int main(int argc, char **argv) {
       for (const auto &name : names)
         if (read(directory / name) != "initial") throw std::runtime_error("rollback mismatch");
     }
+    int progress[2];
+    if (::pipe(progress)) throw std::runtime_error("create progress pipe failed");
     auto first = ::fork();
-    if (first == 0) { try { writer(directory, 'A'); _exit(0); } catch (...) { _exit(1); } }
+    if (first == 0) {
+      ::close(progress[0]);
+      try { writer(directory, 'A', progress[1]); _exit(0); } catch (...) { _exit(1); }
+    }
     if (first < 0) throw std::runtime_error("fork failed");
     auto second = ::fork();
-    if (second == 0) { try { writer(alias, 'B'); _exit(0); } catch (...) { _exit(1); } }
+    if (second == 0) {
+      ::close(progress[0]);
+      try { writer(alias, 'B', progress[1]); _exit(0); } catch (...) { _exit(1); }
+    }
     if (second < 0) throw std::runtime_error("fork failed");
+    ::close(progress[1]);
     int lock = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (lock < 0) throw std::runtime_error("open directory failed");
-    bool first_done = false, second_done = false;
     size_t observations = 0;
-    while (!first_done || !second_done) {
+    ssize_t notified;
+    do {
       if (::flock(lock, LOCK_SH)) throw std::runtime_error("observer lock failed");
       auto expected = read(directory / names.front());
       for (const auto &name : names)
         if (read(directory / name) != expected) throw std::runtime_error("mixed publication");
       if (::flock(lock, LOCK_UN)) throw std::runtime_error("observer unlock failed");
       ++observations;
+      // Wait for a publication before taking another shared lock, which can
+      // otherwise starve both writers waiting for an exclusive lock.
+      char tag;
+      do { notified = ::read(progress[0], &tag, 1); }
+      while (notified < 0 && errno == EINTR);
+      if (notified < 0) throw std::runtime_error("read publication progress failed");
+    } while (notified != 0);
+    ::close(progress[0]);
+    for (auto process : {first, second}) {
       int status;
-      for (auto process : {first, second}) {
-        auto done = ::waitpid(process, &status, WNOHANG);
-        if (done == process) {
-          if (!WIFEXITED(status) || WEXITSTATUS(status)) throw std::runtime_error("writer failed");
-          if (process == first) first_done = true; else second_done = true;
-        }
-      }
+      pid_t done;
+      do { done = ::waitpid(process, &status, 0); }
+      while (done < 0 && errno == EINTR);
+      if (done != process || !WIFEXITED(status) || WEXITSTATUS(status))
+        throw std::runtime_error("writer failed");
     }
     ::close(lock);
-    std::cout << "writers=2 publications=360 locked_observations=" << observations << '\n';
+    if (observations != 2 * publications_per_writer + 1)
+      throw std::runtime_error("publication count mismatch");
+    std::cout << "writers=2 publications=" << observations - 1
+              << " locked_observations=" << observations << '\n';
     return 0;
   } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
 }

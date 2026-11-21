@@ -32,7 +32,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$RUNNER_TEMP"
           executable_sha=$(jq -er .artifact_hashes.python_executable_sha256 "$lock")
           printf '%s  %s\n' "$executable_sha" "$RUNNER_TEMP/python/bin/python3.12" | sha256sum -c -
-      - name: Build and test the frontend and Python backend
+      - name: Build the frontend and Python backend
         run: |
           build="$RUNNER_TEMP/build"
           python="$RUNNER_TEMP/python/bin/python3.12"
@@ -40,7 +40,8 @@ jobs:
             -DBUILD_TESTING=ON -DLANG_ENABLE_LLVM=OFF \
             "-DLANG_TEST_PYTHON=$python" "-DLANG_PYTHON312=$python"
           cmake --build "$build" --parallel 2
-          ctest --test-dir "$build" --output-on-failure --no-tests=error
+      - name: Test the frontend and Python backend
+        run: ctest --test-dir "$RUNNER_TEMP/build" --output-on-failure --no-tests=error
 
   macos-arm64-runtime:
     runs-on: macos-15
