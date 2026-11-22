@@ -60,13 +60,13 @@ This prints `Hello, world!`. Executing Python output requires Python 3.12. Packa
 
 ## Editor setup
 
-Neovim and Emacs can highlight `.wz` files and start the Woozy language server automatically. With the self-hosted compiler, the server adds completion, hover, definition lookup, and live project diagnostics. Run this from the checkout with `woozyc` on your `PATH`.
+On Linux and macOS, Emacs, Vim, and Neovim can highlight `.wz` files and start the Woozy language server automatically. The self-hosted compiler supplies completion, hover, definition lookup, and live project diagnostics. With `woozyc` on your `PATH`, run this from the checkout to configure Vim and Emacs.
 
 ```sh
-python3 development/editor/setup.py
+python3 development/editor/setup.py --editor vim-emacs
 ```
 
-See the [editor guide](development/docs/EDITOR.md) for prerequisites, single-editor setup, and compiler selection.
+Omit `--editor` to configure Neovim and Emacs. See the [editor guide](development/docs/EDITOR.md) for prerequisites, single-editor setup, and compiler selection.
 
 ## Language basics
 

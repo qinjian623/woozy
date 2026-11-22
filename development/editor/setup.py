@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import unicodedata
 
+from vim_lsp import install_vim_lsp
+
 
 ASSETS = Path(__file__).resolve().parent
 OWNER = b'woozy-editor-setup'
@@ -120,6 +122,7 @@ def install(args):
     xdg = Path(os.environ.get('XDG_CONFIG_HOME') or home / '.config').absolute()
     assets = []
     init = None
+    vim_home = home / '.vim' if args.editor in {'vim', 'vim-emacs'} else None
     if args.editor in {'both', 'neovim'}:
         app = Path(os.environ.get('NVIM_APPNAME') or 'nvim')
         if app.is_absolute() or not app.parts or '..' in app.parts:
@@ -128,7 +131,12 @@ def install(args):
         assets.extend((ASSETS / 'nvim' / name, xdg / app / name, replacement) for name, replacement in (
             ('plugin/woozy.lua', quote(compiler)), ('syntax/woozy.vim', None),
         ))
-    if args.editor in {'both', 'emacs'}:
+    if vim_home is not None:
+        assets.extend((
+            (ASSETS / 'vim/plugin/woozy-lsp.vim', vim_home / 'plugin/woozy-lsp.vim', quote(compiler)),
+            (ASSETS / 'nvim/syntax/woozy.vim', vim_home / 'syntax/woozy.vim', None),
+        ))
+    if args.editor in {'both', 'emacs', 'vim-emacs'}:
         init, lisp = emacs_paths(args.emacs_init, home, xdg)
         quote(init)
         assets.extend((ASSETS / 'emacs' / name, lisp / name, replacement) for name, replacement in (
@@ -168,16 +176,20 @@ def install(args):
         if any(parent in paths for parent in path.parents):
             raise ValueError(f'Conflicting setup destinations: {path}')
 
+    plugin_installed = vim_home is not None and install_vim_lsp(vim_home)
+    if plugin_installed:
+        print(f'Installed vim-lsp in {vim_home / "pack/woozy/start/vim-lsp"}')
     for path, contents, previous, mode in changes:
         install_file(path, contents, previous, mode)
         print(f'Updated {path}')
-    if not changes:
+    if not changes and not plugin_installed:
         print('Woozy editor setup is up to date.')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--editor', choices=('both', 'neovim', 'emacs'), default='both')
+    parser.add_argument('--editor', choices=('both', 'neovim', 'emacs', 'vim', 'vim-emacs'),
+                        default='both', help='Editors to configure (default: Neovim and Emacs)')
     parser.add_argument('--compiler', metavar='PATH', help='Woozy executable (default: woozyc on PATH)')
     parser.add_argument('--emacs-init', metavar='FILE', help='Emacs init file (default: detect the usual locations)')
     try:

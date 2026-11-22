@@ -2,32 +2,43 @@
 
 ## Install the editor configuration
 
-On Linux, run the [setup tool](../editor/setup.py) from the repository root
-with Python 3, Neovim 0.10 or later, Emacs with Eglot (included in Emacs 29
-or later), and a working `woozyc` executable. See the [compiler build guide](BUILD.md),
-[Neovim LSP documentation](https://neovim.io/doc/user/lsp/), and
-[Eglot manual](https://www.gnu.org/software/emacs/manual/html_mono/eglot.html).
+On Linux or macOS, run the [setup tool](../editor/setup.py) from the repository
+root with Python 3 and a working `woozyc` executable. Use Vim with job and
+channel support, Neovim 0.10 or later, or Emacs with Eglot (included in Emacs 29
+or later). See the [compiler build guide](BUILD.md) for installing `woozyc`.
+
+Configure Vim and Emacs together.
+
+```sh
+python3 development/editor/setup.py --editor vim-emacs
+```
+
+The default configures Neovim and Emacs.
 
 ```sh
 python3 development/editor/setup.py
 ```
 
-The tool installs Woozy syntax highlighting and automatic LSP startup for
-both editors. It uses the `woozyc` found on `PATH` at setup time and writes its
-absolute path into the editor settings. Pass `--compiler` to select another
-executable, including a build outside `PATH`.
+The tool installs Woozy syntax highlighting and automatic LSP startup. It uses
+the `woozyc` found on `PATH` at setup time and writes its absolute path into
+the editor settings. Pass `--compiler` to select a compiler outside `PATH`.
 
 ```sh
+python3 development/editor/setup.py --editor vim
 python3 development/editor/setup.py --editor neovim
 python3 development/editor/setup.py --editor emacs --compiler /path/to/woozyc
 ```
 
-Neovim files go in the user config directory selected by `XDG_CONFIG_HOME`
-and `NVIM_APPNAME`. Emacs loads the installed mode and Eglot settings from a
-marked block in its init file. Use `--emacs-init FILE` for a custom init.
-Running setup again updates the managed files and block. Setup stops before
-changing files if it finds a conflicting Woozy file that it does not manage.
-The tool uses local files and the selected compiler executable.
+Vim files go in `~/.vim`. The first Vim setup downloads a pinned copy of
+[vim-lsp](https://github.com/prabirshrestha/vim-lsp) from GitHub, verifies its
+checksum, and installs it as a Vim package. A usable existing Vim start
+package can be reused offline. Neovim files go in the user config directory
+selected by `XDG_CONFIG_HOME` and `NVIM_APPNAME`. Emacs loads the mode and
+Eglot settings from a marked block in its init file. Use `--emacs-init FILE`
+for a custom init.
+
+Running setup again updates the files it manages. Setup stops before changing
+editor settings if it finds a conflicting Woozy file.
 
 Restart your editor and open a `.wz` file. Files under the same
 `lang.toml` use the same project root for LSP.
@@ -75,20 +86,10 @@ Use `:lua vim.lsp.buf.format({ name = "woozyc" })` to format the buffer.
 
 ## Vim
 
-If you use the [vim-lsp plugin](https://github.com/prabirshrestha/vim-lsp),
-add this to `.vimrc` and use `:LspDocumentFormat` to format a Woozy buffer.
-
-```vim
-augroup woozy_filetype
-  autocmd!
-  autocmd BufNewFile,BufRead *.wz setfiletype woozy
-  autocmd User lsp_setup call lsp#register_server({
-        \ 'name': 'woozyc',
-        \ 'cmd': {server_info -> ['woozyc', 'lsp']},
-        \ 'allowlist': ['woozy'],
-        \ })
-augroup END
-```
+Use `:LspHover` to inspect the symbol under the cursor, `:LspDefinition` to
+jump to its definition, and `:LspDocumentFormat` to format the buffer.
+In insert mode, press Ctrl-X then Ctrl-O for completion. See the
+[vim-lsp commands](https://github.com/prabirshrestha/vim-lsp#supported-commands).
 
 ## Emacs
 

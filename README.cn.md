@@ -58,13 +58,13 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 
 ## 编辑器配置
 
-Neovim 和 Emacs 打开 `.wz` 文件时可自动启用语法高亮和 Woozy LSP。自举版编译器还提供补全、悬停、定义跳转和实时项目诊断。将 `woozyc` 放在 `PATH` 上，然后在仓库根目录运行以下命令。
+Linux 和 macOS 上的 Emacs、Vim 和 Neovim 打开 `.wz` 文件时可自动启用语法高亮和 Woozy LSP。自举版编译器提供补全、悬停、定义跳转和实时项目诊断。将 `woozyc` 放在 `PATH` 上，然后在仓库根目录用下面这条命令配置 Vim 和 Emacs。
 
 ```sh
-python3 development/editor/setup.py
+python3 development/editor/setup.py --editor vim-emacs
 ```
 
-环境要求、单个编辑器的安装方式和编译器选择见[编辑器配置](development/docs/EDITOR.md)。
+省略 `--editor` 时配置 Neovim 和 Emacs。环境要求、单个编辑器的安装方式和编译器选择见[编辑器配置](development/docs/EDITOR.md)。
 
 ## 主要规则
 
