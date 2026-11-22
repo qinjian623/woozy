@@ -64,6 +64,8 @@ python3.12 tests/tooling/installed_bundle_test.py "$HOME/.local/opt/woozy-curren
 
 ### 预编译发行包
 
+要从 GitHub 安装、检查或升级已发布的编译器，使用 README 的[一键安装命令](../../README.cn.md#安装)。
+
 拿到压缩包和 SHA-256 文件后，在下载目录校验并解包。将整个 `woozy/` 目录放到希望安装的位置。
 
 ```sh

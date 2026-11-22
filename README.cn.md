@@ -32,7 +32,27 @@ func main() throws os.Error {
 
 ## 安装
 
-`v0.1.0-rc.2` 的安装包面向 Linux x86_64 和 Apple Silicon，均包含 `woozyc`、标准库、运行库和锁定版本的 LLVM 工具。Mac 原生程序要求 macOS 14.4 或更新版本，编译时需要 Xcode Command Line Tools 或已安装的 macOS SDK。[发布页](https://github.com/qinjian623/woozy/releases)
+Woozy 安装包面向 Linux x86_64 和 Apple Silicon，均包含 `woozyc`、标准库、运行库和锁定版本的 LLVM 工具。Mac 原生程序要求 macOS 14.4 或更新版本，编译时需要 Xcode Command Line Tools 或已安装的 macOS SDK。
+
+有 curl 和 Python 3.12 或更新版本时，用下面一条命令查询 [GitHub 发布页](https://github.com/qinjian623/woozy/releases)。有可用版本时，脚本会询问是否安装或升级。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
+```
+
+加 `--check` 只查版本。用下面这条命令可跳过询问，直接安装或升级。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --yes
+```
+
+脚本优先选择正式版。已安装预发布版的用户可以升到更新的预发布版或正式版。校验安装包后，脚本会切换 `~/.local/bin/woozyc`，旧版本仍保留。如果终端找不到 `woozyc`，将 `~/.local/bin` 加到 `PATH`。可以用 `--prefix DIR` 指定其他用户安装目录。
+
+如果 `~/.local/bin/woozyc` 已指向源码构建版或没有发行信息的旧安装包，用另一个安装目录保留原有安装。
+
+### 手动安装
+
+下面的命令安装 [发布页](https://github.com/qinjian623/woozy/releases) 上的 `v0.1.0-rc.2`。
 
 ```sh
 archive=woozy-linux-x86_64.tar.gz   # Apple Silicon 改用 woozy-macos-arm64.tar.gz。

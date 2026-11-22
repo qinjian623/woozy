@@ -82,9 +82,10 @@ def copy_guides(bundle, target):
     ignore = shutil.ignore_patterns(".git", "build", "__pycache__", ".DS_Store")
     shutil.copytree(root / "docs", bundle / "docs", ignore=ignore)
     editor = Path("development/editor")
-    for directory in ("emacs", "nvim"):
+    for directory in ("emacs", "nvim", "vim"):
         shutil.copytree(root / editor / directory, bundle / editor / directory, ignore=ignore)
-    shutil.copy2(root / editor / "setup.py", bundle / editor / "setup.py")
+    for script in ("setup.py", "vim_lsp.py"):
+        shutil.copy2(root / editor / script, bundle / editor / script)
     debuggers = [Path("tools/gdb/woozy.py")]
     lldb = Path("tools/lldb/woozy.py")
     if target == "macos-arm64" and (root / lldb).is_file():

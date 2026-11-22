@@ -100,6 +100,8 @@ class ReleaseArchiveTest(unittest.TestCase):
                         f"version=0.1.0-rc.1-selfhost\ncommit={commit}\n")
                     for relative in ("LICENSE", "docs/QUICKSTART.md", "tools/gdb/woozy.py",
                                      "development/editor/setup.py",
+                                     "development/editor/vim_lsp.py",
+                                     "development/editor/vim/plugin/woozy-lsp.vim",
                                      "development/editor/nvim/plugin/woozy.lua",
                                      "development/editor/emacs/woozy-mode.el"):
                         self.assertEqual(archive.extractfile("woozy/" + relative).read(),

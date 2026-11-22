@@ -34,7 +34,27 @@ Most of the guides below are in Chinese.
 
 ## Install
 
-The `v0.1.0-rc.2` release packages target Linux x86_64 and Apple Silicon. Both include `woozyc`, the standard library, runtime files, and pinned LLVM tools. On a Mac, native programs target macOS 14.4 or later and compiling them requires the Xcode Command Line Tools or another installed macOS SDK. See the [releases page](https://github.com/qinjian623/woozy/releases).
+Woozy release packages target Linux x86_64 and Apple Silicon. Both include `woozyc`, the standard library, runtime files, and pinned LLVM tools. On a Mac, native programs target macOS 14.4 or later and compiling them requires the Xcode Command Line Tools or another installed macOS SDK.
+
+With curl and Python 3.12 or later, run this command to check [GitHub Releases](https://github.com/qinjian623/woozy/releases) and confirm an install or upgrade.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
+```
+
+Use `--check` to report the available version without installing anything, or `--yes` to install or upgrade without a prompt.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --yes
+```
+
+The installer prefers stable releases when available. An installed pre-release can move to a newer pre-release or stable version. It verifies the archive before switching `~/.local/bin/woozyc`, and keeps previous versions. Add `~/.local/bin` to your `PATH` if needed. Use `--prefix DIR` for a different user installation directory.
+
+If `~/.local/bin/woozyc` points to a source build or a package without release metadata, specify a separate prefix to keep that installation.
+
+### Manual installation
+
+The commands below install `v0.1.0-rc.2` from the [releases page](https://github.com/qinjian623/woozy/releases).
 
 ```sh
 archive=woozy-linux-x86_64.tar.gz   # On Apple Silicon, use woozy-macos-arm64.tar.gz.

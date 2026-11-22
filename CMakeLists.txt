@@ -63,6 +63,8 @@ if(BUILD_TESTING)
     set_tests_properties(tooling.editor_cli PROPERTIES TIMEOUT 60)
     add_test(NAME tooling.release_archive COMMAND ${LANG_TEST_PYTHON} -B
       ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/release_archive_test.py)
+    add_test(NAME tooling.release_installer COMMAND ${LANG_TEST_PYTHON} -B
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/release_installer_test.py)
     add_test(NAME tooling.editor_setup COMMAND ${LANG_TEST_PYTHON} -B
       ${CMAKE_CURRENT_SOURCE_DIR}/development/editor/test_setup.py)
   endif()
