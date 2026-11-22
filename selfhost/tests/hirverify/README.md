@@ -156,8 +156,9 @@ The production check order is preserved statically: the indexes are built once
 after `shape`, and the consuming loops keep the original node order.  The
 existing six-mode tests pass with their recorded labels/codes, and the current
 `BAD_SOURCE` control sets `nodes[0].source.node.node = 999999` and gets
-`E_IR_INVALID` with `rejected=1 failed=1`.  This has not dynamically exercised
-every span field or every possible error-priority combination.  The entries are
+`E_IR_INVALID` with `rejected=1 failed=1`.  The `BAD_SOURCE` control does not
+dynamically exercise every span field or every possible error-priority
+combination.  The entries are
 private to one `Verifier`/run.  The synthetic set is keyed by module, file and
 node, matching `same_ref`; it is not keyed by a numeric node id or span alone.
 
@@ -201,8 +202,8 @@ python3 selfhost/tests/hirverify/cache/run.py ... \
 
 `results.json` retains every bounded command record, source hashes, raw
 stdout/stderr, per-round equality, the exact positive `ELAPSED_NS` values and
-their median ratio.  The ratio is only this component driver; it is not a
-whole-compiler speedup claim.
+their median ratio.  The ratio applies only to this component driver and is
+not a whole-compiler speedup claim.
 
 Report, elapsed and repeat-loop controls:
 
@@ -233,12 +234,13 @@ exec-only trace.
 `expression_kinds/run.py` is a smaller component check for the production
 `hirverify.verifier_expression`/`verifier_statement` helpers.  It injects only a
 package-internal forwarder (`expression_kinds/probe.wz`) and builds one O0
-driver.  The driver checks the `Await` (42), `TraitObjectInit` (43) and
-`TraitDispatch` (44) kinds are expressions; `ExpressionStatement` (16), `Noop`
-(19) and `Block` (15) are not; and foreign place accesses remain rejected.  A
-pre-fix package directory is run once with `--expect-exit 1` to retain the
-observed three failures.  This does not build the 116-source CLI, the C++
-oracle/probe, or run the complete corpus.  See `expression_kinds/README.md`.
+driver.  The driver checks that `Await` (42), `TraitObjectInit` (43), and
+`TraitDispatch` (44) are expressions, that `ExpressionStatement` (16), `Noop`
+(19), and `Block` (15) are not, and that foreign place accesses remain rejected.
+A pre-fix package directory is run once with `--expect-exit 1` to retain the
+observed three failures.  The runner does not build the 116-source CLI or the
+C++ oracle/probe, and it does not run the complete corpus.  See
+`expression_kinds/README.md`.
 
 ## Scope
 

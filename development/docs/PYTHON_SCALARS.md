@@ -2,9 +2,9 @@
 
 本文保留此前阶段记录。当前 Vec、拥有字段及 move 执行范围见 [T09_EXECUTION.md](T09_EXECUTION.md)。
 
-严格f32/f64四则、负号、六种比较和复合赋值已支持，见
+严格 f32/f64 四则运算、负号、六种比较和复合赋值已支持，见
 [浮点执行说明](../tests/python/STRICT_FLOATING.md)。有限数先按精确整数比计算，再直接
-按目标精度舍入；浮点除零不产生整数Panic。原76探针和3362个动态向量已实际观察。
+按目标精度舍入；浮点除零不触发整数 Panic。原有的 76 个探针和 3362 个动态向量均已实测观察。
 
 Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
 [错误与清理执行说明](PYTHON_T08_EXECUTION.md)。当前运行库版本为
@@ -14,18 +14,18 @@ Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
 已转为真实执行测试。超过目标限制的输入仍在 build 时返回
 `E_CAPABILITY_UNAVAILABLE`，check 可通过。后文保留各阶段的验证记录。
 
-常量字符串已接入，见[字符串实现](CONSTANT_STRINGS.md)。主代理三种构建各28/28，
-关闭LLVM22/22；每套另观察20个实际Python字符串返回值的类型、UTF-8字节和长度。
-该字符串阶段未改运行库版本；动态字符串操作、拥有字段和ARC仍未实现。
+常量字符串已接入，见 [字符串实现](CONSTANT_STRINGS.md)。主代理三种构建各 28/28，
+关闭 LLVM 时为 22/22；每套构建另检查了 20 个实际 Python 字符串返回值的类型、UTF-8 字节和长度。
+该字符串阶段未改动运行库版本；动态字符串操作、拥有字段和 ARC 仍未实现。
 
 ## T07 平凡 struct/enum 值执行（2026-11-04）
 
-主代理已将两个后端合并：GNU Debug、GNU Release和Clang22 ASan/UBSan完整
-CTest各26/26，关闭LLVM的前端构建21/21。原13个项目在三种构建中完成
-native O0/O2与Python比较；另34份补充源码新增56次交叉执行，结果一致。
-独立只读审查另跑6个Python程序通过，含普通返回101与嵌套switch/for。
-运行记录保存在外层checks/t07-python-pod-root-verification.json和
-checks/t07-pod-backend-comparison.json。下方GNU Debug/Release表格保留agent交接时的结果。
+主代理已将两个后端合并：GNU Debug、GNU Release 和 Clang22 ASan/UBSan 完整
+CTest 各 26/26，关闭 LLVM 的前端构建为 21/21。原 13 个项目在三种构建中完成了
+native O0/O2 与 Python 的结果比对；另 34 份补充源码新增 56 次交叉执行，结果一致。
+独立只读审查另跑 6 个 Python 程序全部通过，含普通返回 101 与嵌套 switch/for。
+运行记录保存在外层 checks/t07-python-pod-root-verification.json 和
+checks/t07-pod-backend-comparison.json。下方 GNU Debug/Release 表格保留 agent 交接时的结果。
 
 任务：T07 Python；operation_id：`language-python-pod-aggregates-20261104`；契约 `compiler-dev/1`。
 基于 `1bff58aa6c50b946bc6d7a5761d1bf486e513aa4`，初始工作区干净。
@@ -58,9 +58,9 @@ C++ `emit`、Options、Output 字段和语言契约没有变化。Python 私有�
 
 ### 单列的 sharedcap 本地修改
 
-`src/hir/hir.cpp` 只修改 `check_backend_capabilities`；agent独立补丁保留在外层
-`reviews/python-pod-sharedcap-local.patch`，由root与native改动共同合入。
-该补丁是运行本次Python聚合测试所需的本地修改，不能只取emitter。
+`src/hir/hir.cpp` 只修改 `check_backend_capabilities`；agent 独立补丁保留在外层
+`reviews/python-pod-sharedcap-local.patch`，由 root 与 native 改动共同合入。
+该补丁是运行本次 Python 聚合测试所需的本地修改，不能只取 emitter。
 
 只对 Python 放开平凡聚合操作。字段类型在 TypeContext 的私有副本中替换，公开 TypeContext
 不变；函数字段只按函数值存储处理，不沿函数返回类型继续展开名义类型。实际函数与 Call 的
@@ -301,8 +301,8 @@ IntegerConvert 检查目标范围，动态越界产生 Panic。
 
 ## 拒绝的输入
 
-T06 初版拒绝严格浮点算术/比较/转换、捕获闭包、string、Vec、聚合、泛型、typed throws、defer、ARC、move、
-复杂 Place/借用及 foreign 均不在本标量版本内；已有前端或 emitter 报
+T06 初版不支持严格浮点算术/比较/转换、捕获闭包、string、Vec、聚合、泛型、typed throws、defer、ARC、move、
+复杂 Place/借用及 foreign；前端或 emitter 对这些构造一律报
 `E_CAPABILITY_UNAVAILABLE`，不会转成 Any 或切换后端。
 本次 T07 已接入的具体标量泛型与未使用声明见文首，不能继续按初版分类为未支持。
 普通参数重新赋值仍等待用户选择，checker 对它报告同一未支持诊断。
@@ -447,12 +447,12 @@ native 差分、T08 错误清理、T09 ARC/泄漏、T10 foreign 集成未执行�
 
 主代理已加入正式 `woozyc build --project MANIFEST --backend python --out-dir DIR [--format json]`。
 该命令先检查再生成 program.py/langrt.py，不运行解释器。主目录 Debug、Release、Clang22
-ASan/UBSan 均17/17通过（包括新增 python.cli），实际17工程、15补充、5分类对照通过。
-独立只读审查310f6335未发现可确认错误。主目录新输出不依赖上述旧独立构建目录。
+ASan/UBSan 均 17/17 通过（包含新增 python.cli），实际执行的 17 个工程、15 项补充用例和 5 项分类对照全部通过。
+独立只读审查 310f6335 未发现可确认错误。主目录的新输出不依赖上述旧的独立构建目录。
 
-构建时缺少 Python3.12 不影响 C++生成器；仅两项执行测试记为not_run。执行测试须设置
-LANG_PYTHON312且由runner核实真实版本。正式CLI源码错误或未支持不会覆盖已有输出；
-文件写入先在私有临时目录完成，program.py最后替换，写入失败返回2并清除临时目录。
+构建时缺少 Python 3.12 不影响 C++ 生成器，仅两项执行测试记为 not_run。执行测试须设置
+LANG_PYTHON312，并由 runner 核实真实版本。正式 CLI 遇到源码错误或未支持能力时不会覆盖已有输出；
+文件写入先在私有临时目录完成，最后替换 program.py，写入失败返回 2 并清理临时目录。
 
 ```sh
 cmake --preset frontend-debug -DLANG_PYTHON312=/path/to/python3.12

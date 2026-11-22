@@ -4,7 +4,7 @@
 
 ## 源码
 
-`dyn Trait` 与 `dyn Trait[Args]` 是显式类型。`dyn` 不是新关键字，只在类型位置识别。一个具体值可以出现在期望 dyn 类型的位置（绑定、参数、返回值、struct/enum 字段、Vec 元素和赋值），转换要求该具体类型对完整 trait 应用恰有一个 impl。
+`dyn Trait` 与 `dyn Trait[Args]` 是显式类型。`dyn` 不是新关键字，只在类型位置识别。具体类型的值可以直接用在期望 dyn 类型的位置（绑定、参数、返回值、struct/enum 字段、Vec 元素和赋值），转换要求该具体类型对完整 trait 应用恰好有一个 impl。
 
 ```wz
 trait Convert[T] { func value(self Self, fallback T) T; }
@@ -13,7 +13,7 @@ let number dyn Convert[i32] = tag;
 let values Vec[dyn Convert[i32]] = [tag, other];
 ```
 
-`Convert[i32]` 和 `Convert[bool]` 的 `TypeId` 不同：`TypeKind::TraitObject` 保存真实 trait `declaration` 和有序 `type_args`。转换要求完整 trait 应用恰有一个 impl；空 trait 也必须存在 impl，否则在语义检查阶段报告源错误，不进入 HIR。dyn 值按普通值规则复制/移动；复制共享同一个装箱值，最后一次销毁释放拥有字段。
+`Convert[i32]` 和 `Convert[bool]` 的 `TypeId` 不同：`TypeKind::TraitObject` 保存真实 trait `declaration` 和有序 `type_args`。即便是空 trait 也必须存在唯一 impl，否则在语义检查阶段报告源码错误，不进入 HIR。dyn 值按普通值规则复制或移动；复制共享同一个装箱值，最后一次销毁时释放拥有字段。
 
 ## 对象安全
 
@@ -39,8 +39,8 @@ trait 在用作 dyn 时检查全部方法：
 
 ## Python 表示
 
-`langrt.DynObject` 保存具体 `ValueType`、装箱值和按声明顺序排列的方法函数表。复制使用具体类型的 `ValueType.copy`；调用时复制接收者并转发到具体函数；销毁使用 `ValueType.drop`。`ValueType('dyn')` 参与 Vec/struct 的 copy/drop/trace。语言 GC 在计数阶段已经减过 dyn 内部强边，因此退役阶段必须穿过 DynObject 的具体值和嵌套结构，跳过已计数的 Vec/function/Slice 边，禁止对旧别名二次 drop 或重新激活；DynObject 本身在退役/销毁后标记为 dead。
+`langrt.DynObject` 保存具体 `ValueType`、装箱值和按声明顺序排列的方法函数表。复制使用具体类型的 `ValueType.copy`；调用时复制接收者并转发到具体函数；销毁使用 `ValueType.drop`。`ValueType('dyn')` 参与 Vec/struct 的 copy/drop/trace。语言 GC 在计数阶段已经减过 dyn 内部强边，因此退役阶段必须遍历 DynObject 内部的具体值和嵌套结构，跳过已计数的 Vec/function/Slice 边，禁止对旧别名二次 drop 或重新激活；DynObject 本身在退役或销毁后标记为 dead。
 
 ## 验证
 
-`tests/trait_objects/cases.json` 包含正例（标量/复合返回、异构 `Vec[dyn]`、泛型 trait 身份、泛型 impl、泛型函数边界、复制/移动/销毁、字段/枚举/函数边界、闭包捕获、空 trait 有 impl、纯 Woozy dyn 环、dyn 内拥有函数/Slice 的退役环）与拒绝例（对象不安全方法、Self 返回、歧义 impl、空 trait 无 impl）。`run_trait_cases.py` 对两个前端后端执行 check，正例执行 Python 与 Native O0/O2，检查 ELF64/x86_64、无 `PT_INTERP`、无强未定义符号；`observe_dyn_cycle.py` 在禁用 CPython GC 的进程中运行 dyn 环，检查语言 GC 实际收集、无 live Vec、DynObject 全部退役；`dyn-retire` 另覆盖 dyn 具体值内的闭包环境与 Slice 退役分支。
+`tests/trait_objects/cases.json` 包含正例（标量/复合返回、异构 `Vec[dyn]`、泛型 trait 身份、泛型 impl、泛型函数边界、复制/移动/销毁、字段/枚举/函数边界、闭包捕获、空 trait 有 impl、纯 Woozy dyn 环、dyn 内拥有函数/Slice 的退役环）与拒绝例（对象不安全方法、Self 返回、歧义 impl、空 trait 无 impl）。`run_trait_cases.py` 对两个前端后端执行 check，正例运行 Python 与 Native O0/O2，并检查 ELF64/x86_64、无 `PT_INTERP`、无强未定义符号。`observe_dyn_cycle.py` 在禁用 CPython GC 的进程中运行 dyn 环，检查语言 GC 实际完成回收、没有残留的 live Vec，且所有 DynObject 均已退役。`dyn-retire` 另外覆盖 dyn 具体值内的闭包环境与 Slice 退役分支。

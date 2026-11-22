@@ -12,22 +12,22 @@
 
 ## 非阻塞读写和退出
 
-服务端使用单线程事件循环。监听和已接收的 socket 均带 `SOCK_NONBLOCK`；`net.poll` 正常使用无限等待，有待关闭连接时使用有限等待清理过期连接。每次处理的接受连接和读取批次有上限，慢客户端的发送队列已满或写入失败时断开该客户端。
+服务端使用单线程事件循环。监听和已接收的 socket 均带 `SOCK_NONBLOCK`；`net.poll` 平时使用无限等待，有待关闭连接时改用有限等待来清理过期连接。每轮接受连接和读取的批次都有上限；慢客户端的发送队列已满或写入失败时会直接断开。
 
-客户端同时 poll stdin 与 socket。连接等待最多 5 秒；`/quit` 或 stdin EOF 后尝试写完队列、关闭写方向并读取剩余响应。发送和读取结束各最多等 2 秒。服务端处理对端 EOF 时也给已有输出最多 2 秒发送时间。服务器 EOF 即使遇到仍打开的 stdin，也能使客户端退出。
+客户端同时 poll stdin 与 socket。连接最多等待 5 秒；收到 `/quit` 或 stdin EOF 后，先尝试发完队列、关闭写方向并读完剩余响应，发送和读取收尾各最多等 2 秒。服务端处理对端 EOF 时，同样给已有输出最多 2 秒发送时间。即使 stdin 仍打开，服务端返回 EOF 后客户端也会退出。
 
-Linux accept4 可以返回新连接上已发生的网络错误。应用继续接受这类连接，不结束现有会话；监听描述符本身错误仍抛出。处理规则依据 [Linux accept(2)](https://man7.org/linux/man-pages/man2/accept.2.html)：临时错误为 ECONNABORTED、ENETDOWN、EPROTO、ENOPROTOOPT、EHOSTDOWN、ENONET、EHOSTUNREACH、EOPNOTSUPP、ENETUNREACH。
+Linux accept4 会直接返回新连接上已经发生的网络错误。遇到这类临时错误时，应用跳过该连接并继续等待新连接，不中断现有会话；监听描述符本身的错误仍会抛出。处理规则依据 [Linux accept(2)](https://man7.org/linux/man-pages/man2/accept.2.html)：临时错误为 ECONNABORTED、ENETDOWN、EPROTO、ENOPROTOOPT、EHOSTDOWN、ENONET、EHOSTUNREACH、EOPNOTSUPP、ENETUNREACH。
 
 ## 实际检查
 
-`native.chat` 在 O0/O2 构建、运行两端。共 67 项检查：
+`native.chat` 在 O0 和 O2 下构建并运行服务端与客户端，共 67 项检查：
 
 - O0：33 项；O2：34 项。
-- 两个真实 Woozy 客户端互发中文、emoji，核对发送者回显、广播、空行、CRLF、EOF、重连和昵称复用。
+- 两个真实 Woozy 客户端互发中文和 emoji，核对发送者回显、广播、空行、CRLF、EOF、重连和昵称复用。
 - 原始 TCP 客户端逐字节发送 UTF-8，覆盖分包、合并消息、消息长度上限和非法输入。
-- 独立测试服务器只用于客户端不可信输入检查，不替代真实双端测试。
-- O2 慢读者压力中，慢连接被移除，健康连接仍收到后续消息；O0 不跑这项压力。
-- 每个配置模拟 9 个 accept 临时错误和 2 个致命错误：通过链接器 `--wrap` 令运行库的第 3 次 accept 返回指定错误。stderr 标记必须恰好一次，以确认模拟发生。已有客户端注册后触发错误，临时错误不影响双向聊天，错误 9/22 仍结束服务端。此项模拟运行库返回值，没有制造真实内核网络故障。
+- 独立测试服务器只用于检查客户端对不可信输入的处理，不替代真实双端测试。
+- 在 O2 慢读者压力测试中，慢连接会被移除，健康连接仍能收到后续消息；O0 不跑这项压力测试。
+- 每个配置模拟 9 个 accept 临时错误和 2 个致命错误：通过链接器 `--wrap` 让运行库的第 3 次 accept 返回指定错误，并要求 stderr 中的标记恰好出现一次，以确认模拟确实触发。错误在已有客户端注册后注入，临时错误不影响双向聊天，错误 9/22 仍会让服务端退出。这项测试只模拟运行库返回值，没有制造真实内核网络故障。
 - 生成 ELF 没有 INTERP、NEEDED 或强未定义符号；测试创建的进程和 socket 均清理。
 
 测试 runner 是 `tests/native/run_chat.py`，额外错误模拟文件是 `tests/native/chat_accept_error.cpp`。在已配置的 Native 构建中执行：

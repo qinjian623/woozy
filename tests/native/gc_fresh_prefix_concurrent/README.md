@@ -260,22 +260,22 @@ The executable allowlist is per role and exact:
 | readelf | the supplied readelf |
 | public program / observed program | that artifact only |
 
-so a Wz emission that shells out to the Cpp CLI/helper or to an LLVM tool to
-stand in for the Source frontend is a recorded failure, not a label.
+If a Wz emission shells out to the Cpp CLI/helper or an LLVM tool instead of
+running the Source frontend, the exec audit records a failure, not merely a
+label.
 
 The configured input set is resolved once from the actual argv-selected
-locations — helper, Wz driver, CLI, hosted runtime archive, clang, readelf,
+locations: helper, Wz driver, CLI, hosted runtime archive, clang, readelf,
 strace, the fixed LLVM tool set (`clang`, `clang++`, `opt`, `llc`, `ld.lld`),
 the optional linker, `selfhost/corpus.py`, this runner, the controls, the
 observer parser, the allocation observer, the shim, the generation control, the
-fixture manifest/source and every file of the actual `--stdlib` tree.  The tree
-is enumerated again for each snapshot so added and removed files also fail.
-A missing
-declared input is an error, not a silently skipped entry.  `inputs.before.json`,
-`inputs.after.json` and the final comparison are all recorded.  The internal
-toolchain selection of the supplied CLI is *not* resolved by this runner; the
-exec audit records what that CLI really executed instead of pretending the
-provenance is known.
+fixture manifest/source, and every file in the actual `--stdlib` tree.  The
+`--stdlib` tree is re-enumerated on every snapshot so added or removed files
+also trigger a failure.  A missing declared input is an error, not a silently
+skipped entry.  `inputs.before.json`, `inputs.after.json`, and the final
+comparison are all recorded.  This runner does not resolve the supplied CLI's
+internal toolchain selection; the exec audit records what the CLI actually
+executed instead of assuming provenance.
 
 The typed/raw process record is handed to the shared `commands.json` save point
 before the after-input snapshot is read, so an unreadable after-snapshot keeps
@@ -316,22 +316,26 @@ every expected command in the matrix really ran.
 python3 -B tests/native/gc_fresh_prefix_concurrent/pure_controls.py
 ```
 
-The spawn/exec/socket guards are installed before `run.py` is imported and
-`external_launch_attempts` must stay `[]`.  90 controls cover the original set
-of 68 plus: the Wz printed pointer-stride form through the real `check_engine`,
-a quoted stride spelling, exact protocol integers/booleans (boolean-as-integer,
-float, integer-as-boolean, counts and stats), non-finite `Infinity`/`NaN`,
-positive and negative exponent overflow, and
-duplicate protocol keys, a float observer metric, a kept launch-failure record,
-and seven whole-main controls — a complete successful `--opt 0` run including the
-first observed handshake with the real allocation parser, the known
-after-snapshot failure (the executed command and its raw bytes are kept),
-added and removed standard-library files, a
-changed frozen tool input, and a Wz emit that really executes the Cpp helper
-(rejected by the exec audit with the log preserved), plus real soft links for
-`clang++` and `llvm-readelf`. Their invocation names are preserved because LLVM
-uses those names to choose its driver and output format; exec auditing still
-compares the resolved executable targets.
+The spawn/exec/socket guards are installed before `run.py` is imported, and
+`external_launch_attempts` must stay `[]`.  The 90 controls cover the original
+68 plus:
+
+* the Wz printed pointer-stride form through the real `check_engine`, and a
+  quoted stride spelling;
+* exact protocol integers and booleans (boolean-as-integer, float,
+  integer-as-boolean, counts and stats), non-finite `Infinity`/`NaN`, positive
+  and negative exponent overflow, duplicate protocol keys, a float observer
+  metric, and a kept launch-failure record;
+* seven whole-main controls: a complete successful `--opt 0` run (including the
+  first observed handshake with the real allocation parser), the known
+  after-snapshot failure (preserving the executed command and its raw bytes),
+  added and removed standard-library files, a changed frozen tool input, a Wz
+  emit that actually executes the Cpp helper (rejected by the exec audit with
+  the log preserved), and real soft links for `clang++` and `llvm-readelf`.
+
+Invocation names for symlinked `clang++` and `llvm-readelf` are preserved
+because LLVM uses those names to choose its driver and output format; exec
+auditing still compares the resolved executable targets.
 
 ## Current status
 

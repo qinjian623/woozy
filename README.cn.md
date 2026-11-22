@@ -34,7 +34,7 @@ func main() throws os.Error {
 
 Woozy 安装包面向 Linux x86_64 和 Apple Silicon，均包含 `woozyc`、标准库、运行库和锁定版本的 LLVM 工具。Mac 原生程序要求 macOS 14.4 或更新版本，编译时需要 Xcode Command Line Tools 或已安装的 macOS SDK。
 
-有 curl 和 Python 3.12 或更新版本时，用下面一条命令查询 [GitHub 发布页](https://github.com/qinjian623/woozy/releases)。有可用版本时，脚本会询问是否安装或升级。
+装有 curl 和 Python 3.12 及以上版本时，可以用下面这条命令检查 [GitHub 发布页](https://github.com/qinjian623/woozy/releases)；找到可用版本后，脚本会询问是否安装或升级。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | 
 
 脚本优先选择正式版。已安装预发布版的用户可以升到更新的预发布版或正式版。校验安装包后，脚本会切换 `~/.local/bin/woozyc`，旧版本仍保留。如果终端找不到 `woozyc`，将 `~/.local/bin` 加到 `PATH`。可以用 `--prefix DIR` 指定其他用户安装目录。
 
-如果 `~/.local/bin/woozyc` 已指向源码构建版或没有发行信息的旧安装包，用另一个安装目录保留原有安装。
+如果 `~/.local/bin/woozyc` 已指向源码构建版或没有发行信息的旧安装包，请改用另一个安装目录，以免覆盖原有安装。
 
 ### 手动安装
 
@@ -80,11 +80,11 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-输出 `Hello, world!`。执行 Python 输出需要 Python 3.12。分包构建使用系统的 Make 或 Ninja。TLS 需要单独构建附加库。[构建说明](development/docs/BUILD.md#安装自举版工具链) · [标准库说明](docs/STDLIB.md)
+输出 `Hello, world!`。运行生成的 Python 代码需要 Python 3.12。分包构建使用系统的 Make 或 Ninja，TLS 需要单独构建附加库。[构建说明](development/docs/BUILD.md#安装自举版工具链) · [标准库说明](docs/STDLIB.md)
 
 ## 编辑器配置
 
-Linux 和 macOS 上的 Emacs、Vim 和 Neovim 打开 `.wz` 文件时可自动启用语法高亮和 Woozy LSP。自举版编译器提供补全、悬停、定义跳转和实时项目诊断。将 `woozyc` 放在 `PATH` 上，然后在仓库根目录用下面这条命令配置 Vim 和 Emacs。
+Linux 和 macOS 上的 Emacs、Vim 和 Neovim 打开 `.wz` 文件时可自动启用语法高亮和 Woozy LSP。自举版编译器提供补全、悬停、定义跳转和实时项目诊断。把 `woozyc` 加到 `PATH` 后，在仓库根目录运行下面这条命令即可配置 Vim 和 Emacs。
 
 ```sh
 python3 development/editor/setup.py --editor vim-emacs
@@ -96,17 +96,17 @@ python3 development/editor/setup.py --editor vim-emacs
 
 类型写在名字后面，如 `count i32`。局部绑定可以推断类型，函数参数必须声明类型。简单语句以分号结束。
 
-`let` 不允许重新绑定或修改值字段，`var` 允许。struct/enum 按字段复制；Vec 赋值共享容器，切片建立新 Vec，引用元素仍可共享。
+`let` 不允许重新绑定或修改值字段，`var` 允许。struct/enum 按字段复制；Vec 赋值共享同一容器，切片会建新 Vec，但其中的引用元素仍会共享。
 
-`string` 是不可变 UTF-8 值。`text.len`、索引和切片按 Unicode 码点计算，索引得到 `u32`；`+` 建立新字符串，`==` 和排序按字节内容比较，不做 Unicode 正规化。`var` 整体绑定可以用 `+=`，字段、索引和 `let` 绑定不行。字符串与 `Vec[u8]` 的转换由 `std/text` 显式完成。
+`string` 是不可变 UTF-8 值。`text.len`（来自 `std/text`）、索引和切片都按 Unicode 码点计算，索引得到 `u32`；`+` 生成新字符串，`==` 和排序按字节内容比较，不做 Unicode 正规化。只有整体 `var` 绑定能用 `+=`，字段、索引和 `let` 绑定不行。字符串与 `Vec[u8]` 之间通过 `std/text` 显式转换。
 
 普通参数不消耗实参，参数名只读。转交拥有值使用 `move`，修改调用者的变量使用 `inout`，调用处都要明确写出。
 
-函数值可以捕获创建时的局部绑定。捕获绑定只读；Vec、Box 等共享对象的内容仍可通过接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 转移实际捕获的拥有值。保存 `value.method` 会保存接收者的逻辑副本；重新绑定或替换普通按值字段不会改变它，Vec 等引用字段仍共享内容。
+函数值可以捕获创建时的局部绑定。捕获绑定只读，Vec、Box 等共享对象的内容仍可通过接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 转移实际捕获的拥有值。把 `value.method` 存为函数值时会保留接收者的逻辑副本：重新绑定原变量或替换普通按值字段不会影响它，Vec 等引用字段仍共享内容。
 
-`throws E` 声明可传播的错误，调用者捕获或继续声明同类错误。`defer` 在当前词法块退出时执行，后注册的先执行。整数除零、越界等 Panic 不能用 typed catch 恢复。
+`throws E` 声明可传播的错误，调用者要么捕获，要么继续声明同类错误。`defer` 在当前词法块退出时执行，后注册的先执行。整数除零、越界等 Panic 不能用 typed catch 恢复。
 
-泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。`dyn Trait` 与 `dyn Trait[Args]` 是显式的动态 trait 类型，支持对象安全方法的动态分派、`Vec[dyn Trait]`、复制/移动/销毁以及泛型 trait 应用身份（如 `Convert[i32]` 与 `Convert[bool]` 不同）。没有模板特化或关联类型。
+泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。`dyn Trait` 与 `dyn Trait[Args]` 是显式的动态 trait 类型，支持对象安全方法的动态分派、`Vec[dyn Trait]`、复制/移动/销毁，也能按类型实参区分泛型 trait 身份（如 `Convert[i32]` 与 `Convert[bool]` 不同）。不支持模板特化和关联类型。
 
 ## 当前范围
 
@@ -114,11 +114,11 @@ python3 development/editor/setup.py --editor vim-emacs
 
 标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口用于 Linux x86_64 和 macOS arm64 的原生程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
 
-`std/http` 支持 HTTP/1.1；`std/http_server` 提供支持 keep-alive、流水线、非阻塞背压、请求/正文/空闲/写超时、`Expect: 100-continue` 和优雅 stop/drain/abort 的异步 HTTP/1.1 服务器；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
+`std/http` 支持 HTTP/1.1；`std/http_server` 是异步 HTTP/1.1 服务器，支持 keep-alive、流水线、非阻塞背压、请求/正文/空闲/写超时、`Expect: 100-continue` 以及优雅 stop/drain/abort；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
 
-`std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
+`std/thread` 用无捕获函数和显式参数来创建并等待线程，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员自行同步，原子 ARC 只保护引用计数。
 
-Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Woozy 强引用环。Native 还支持 async/await、计时器与描述符等待，以及未启动或已完成 Task 的纯 Woozy 引用环回收；异步普通拥有参数在创建 Task 时复制并持有。执行器保持单线程，Python 暂不支持 async；用法见[线程与异步](docs/CONCURRENCY.md)。外部 Python/C 对象自身的环由宿主管理。
+Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Woozy 强引用环。Native 还支持 async/await、计时器与描述符等待，以及未启动或已完成 Task 的纯 Woozy 引用环回收；异步函数的普通拥有参数在创建 Task 时复制并持有。执行器为单线程，Python 后端暂不支持 async，用法见[线程与异步](docs/CONCURRENCY.md)。外部 Python/C 对象自身的环由宿主管理。
 
 `std/rwlock` 提供读写锁，`std/cancel` 提供协作取消。`std/channel` 提供有界或无界队列，以及超时和取消等待；`std/task` 提供固定工作线程的线程池与 Future，需要显式调用 shutdown。
 
@@ -128,7 +128,7 @@ Native 程序可以声明并调用 C 库的有类型函数，传递自然布局�
 
 `std/process` 支持 spawn、exec、wait、参数和环境，`std/signal` 支持同步信号等待，`std/ipc` 支持共享内存及跨进程同步。多线程 fork 后只保留调用线程，业务锁由程序员处理，子进程通常应尽快 exec。
 
-默认参数和模板特化尚未提供。
+默认参数尚未提供。
 
 编译器编译、实现、测试和开发协作资料统一放在 [development/](development/README.md)。
 

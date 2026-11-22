@@ -40,7 +40,7 @@
 
 ## 当前实测（2026-11-04，基点 51363f5）
 
-临时构建位于 `/tmp/language-t10-binding-fixtures-20261104/build/langc`，未改编译器和仓库构建目录。先读了 `docs/TOOLING.md` 第 3 节和 `langc --help`。
+临时构建位于 `/tmp/language-t10-binding-fixtures-20261104/build/langc`，未改动编译器和仓库构建目录。
 
 ```sh
 woozyc check --syntax-only --format json <fixture>
@@ -49,13 +49,13 @@ woozyc check --syntax-only --format json <fixture>
 - 12 个新 fixture + 原 `04_numpy_torch.wz`：13/13 `status=ok`、0 diagnostics。语法通过不代表类型、绑定或执行通过。
 - 用临时项目清单和原绑定示例跑完整 check 时，12 个 fixture 都先导入 `std/py`；当前 CLI 没有 std binding bundle 配置，因此在 **resolve** 阶段得到 `E_IMPORT_NOT_FOUND: std source is not configured`。这不是语法拒绝，也不是 T10 静态通过。
 - 为区分 std 配置问题，仅在 `/tmp` 去掉 `std/py` 做了临时探针；项目载入成功后，在 **type** 阶段得到 `E_CAPABILITY_UNAVAILABLE: foreign declarations require T10/T11`。因此当前完整 check 没有进入 T10 绑定语义检查。
-- 初版命令和失败检查保存在 `/tmp/language-t10-binding-fixtures-20261104/initial/`；唯一修正的 13 份语法结果、13 次完整检查及报告在同目录的 `correction/`。root 的独立记录保存在外层工作目录 `checks/t10-fixtures-root/{initial,correction}/`。
+- 初版命令和失败检查保存在 `/tmp/language-t10-binding-fixtures-20261104/initial/`；修正轮的 13 份语法结果、13 次完整检查及报告在同目录的 `correction/`。root 的独立记录保存在外层工作目录 `checks/t10-fixtures-root/{initial,correction}/`。
 
 本目录没有修改 CMake，因此当前不会自动进入 CTest；未来 T10 测试接入时由 owner 读取 `cases.json` 并建立项目清单/绑定配置。
 
 ## 未决问题
 
-1. **外部属性/下标绑定**：原 schema 只有 modules/types/values/callables，没有字段属性、Tensor/ndarray 下标、单/多下标或结果类型的声明位置。T10 是扩展绑定契约，还是把这些统一报为未支持能力？在决定前，`12_...wz` 不写成 accept 或 reject；更不能用 Vec 非负索引规则代替外部语义。
+1. **外部属性/下标绑定**：原 schema 只有 modules/types/values/callables，没有字段属性、Tensor/ndarray 下标、单/多下标或结果类型的声明位置。T10 是扩展绑定契约，还是把这些统一报为未支持能力？在定下来前，`12_external_index_attributes.wz` 不标为 accept 或 reject，更不能套用 Vec 的非负索引规则代替外部语义。
 
 ## 已确定的测试处理
 

@@ -169,9 +169,7 @@ Vec/Handle/真实 Weak 语言路径的集成回归；不能把本报告当作 ME
 
 ## 2026-11-12 Weak invalidation / GC integration update
 
-范围：在本已 accepted 的 16-byte Weak 控制块上增加 GC white-candidate
-invalidation，并验证与已 accepted GC kernel 的组合顺序。仍不代表源码级
-`Weak[T]`、自动 GC 或整个 MEM02 完成。
+范围：在已接受的 16 字节 Weak 控制块上增加 GC white-candidate invalidation，并验证它与已接受 GC kernel 的组合顺序。这仍不代表源码级 `Weak[T]`、自动 GC 或整个 MEM02 已经完成。
 
 固定工具链：
 
@@ -181,13 +179,7 @@ ld.lld:  LLD 22.1.8 (same LLVM build)
 legacy:  ${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9
 ```
 
-新增行为：`lang_weak_invalidate_slot_v1` 在 Weak 锁内把 canonical slot 换成
-永久 closed tag（不可能的自然对齐指针值 1），清空旧 control target，锁外释放
-隐含 Weak 引用。closed slot 后续 downgrade 返回 null、不会重装；旧真实 Weak
-仍可 copy/drop，但 alive/upgrade 为 dead；final release 遇 tag 的 detach 是
-无害 no-op。downgrade 的旧 control load+retain 已改为 Weak 锁内重读并 retain，
-避免 invalidate 释放隐含引用后对已 free control 的 UAF；锁内不分配、不 free、
-不 Panic。
+新增行为：`lang_weak_invalidate_slot_v1` 在 Weak 锁内将 canonical slot 替换为永久 closed tag（自然对齐下不可能出现的指针值 1），清空旧控制块的 target，并在锁外释放隐含的 Weak 引用。slot 关闭后，后续 downgrade 直接返回 null 且不再重装控制块；指向旧真实控制块的 Weak 仍可正常 copy/drop，但 alive/upgrade 均表现为 dead；final release 遇到 closed tag 时，detach 为无害 no-op。同时，downgrade 读取并 retain 旧控制块的路径已改为在 Weak 锁内重读并 retain，防止 invalidate 释放隐含引用后触发对已释放控制块的 UAF；持锁期间不分配、不释放、不 Panic。
 
 实际运行：
 

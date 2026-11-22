@@ -1,6 +1,7 @@
 # Pure-Wz floating observer harness
 
-Test-only. No production language, CLI, stdlib, fixture or gold change.
+Test-only harness. It makes no changes to the production language, CLI, stdlib,
+fixtures, or gold outputs.
 
 ## Files
 
@@ -20,10 +21,11 @@ Test-only. No production language, CLI, stdlib, fixture or gold change.
 
 ## Canonical identity
 
-`run.py` never treats a bare flag or the mere existence of a proof file as
+`run.py` never treats a bare flag or the mere presence of a proof file as
 canonical. It requires an `accepted` proof, matching candidate absolute path
 and SHA, matching Root `verify_ops`, and an existing frozen proof source
-snapshot. Otherwise the report is `component`, never `passed` canonical.
+snapshot. Otherwise the report stays `component` and is never marked `passed`
+as canonical.
 
 The canonical run uses:
 
@@ -35,16 +37,17 @@ The canonical run uses:
 
 ## Strict commands and work directories
 
-Every command is run through the Root `selfhost/corpus.py::_run_process_impl`.
-A successful command must have exactly the expected exit status (positive 0,
-negative controls their exact non-zero/101), no timeout, complete process-group
-cleanup and no abandoned pipes. Partial stdout/stderr and argv are written
-before the check. Signal/timeout is never accepted as control detection.
+Every command runs through the Root `selfhost/corpus.py::_run_process_impl`.
+A successful command must exit with the exact expected status (0 for positive
+runs, or the expected non-zero status / 101 for negative controls), without
+timing out, with complete process-group cleanup, and with no abandoned pipes.
+Partial stdout/stderr and argv are written before validation. A signal or
+timeout never counts as a negative-control detection.
 
-A reused driver needs a successful build record matching the actual binary,
-driver main, all 115 Wz source hashes, bootstrap compiler, helper and runtime.
-A non-empty `--work-dir` is rejected before logs/results/staging. New runs use
-new directories; old reports are not overwritten.
+A reused driver requires a successful build record matching the actual binary,
+driver main, all 115 Wz source hashes, bootstrap compiler, helper, and runtime.
+A non-empty `--work-dir` is rejected before creating logs, results, or staging
+files. New runs use fresh directories so old reports are never overwritten.
 
 All `--root` reads (driver source, fixtures, cases, vectors, gold/helper
 modules, stdlib, runtime) come from that root and are hashed as read.
@@ -86,13 +89,13 @@ python3 selfhost/tests/float_observer/run.py --profile full \
   --candidate-cli "$candidate" --work-dir "$full_work"
 ```
 
-Full profile uses the original 10 floating fixtures (76 probes), the original
-native dynamic fixture (`3138`), the original values-cleanup fixture (`6`), and
-the Python APFloat table (`3362`). `supplemental.py` separately checks the
-original Python supplemental 14 projects and 9 function observations with the
-retained CLI and driver. It checks exact result and parameter types, Cell
-updates, TypedError and Panic behavior. Driver metadata does not include
-parameter modes or throws declarations; those fields are not independently
+The `full` profile runs the original 10 floating fixtures (76 probes), the
+original native dynamic fixture (`3138`), the original values-cleanup fixture
+(`6`), and the Python APFloat table (`3362`). `supplemental.py` separately
+checks the 14 original supplemental Python projects and 9 function observations
+with the retained CLI and driver. It checks exact result and parameter types,
+Cell updates, TypedError, and Panic behavior. Driver metadata does not include
+parameter modes or throws declarations, so those fields are not independently
 checked. This is a frozen-source result, not a build of the latest compiler.
 
 ## Runner controls

@@ -31,15 +31,12 @@ results with the same helper; it does not mock the implementation.
 Both modules are verified with `opt -passes=verify`, compiled with `llc`, and
 linked with the real native runtime. Generated IR is never edited.
 
-The file payload is a 120-byte C record standing in for the real
-`std/os.FileInfo` layout. The 213 routing/argument expansion is independent of
-the nominal field layout, which the C++ project and stat_bytes fixtures cover
-directly.
-
-The C driver's 120-byte record is only the E argument-expansion probe; running
-the typed `stat_bytes` differential and the C++ system tests is separate. This
-proves only the E component. The full Wz public check/build facade is not
-implemented, so whole-compiler stage1/stage2 execution is `not_run`. Processes
-that call `setsid()` and escape the session remain the original corpus
-limitation; the runner reports incomplete cleanup but does not claim to kill
-them.
+The C driver uses a 120-byte record to stand in for the real
+`std/os.FileInfo` layout. Op-213 routing and argument expansion are
+independent of the nominal field layout, which the C++ project and stat_bytes
+fixtures check directly. The typed `stat_bytes` differential and C++ system
+tests run separately. This run covers only the E component. The full Wz public check/build
+facade is not implemented, so whole-compiler stage1/stage2 execution is
+`not_run`. Processes that call `setsid()` and escape the session remain the
+original corpus limitation; the runner reports incomplete cleanup and does not
+claim to kill them.

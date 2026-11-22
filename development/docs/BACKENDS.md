@@ -1,7 +1,6 @@
 # LLVM 与 Python 后端开发契约
 
-本文规定后端开发要求；当前实现范围见[NATIVE_SCALARS](NATIVE_SCALARS.md)、
-[PYTHON_SCALARS](PYTHON_SCALARS.md)、两端T08说明及[T09执行记录](T09_EXECUTION.md)。有限无环 Vec/拥有聚合已实施；其他 ARC 组合和外部绑定仍未完成。严格标量浮点执行见两端的浮点说明，其他目标要求不能当成实现结果。本文以 [SEMANTICS.md](../../docs/SEMANTICS.md) 的语言语义、[IR_CONTRACTS.md](IR_CONTRACTS.md) 的 IR 定义为准。后端不得自行选择另一套数值、所有权或清理规则。
+本文规定后端开发要求；当前实现范围见 [NATIVE_SCALARS](NATIVE_SCALARS.md)、[PYTHON_SCALARS](PYTHON_SCALARS.md)、两端的 T08 说明及 [T09执行记录](T09_EXECUTION.md)。有限无环 Vec/拥有聚合已实施；其他 ARC 组合和外部绑定仍未完成。严格标量浮点执行见两端的浮点说明，其余设计要求不代表已经实现。本文以 [SEMANTICS.md](../../docs/SEMANTICS.md) 的语言语义和 [IR_CONTRACTS.md](IR_CONTRACTS.md) 的 IR 定义为准，后端不能另起一套数值、所有权或清理规则。
 
 ## 1 目标与模块边界
 
@@ -14,7 +13,7 @@
 | LLVM emission | 已验证原生 IR、目标 ABI、运行库接口版本 | LLVM Module 或文本 IR | 不根据 AST 猜类型；不调用 Python 推断绑定 |
 | Toolchain driver | 目标文件、显式链接配置、运行库 | 可执行文件或库 | 不从宿主架构推断交叉目标；不自动安装 SDK |
 
-后端对其输入实施显式验证。未完成的语言特性应报告 capability 诊断，不能以跳过语句、返回零、调用动态 eval 或退回其他后端的方式伪造成功。
+后端必须显式验证输入。遇到尚未实现的语言特性，应报 capability 诊断，不能靠跳过语句、返回零、调用动态 eval 或退回其他后端来假装成功。
 
 第一版不包含 MLIR、JIT、任意 Python 动态执行、直接导入完整 C++ 模板库、自定义 GPU kernel 编译。模块边界允许以后增加这些能力，但没有对应实现前不可宣称支持。
 
@@ -66,8 +65,8 @@ struct ToolchainPaths {
 2. 给每个原生 IR 基本块建立对应 LLVM BasicBlock。
 3. 为指令和块参数建立 ValueId 到 llvm::Value* 映射。
 4. 生成算术、比较、内存、调用及终结指令，补齐 phi 或采用可验证的局部存储方案。
-5. 在需要的源操作附带调试位置；生成代码的辅助指令必须可追溯到源 Span 或标明编译器生成。
-6. 函数生成后验证函数，模块完成后验证模块。优化后再次验证。
+5. 在需要的源操作上附带调试位置；生成的辅助指令要么追溯到源 Span，要么标明由编译器生成。
+6. 每个函数生成后验证函数，模块完成后验证模块，优化后再验证一次。
 7. 用 PassBuilder 建立所选优化流水线，再通过 TargetMachine 输出目标文件。
 
 初期允许把 LLVM Module 输出成 .ll 后调用匹配版本的 opt/llc/clang 工具，验证模块边界。最终 API 集成必须复用同一个 lowering 逻辑，不能另写一条行为不同的字符串拼接后端。
@@ -94,7 +93,7 @@ struct ToolchainPaths {
 - 普通参数不自动意味着 readonly/noescape；inout 的语言限制也不能未经证明直接变成任意 noalias 属性。
 - 浮点 fast-math 必须来自明确、可追溯的语言/构建选项。默认不得因 O2 自动启用。
 - 不从宿主 C++ 的整数溢出、强制转换或求值顺序推导本语言行为。
-- LLVM 验证通过只能证明 IR 结构满足相应约束，不能证明编译器保存了源语言语义。
+- LLVM 验证通过只说明 IR 结构合法，不能证明编译器保住了源语言语义。
 
 ### 3.5 数值 lowering 的必要分支
 
@@ -110,7 +109,7 @@ Python 辅助函数复用同一组语言级数值测试。仅把源整数运算�
 
 源码中的普通返回值 T 与错误 E 分别建模；Result[T, E] 仍是普通语言枚举。第一版原生后端采用显式成功/失败分支，不使用平台异常栈展开。
 
-采用下列编译器内部 ABI 概念，与运行库和 IR 文档共同版本化；它不承诺跨编译器版本稳定：
+下面规定编译器内部 ABI 约定，与运行库和 IR 文档一起版本化，不承诺跨编译器版本稳定：
 
 ~~~text
 source: func f(args...) T throws E
@@ -155,7 +154,7 @@ defer 本身不得向外传播错误。移动、借用或异步行为是否允�
 
 ### 6.1 输出与运行环境
 
-输入为已检查 HIR 和显式绑定。输出为可读 .py、必要的运行时辅助模块和源位置映射。Python 运行基线为 3.12.x，精确补丁版本和依赖组合由工具链锁定任务记录。C++ 实现可使用自有 PyAst 节点和确定性打印器；不要求在编译器内嵌 CPython。内部必须使用结构化 AST/代码生成节点，禁止把任意用户文本交给 eval/exec。
+输入为已检查 HIR 和显式绑定，输出为可读 .py、必要的运行时辅助模块和源位置映射。Python 运行基线为 3.12.x，精确补丁版本和依赖组合由工具链锁定任务记录。C++ 实现应使用结构化 AST/代码生成节点（如自有 PyAst）和确定性打印器，不需要内嵌 CPython，也禁止把任意用户文本交给 eval/exec。
 
 编译和 check 阶段不导入 numpy/torch，不启动 Python 子进程推断签名，不初始化 GPU。执行前单独检查锁定的 Python 环境和依赖版本；缺少库属于运行环境错误，不能伪装成源码语法错误。
 
@@ -213,7 +212,7 @@ Python 结构：
             A
 ~~~
 
-这不是把所有 defer 提前注册。before 失败不执行 A；middle 发生 typed error 只执行 A；正常完成或 after 发生 typed error 执行 B 后执行 A。Panic 则跳过语言 defer；若 B 自身 Panic，外层也跳过 A。每层标志须为生成器唯一的作用域局部名。return 的表达式在 finally 之前求值。清理代码必须读取正确的语言绑定，不能被 Python 闭包晚绑定或循环变量复用改变。
+这不是把所有 defer 提前注册。before 失败不执行 A；middle 发生 typed error 只执行 A；正常完成或 after 发生 typed error 执行 B 后执行 A。Panic 则跳过语言 defer；若 B 自身 Panic，外层也跳过 A。每层标志都必须由生成器分配唯一的作用域局部名。return 的表达式在 finally 之前求值。清理代码必须读取正确的语言绑定，不能被 Python 闭包晚绑定或循环变量复用改变。
 
 三段式 for 降为 while 时，源码 continue 仍然必须执行步进语句。不能直接输出 Python continue 跳过步进。实现可通过携带 ControlTargetId 的结构化改写处理；嵌套循环、switch 的 break 和块清理要分别测试。
 
@@ -227,7 +226,7 @@ Python 结构：
 
 编译器输出目标文件后，由 toolchain driver 链接语言运行库、目标系统库和用户显式依赖。初期可以调用已配置的 Clang 驱动完成平台链接；这不表示本语言先翻译为 C。后续统一驱动接口时保持相同输入记录。
 
-将参数作为 argv 数组传给进程 API，不能拼成 shell 命令执行。记录工具路径、版本、退出码和保留的诊断。临时文件使用受控目录；失败时不得把残缺文件登记为成功产物。
+将参数作为 argv 数组传给进程 API，不能拼成 shell 命令执行。记录工具路径、版本、退出码和诊断输出。临时文件使用受控目录；失败时不得把残缺文件登记为成功产物。
 
 原生可执行文件入口由驱动/运行库适配：源 main、操作系统入口和 C main 不是同一个符号约定。参数、退出码、顶层未处理错误和启动/退出清理由入口适配层规定。没有实现时先支持测试用无参数 main i32 子集，并明确诊断其他形式。
 

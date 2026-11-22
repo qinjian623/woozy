@@ -1,45 +1,27 @@
 # Python capability gate for Native-only system calls
 
-这个组件测试锁定 Wz `hirverify` 的 Python 后端的系统操作检查，对应 C++
-`src/hir/hir.cpp:check_backend_capabilities` 的 `value_system_operations`
-规则。它只构建一个小驱动，不重建 Wz CLI，也不运行 Python 后端。
+这个组件测试用来锁定 Wz `hirverify` 对 Python 后端的系统操作检查，对应 C++ `src/hir/hir.cpp:check_backend_capabilities` 中的 `value_system_operations` 规则。它只构建一个小驱动，不重建 Wz CLI，也不运行 Python 后端。
 
 ## 根因与修复
 
-修复前 `selfhost/src/wzcc/hirverify/backend.wz:system_op_category` 只把
-`std/slice` 和 `std/weak` 分成特殊类别，其余所有操作都返回类别 `0`；而
-`check_backend_capabilities` 在非 Native/64 时只拒绝类别 1/2。于是
-`std/os` 以及线程、网络、进程、FFI、async 等所有 Native-only
-`CalleeKind::System` 调用都被 Python/64 放行，直到 Python emitter 把它们
-当成普通 `_rt.value_call(...)` 生成并在运行时失败。
+修复前 `selfhost/src/wzcc/hirverify/backend.wz:system_op_category` 只把 `std/slice` 和 `std/weak` 分成特殊类别，其余所有操作都返回类别 `0`；而 `check_backend_capabilities` 在非 Native/64 时只拒绝类别 1/2。结果 `std/os` 以及线程、网络、进程、FFI、async 等所有 Native-only `CalleeKind::System` 调用都被 Python/64 放行，直到 Python emitter 把它们当成普通 `_rt.value_call(...)` 生成并在运行时失败。
 
-修复把类别补成与 C++ 检查规则一致：
+修复后将类别补成与 C++ 检查规则一致：
 
-- `0`：C++ `value_system_operations` 覆盖的 `std/unicode`、`std/text`、
-  `std/vec`、`std/strconv`、`std/math` 操作，仍可生成 Python 代码；
+- `0`：C++ `value_system_operations` 覆盖的 `std/unicode`、`std/text`、`std/vec`、`std/strconv`、`std/math` 操作，仍可生成 Python 代码；
 - `1`：`std/slice`，仍由 `slice_values` 控制；
 - `2`：`std/weak`，仍由 `weak_values` 控制；
-- `3`：其余所有操作（含 `std/os`、运行句柄、网络、进程、FFI、async），
-  非 Native/64 时以 `E_CAPABILITY_UNAVAILABLE` / phase `type` /
-  `system operations require the Native/64 profile` 拒绝。
+- `3`：其余所有操作（含 `std/os`、运行句柄、网络、进程、FFI、async），非 Native/64 时以 `E_CAPABILITY_UNAVAILABLE` / phase `type` / `system operations require the Native/64 profile` 拒绝。
 
-判定读取 typed HIR 的 `Call.kind == System`、`Call.system` 和生成表
-`OperationSpec.owner`，不是按 `os_text_length` 等函数名字符串做黑名单。
-对该快照核对过：C++ `value_system_operations` 的 57 个名称与 Wz 生成表中
-上述 owner 的 57 个名称完全一致，owner 集合相等。
+判定读取 typed HIR 的 `Call.kind == System`、`Call.system` 和生成表 `OperationSpec.owner`，不是按 `os_text_length` 等函数名字符串做黑名单。核对过该快照：C++ `value_system_operations` 的 57 个名称与 Wz 生成表中上述 owner 的 57 个名称完全一致，owner 集合相等。
 
 ## Fixture 与断言
 
-- `fixtures/native_only/`：app 导入最小合法 `std/os`，后者调用
-  `__woozy_os_text_length(value)`。同一份 Source 分别以 Native/64 和
-  Python/64 跑真实 parse/resolve/sema/HIR。
-- `fixtures/value/`：最小 `std/text` 调用 `__woozy_text_len(value)`，
-  Python/64 必须继续接受。
-- `fixtures/ordinary/`：无 system call 的普通函数调用，Python/64 必须继续
-  接受。
+- `fixtures/native_only/`：app 导入最小合法 `std/os`，后者调用 `__woozy_os_text_length(value)`。同一份 Source 分别以 Native/64 和 Python/64 跑真实 parse/resolve/sema/HIR。
+- `fixtures/value/`：最小 `std/text` 调用 `__woozy_text_len(value)`，Python/64 必须继续接受。
+- `fixtures/ordinary/`：无 system call 的普通函数调用，Python/64 必须继续接受。
 
-`src/main.wz` 从 typed HIR 中找出 system call 的精确 `Source.span`，再要求
-Python 诊断的 primary 与之逐字节相等。当前期望：
+`src/main.wz` 从 typed HIR 中找出 system call 的精确 `Source.span`，并要求 Python 诊断的 primary 区间与之逐字节相等。当前期望：
 
 ```text
 CASE native-only-native ... result=accept ... operation=12 call-begin=67 call-end=96
@@ -95,9 +77,4 @@ ordinary/main.wz     db6b1345acfde8be2e2f47199a86fc4d125724adc58fd168412927afe26
 
 ## 边界
 
-本测试证明共享 Wz capability gate 对同一最小 Source 的 accept/reject 和
-精确主 span，且 C++ 参考结果一致。它不重建或运行 Wz CLI，因此没有验证
-CLI 发布目录中“没有 program.py/langrt.py”的最终落盘；但 Python 公共
-`verify` 在拒绝时不返回 `VerifiedHirModule`，`pythonemit.emit` 也先经过同一
-gate。实际 `case02` 全 stdlib Source、原 6178 二进制、stage2/3、完整 corpus
-均未在本任务中重跑；6178 的旧行为保持原样，未标记为已修。
+本测试只验证共享 Wz capability gate 对这批最小 Source 的 accept/reject 结果和精确主 span，并确认与 C++ 参考结果一致。它不重建或运行 Wz CLI，因此没有验证 CLI 发布目录最终确实未生成 program.py/langrt.py；但 Python 公共 `verify` 在拒绝时不返回 `VerifiedHirModule`，`pythonemit.emit` 也会先经过同一 gate。实际 `case02` 全 stdlib Source、原 6178 二进制、stage2/3 和完整 corpus 均未在本任务中重跑；6178 的旧行为保持原样，未标记为已修。

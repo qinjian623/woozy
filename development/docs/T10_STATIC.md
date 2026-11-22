@@ -18,11 +18,13 @@ auto verified = hir::verify(*typed.value, {}, hir::VerifyMode::static_only);
 auto checked = sema::check_project(resolved, {}, {}, hir::VerifyMode::static_only);
 ```
 
-`hir::VerifyMode { backend, static_only }` 是 `hir::verify` 的第三个参数和两个 `sema::check_project` 重载的第四个参数，均默认为 `backend`。旧调用仍执行后端支持检查；`static_only` 深复制 builder、ResolvedProject、Project、AST 后执行 `verify_types`，通过后才发布同一个 `VerifiedHirModule`。没有新增包装或公开构造者。
+`hir::VerifyMode { backend, static_only }` 是 `hir::verify` 的第三个参数，也是两个 `sema::check_project` 重载的第四个参数，均默认为 `backend`。旧调用仍执行后端支持检查；`static_only` 会深复制 builder、ResolvedProject、Project 和 AST 后再执行 `verify_types`，通过后才发布同一个 `VerifiedHirModule`，没有新增包装类型或公开构造函数。
 
-`static_only` 只跳过尚未实现的生成支持检查。项目 backend/word_bits 必须匹配，声明 `allowed_backends` 仍有效；使用外部模块的 native 源报 `E_CAPABILITY_UNAVAILABLE`。外部读取需要声明中的 `lang.py.Error`；没有该类型的旧测试绑定继续明确报未支持，不伪造 std 声明或恢复类型。
+`static_only` 只跳过尚未实现的生成支持检查。项目 backend/word_bits 必须匹配，声明中的 `allowed_backends` 仍生效；使用外部模块的 native 源码仍报 `E_CAPABILITY_UNAVAILABLE`。外部读取要求声明中存在 `lang.py.Error`；缺少该类型的旧测试绑定继续报未支持，不会伪造 std 声明或恢复类型。
 
-`check_backend_capabilities` 现在只对 Python/64 开放已实现的外部类型、读取和调用：可执行 callable 必须声明 `error_type=lang.py.Error`，所有参数为 ordinary；外部值读取也要求声明存在。外部宿主引用可作为整体 move 参数或从已有绑定/临时值 move，也可放入 Vec、struct 字段、enum payload 和泛型字段/元素；分类与清理继续使用同一 `ValueKind::foreign_reference` 和共享 ownership。声明的 `py.Error` 使用同一规则存入 Vec、struct、enum 和嵌套泛型值，分类为 `ValueKind::foreign_error`，复制共享原异常载荷。native/其他 profile、无 throws 的外部 callable、外部 inout、部分 move 及其他未实现组合仍报 `E_CAPABILITY_UNAVAILABLE`；外部 callable 仍不能成为聚合成员。即便调用只有标量参数、返回 Unit，也按操作和声明本身检查。函数值逃逸、外部索引/数据属性仍拒绝；返回外部对象的函数类型签名本身不被误拒。Python emit 仍独立调用该检查，native lower 仍独立拒绝不支持的输入；未使用模板和类型池中的外部声明不会被当作可执行操作扫描。实际生成范围见 [T10_PYTHON.md](T10_PYTHON.md)。
+`check_backend_capabilities` 目前只对 Python/64 开放已实现的外部类型、读取和调用：可执行 callable 必须声明 `error_type=lang.py.Error` 且所有参数为 ordinary，外部值读取也要求对应声明存在。外部宿主引用可作为整体 move 参数或从已有绑定/临时值 move，也能放入 Vec、struct 字段、enum payload 和泛型字段/元素；分类与清理沿用同一 `ValueKind::foreign_reference` 和共享 ownership。声明的 `py.Error` 按同一规则存入 Vec、struct、enum 和嵌套泛型值，分类为 `ValueKind::foreign_error`，复制时共享原异常载荷。
+
+native 及其他 profile、不带 throws 的外部 callable、外部 inout、部分 move 和其他未实现组合仍报 `E_CAPABILITY_UNAVAILABLE`；外部 callable 仍不能作为聚合成员。即使调用只有标量参数且返回 Unit，也按外部操作和声明本身检查。函数值逃逸以及外部索引、数据属性继续拒绝，但返回外部对象的函数类型签名本身不会被误拒。Python emit 仍独立调用该检查，native lower 仍独立拒绝不支持的输入；未使用的模板和类型池中的外部声明不会被当作可执行操作扫描。实际生成范围见 [T10_PYTHON.md](T10_PYTHON.md)。
 
 ## 公共表示
 
@@ -55,7 +57,9 @@ auto checked = sema::check_project(resolved, {}, {}, hir::VerifyMode::static_onl
 
 每个 ForeignRead 有独立的 py.Error 错误出口；Call 的独立出口来自声明的 error_type。两者都沿用原 errors、ExitPlan、try/catch 和 typed throws 检查。读取失败时不会登记尚未求值的实参或未成功的调用结果；后续实参失败只清理已完成的临时值，并结束已开始的借用。清空 errors/exits/ownership 后重新计算，也不能绕过上面的源码外部操作检查。
 
-ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs_drop=true`、`pod_inout=false`。接收者及内部目标使用既有 Temporary/ValueUse/CallLifetime 保活，目标借用在调用返回或失败时结束，拥有临时值在 full-expression 结束时销毁。方法接收者读取可取得同一对象的逻辑 copy，并保持到该表达式结束。普通参数保存、赋值、返回取得同一对象的新拥有引用；普通调用借用参数，显式 move 才消费整个拥有绑定或临时值。普通外部引用和 `py.Error` 位于 Vec/struct/enum/泛型字段时，copy 递归共享宿主对象，drop 只释放语言槽；move 转移同一句柄，不搬移宿主数据。ForeignCallable 仍只能出现在紧邻外部 Call 的读取结果中，不能作为聚合成员保存。返回或传播错误先保存活动输出，再执行清理。catch 载荷及其复制也有真实拥有记录。
+ForeignOpaque、ForeignCallable 和 py.Error 的 `classify_value` 都返回 `needs_drop=true`、`pod_inout=false`。接收者及内部目标沿用既有 Temporary/ValueUse/CallLifetime 保活规则。目标借用在调用返回或失败时结束，拥有临时值在 full-expression 结束时销毁。读取方法接收者时，可以取得同一对象的逻辑 copy，并保持到该表达式结束。
+
+保存、赋值或返回普通参数时，会取得同一对象的新拥有引用；普通调用借用参数，只有显式 move 才会消费整个拥有绑定或临时值。普通外部引用和 `py.Error` 位于 Vec、struct、enum 或泛型字段中时，copy 递归共享宿主对象，drop 只释放语言槽，move 只转移同一句柄而不搬移宿主数据。ForeignCallable 仍只能出现在紧邻外部 Call 的读取结果中，不能作为聚合成员保存。返回或传播错误时先保存活动输出再执行清理；catch 载荷及其复制也带有真实拥有记录。
 
 生产者和验证器都从结构重新推导拥有记录，验证器不读取提交的记录作为预期。绑定、owner、读取目标、签名、源码实参、形参索引、省略项、效果、错误出口或拥有记录不符均报 `E_IR_INVALID`。把错误树的拥有记录重新计算成自洽形式，也不能绕过源码身份检查。
 
@@ -71,6 +75,6 @@ Python/64 的有限外部生成和 runtime 异常桥接已实现，范围见 [T1
 
 ## 测试和接入
 
-新增入口是 `tests/bindings/static_test.cpp`，总 CMake 已注册 `sema.t10`。测试使用真实 load/resolve/check_types/verify_types/verify/check_project API；额外绑定变体只写入测试输出目录。函数值调用的返回类型从已验证的 Function 签名取得，支持函数参数取得 Tensor 或 Linear 后的立即方法/对象调用，不依赖可被篡改的调用结果节点。
+新增测试入口为 `tests/bindings/static_test.cpp`，总 CMake 已注册 `sema.t10`。测试直接调用真实的 load/resolve/check_types/verify_types/verify/check_project API，额外的绑定变体只写入测试输出目录。函数值调用的返回类型取自已验证的 Function 签名，支持通过函数值参数取得 Tensor 或 Linear 后立即执行方法或对象调用，不依赖可被篡改的调用结果节点。
 
-测试包含原 04、P01–P06、原负例、零号绑定、重载、省略、乱序命名实参、读取与调用各自错误出口、失败前缀、对象和错误载荷 copy/返回/丢弃、冻结别名，以及逐类合法对照和坏 HIR。另有括号方法/函数/ callable、计算方法接收者、未知方法、方法值逃逸负例，以及实例方法/对象 callable/dtype 值读取三类外部操作被删除后清空 errors/exits 并重算 ownership 的坏 HIR；每类都有合法对照，删除后 `verify_types` 和静态 `verify` 都报 `E_IR_INVALID`。还实际检查没有声明 `lang.py.Error` 的静态包装不能通过 Python emit；LLVM 构建另检查 native lower 拒绝 Python 静态包装。所有失败尝试保留，实际构建与测试状态以外层 `checks/t10-static-implementation/correction/` 中报告、完整命令、退出码及源码 SHA-256 为准，不引用声明阶段或初版中断任务的历史通过数量。
+测试覆盖原 04、P01–P06、原负例、零号绑定、重载、省略、乱序命名实参、读取与调用各自错误出口、失败前缀、对象和错误载荷的 copy/返回/丢弃、冻结别名，以及逐类合法对照和坏 HIR。同时覆盖带括号的方法/函数/callable、计算所得的方法接收者、未知方法、方法值逃逸负例，以及删除实例方法、对象 callable 或 dtype 值读取后清空 errors/exits 并重算 ownership 的三类坏 HIR；每类都配有合法对照，删除操作后 `verify_types` 和静态 `verify` 均报 `E_IR_INVALID`。测试还验证了未声明 `lang.py.Error` 的静态包装不能通过 Python emit；启用 LLVM 的构建另验证 native lower 会拒绝 Python 静态包装。所有失败尝试均保留，实际构建与测试状态以外层 `checks/t10-static-implementation/correction/` 中的报告、完整命令、退出码及源码 SHA-256 为准，不引用声明阶段或初版中断任务的历史通过数量。

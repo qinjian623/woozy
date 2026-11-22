@@ -2,7 +2,8 @@
 
 Scope: the private `LangSlice` ABI in `runtime/native/slice.hpp`/`slice.cpp`.
 This is the low-level borrowed view only. It does not implement source-level
-`WzSlice`, typed `Ptr`, or change the existing copying `v[start:end]` Vec slice.
+`WzSlice` or typed `Ptr`, nor does it change the existing copying `v[start:end]`
+Vec slice.
 
 ## ABI
 
@@ -34,7 +35,7 @@ it performs no libc allocation and does not invoke element copy/drop callbacks.
 
 - `new` checks `start <= end <= length <= initialized`, then retains and pins.
   Empty ranges still retain and pin their owner.
-- `copy` adheres a bit-copied live handle with one additional retain and pin.
+- `copy` adds one retain and one pin to a bit-copied live handle.
   A zeroed `LangSlice` is the only owner-less state: copying it is a no-op and
   dropping it repeatedly is safe.
 - `drop` clears the descriptor before ending the pin and releasing the owner.

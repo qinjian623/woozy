@@ -20,7 +20,7 @@ adds `std/http_server`) must be supplied as a frozen snapshot through
 `--stdlib-root`; the runner intentionally rejects a different file count so a
 mixed frozen/current input set is never accepted.
 
-`--public-object` migrates only the observation source of the object:
+`--public-object` changes only where the observed object comes from:
 
 1. The selected role CLI performs all 44 public Source builds: 19 positive
    manifests at O0 and O2 plus 6 reject manifests at O0.
@@ -55,18 +55,20 @@ The mode is fail-closed:
   builds additionally allow only the matching helper. Observer compile, link,
   and execution are recorded separately and are not part of the Source
   allowlist.
-- The output directory must be new or empty. Failures continue with the
-  remaining cases; partial evidence is retained. Every command writes raw
-  stdout/stderr bytes, SHA-256, process fields, cwd, timeout, and trace
-  immediately. Exits are real ints; `timed_out`, `cleanup_complete`, and
-  `abandoned_pipes` are strict bools. Timeouts must be positive finite
-  numbers. A killed process keeps its real exit and timeout flags.
-- Recording a failure and accepting a pass are separate. A command may be
-  retained with its real failure flags, but program, positive-build,
-  reject-build, observer compile/link/execute, and the final summary accept a
-  success only when `timed_out` is `false`, `cleanup_complete` is `true`, and
-  `abandoned_pipes` is `false`. A legal expected exit 1 and a normal nonzero
-  reject exit remain valid when those cleanup conditions hold.
+- The output directory must be new or empty. When a case fails, the runner
+  continues with the remaining cases and retains partial evidence. Every
+  command immediately writes raw stdout/stderr bytes, SHA-256, process fields,
+  cwd, timeout, and trace. Exits are real ints; `timed_out`,
+  `cleanup_complete`, and `abandoned_pipes` are strict bools. Timeouts must be
+  positive finite numbers. A killed process keeps its real exit and timeout
+  flags.
+- Recording a failed command and counting a case as passed are separate. A
+  command stays in the log with its actual failure flags, while program,
+  positive-build, reject-build, observer compile/link/execute, and the final
+  summary treat a run as passing only when `timed_out` is `false`,
+  `cleanup_complete` is `true`, and `abandoned_pipes` is `false`. An otherwise
+  valid expected exit 1 or normal nonzero reject exit remains valid when
+  these cleanup conditions hold.
 - Before/after SHA-256 sets cover all 25 manifests and Sources, `cases.json`,
   the observer, the nine wraps, the runner, the runtime, headers, tools, both
   CLIs and the reference helper, and the role's 37-file stdlib tree. The 116

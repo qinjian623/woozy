@@ -72,8 +72,8 @@ should catch it in the handler and return a response. `text_response` and
 
 - `serve` accepts until stopped, aborted, or cancelled. Each accepted
   connection becomes one task. Dropping the returned Task handle does not stop
-  the server. Returning (including cancellation) closes the listener and
-  starts graceful drain.
+  the server. When `serve` returns (including on cancellation), it closes the
+  listener and starts a graceful drain.
 - `stop` closes the listener, shuts down idle keep-alive connections
   immediately, stops starting new requests, and lets in-flight requests finish
   until `drain_timeout_ms`. The watchdog aborts anything still active at that
@@ -82,8 +82,8 @@ should catch it in the handler and return a response. `text_response` and
 - `drain(server, timeout_ms)` calls `stop` and waits until no connection task
   is active. `timeout_ms <= 0` waits until idle. It returns false only when a
   positive timeout expires first. Do not call it from a connection task.
-- The watchdog only calls `shutdown(2)` on the owning descriptor; the
-  connection task always remains the sole closer.
+- The watchdog only calls `shutdown(2)` on the connection's socket descriptor;
+  the connection task always remains the sole closer.
 - `stats` is a single-threaded snapshot. `requests` counts handler responses
   that were fully written, `bytes_sent` counts those response bytes plus any
   100 Continue bytes, `errors` counts protocol, expectation, handler, framing
@@ -108,8 +108,8 @@ should catch it in the handler and return a response. `text_response` and
   request contains the `keep-alive` token. Connection tokens are compared
   case-insensitively and may appear in comma-separated values.
 - HEAD, 1xx, 204, and 304 responses never carry a body. For HEAD and 304, a
-  missing `Content-Length` is filled from the handler body, which describes the
-  selected representation.
+  missing `Content-Length` is filled from the handler body's length, which
+  describes the selected representation.
 - For ordinary responses, a handler `Content-Length` is ignored and replaced
   with the actual body length.
 - The response version follows the request version (`HTTP/1.0` or
@@ -139,17 +139,17 @@ timeout. Retrying a WouldBlock operation keeps the same deadline.
 - `drain_timeout_ms` is an overall graceful-stop deadline; it never extends a
   shorter per-operation deadline.
 
-These are absolute deadlines, not inactivity reset timers. A slowloris that
-delivers one byte slowly still hits the header deadline. Timeouts use
+These are absolute deadlines, not inactivity reset timers. A slowloris client
+that sends bytes slowly still hits the header deadline. Timeouts use
 `CLOCK_MONOTONIC`; if the clock call fails, the deadline is disabled rather
 than firing immediately.
 
 ## Performance
 
 Reads and writes use nonblocking descriptors; `WouldBlock` parks the
-connection task on the executor's wait instead of blocking a thread. Many
+connection task on the executor's I/O wait instead of blocking a thread. Many
 connections and large slow responses therefore do not block accept or other
-connections. After 32 accepts and after every 1024 kept-alive responses, a
+connections. After 32 accepts and after every 1024 keep-alive responses, a
 task takes a 1 ms timer turn so one busy listener or pipeline cannot starve
 ready descriptors.
 

@@ -69,7 +69,7 @@ func main() i32 throws os.Error {
 | `read_i32(memory, offset) i32`、`read_i64(memory, offset) i64` | 读取整数，均 throws os.Error |
 | `write_i32(memory, offset, value)`、`write_i64(memory, offset, value)` | 写入对应整数，均 throws os.Error |
 
-表中的 offset、start、count 都是 `usize`。`read_bytes` 返回的 Vec 不与共享区域相连；修改它后，需要再调用 `write_bytes` 才会写回。跨进程传字符串时可以写入 `text.bytes(value)`，在接收端用 `text.from_bytes` 严格解码。
+表中的 offset、start、count 都是 `usize`。`read_bytes` 返回的 Vec 是独立副本；修改它后，需要再调用 `write_bytes` 才会写回。跨进程传字符串时可以写入 `text.bytes(value)`，在接收端用 `text.from_bytes` 严格解码。
 
 `protection` 可以组合 `PROT_READ`、`PROT_WRITE`。长度必须大于 0；访问超出映射、数值偏移没有按 i32 的 4 字节或 i64 的 8 字节对齐时抛出 `os.Error`。读写权限不符也抛错。
 
@@ -129,7 +129,7 @@ Mutex 不可递归。持锁者再次加锁、错误线程或进程解锁、销�
 
 条件变量只负责等待通知，不保存“条件成立”。调用 wait 前必须已经持有传入的同一把锁；条件数据也用这把锁保护。等待可以在没有通知时返回，所以要像示例那样用 `for` 重新检查条件，不能只检查一次。
 
-`cond_timedwait` 返回 true 也不保证条件仍成立，返回 false 时仍重新持有 mutex。超时可以为 0，-1 表示无限等待。
+`cond_timedwait` 返回 true 也不保证条件仍成立；返回 false 时也会重新持有 mutex。超时可以为 0，-1 表示无限等待。
 
 ## Semaphore 与原子整数
 

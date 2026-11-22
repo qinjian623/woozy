@@ -84,8 +84,6 @@ authorized build of the current component.
   environment failure.
 * The venv `--python` argv path is kept absolute and is not resolved, so the
   NumPy/PyTorch site-packages are not lost.
-* No CMake budget (600/300/1800) was increased and no new product CLI option
-  was added.
 
 ## Optional observer `uname -p` probe
 
@@ -114,8 +112,8 @@ accepts exactly that optional child and nothing else:
   keep their own exact whitelist and still reject `uname` and every helper.
 * The traced Python tool must have at least one complete successful `execve`
   record with a real pid.  A failed or malformed required record does not count
-  as a successful appearance.  The probe itself stays optional, so a
-  Python-only observer trace is accepted and no observation must run `uname`.
+  as a successful appearance.  The probe itself stays optional: a Python-only
+  observer trace is accepted, and observers are not required to invoke `uname`.
 * Every retained `uname` line must use argv `["uname", "-p"]`, every failed
   lookup must be the next explicit entry of the frozen observer `PATH` with a
   real `ENOENT` errno token (not a text substring), and the same child pid must
@@ -132,28 +130,36 @@ accepts exactly that optional child and nothing else:
 ## Pure controls
 
 `tests/python/t10_runner_controls.py` is the only runnable delivery here.  It
-starts no compiler, driver, observer, program, NumPy or PyTorch: module setup
-globally blocks `subprocess`, `os` exec/spawn/fork, `socket` and the lowest
-bounded transport, and each test only replaces that lowest transport.  The real
+starts no compiler, driver, observer, program, NumPy, or PyTorch: module setup
+globally blocks `subprocess`, `os` exec/spawn/fork, `socket`, and the lowest
+bounded transport, and each test replaces only that lowest transport.  The real
 `Runner.command`/`traced`/`emit_paired`/`observe`/`real_observe` branches are
-therefore exercised, never replaced by a fake command.  The controls check the
-20-name plan, the exact three-case subset, the eleven nested rejection projects,
-legacy/paired `main` dispatch with every launch blocked, invalid budget/role/
-non-empty strict output rejection before launch, strict process flags, dirty
-observer flag rejection, the optional observer `uname -p` probe (Python-only
-and the real frozen `/usr/bin/uname` with a failed `PATH` lookup accepted;
-missing or failed/malformed Python, arbitrary same-name executables, execveat,
-errno text spoofing, unknown/out-of-order or dangling lookups, wrong/extra
-argv, relative paths, reused observer pid, other tools and a mixed C++ helper
-rejected; a changed or missing frozen tool identity rejected; compile/program
-whitelists still reject `uname` and the helper), paired reference-helper
-bounded/trace records, raw retention on a failed `execveat` trace, separate
-compile/observer whitelists, no helper fallback, the CLI/API byte + symbol + HIR metadata gate, both missing
-files on candidate rejection (including a langrt-only residue), unchanged old
-directory contents/mode, and a compile budget capped at 180. The existing tree
-is captured with the corpus output reader before a rejected candidate command
-and compared afterwards, including the output directory itself. Six mutation
-controls cover changed bytes, permissions, deleted/added files and directories.
+therefore exercised rather than replaced by a fake command.
+
+The controls cover:
+
+* Plan, dispatch, and CLI limits: the 20-name plan, the exact three-case
+  subset, the eleven nested rejection projects, legacy/paired `main` dispatch
+  with every launch blocked, compile budget capped at 180, and pre-launch
+  rejection of invalid budgets, roles, or non-empty strict output directories.
+* Process and trace enforcement: strict process flags, dirty observer flag
+  rejection, paired reference-helper bounded/trace records, raw retention on a
+  failed `execveat` trace, separate compile/observer whitelists, and no helper
+  fallback.
+* Optional observer `uname -p` probe: Python-only traces and the frozen
+  `/usr/bin/uname` after a failed `PATH` lookup are accepted.  Missing or
+  failed/malformed Python, arbitrary same-name executables, `execveat`, errno
+  text spoofing, unknown/out-of-order or dangling lookups, wrong/extra argv,
+  relative paths, reused observer pids, other tools, a mixed C++ helper, and a
+  changed or missing frozen tool identity are rejected.  Compile and program
+  whitelists still reject both `uname` and the helper.
+* Candidate publication and rejection: the CLI/API byte + symbol + HIR metadata
+  gate, requiring both files absent on candidate rejection (including a
+  langrt-only residue), and unchanged existing directory contents and mode.
+  The existing tree is captured with the corpus output reader before a rejected
+  candidate command and compared afterwards, including the output directory
+  itself; six mutation controls cover changed bytes, permissions, deleted/added
+  files, and directories.
 
 No real Source, component build, or T10 execution is performed by this coding
 delivery; see `.work/SH16-t10-public-candidate-correction.md`.

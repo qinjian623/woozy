@@ -18,7 +18,7 @@ Vec 复制共享容器；切片建立新容器并逻辑复制元素。索引先�
 
 ## 已运行范围与保留的拒绝
 
-临时开放 native/64 支持时，已运行共享写入、有限嵌套 Vec、含 Vec 的 struct/enum、整个绑定或临时值 move、移动后重建、普通参数借用/保存/返回、具体泛型实例、部分构造失败、较晚实参失败、成功/错误两输出、字段替换、别名自赋值、defer/模式绑定，以及 for-in 的 continue/break/return/throw。目标为 Linux x86_64、generic CPU、O0/O2。
+临时开放 native/64 支持时，已运行共享写入、有限嵌套 Vec、含 Vec 的 struct/enum、整个绑定或临时值 move、移动后重建、普通参数借用/保存/返回、具体泛型实例、部分构造失败、后续实参失败、成功/错误两输出、字段替换、别名自赋值、defer/模式绑定，以及 for-in 的 continue/break/return/throw。目标为 Linux x86_64、generic CPU、O0/O2。
 
 仍拒绝普通参数重赋值、计算产生的拥有 switch 临时值、动态 string/Vec[string]、部分 move、非平凡 inout、索引 inout、索引字段写回、递归拥有图、捕获闭包、foreign 及原 T07 未支持组合。没有新增 len/push/share 等源语言接口。
 
@@ -28,7 +28,7 @@ Vec 复制共享容器；切片建立新容器并逻辑复制元素。索引先�
 - 观察程序记录对象身份、分配、最后释放、元素顺序和剩余存活对象；普通及 typed-error 结束检查零存活，Panic 不作此断言。另检查 struct/enum 字段释放顺序和用户事件。观察代码直接检查生成的 LLVM 函数类型。
 - 已保存的沙箱外 ASan/UBSan 为 66/66：60 个生成程序及 6 个私有 runtime 检查。沙箱内 LeakSanitizer 因 ptrace 限制失败的记录保留。最后新增 `owned-two-channels`、`assign-move-error` 的 4 次 O0/O2 sanitizer 执行被中断，记为 `not_run`；其普通源码执行已包含于 80/80。
 - 临时支持下，两套完整 CTest 均为 34 passed / 3 failed，失败均为旧阶段要求 Vec/move 继续被拒绝的断言；断言及其后未运行内容保存在交付说明中。还原临时补丁后，两套重建成功，完整 CTest 各为 36 passed / 0 failed / 1 skipped。`native.ownership` 因公共支持未开放而跳过，记为 `not_run`；私有 runtime 测试通过。
-- LLVM/Clang/LLD 为 22.1.8；测试 Python 固定为工具目录内的 3.12.15。公共 Clang sanitizer、LLVMoff 和跨后端比较由 root 运行，本次 `not_run`。
+- LLVM/Clang/LLD 为 22.1.8；测试 Python 固定为工具目录内的 3.12.15。公共 Clang sanitizer、关闭 LLVM 的构建和跨后端比较由 root 运行，本次 `not_run`。
 
 完整命令、退出码、旧失败日志、逐项观察及 hash 位于 `/tmp/language-t09-native-20261104/`。临时公共补丁已还原，`src/hir/hir.cpp` SHA256 为 `bd8e0fab69833d3a556ce502706cc689551c49701447ea7b78c3fd46c099af7f`。产品补丁含新增文件，不含公共支持修改。
 
@@ -49,9 +49,9 @@ NativeIR 在枚举末尾追加 `vec_element_address`，原有编号不变。该�
 
 删除/遗漏旧字段 drop、把非拥有 store 改成 replace、提前销毁接收者临时值、移除
 bounds check、交换 receiver/index、替换字段 SymbolId、把地址送入 return 或其它
-非字段操作，均有独立失败探针；合法对照先通过。五个冻结 before 项目原先的
-`indexed value-field writeback is not supported` 现改为检查通过，并分别在
-Native O0/O2 与 Python 实际运行。
+非字段操作，均有独立失败探针；合法对照先通过。五个冻结的 before 项目原先报
+`indexed value-field writeback is not supported`，现改为检查通过，并分别在
+Native O0/O2 与 Python 上实际运行。
 
 ### 2026-11-09 返修：Assign 来源与地址 owner 活期
 

@@ -30,19 +30,19 @@ CPython 为 3.12.15，NumPy 为 2.5.4，PyTorch 为 2.15.0+cpu。锁中包含这
 - forward hook 和 MSE 调用各 201 次，backward、zero_grad、step 各 200 次；参数实际变化。
 - 初始 loss 为 `3.829054355621338`，最终为 `9.684752999561397e-13`，有限、非负、下降且小于 `1e-3`。
 - 返回真实的零维 CPU float32 Tensor，`requires_grad=True`、`grad_fn=MseLossBackward0`；未插入 item/detach/cpu/numpy。
-- 与未修改手写参考在同一环境的结果使用 `rtol=1e-5, atol=1e-6` 比较；独立 CLI 复核读取已核实的参考结果，未再次运行参考。
-- 直接执行 CLI 生成的 `program.py` 也退出 0，标准输出和错误输出为空。它会执行原 main 中的另外一次 200 步，独立观察器的一次 train 与直接入口运行分别记录。
+- 与未修改手写参考在同一环境的结果使用 `rtol=1e-5, atol=1e-6` 比较；独立 CLI 复核直接读取已核实的参考结果，未重新运行参考程序。
+- 直接执行 CLI 生成的 `program.py` 也退出 0，标准输出和错误输出为空。它会执行原 main 中的另一次 200 步训练；独立观察器的单次 train 与直接入口运行分别记录。
 
 原 04 SHA-256：`beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797`。原参考 SHA-256：`991e8692a123e68ad2a1e1941f39efdc8590e91b09050450a1323d739fc7080c`。运行库为 `compiler-dev/1-python-values/5`。
 
-上述生成程序的观察器直接检查进入模型的 Tensor x/y。NumPy 中间数组的 `(128, 1)`、float32 和 `y = 2x + 1` 由同一声明集的宿主接口检查记录；没有把 Tensor 观察写成直接观察了生成函数的 NumPy 局部变量。另有生成程序小例对真实 ndarray/Tensor 的普通参数、let 保存和返回逐项检查身份及别名写入。
+上述生成程序的观察器直接检查进入模型的 Tensor x/y。NumPy 中间数组的 `(128, 1)`、float32 和 `y = 2x + 1` 由同一声明集的宿主接口检查记录；没有把对 Tensor 的观察写成直接观察了生成函数中的 NumPy 局部变量。另有小例对生成程序中真实 ndarray/Tensor 的普通参数、let 绑定和返回值逐项检查身份与别名写入。
 
 ## 本轮整合
 
 T10 的上述首批 CPU 范围已完成。主目录 GNU Debug/LLVM ON、GNU Release/LLVM ON、Clang 22 ASan+UBSan+LSan/LLVM ON 各 43/43，GNU Debug/LLVM OFF 为 33/33，共 162 项，无跳过。每种构建实际执行 14 个绑定/运行库用例及 7 个 CLI 用例；真实对象身份/修改 19 项、真实 NumPy 异常 16 项检查全为 true。
 
-辅助程序曾把缺值后的 `--check-only` 当作绑定文件名，误生成 872 字节对象。修复后缺值退出 2，新对象不生成、旧对象字节保持；`--opt` 也不再被吞。新增测试的未知 `--only` 名称曾把零用例算成功，现已报错退出 2；混合选择中的合法用例可能在最终报未知名之前执行，这只影响测试脚本。
+辅助程序曾把缺值后的 `--check-only` 误当成绑定文件名，写出 872 字节的对象。修复后缺值直接退出 2，既不生成新对象，也不改动已有对象的字节；`--opt` 也不再被吞掉。新增测试中，未知的 `--only` 名称此前会把零用例误算为成功，现已报错退出 2；混合指定合法名称与未知名称时，合法用例可能在最终报未知名称之前执行，这只影响测试脚本。
 
-主目录整合记录 SHA-256：`4dd885865f1bbbc0748dc2ac4de000d4ee2f4731911f36c0abcb03c8bef52833`。完整记录保留在开发工作目录的 `checks/t10-cli-root/integration-final/`；源码摘要、命令、退出码、JUnit 和各用例结果分别保存。后续构建可设置 `LANG_T10_PYTHON` 后运行 `ctest --test-dir BUILD --output-on-failure`；缺少这个专用环境时两项 T10 测试不注册，不能据其他测试通过声称 T10 已在该环境验证。
+主目录整合记录 SHA-256：`4dd885865f1bbbc0748dc2ac4de000d4ee2f4731911f36c0abcb03c8bef52833`。完整记录保留在开发工作目录的 `checks/t10-cli-root/integration-final/`；源码摘要、命令、退出码、JUnit 和各用例结果分别保存。后续构建可设置 `LANG_T10_PYTHON` 后运行 `ctest --test-dir BUILD --output-on-failure`；缺少这个专用环境时，这两项 T10 测试不会注册，不能凭其他测试通过就宣称 T10 已在该环境完成验证。
 
 本记录不覆盖 GPU、AMP、DDP、torch.compile、任意 PyTorch API、其他平台或完整原生 ARC。原生后端继续明确拒绝 Python 外部源。

@@ -72,13 +72,13 @@ handled before the controller considers pressure.
 
 ## 3. Collection and status mapping
 
-`lang_gc_runtime_collect_v1` claims a controller busy word with CAS. A second
-controller collection returns `-16`. The caller must be explicitly world
-registered and outside SAFE/critical; the automatic poll gates this with
-`lang_gc_world_can_collect_v1`, while direct misuse inherits world stop's
-critical `-16` or SAFE/unregistered Panic. The timeout is passed unchanged to
-`lang_gc_world_stop_v1`, so the world owns the fixed monotonic deadline and all
-EINTR handling.
+`lang_gc_runtime_collect_v1` claims a controller busy word with CAS; a
+concurrent controller collection returns `-16`. The caller must be explicitly
+world-registered and outside SAFE and critical regions. The automatic poll
+gates on `lang_gc_world_can_collect_v1`, while direct misuse falls through to
+`lang_gc_world_stop_v1` (`-16` inside critical, or Panic when SAFE or
+unregistered). The timeout is forwarded unchanged to `lang_gc_world_stop_v1`,
+which owns the fixed monotonic deadline and EINTR retries.
 
 The world is stopped before the kernel collector. `lang_gc_collect_stopped_v1`
 is called while stopped; it returns only `LANG_GC_OK` or `LANG_GC_BUSY` in this
@@ -123,9 +123,8 @@ enqueue. The controller cannot observe the kernel's individual trace, clear, and
 release callbacks; source integration must therefore call this helper only from
 clear/release, never from trace. The slow path checks the current gettid against
 the recorded collector tid under the queue lock. Other SAFE/mutator threads
-receive false. Queue node
-allocation happens before the lock; free happens after unlock; callbacks run
-only after detach/resume and never under the lock.
+receive false. Queue node allocation happens before the lock; free happens
+after unlock; callbacks run only after detach/resume and never under the lock.
 
 The queue holds the transferred payload/reference without retaining it and
 without releasing it early. Each node is released exactly once. On success the
@@ -235,9 +234,6 @@ release while the world is stopped.
   provided.
 * Any claim that MEM02/SourceNativeGC is complete.
 
-The controller is only the runtime connector. Source writes and compiler
-instrumentation remain future Root work.
-
 ## 10. Verification evidence
 
 `tests/native/gc_runtime/run_all.sh` is the single entry point. It applies a
@@ -334,6 +330,6 @@ bash tests/native/gc_world/run_all.sh
 # SUMMARY pass=42 fail=0 skip=0
 ```
 
-This run still does not make MEM02/SourceNativeGC complete. Source writes,
-compiler instrumentation, blocking SAFE, foreign-callback guards, and the
-main-return final collection hook remain Root integration work.
+This acceptance run covers the runtime controller and world layers only. To
+complete MEM02/SourceNativeGC, Root still needs to integrate the items listed
+in section 9.

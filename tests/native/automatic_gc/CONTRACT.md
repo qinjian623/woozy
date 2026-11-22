@@ -26,7 +26,7 @@ In scope:
 Out of scope:
 
 - `Weak` downgrade/upgrade and liveness (MEM01).
-- Capturing closures/closures environments (LANG01 is planned).
+- Capturing closures and closure environments (LANG01 is planned).
 - Concurrent collection, thread stop-the-world, runtime blocking-call SAFE,
   threads, fork, channels and foreign Python/C cycles.
 - Source-level `collect`, `gc`, `retain`, `release`, `Weak` or closure APIs.
@@ -190,15 +190,15 @@ a generic `lld` target. Candidate builds, links, readelf and program runs are
 traced with separate exec allowlists: the CLI plus its fixed LLVM toolchain
 for the build, the selected clang/LLD for the observer link, the built program
 for its run, the observer only for its run, and readelf only for ELF checks.
-The one existing `clang --version` call uses the same bounded command layer,
-raw/SHA and process JSON as case commands; candidate version tracing allows
-only clang. An unexpected exec, missing trace, timeout, signal, non-int exit,
-non-bool cleanup flag, abandoned pipe, missing `program.o`, or build failure
-stops that case before a later observer can mask it.
+The `clang --version` check uses the same bounded command layer,
+raw output/SHA records, and process JSON as case commands; candidate version
+tracing allows only clang. An unexpected exec, missing trace, timeout, signal,
+non-int exit, non-bool cleanup flag, abandoned pipe, missing `program.o`, or
+build failure stops that case before a later observer can mask it.
 
 The full nine cases at O0/O2 are 18 runs. Reference uses 7 commands per run
 (126 case commands); candidate uses 6 (108) because it has no helper emit.
-Each role also performs the existing one `clang --version` check, so the full
+Each role also performs one `clang --version` check, so the full
 planned counts are 127 and 109 (236 for both), excluding preparation. The
 `command_plan` field reports these pre-run expectations; it is not backfilled
 from a driver exit status.
@@ -223,12 +223,12 @@ from a driver exit status.
 - Every command has a finite timeout (`--timeout`, per-case override for the
   pressure cases). Tool output, exit codes, source hashes and the pin are in
   the external full summary.
-- Before the run snapshot the selected CLI resource stdlib and runtime, the
-  linked runtime, root stdlib, observer source, all fixtures and tools. The
-  Vec header is `HERE.parents[2]/runtime/native/vec.hpp`, the actual file
-  selected by `observe_gc.cpp`'s relative include; it is independent of
+- Before the run, the runner snapshots the selected CLI resource stdlib and
+  runtime, the linked runtime, root stdlib, observer source, all fixtures, and
+  tools. The Vec header is `HERE.parents[2]/runtime/native/vec.hpp`, the actual
+  file selected by `observe_gc.cpp`'s relative include; it is independent of
   `--root`. The snapshot and both before/after path displays use that same
-  actual header. After the run recompute the same set from the stored
+  actual header. After the run, it recomputes the same set from the stored
   before paths. Any change or missing required input makes the run
   `inconclusive_tool_pin` with a non-zero exit; it is not merely recorded as
   `false` while still passing. Missing required inputs are never silently

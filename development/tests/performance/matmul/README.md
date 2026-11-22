@@ -91,10 +91,6 @@ The observer uses the real runtime C ABI from `runtime/native/vec.hpp`
 not recompute the matmul. The observer binary depends on the host libc and the
 runtime; it is test-only and is not a standalone Native performance program.
 
-`negative` variants mutate the actual last C element and embed the matching
-wrong expected value, so the formal program exits `0` but the Native observer
-must capture the exact wrong bits and reject them against the oracle.
-
 ### Python
 
 `lang_python_emit` generates the unmodified `program.py`, `langrt.py`,
@@ -108,8 +104,8 @@ by the Native observer and the oracle. It does not recompute the matmul.
 
 `prepare.py` loads `tests/performance/mandelbrot/prepare.py` through
 `importlib` under the unique module name
-`_matmul_reuse_mandelbrot_prepare`. It reuses the already-read Mandelbrot/Sieve
-generic helpers: `need`, `now`, `file_rec`, `manifest_text`, `tool`,
+`_matmul_reuse_mandelbrot_prepare`. It reuses these generic helpers shared with
+the Mandelbrot and Sieve fixtures: `need`, `now`, `file_rec`, `manifest_text`, `tool`,
 `run_program`, `require_exit`, `verify_ir`, `build_langc`, `parse_functions`,
 `parse_loop_sections`, `elf_checks`, the empty `visit` recognizer
 (`visit_function`), `source_call_count`, `decode_hex`, the mangled C++ visit
@@ -195,6 +191,6 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
   --cpu 4
 ```
 
-The output directory must not already exist. A passed run is a correctness and
-artifact check, not a formal performance measurement; no measurement stage is
-provided by this fixture.
+The output directory must not already exist. This fixture runs only the
+correctness and artifact check; it does not include a performance measurement
+stage.

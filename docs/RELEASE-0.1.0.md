@@ -18,7 +18,7 @@ A system LLVM installation is not required. Keep the extracted `woozy/` director
 
 ## Install
 
-Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). This note is a draft for v0.1.0, so the command block uses a shell variable for the tag. The final tag for this draft is `v0.1.0`; use `v0.1.0-rc.1` for the original Linux pre-release, or set `tag` to the published tag when the final release is available.
+Download the archive and checksum from the [releases page](https://github.com/qinjian623/woozy/releases). Because this draft targets the unpublished `v0.1.0` release, the commands below take the release tag in `tag`: use `v0.1.0-rc.1` for the original Linux pre-release, or `v0.1.0` (or the published final tag) once the final release is available.
 
 ```sh
 # Use v0.1.0 after publication or v0.1.0-rc.1 for the original Linux package.
@@ -31,11 +31,9 @@ tar -xzf woozy-linux-x86_64.tar.gz
 ./woozy/woozyc --version
 ```
 
-The `v0.1.0` package reports its full version and source commit with
-`woozyc --version`. The published `v0.1.0-rc.1` package reports
-`woozyc 0.1.0-selfhost (compiler-dev/1)`.
+The `v0.1.0` package reports its full version and source commit with `woozyc --version`. The published `v0.1.0-rc.1` package reports `woozyc 0.1.0-selfhost (compiler-dev/1)`.
 
-To put `woozyc` on your `PATH`, create a symbolic link into a directory that is already on your path, or add the extracted directory directly. For example:
+To put `woozyc` on your `PATH`, symlink it into a directory already on your `PATH`, or add the extracted `woozy/` directory directly. For example:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -48,7 +46,7 @@ The symlink must point into the intact `woozy/` directory; moving only the compi
 
 ## Hello World
 
-The release archive does not include the repository examples. From a checkout of this repository, build the bundled Hello World project and run the resulting Native program:
+The release archive does not include the repository examples. From a checkout of this repository, build the Hello World example and run the resulting Native program:
 
 ```sh
 woozyc build --project examples/hello/lang.toml --backend native --out-dir build/hello
@@ -107,7 +105,7 @@ The published v0.1.0-rc.1 check in [GitHub Actions run 44698760308](https://gith
 
 - Native programs target Linux x86_64 only. Windows, macOS, and ARM targets are not provided.
 - Default arguments, associated types, template specialization, and non-type or variadic template parameters are not supported.
-- Async/await and the Linux system modules are available only on the Native backend. The Python backend does not support them.
+- Async/await and the Linux system modules are available only on the Native backend, not the Python backend.
 - C bindings target the Linux x86_64 C ABI. C++ ABI and name-mangled symbols are not supported directly; C++ libraries need an `extern "C"` interface. C variadic calls, arrays, unions, packed or bitfield records, record construction, and record field assignment are not supported.
 - `std/http_server` serves HTTP/1.1 without TLS. TLS and HTTPS use the separate `std/tls` and `std/https` addon described above.
 - There is no raw syscall API.

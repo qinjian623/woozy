@@ -30,7 +30,7 @@ LLVM/Clang/LLD 与现有运行库可以保留。新编译器不得启动 woozyc/
 
 ## SourceManager（SH01b）
 
-Source包追加公开 `Manager { pub files Vec[string]; pub snapshots Vec[model.Source]; pub revision u64; }` 和 `manager() Manager`、`add_file(state inout Manager, path string) u64`、`update(state inout Manager, file_id u64, bytes Vec[u8]) model.Source`、`get(state Manager, snapshot_id u64) model.Source`。严格沿用CPP SourceManager的1起始file/snapshotID与全局递增revision；update保留旧快照，非法source仍记录快照。空path/非法ID是内部错误，不能静默创建别的file。已有snapshot六函数与共享model不变。
+Source 包新增公开结构 `Manager { pub files Vec[string]; pub snapshots Vec[model.Source]; pub revision u64; }` 及四个函数：`manager() Manager`、`add_file(state inout Manager, path string) u64`、`update(state inout Manager, file_id u64, bytes Vec[u8]) model.Source`、`get(state Manager, snapshot_id u64) model.Source`。file/snapshot ID 从 1 开始、revision 全局递增等规则严格沿用 C++ SourceManager；update 会保留旧快照，非法 source 同样记入快照。传入空 path 或非法 ID 属于内部错误，不能静默创建新的 file。已有的 snapshot 六函数与共享 model 保持不变。
 
 ## 项目与名称解析（SH05）
 
@@ -48,7 +48,7 @@ resolve.resolve_project(project model.Project) model.ResolveResult
 
 BindingStore.hosted 由 project 在读取 C bundle 前设置；C 注册回调在非 hosted 模式仍按现有规则拒绝。bundle 缓存和 identity 冲突由 bindings 负责，成功后才发布声明。图加载完成时将 store 中的声明数组放入 Project。
 
-ManifestConfig 保存 canonical source_root、manifest、package_name、entry、backend、word_bits、hosted、按名字排序的 dependencies 和清单 span。对非主清单的 backend/word_bits 保留现有不采用的行为。TOML 原始整数必须递归检查当前 toml++ 的 i64 范围，含未使用字段中的整数；不能因通用 TOML 模块保留任意大文本而扩大清单接受范围。E_MANIFEST_INVALID 属于 Environment，span 为整个原始清单。TOML parser 的错误文本由项目模块按实际对照处理，不能省略诊断。
+ManifestConfig 保存 canonical source_root、manifest、package_name、entry、backend、word_bits、hosted、按名字排序的 dependencies 和清单 span。对非主清单中的 backend/word_bits 维持现状，不予采用。TOML 原始整数必须递归检查当前 toml++ 的 i64 范围，含未使用字段中的整数；不能因通用 TOML 模块保留任意大文本而扩大清单接受范围。E_MANIFEST_INVALID 属于 Environment，span 为整个原始清单。TOML parser 的错误文本由项目模块按实际对照结果处理，不得省略诊断。
 
 Module 从入口开始 DFS 首次发现分配 ID，先登记 canonical identity，再按路径排序解析目录内全部 .wz，随后按文件/AST 顺序解析 import。符号链接来源去重；相同逻辑名的不同来源报冲突；全部 import 环报错。library/dir 按首次使用顺序去重。foreign exports 按名字排序，重载候选按声明次序。
 
@@ -74,13 +74,13 @@ substitute(id usize,substitutions Vec[model.Substitution],state inout Context) u
 patterns_overlap(left usize,right usize,state Context) bool throws Error
 ```
 
-完整沿用 TypeContext::intern 的合法形状/引用检查及确定 ID，不把类型声明存在性检查提前到表内。intern 复制 parameters/type_args；find 返回的数组也不能让调用方改写表内记录。clone_context 用于 C++ 类型表按值复制的尝试检查，新表追加不能改动旧表。substitute 与 patterns_overlap 对照现有 hir.cpp，含 occurs check 与无递归环处理。system signature 中需要 std/Option/Result/系统记录声明的部分，等 HIR 记录发布后另做，不以形状相似的假记录替代。
+完整沿用 TypeContext::intern 的合法形状/引用检查及确定 ID，不把类型声明存在性检查提前到表内。intern 复制 parameters/type_args；find 返回的数组也不能让调用方改写表内记录。clone_context 用于承接 C++ 里按值复制类型表做试探性检查的写法，向新表追加条目不能影响旧表。substitute 与 patterns_overlap 对照现有 hir.cpp，含 occurs check 与无递归环处理。system signature 中需要 std/Option/Result/系统记录声明的部分，等 HIR 记录发布后另做，不能用形状相似的假记录替代。
 
 ## HIR 数据定义（SH06c）
 
 `app/wzcc/hir` 是同一个数据包，nodes/ownership/module 三个文件分别保存节点、清理与退出记录、声明与 HirModule。SH06c worker 是该批三个文件的唯一写入负责人；model、CLI 和契约仍由 Root 修改。hir 导入 model/types，types 只导入 model，不形成 import 环。所有需要完整 HirModule 的签名生成、验证与分类算法放到后续独立包。
 
-字段来源为完整 `include/lang/hir/hir.hpp`；Source/Scope 分别改名 HirSource/HirScope，type 字段改 type_id，CaptureSource.move 改 is_move，HirFunction.async 改 is_async，pair 重命名表改 SymbolRename。NodeData/NodeKind 必须保留全部45项顺序；kind 从 data 推导。不得省略捕获、bound receiver、异步取消、ownership/exits、迭代器、dyn trait、C callback 引用或 Python access 元数据。数据定义阶段不提供可随意创建的 VerifiedHirModule 或 verified bool；发布隔离和验证另做。
+字段来源为完整 `include/lang/hir/hir.hpp`；Source/Scope 分别改名 HirSource/HirScope，type 字段改 type_id，CaptureSource.move 改 is_move，HirFunction.async 改 is_async，pair 重命名表改 SymbolRename。NodeData/NodeKind 必须保留全部45项顺序；kind 从 data 推导。不得省略捕获、bound receiver、异步取消、ownership/exits、迭代器、dyn trait、C callback 引用或 Python access 元数据。数据定义阶段不提供可随意构造的 VerifiedHirModule 或 verified bool，发布隔离和验证留待后续阶段实现。
 
 ## HIR 共用算法
 
@@ -127,9 +127,9 @@ ownership.produce_ownership(module inout hir.HirModule) model.UnitResult
 ownership.verify_ownership(module hir.HirModule) model.UnitResult
 ```
 
-foreign.BoundArguments 字段 parameters/omitted 均为 Vec[u32]，顺序保持现有头文件。`valueops` 只读输入；临时替换需 clone_context，返回字段的 TypeId 必须属于公开 module.types。共享标准类型依真实声明身份查找，不按名称相似或自造记录。
+foreign.BoundArguments 的 parameters/omitted 字段均为 Vec[u32]，顺序沿用现有头文件。`valueops` 只读输入；临时替换必须走 clone_context，返回字段的 TypeId 必须属于公开的 module.types。共享标准类型必须按真实声明身份查找，不能只按名字匹配或自造记录。
 
-`hirclone.clone_module(module hir.HirModule) hir.HirModule throws model.SupportError` 必须复制全部可变 Vec，包括 resolved/project、Source 字节/位置表、词法/AST arena、绑定声明、HIR、嵌套模式/常量/清理步骤和 types.Context。不可把只复制顶层 Vec 当作隔离。源 string 值可以共享其不可变存储。新编译器不能调用旧前端进行复制或转储。
+`hirclone.clone_module(module hir.HirModule) hir.HirModule throws model.SupportError` 必须深复制全部可变 Vec，包括 resolved/project、Source 字节与位置表、词法/AST arena、绑定声明、HIR、嵌套模式/常量/清理步骤以及 types.Context，不能只复制顶层 Vec 就当成完成了隔离。源 string 值可共享其不可变存储。新编译器不得调用旧前端执行复制或转储。
 
 Sema 的具体实例变换还直接需要 `hirclone.clone_node(value hir.HirNode) hir.HirNode throws model.SupportError`、`clone_function(value hir.HirFunction) hir.HirFunction throws model.SupportError`、`clone_pattern(value hir.Pattern) hir.Pattern throws model.SupportError`、`clone_constant(value hir.ConstantValue) hir.ConstantValue throws model.SupportError`。这些入口复用 clone_module 的相同复制函数，不能再维护另一份45节点复制器。超过内部递归限制或循环时抛 SupportError.Invalid；不得用故意越界或 Panic 代替错误返回。
 
@@ -171,7 +171,7 @@ constant 保留现有 128 深度/100000 次工作限制、源 AST 重新求值�
 
 ## 检查与经过验证的 HIR
 
-`sema.check_types(input model.ResolveResult, config Option[model.CheckConfig]) hir.HirResult` 对应现有 check_types：Resolve 的失败/恢复/取消不得继续进入检查器；没有可用配置时使用 Project 的 backend/word_bits。HirResult 与现有普通阶段记录一样保存 state/failure/diagnostics/has_value/value。本函数只产生可变 HIR，不能直接授予代码生成权限。
+`sema.check_types(input model.ResolveResult, config Option[model.CheckConfig]) hir.HirResult` 对应现有 check_types：Resolve 处于失败、恢复或取消状态时不得继续进入检查器；未显式传入配置时，沿用 Project 的 backend/word_bits。HirResult 与现有普通阶段记录一样保存 state/failure/diagnostics/has_value/value。本函数只产生可变 HIR，不能直接授予代码生成权限。
 
 `app/wzcc/hirverify` 公开 VerifyMode { Backend; StaticOnly; } 和 VerifiedHirModule（所有实例字段私有，只能由本包 verify 创建）。VerifyResult 的公开字段为 state/failure/diagnostics/value，value 是 Option[VerifiedHirModule]，不另存可被填错的 has_value。
 
@@ -183,8 +183,8 @@ hirverify.snapshot(value hirverify.VerifiedHirModule) hir.HirModule throws model
 hirverify.config(value hirverify.VerifiedHirModule) model.CheckConfig
 ```
 
-验证器逐项重读 Source/AST/声明，与现有完整 Verifier 一致，不信任生产方的常量、类型、函数实例、effect、ownership 或出口信息。verify 必须先 hirclone.clone_module，再验证后保存；snapshot 再返回独立副本，不能让调用方通过共享 Vec 改写已经验证的数据。backend 模式与 static_only 的差异、只遍历可执行节点的能力检查和现有诊断次序必须保留。
+验证器与现有完整 Verifier 一致，逐项重读 Source、AST 和声明，不信任上游产出的常量、类型、函数实例、effect、ownership 或出口信息。verify 必须先调用 hirclone.clone_module，验证通过后再保存副本；snapshot 每次也返回独立副本，防止调用方通过共享 Vec 改写已验证数据。backend 与 static_only 模式的差异、仅遍历可执行节点的能力检查以及现有诊断顺序都必须保留。
 
 本次 Wz 阶段函数尚未公开 C++ 的共享 stop_token。取消分支不能以普通 bool 冒充；完整 CLI 的 SIGINT 退出和临时输出处理还需在分代测试中检查。
 
-Sema 共用的 Checker/Value/Expr/Constant/Error 和 clone_checker 只由 Root 维护，详见 SELFHOST_SEMA.md。A/B 在同一个 sema 包写不同文件，原 C++ 方法的归属、全部跨文件签名、回调状态单元及错误槽以该文档为准；不各自改名或复制状态。包内 reject 系列构造 Error，调用处必须 throw。所有使用同一个 inout state 的嵌套实参先求值到局部变量。
+Sema 共用的 Checker/Value/Expr/Constant/Error 和 clone_checker 只由 Root 维护，详见 SELFHOST_SEMA.md。A/B 在同一个 sema 包写不同文件，原 C++ 方法的归属、全部跨文件签名、回调状态单元及错误槽以该文档为准；不各自改名或复制状态。包内的 reject 系列辅助函数只构造 Error，调用处必须显式 throw。若嵌套实参共用同一个 inout state，必须先求值到局部变量。

@@ -43,16 +43,15 @@ server identity using `tls.NameKind.Auto` (DNS + SNI for names, IP verification
 without SNI for literals). It closes the socket on handshake failure.
 
 `send` and `receive` use one persistent `std/http` reader, so multiple messages
-can be sent and received on the same TLS connection. `request` is a convenience
+can be sent and received on the same TLS connection. `request` is a
 single-request helper that closes the connection afterwards.
 
 If `request` fails while sending or receiving, the TLS stream is already in an
-error state. It closes the socket owned by this module exactly once and
-rethrows the original error; it does not attempt `SSL_shutdown` or wait for the
-peer. On success it performs the normal graceful `close` outside that error
-path. This keeps the borrowed-fd behavior of the explicit `tls.close` API
-unchanged while ensuring an HTTP or fatal-TLS failure never waits for a peer or
-closes a reused descriptor.
+error state. `request` closes the socket it owns exactly once and rethrows the
+original error without calling `SSL_shutdown` or waiting for the peer. On
+success, it runs the normal graceful `close`. This keeps the borrowed-fd
+behavior of `tls.close` unchanged while ensuring an HTTP or fatal TLS failure
+never waits for the peer or closes a reused descriptor.
 
 ## Server
 
@@ -81,7 +80,7 @@ The source tests exercise:
 * a Woozy HTTPS server against an independent Python `ssl` peer, including a
   fragmented chunked request with a trailer and two requests on one connection;
 * Woozy-to-Woozy HTTPS with the same persistent connection;
-* binary bodies containing NUL and non-UTF-8 bytes, byte-for-byte equality;
+* binary bodies containing NUL and non-UTF-8 bytes, checked byte-for-byte;
 * clean close versus TCP truncation and certificate failures at the TLS layer.
 
 The HTTP limits and errors are the existing `std/http` ones. Use

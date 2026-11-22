@@ -9,7 +9,7 @@
 3. 普通参数不消费源绑定，不意味着外部库只读、不会保存引用或不会修改对象。绑定中的 ownership 和 escape 约定必须与实际 API 对应。
 4. 只支持已声明的重载、可省略参数和调用能力。找不到绑定时明确报错，不退回动态 Any。
 5. 绑定版本、目标后端、包版本约束和生成器版本进入依赖锁及编译缓存键。
-6. 不为使绑定“更安全”而隐式复制 Tensor、迁移设备、截断梯度或强制求标量。
+6. 不要为了把绑定做得“更安全”而隐式复制 Tensor、迁移设备、截断梯度或强制求标量。
 
 ## 2 绑定数据模型
 
@@ -135,7 +135,7 @@ extern "C" void image_destroy(void* handle) noexcept;
 extern "C" void bridge_error_destroy(void* error) noexcept;
 ~~~
 
-约定：状态 0 为成功，非零为失败；正常返回时 out_handle/out_error 都有确定指针值，但只有与状态对应的非空句柄可使用。创建失败不把部分初始化对象转移给调用者。错误句柄由包装库创建并由同一库销毁，错误码可表达无法分配错误对象等失败；错误句柄不保证每次失败都有值。读取输出指针前须先确认调用返回及状态。
+约定：状态 0 为成功，非零为失败；正常返回时 out_handle/out_error 都有确定指针值，但只有与状态对应的非空句柄可使用。创建失败时不得把部分初始化的对象交给调用方。错误句柄由包装库创建并由同一库销毁，错误码可表达无法分配错误对象等失败；错误句柄不保证每次失败都有值。读取输出指针前须先确认调用返回及状态。
 
 本语言绑定把状态协议转换成语言的普通返回值或 typed throws，源码不手动检查每次 C 返回码。内部 LLVM throws ABI 与这套对外包装 ABI 是两个层次。
 
@@ -163,9 +163,9 @@ extern "C" void bridge_error_destroy(void* error) noexcept;
 
 当前 Linux x86_64 Native/64 实现见 [系统接口](../../docs/OS.md)，标准库源码为 `stdlib/os/os.wz`。名称和参数顺序采用 C 风格，错误使用 `throws os.Error`，不开放原始 syscall、Ptr 或用户指定的原生函数。File 为普通值包装的描述符，复制不会 dup，离开作用域不会自动 close。
 
-`read/write` 接收 `File, Vec[u8], usize`，返回本次字节数；`write_text` 写一次字符串的UTF-8字节。`write_all/write_all_text` 写完全部数据：短写推进偏移，EINTR原位重试，零进展抛NoProgress，其他错误保留累计completed。空数据成功返回0，不检查描述符。`close`不自动重试。路径检查嵌入NUL和Linux路径长度，生成临时终止副本；源字符串本身不增加结尾NUL。
+`read/write` 接收 `File, Vec[u8], usize`，返回本次字节数；`write_text` 写一次字符串的 UTF-8 字节。`write_all/write_all_text` 写完全部数据：短写时推进偏移，遇到 EINTR 原位重试，零进展抛 NoProgress，其他错误保留累计 completed。空数据直接成功返回 0，不检查描述符。`close` 不自动重试。路径参数会检查内嵌 NUL 和 Linux 路径长度，并生成带 NUL 结尾的临时副本；源字符串本身不附加结尾 NUL。
 
-标准模块还提供 stdin/stdout/stderr、open、lseek、unlink、mkdir、rmdir、getpid、exit。exit立即终止进程，不运行语言defer。内核调用全部由自有运行代码直接执行，不链接libc。Python和其他平台没有对应实现，明确报告未支持；C++ opaque包装也未由本项实现。
+标准模块还提供 stdin/stdout/stderr、open、lseek、unlink、mkdir、rmdir、getpid、exit。exit 会立即终止进程，不运行语言 defer。所有内核调用都由自有运行库代码直接发起，不链接 libc。Python 和其他平台没有对应实现，会明确报告未支持；这一项也不包含 C++ opaque 包装实现。
 
 ## 8 C++ 与平台验收
 

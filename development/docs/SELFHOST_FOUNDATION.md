@@ -13,7 +13,7 @@
 - `add/subtract/multiply(left BigInt, right BigInt) BigInt`
 - `divrem(left BigInt, right BigInt) DivRem throws Error`，DivRem 有 pub quotient/remainder BigInt；商向零截断，余数与被除数同号。
 - `shift_left(value BigInt, bits u64) BigInt`、`shift_right(value BigInt, bits u64) BigInt`：按绝对值移位并保留符号，右移截断；它不是源语言负数算术右移，后续常量求值须按定宽规则另行处理。
-- `bit_length(value BigInt) u64` 按绝对值；`gcd(left BigInt, right BigInt) BigInt` 非负。
+- `bit_length(value BigInt) u64` 按绝对值计算；`gcd(left BigInt, right BigInt) BigInt` 返回非负结果。
 - `to_i64/to_u64(value BigInt) i64/u64 throws Error`：越界报 Error.Overflow，禁止绕回。
 
 Error 包含 InvalidBase、InvalidDigit(offset usize)、DivisionByZero、Overflow。不允许用 f64 中转大整数；先完成这些基础运算，再接入精确有理数和 IEEE 舍入。
@@ -22,7 +22,7 @@ Error 包含 InvalidBase、InvalidDigit(offset usize)、DivisionByZero、Overflo
 
 实现当前 toml++ 所接受的 TOML 1.0 结构规则；保存字符串、整数/浮点原始文本、布尔、日期时间、数组和表。公开入口 `parse(input string) Document throws Error`，Document 有 pub root Value；Value 为带类型的 enum，表是有序 `Vec[Entry]`，Entry 有 pub key string/value Value。Error.Syntax 带 pub 风格的载荷 offset usize、message string，offset 是 Unicode 码点位置；调用方将其转换为 Source 原始字节区间。
 
-保留重复键/重复表、点分键、隐式表与 inline table 的正确限制，不能用逐行 split 替代。支持 basic/literal/multiline 字符串、Unicode 转义、注释、数组/inline table、array of tables、数字与日期时间；不认识或未移植的合法形式必须明确报告，不能静默跳过或猜测字符串。模块只负责通用 TOML，清单字段白名单、路径与依赖语义由 project 模块负责。
+保留重复键/重复表、点分键、隐式表与 inline table 的正确限制，不能用逐行 split 替代。支持 basic/literal/multiline 字符串、Unicode 转义、注释、数组/inline table、array of tables、数字与日期时间；不认识或尚未移植的合法形式必须明确报错，不能静默跳过或当成字符串硬猜。模块只负责通用 TOML，清单字段白名单、路径与依赖语义由 project 模块负责。
 
 这份接口并不表示模块已实现；必须由真实 Woozy 程序和独立期望/第三方解析对照检查后才能采用。
 
@@ -63,7 +63,7 @@ wrap_integer(value BigInt, width u32, signed bool) IntegerValue throws Error
 
 ## input / paths
 
-`app/wzcc/input` 依赖 SourceManager，公开 `ReadResult { pub state model.PhaseState; pub failure model.FailureKind; pub diagnostics Vec[model.Diagnostic]; pub has_value bool; pub value model.Source; }` 和 `read(path string, state inout source.Manager) ReadResult`。对应 `src/support/input.cpp`：文件 I/O 失败为 Environment/E_INPUT_IO/toolchain；非法源文件为 Source/E_INVALID_SOURCE/lex，span 使用快照原始字节错误区间；有效源文件 Complete。失败时 value 不用于下游分析，SourceManager 仍保留已读到的非法快照。不要绕过已有 Source 验证。
+`app/wzcc/input` 依赖 SourceManager，公开 `ReadResult { pub state model.PhaseState; pub failure model.FailureKind; pub diagnostics Vec[model.Diagnostic]; pub has_value bool; pub value model.Source; }` 和 `read(path string, state inout source.Manager) ReadResult`。行为对应 `src/support/input.cpp`：文件 I/O 失败返回 Environment/E_INPUT_IO/toolchain；非法源文件返回 Source/E_INVALID_SOURCE/lex，span 指向快照原始字节中的错误区间；有效源文件返回 Complete。失败时 value 不用于下游分析，SourceManager 仍保留已读到的非法快照。不要绕过已有 Source 验证。
 
 `app/wzcc/paths` 公开 `canonical(value string) string throws os.Error`，对应 Linux 已存在路径的 `std::filesystem::canonical`；解析符号链接和相对路径，不能先 clean 掉符号链接之前的 `..`，保留 ENOENT/ENOTDIR/ELOOP 错误。`join(left string,right string) string` 只拼接路径，right 绝对路径时替换 left；不消除 `.`/`..`，避免提前改变符号链接含义。目录枚举和排序由 project 负责。
 

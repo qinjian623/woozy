@@ -102,14 +102,13 @@ pub func ready[R](future Future[R]) bool;
 - 跨池等待造成的循环不在检测范围内；`join` 只检测当前池的 worker 自等待。
   同一个 worker 若 `get` 自己池中尚未完成、且需要全部 worker 才能推进的 Future，
   仍可能等待自己；本模块不检测这种 Future 自等待。
-- worker 线程参数持有池状态直到线程退出；没有用户析构器或循环回收，因此只
-  drop Pool 句柄而不 close/join 时 worker 可能继续运行并保持状态存活。
+- worker 线程参数持有池状态直到线程退出；由于没有用户析构器、循环回收或自动
+  drop 清理，只 drop Pool 句柄而不 close/join 时，worker 会继续等待任务并保持
+  状态存活。本模块不做隐式后台清理，未关闭的池生命周期需由调用方显式结束。
 - 不提供 worker 级取消、任务取消、超时 Future、优先级或抢占。任务函数必须是
-  无捕获函数值；捕获闭包升级后本 API 保持兼容。
-- 未实现自动 drop 清理。调用方不 close/join 时，worker 会继续等待任务；这是
-  明确的未完成生命周期，而不是被隐藏的后台清理。
+  无捕获函数值；后续支持捕获闭包时，本 API 保持兼容。
 - 泄漏/分配跟踪：当前没有公开的 Wz 分配观察接口，本模块验证记录会明确标注
-  `not_run`，不能把正常运行当作物种级泄漏证明。
+  `not_run`，不能把正常运行当作无内存泄漏的证明。
 
 ## 验证记录
 
@@ -117,11 +116,11 @@ pub func ready[R](future Future[R]) bool;
 `build/woozy-stdlib-native/woozyc`，
 固定 `LD_LIBRARY_PATH=${WOOZY_TOOLCHAIN_ROOT}/libxml2-legacy-2.13.9/usr/lib`。
 
-验收程序使用真实 Native O0/O2、原子 started 门和最大并发计数证明 worker 并行，
-覆盖多 submitter/多 waiter、背压、close 排空、close/submit 竞争、拥有结果复制、
-`R=Result` typed 失败、自 join、零参数错误和无固定 sleep。harness 为
-`tests/native/threadpool/run_threadpool.py`，每个 build/run 都有有限 timeout，
-build/run 输出和失败项保存在运行目录的 `summary.json`。
+验收程序在真实 Native O0/O2 下通过原子 started 门闩和最大并发计数证明 worker
+并行，覆盖多 submitter/多 waiter、背压、close 排空、close/submit 竞争、带所有权
+的结果复制、`R=Result` typed 失败、自 join 和零参数错误，且不依赖固定 sleep。
+harness 为 `tests/native/threadpool/run_threadpool.py`，每个 build/run 都有有限
+timeout，build/run 输出和失败项保存在运行目录的 `summary.json`。
 
 实际结果（本次工作树，O0/O2）：
 

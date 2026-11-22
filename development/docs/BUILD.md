@@ -1,6 +1,8 @@
 # 前端构建与检查
 
-契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、pkg-config、toml++、json-c 和 GMPXX >= 6.3.0 的开发文件。本机使用 toml++ 3.4.0、json-c 0.19、GMP/GMPXX 6.3.0。前端库与检查命令不链接 LLVM 或 CPython，检查不启动后端进程，包含源码快照、诊断、输入/取消、词法语法、项目和名称解析，以及标量类型检查与 HIR 验证。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。Python 标量代码生成和显式运行测试已实现；原生标量后端已接入正式 CLI，启用方式见下文。
+契约版本 compiler-dev/1。构建前端需要 C++20 编译器、CMake >= 3.20、Ninja、pkg-config、toml++、json-c 和 GMPXX >= 6.3.0 的开发文件；本机环境为 toml++ 3.4.0、json-c 0.19、GMP/GMPXX 6.3.0。前端库和检查命令不链接 LLVM 或 CPython，检查时也不启动后端进程，覆盖源码快照、诊断、输入/取消、词法语法、项目和名称解析，以及标量类型检查与 HIR 验证。
+
+开发测试如果找到 Python，会运行 80 个语法分类和 20 个独立模块项目；测试解释器可用 LANG_TEST_PYTHON 指定。找不到 Python 时，这些测试会明确记为未运行，C++ 单元测试仍照常执行。Python 标量代码生成与显式运行测试已实现；原生标量后端已接入正式 CLI，启用方式见下文。
 
 ```sh
 cmake --preset frontend-debug
@@ -10,7 +12,7 @@ build/frontend-debug/woozyc --help
 build/frontend-debug/woozyc --version
 ```
 
-帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build 已支持 Python/64 和 Linux x86_64 原生标量程序；未开启 LANG_ENABLE_LLVM 时原生 build 明确拒绝。C++ 版的 `woozyc lsp` 和 `woozyc fmt` 也可用在不带 LLVM 的构建中，见 [编辑器配置](EDITOR.md)。`capabilities` 仍返回 `E_CAPABILITY_UNAVAILABLE`。
+帮助和版本选项返回 0；无参数、未知命令或多余的帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查单个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。退出码约定：检查成功返回 0，源码错误或未支持操作返回 1，输入文件/配置/参数错误返回 2，内部错误返回 3。build 已支持 Python/64 和 Linux x86_64 原生标量程序；未开启 LANG_ENABLE_LLVM 时，原生 build 会明确拒绝。C++ 版的 `woozyc lsp` 和 `woozyc fmt` 也可用于不带 LLVM 的构建，见 [编辑器配置](EDITOR.md)。`capabilities` 仍返回 `E_CAPABILITY_UNAVAILABLE`。
 
 ```sh
 build/frontend-debug/woozyc check --syntax-only examples/core.wz
@@ -18,7 +20,7 @@ build/frontend-debug/woozyc check --syntax-only --format json examples/core.wz
 python3 tests/syntax/run_cases.py build/frontend-debug/woozyc
 ```
 
-CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另有 lexer、AST、恢复、深度、取消、源码和输入错误测试。文件用例先读取实际文件并与固定清单逐字节比较，防止只检查旧副本。
+CTest 已用真实 C++ CLI 执行这 80 个语法分类并校验 JSON schema，还包含 lexer、AST、错误恢复、嵌套深度、取消、源码和输入错误测试。文件用例会先读取磁盘上的实际文件，再与固定清单逐字节比对，避免误测旧副本。
 
 `lang_modules` 库提供 `load_project` 与 `resolve_project`，`lang::sema::check_project` 随后检查类型并调用唯一 HIR 验证器。CLI 的 `--backend` 覆盖清单中的 backend，字宽仍来自清单；检查不运行源程序。`lang_module_check` 只在 BUILD_TESTING 下构建，成功表示项目和名称检查通过：
 
@@ -39,7 +41,7 @@ build/llvm/lang_llvm_probe
 
 仅接受 LLVM_PACKAGE_VERSION 精确等于 22.1.8。lang_llvm_probe 只打印版本；同一选项还构建独立的 native helper、对象发射器和运行库。正式 native build 通过 argv 启动 helper，使用指定的 Clang/LLD 链接，不执行生成程序。探针本身不能代替代码生成和运行检查。不要提交本机 LLVM_DIR 或构建缓存。
 
-系统已安装 LLVM 22.1.8 时，可以用 `-DLLVM_DIR="$(llvm-config --cmakedir)"` 配置。工具和 LLVM 库分别安装时，可加 `-DWOOZY_LLVM_TOOLS_DIR` 指向含 `opt`、`llc`、`clang` 和 `ld.lld` 的目录。C++ 版和 Woozy 自写版都可设置 `WOOZY_LLVM_BIN`，相对值从编译器所在目录解析，默认使用同目录下的 `toolchain/`。搬动编译器时，同时复制标准库、运行库和 C++ 版的 Native helper。目标机器的 LLVM 工具可通过 `WOOZY_LLVM_BIN` 指定。
+系统已安装 LLVM 22.1.8 时，可以用 `-DLLVM_DIR="$(llvm-config --cmakedir)"` 配置。工具和 LLVM 库分别安装时，可加 `-DWOOZY_LLVM_TOOLS_DIR` 指向含 `opt`、`llc`、`clang` 和 `ld.lld` 的目录。C++ 版和 Woozy 自写版都支持通过 `WOOZY_LLVM_BIN` 指定 LLVM 工具目录（相对路径按编译器所在目录解析，默认查找同目录下的 `toolchain/`）。搬动编译器时，要一并复制标准库、运行库和 C++ 版的 Native helper，并在目标机器上按需用 `WOOZY_LLVM_BIN` 指定工具位置。
 
 已验证的独立工具链版本、来源和摘要见 contracts/toolchain.lock.json。本机的官方 Linux 包另外需要 libxml2.so.2 和静态 zstd：兼容库取自验证过发行签名的 Arch libxml2-legacy，zstd 1.5.7 从官方源码构建并核对发布的 SHA-256。系统库没有被替换。
 
@@ -80,9 +82,9 @@ GitHub Actions 的 [日常检查](../../.github/workflows/ci.yml) 在 PR 和 `ma
 
 [发布工作流](../../.github/workflows/release.yml) 在版本标签推送或手动运行时构建 Linux x86_64 和 macOS arm64 两个包。Ubuntu 24.04 从源码构建 C++ 种子和 Woozy 编译器，并用后者按源码包生成 Mac 编译器的 Mach-O 对象，保留 LLVM 逐步校验。Mac 任务校验对象归档，在 Apple Silicon 上用本机 Xcode SDK 和 Darwin 运行库链接。两个平台都按 [工具链锁文件](../../contracts/toolchain.lock.json) 校验下载的 LLVM。
 
-两个包都要解包检查 SHA-256、版本和源码提交，并使用解包后的编译器运行示例、标准库、Python、编辑器和本机网络用例。Linux 在禁网容器中运行，源码调试分别用 GDB 和 LLDB 测试。手动运行只生成 Actions 附件。版本标签推送时，两个包都通过验证后才会一起发布到同一个 GitHub Release。
+两个包都要解包校验 SHA-256、版本和源码提交，再用解包后的编译器运行示例、标准库、Python、编辑器和本机网络用例；Linux 在禁网容器中执行，源码调试分别用 GDB 和 LLDB 验证。
 
-在 Actions 中手动运行，可从该次运行的 **Artifacts** 下载产物。推送 `v0.1.0` 这类标签后，同样的测试通过才会发布 GitHub Release。带后缀的标签，例如 `v0.1.0-rc.1`，会发布为预发行版。
+在 Actions 中手动运行时只生成附件，可从该次运行的 **Artifacts** 下载产物。推送 `v0.1.0` 这类版本标签时，两个包都通过上述验证后才会一起发布到同一个 GitHub Release；带后缀的标签（例如 `v0.1.0-rc.1`）会发布为预发行版。
 
 本机复查 LLVM 接入时，使用外层 toolchains/ 中的目录：
 
@@ -112,16 +114,9 @@ woozyc build --project tests/fixtures/core/lang.toml --backend python --out-dir 
 
 numeric 使用同样命令，将 core 替换为 numeric。native 输出 program 和 program.o；Python 输出 program.py 和 langrt.py。两项目预期无标准输出、程序退出 0。core 验证循环和函数调用；numeric 验证整数回绕、最小整数除 -1、余数和负数截断。这两个项目已经实际通过 native O0/O2 以及 Python 3.12.15 的执行检查。
 
-各阶段记录在外层 checks/。T00 的 C++20、LLVM 22.1.8 探针和 Clang/LLD 运行检查已通过；T02 的 Debug/Release 语法分类为 80/80。后续阶段记录自己的检查结果，不用工具链探针代替语言程序运行。
+各阶段记录在外层 checks/。T00 的 C++20、LLVM 22.1.8 探针和 Clang/LLD 运行检查已通过；T02 的 Debug/Release 语法分类为 80/80。后续阶段各自记录检查结果，不拿工具链探针代替语言程序运行。
 
-
-T04 的类型表与标量 HIR 验证组件位于 lang_hir，包含 74 项损坏检查。lang_sema 从真实
-项目/名称结果生成 HIR，支持基本整数、bool、Unit、函数值、无捕获匿名函数、控制流、
-调用和数值/bool 整体 inout；sema.scalar 执行 180 个静态项目检查，sema.cli 检查真实 CLI。
-范围、未支持操作与实际验证见 [CHECKER.md](../tests/sema/CHECKER.md)。两个标量后端已生成并运行程序；
-完整严格浮点算术仍未实现；普通参数重新赋值规则等待用户选择。
-T07 的泛型、聚合类型和 trait 静态接口及当前限制见 [GENERICS.md](GENERICS.md)；
-静态 HIR 通过不等于新增后端执行已经通过。
+T04 的类型表与标量 HIR 验证组件位于 lang_hir，包含 74 项损坏检查。lang_sema 基于真实项目和名称解析结果生成 HIR，支持基本整数、bool、Unit、函数值、无捕获匿名函数、控制流、调用和数值/bool 整体 inout；sema.scalar 执行 180 个静态项目检查，sema.cli 检查真实 CLI。具体范围、未支持操作和实际验证见 [CHECKER.md](../tests/sema/CHECKER.md)。两个标量后端已生成并运行程序；完整严格浮点算术仍未实现，普通参数重新赋值规则等待用户选择。T07 的泛型、聚合类型与 trait 静态接口及当前限制见 [GENERICS.md](GENERICS.md)；静态 HIR 通过不代表新增后端执行已经通过。
 
 ## Python 标量程序
 
@@ -130,14 +125,9 @@ woozyc build --project tests/fixtures/core/lang.toml --backend python --out-dir 
 /path/to/python3.12 -s build/core/python/program.py
 ```
 
-build 检查源程序并写入 program.py 和 langrt.py，不执行 Python。执行是独立步骤。
-生成器与前端不链接 CPython 或 LLVM。Python 首执行 profile 为64位；32位项目在生成阶段
-明确拒绝。安装的解释器只供运行测试使用，可用 -DLANG_PYTHON312=/path/to/python3.12
-指定；未找到时 python.projects/python.cli 明确记为 not_run，C++ API 测试仍可运行。
+build 会检查源程序并写出 program.py 和 langrt.py，但不执行 Python，运行需要单独执行。生成器与前端不链接 CPython 或 LLVM。Python 首个执行 profile 为 64 位，32 位项目会在生成阶段明确拒绝。本机安装的解释器只用于运行测试，可通过 -DLANG_PYTHON312=/path/to/python3.12 指定；找不到解释器时，python.projects/python.cli 会明确记为 not_run，C++ API 测试仍照常运行。
 
-正式集成后，GNU Debug/Release、Clang22 ASan/UBSan 各21/21通过；不启用 LLVM 的前端工程18/18通过。17个必须执行项目、15项补充、
-5项Panic分类对照均实际通过。检查清单与限制见 [PYTHON_SCALARS.md](PYTHON_SCALARS.md)。
-
+正式集成后，GNU Debug/Release 和 Clang22 ASan/UBSan 均为 21/21 通过，不启用 LLVM 的前端构建为 18/18 通过；17 个必须执行的项目、15 项补充检查和 5 项 Panic 分类对照均已实际通过。完整检查清单和限制见 [PYTHON_SCALARS.md](PYTHON_SCALARS.md)。
 
 ## 原生标量程序
 
@@ -147,15 +137,9 @@ build/native-cli/woozyc build --project tests/fixtures/core/lang.toml \
 build/core/native/program
 ```
 
-仅接受 Linux x86_64、64位项目和 O0/O2。woozyc 不链接 LLVM 或 CPython；生成工作由独立
-helper 执行。源码/未支持错误返回1，工具缺失和写文件错误返回2，链接失败报告
-E_LINK_FAILED。发布前检查目的文件类型；第二个文件替换报错时恢复第一个旧文件，
-没有旧文件则移除新文件。恢复失败会保留备份并在诊断中给出位置。构建命令不执行新程序。
+原生构建仅接受 Linux x86_64、64 位项目和 O0/O2。woozyc 不链接 LLVM 或 CPython，代码生成由独立 helper 完成。源码或未支持错误返回 1，工具缺失和写文件错误返回 2，链接失败报 E_LINK_FAILED。写出产物前会检查目标文件类型；替换第二个文件出错时，会恢复第一个旧文件（没有旧文件则删除新文件），恢复失败则保留备份并在诊断中标出位置。构建命令本身不执行生成的程序。
 
-正式 CLI 的17个项目分别在O0/O2执行，共34次，另有普通返回7、源码错误保留输出、
-无main及写入失败清理测试。独立对象生成测试另有62次ELF执行。
-ASan/UBSan覆盖本项目编译器代码；生成程序使用的独立运行库不继承编译器的检查选项。
-预编译LLVM和生成程序不计入该检查覆盖范围。
+正式 CLI 的 17 个项目分别在 O0 和 O2 下执行（共 34 次），另外覆盖普通返回 7、源码错误时保留原输出、无 main 以及写入失败清理等测试；独立对象生成测试还包含 62 次 ELF 执行。ASan/UBSan 只覆盖本项目编译器代码，生成程序使用的独立运行库不继承编译器的检查选项，预编译 LLVM 和生成程序也不计入该检查范围。
 
 ## 用 GDB 调试 Woozy 程序
 

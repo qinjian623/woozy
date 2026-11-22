@@ -4,7 +4,7 @@
 
 Woozy 使用静态类型，支持局部类型推断、泛型、结构体、枚举和可声明的错误。函数、值、作用域与容器的规则在不同后端保持一致。
 
-这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.cn.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
+这份教程介绍如何用 Woozy 写程序，先看一段完整代码，再逐项展开写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.cn.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
 
 ## 1. 先读一个程序
 
@@ -162,7 +162,7 @@ var greeting = "你好";
 greeting += "，Woozy";  // 建立新字符串
 ```
 
-字段、索引和 `let` 绑定的字符串不能直接 `+=`，需要写成 `target = target + suffix`。字符串 `const` 的初始值仍须在编译期确定，`const C = "a" + "b";` 会报错；const 只接受能在编译期确定的字符串值。
+字段、索引和 `let` 绑定的字符串都不能直接 `+=`；对可赋值的字段或索引元素，需要写成 `target = target + suffix`。字符串 `const` 只接受能在编译期确定的初始值，`const C = "a" + "b";` 会报错。
 
 ## 4. 运算与转换
 
@@ -262,7 +262,7 @@ func moved_capture() i32 {
 }
 ```
 
-方法也可以保存为函数值。创建 `value.method` 时会保存接收者的逻辑副本。之后重新绑定原变量，或替换普通按值字段，不会改变已保存的函数值；但 Vec 等引用字段仍共享同一对象，修改其内容会被看到。move-Self 方法同样可以绑定，绑定值可复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法：
+方法也可以保存为函数值。创建 `value.method` 时会保存接收者的逻辑副本。之后重新绑定原变量，或替换普通按值字段，不会改变已保存的函数值；但 Vec 等引用字段仍共享同一对象，修改其中的内容仍然可见。move-Self 方法同样可以绑定，绑定值可复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法：
 
 ```wz
 struct Counter {
@@ -354,7 +354,7 @@ let copy = scores[0:2];
 copy[0] = 99;                // scores[0] 仍为 15
 ```
 
-`let` 禁止给名称重新赋值，也禁止修改本语言值的字段，但允许修改共享 Vec 的元素。切片复制元素的值；若元素也是 Vec，里面的容器仍会共享，不是递归深复制。
+`let` 禁止给名称重新赋值，也禁止修改按值字段，但允许修改共享 Vec 的元素。切片复制元素的值；若元素也是 Vec，里面的容器仍会共享，不是递归深复制。
 
 `std/vec` 提供长度和可变操作，使用前写 `import "std/vec" as vec;`。以下写在函数体内：
 
@@ -520,7 +520,9 @@ func changed() i32 {
 }
 ```
 
-`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置可以是数值、bool、递归只含平凡值的有限 struct/enum，也可以是 Vec/Slice 容器本身、string、函数值、Weak、dyn 和含拥有字段的聚合；被调用方可以整体替换它们，旧值恰好释放一次。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝，`Task` 与外部 C resource 的 `inout` 报 `E_CAPABILITY_UNAVAILABLE`。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
+`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置可以是数值、bool、递归只含平凡值的有限 struct/enum，也可以是 Vec/Slice 容器本身、string、函数值、Weak、dyn 和含拥有字段的聚合；被调用方可以整体替换它们，旧值恰好释放一次。`Task` 与外部 C resource 的 `inout` 报 `E_CAPABILITY_UNAVAILABLE`。
+
+同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝。Vec/Slice 句柄可能通过绑定复制、struct/enum、函数返回值或闭包共享同一对象，因此元素 `inout` 借用期间，这些未知别名会被保守拒绝。
 
 转交一个拥有值时使用 `move`：
 
@@ -692,7 +694,9 @@ func smaller[T Ordered](left T, right T) T {
 }
 ```
 
-`smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum；在 `std/option` 包内部才可以省略成 `Option.Some(value)`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
+`smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum，只有在 `std/option` 包内部才可以省略成 `Option.Some(value)`。
+
+类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
 
 当前不支持 C++ 模板特化、常量泛型或关联类型。需要运行时多态时，可以让具体值转换成一个 `dyn Trait` 值，再通过 trait 方法调用：
 
@@ -751,7 +755,7 @@ func main() i32 {
 
 for 只求值一次，并推进它保存的迭代器副本，所以这里 source.value 仍是 0。副本里的 Vec 等引用字段仍共享对象。要直接推进自己的可写变量，可调用 `(inout cursor).next()`。
 
-next 不能 throws；需要逐项报告错误时，让元素类型 T 为 Result。一个类型若有多个不同 Iterator 实参实现，直接 for-in 会报歧义；带明确 Iterator 约束的泛型函数可选定相应实现。只有同名 next 方法不够，必须实现标准 trait。
+next 不能声明 throws；需要逐项报告错误时，让元素类型 T 为 Result。一个类型若有多个不同 Iterator 实参实现，直接 for-in 会报歧义；带明确 Iterator 约束的泛型函数可选定相应实现。只有同名 next 方法不够，必须实现标准 trait。
 
 ## 15. 线程与共享数据
 
@@ -765,7 +769,7 @@ Vec 传给线程后仍共享容器。多个线程读写同一份可变数据时�
 
 ## 16. 常用标准库
 
-标准库按 `std/...` 导入。下面完整文件用 `std/text` 拆分输入，用 `std/strconv` 解析整数，再用 `std/io` 输出总和：
+标准库按 `std/...` 导入。下面这个完整程序用 `std/text` 拆分输入，用 `std/strconv` 解析整数，再用 `std/io` 输出总和：
 
 ```wz
 package main;

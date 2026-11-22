@@ -296,7 +296,7 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 
 ## std/iter
 
-`Iterator[T]` 是 for-in 使用的标准 trait，声明 `func next(cursor inout Self) option.Option[T]`。for 只求值一次，按普通规则复制迭代器并推进副本；引用字段仍共享对象。next 不抛错，可用 Result 作为元素类型。完整示例见[自定义迭代器](TUTORIAL.cn.md#自定义迭代器)。
+`Iterator[T]` 是 for-in 使用的标准 trait，声明 `func next(cursor inout Self) option.Option[T]`。for 只对迭代目标求值一次，按普通规则复制迭代器并推进副本；引用字段仍共享对象。next 不抛错，可用 Result 作为元素类型。完整示例见[自定义迭代器](TUTORIAL.cn.md#自定义迭代器)。
 
 ## std/async
 
@@ -567,7 +567,7 @@ HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读�
 
 `Header` 包含 `name string`、`value Vec[u8]`；`Response.reason`、请求和响应的 `body` 也都是字节。用 `text_header(name, value)` 从文本创建头字段；`header`/`header_values` 按不区分 ASCII 大小写的名称取字节值，`header_text`/`header_text_values` 和 `value_text` 才进行 UTF-8 解码，失败报 `InvalidUtf8`。
 
-解码支持定长和 chunked 正文；响应也支持读到连接关闭。`read_*_head` 返回的对象正文和 trailers 为空，Reader 保持正文阶段；必须用对应 `read_*_body` 完成、改用合并读取，或关闭连接。`encode_response_head` 适合大正文的分段发送，避免把正文复制进编码缓冲区。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
+解码支持定长和 chunked 正文；响应也支持读到连接关闭。`read_*_head` 返回的对象正文和 trailers 为空，Reader 停留在正文读取阶段；调用方必须用对应的 `read_*_body` 读完正文、改用合并读取，或关闭连接。`encode_response_head` 适合大正文的分段发送，避免把正文复制进编码缓冲区。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
 
 以下只有导入和普通函数声明，接收已连接的阻塞 Socket，处理一个请求后关闭。函数负责关闭，调用方不要再次关闭同一描述符：
 
@@ -614,13 +614,13 @@ func serve_once(socket net.Socket) throws http.Error {
 | `drain(server, timeout_ms) bool` | 停止并等待所有连接任务退出；正超时到期返回 false |
 | `text_response(status, body)`、`bytes_response(status, body)` | 构造带默认 reason 的响应 |
 
-`Server` 复制共享监听 Socket 和计数；任一副本 `stop`/`abort`/`close` 都影响所有副本。服务器状态和连接表不做同步，只能在拥有它的执行器线程使用。每个 Server 只应调用一次 `serve`。`handler` 的类型是 `func(http.Request) http.Response throws http.Error`，在连接任务中同步执行，抛错时返回 500 并关闭连接。应用自有错误应在 handler 内捕获并返回响应。
+复制 `Server` 会共享监听 Socket 和计数；任一副本调用 `stop`/`abort`/`close` 都会影响所有副本。服务器状态和连接表不做同步，只能在拥有它的执行器线程里使用。每个 Server 只应调用一次 `serve`。`handler` 的类型是 `func(http.Request) http.Response throws http.Error`，在连接任务中同步执行，抛错时返回 500 并关闭连接。应用自有错误应在 handler 内捕获并返回响应。
 
-监听 Socket 和接受的连接都是非阻塞、close-on-exec；读写遇到 `WouldBlock` 时任务挂起到执行器的可读/可写等待，不阻塞线程。单个 watchdog 任务按 `timer_tick_ms` 扫描连接表，执行 header/body/idle/write 超时和 graceful drain 截止时间；超时用 `CLOCK_MONOTONIC`，只对连接 `shutdown`，由连接任务负责关闭描述符。超时是绝对截止时间，不是每次活动重置。`Expect: 100-continue` 在读取正文前返回 100；不支持的 expectation 返回 417。
+监听 Socket 和接受的连接都是非阻塞、close-on-exec；读写遇到 `WouldBlock` 时，连接任务挂起等待执行器的可读/可写事件，不阻塞线程。单个 watchdog 任务按 `timer_tick_ms` 扫描连接表，执行 header/body/idle/write 超时和 graceful drain 截止时间；超时用 `CLOCK_MONOTONIC`，只对连接调用 `shutdown`，由连接任务负责关闭描述符。超时按绝对截止时间计算，不会在每次活动时重置。`Expect: 100-continue` 在读取正文前返回 100；不支持的 expectation 返回 417。
 
-响应统一使用 `Content-Length`。服务器移除 handler 的 `Connection`，按请求版本和连接令牌决定 keep-alive 或 close；handler 明确要求 close 时关闭。HEAD、1xx、204 和 304 不发送正文；HEAD/304 缺少 `Content-Length` 时用 handler 正文长度补齐。普通响应的 handler `Content-Length` 会被实际正文长度替换。handler 设置 `Transfer-Encoding`、非空 trailers 或非法状态码时，编码失败，连接返回 500。协议错误返回 400、408、413、417、431、501 或 505 并关闭；EOF 和 I/O 失败直接关闭。连接数超过 `max_connections` 时新连接收到 503 后关闭；`max_requests` 到达上限后发送 close。大正文超过 `large_body_threshold` 时用 `encode_response_head` 加单独正文写入，避免一次完整正文复制。
+响应统一使用 `Content-Length`。服务器会移除 handler 设置的 `Connection` 头，按请求版本和连接令牌决定 keep-alive 或 close；handler 明确要求 close 时关闭连接。HEAD、1xx、204 和 304 不发送正文；HEAD/304 缺少 `Content-Length` 时用 handler 正文长度补齐。普通响应中 handler 设置的 `Content-Length` 会被实际正文长度替换。handler 设置 `Transfer-Encoding`、非空 trailers 或非法状态码时，编码失败并返回 500。协议错误返回 400、408、413、417、431、501 或 505 并关闭；EOF 和 I/O 失败直接关闭。连接数超过 `max_connections` 时，新连接收到 503 后关闭；`max_requests` 到达上限后发送 close。正文超过 `large_body_threshold` 时先用 `encode_response_head` 编码头部再单独写出正文，避免完整复制一次正文。
 
-执行器是单线程，handler 中的长时间 CPU 计算、阻塞文件 I/O 或阻塞 C 调用会停顿所有连接。接受 32 个连接或处理 1024 个 keep-alive 响应后，任务让出 1 毫秒，避免繁忙监听循环或流水线饿死其他描述符。handler 返回完整的 Response；请求正文按 `Config.limits` 全量缓冲，不提供流式/chunked 响应、`Date`/`Server` 头、HTTP/2 或 TLS。完整契约见 [stdlib/http_server/README.md](../stdlib/http_server/README.md)。
+执行器是单线程的，handler 中的长时间 CPU 计算、阻塞文件 I/O 或阻塞 C 调用会阻塞所有连接。接受 32 个连接或处理 1024 个 keep-alive 响应后，任务让出 1 毫秒，避免繁忙的监听循环或流水线饿死其他描述符。handler 返回完整的 Response；请求正文按 `Config.limits` 全量缓冲，不提供流式/chunked 响应、`Date`/`Server` 头、HTTP/2 或 TLS。完整契约见 [stdlib/http_server/README.md](../stdlib/http_server/README.md)。
 
 ```wz
 import "std/http" as http;
@@ -685,7 +685,7 @@ macOS arm64 上用生成的 Darwin 绑定，将 `stdc++` 换成 `c++`，并把 O
 | `receive_request(connection)`、`respond(connection, response, request_method)` | 服务端收发请求与响应 |
 | `local_address(server)`、`close(connection)`、`close_server(server)` | 查询监听地址，或关闭模块拥有的连接、监听 Socket |
 
-这些操作抛出 `https.Error`，分别包装 TLS、网络和 HTTP 错误。Connection 的复制共享同一连接，整个连接只关闭一次，不要通过两个别名重复关闭。`request` 收发失败时只关闭拥有的 Socket 并继续抛出原错误，不等待 TLS 正常关闭；成功后执行正常的双向关闭。
+这些操作抛出 `https.Error`，分别包装 TLS、网络和 HTTP 错误。复制 Connection 会共享同一连接，整个连接只关闭一次，不要通过两个别名重复关闭。`request` 收发失败时只关闭模块拥有的 Socket 并继续抛出原错误，不等待 TLS 正常关闭；成功后执行正常的双向关闭。
 
 ## std/path
 

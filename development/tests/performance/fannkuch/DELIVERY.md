@@ -6,7 +6,7 @@ This file records pre-release measurements made with the old `langc` / `.wz` nam
 契约版本：`compiler-dev/1`
 状态：`done`（仅正确性与编译产物准备；正式计时 `not_run`）
 
-本文件续接已拒绝的 task74bf6eb0，不新增扩展任务。已按
+本文件续接被退回的 task74bf6eb0，不新增扩展任务。已按
 `<dev-work-dir>/checks/fannkuch-first-delivery-review-20261109.md`
 修正真实 Source 观察器、实际 visit 符号识别、Source 负控制和公共准备代码复用。
 没有提交、推送或另派 agent；未修改主仓、冻结 oracle、公共 runtime 或其他算法。
@@ -33,9 +33,9 @@ This file records pre-release measurements made with the old `langc` / `.wz` nam
    - 只把传给 `visit` 的 flips 改成 `flips + 1`；真实观察器必须失败于 `flips`。
    - 只把传给 `visit` 的排列改成翻转后的 `perm`；真实观察器必须失败于
      `permutation`。
-6. `prepare.py` 删除自写构建树/工具识别，直接复用 `run_native.py` 的
+6. `prepare.py` 删掉自写的构建树和工具识别代码，直接复用 `run_native.py` 的
    `common.base_report`、`build_tree_info`、工具 SHA/版本检查。当前脚本 828 行，
-   减少了对 Release 宏匹配的重复实现；本轮没有新增测量框架或正式计时。
+   减少了 Release 宏匹配的重复实现；本轮没有新增测量框架或正式计时。
 
 ## 输入与未改材料
 
@@ -43,14 +43,14 @@ This file records pre-release measurements made with the old `langc` / `.wz` nam
   相对 `163ba5c` 只有三份文档变化，编译器代码相同。
 - 主仓：`<repo>`，HEAD 相同。运行前后
   未修改主仓文件；只保留原有未跟踪项 `not a tty`。
-- 本轮使用专门 production Release：
+- 本轮使用单独的 production Release 构建：
   `build/native-perf-release`，
   `CMAKE_BUILD_TYPE=Release`，同一 `36555eb` 源码，`BUILD_TESTING=OFF`。
   该构建的四个 `LANG_NATIVE_*` 定义均唯一，公共 `run_native.py` 检查通过，
-  没有筛宏放宽。
+  没有放宽宏筛选。
 - `lang_python_emit`：
   `build/native-cli-release/tests/python/lang_python_emit`
-  稳定同版本构建；SHA 已记录。
+  同版本的稳定构建；SHA 已记录。
 - 冻结 oracle：
   `<dev-work-dir>/checks/fannkuch-oracle-20261109`。
   `results.json`、`inputs.json`、5 份 trace、5 份 expected-output 共 12 份文件
@@ -146,9 +146,9 @@ SHA-256：`5b9647fff0f6836d9781d0be08d99e2d483f7f9d6a38e1449958ad9d6edbf280`
 报告含 256 条完整子命令记录，每条都有 `argv/status/exit/stdout/stderr/timeout_s`：
 216 条退出 0，20 条预期退出 1，20 条预期退出 2。
 
-correction 过程中的 r7-r9 是准备脚本自身的字段/命名错误导致的失败尝试，全部保留在
-独立 `build/fannkuch-prepare-20261109-correction-r*` 目录，没有作为通过证据；
-最终通过运行是 r10。
+correction 过程中的 r7-r9 是准备脚本自身的字段或命名错误导致的失败尝试，全部保留在
+独立的 `build/fannkuch-prepare-20261109-correction-r*` 目录中，没有作为通过证据；
+最终通过的是 r10。
 
 C++ 构建使用
 `--target=x86_64-unknown-linux-gnu -march=x86-64 -mtune=generic`、

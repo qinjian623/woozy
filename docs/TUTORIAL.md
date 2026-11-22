@@ -20,7 +20,7 @@ func main() throws os.Error {
 }
 ```
 
-`import "std/io" as io;` makes the output functions available as `io`. `io.println` writes the string followed by a newline. `throws os.Error` declares that output can fail. The error handling section shows how to handle that case. The native program prints `Hello, world!`.
+`import "std/io" as io;` binds the output functions under `io`, and `io.println` writes the string followed by a newline. `throws os.Error` declares that output can fail (covered in the error handling section below). The native program prints `Hello, world!`.
 
 The next program adds a list of scores. Save it separately from the first example.
 
@@ -42,7 +42,7 @@ func main() i32 {
 }
 ```
 
-`package main;` declares which package the file belongs to. `sum` takes a list of `i32` integers, loops over them, and returns their sum. `main` is the program's entry point. Returning `0` signals a successful exit.
+`package main;` declares the file's package. `sum` takes a list of `i32` integers, loops over them, and returns their sum. `main` is the program's entry point, and returning `0` signals a successful exit.
 
 - Put the type after the name, as in `scores Vec[i32]` or `total i32`.
 - Declare functions with `func` and put the return type after the parameter list.
@@ -65,7 +65,7 @@ count += 2;  // count is 12
    The type of count is inferred from its initializer. */
 ```
 
-Reassigning `initial` is an error. Both `let` and `var` need an initializer, and later assignments must preserve the binding's type. You can omit the type of a local binding. Function parameters and struct fields require a type.
+Reassigning `initial` is an error. Both `let` and `var` need an initializer, and later assignments must preserve the binding's type. Local bindings can omit their types, while function parameters and struct fields require explicit types.
 
 A `const` needs an initializer known at compile time. You can declare it at the top level or in a local scope.
 
@@ -76,7 +76,7 @@ const Greeting string = "你好，Woozy";
 
 Ordinary function calls, Vec values, and foreign objects are invalid as constant initializers. You can construct constant structs and enums recursively and read fields of constant values.
 
-Braces introduce a local scope. Names must be unique within a scope. An inner scope can shadow an outer name.
+Braces introduce a local scope. Names must be unique within a scope, though an inner scope can shadow an outer name.
 
 ```wz
 // Inside a function body
@@ -114,7 +114,7 @@ let scale f32 = 1e3;  // The context supplies f32
 let small u8 = 10;
 ```
 
-Without a type context, integer literals default to `i64` and floating-point literals to `f64`. Context can determine a literal's type. Variables that already have a concrete type keep it. Type suffixes such as `123i32` are invalid, as are `.5`, `1.`, and `007`.
+Without a type context, integer literals default to `i64` and floating-point literals to `f64`. Context can determine a literal's type, whereas variables that already have a concrete type do not convert automatically. Type suffixes such as `123i32` are invalid, as are `.5`, `1.`, and `007`.
 
 Double-quoted strings support newline, tab, and Unicode escapes. Backticks enclose raw strings, which treat backslashes literally and can span lines.
 
@@ -128,9 +128,9 @@ let message = `第一行
 第二行`;
 ```
 
-Single-quoted character literals, string interpolation, and `\xHH` escapes are unavailable. A `string` is an immutable UTF-8 value. You can store it, copy it, pass it as an argument, and put it inside an aggregate. String operations include concatenation, equality, and ordering. Comparisons use UTF-8 bytes without Unicode normalization.
+Single-quoted character literals, string interpolation, and `\xHH` escapes are not supported. A `string` is an immutable UTF-8 value that can be stored, copied, passed as an argument, and placed inside aggregates. Strings support concatenation, equality, and ordering, comparing UTF-8 bytes without Unicode normalization.
 
-`std/text` counts Unicode code points with `len`. String indexing returns a `u32` code point, and slice endpoints also use code point positions. Use `text.bytes` to get the bytes and `text.from_bytes` to build a string. Invalid UTF-8 makes `text.from_bytes` throw `text.Error`. Import `std/text` first.
+`std/text`'s `len` counts Unicode code points; string indexing returns a `u32` code point, and slice endpoints use code point positions as well. Use `text.bytes` to get the raw bytes and `text.from_bytes` to build a string from them; invalid UTF-8 makes `text.from_bytes` throw `text.Error`. Import `std/text` first:
 
 ```wz
 import "std/text" as text;
@@ -166,7 +166,7 @@ String `+=` applies to whole `var` bindings only. For an assignable field or ind
 
 Use `+ - * / %` for arithmetic and `== != < <= > >=` for comparisons. The remainder operator `%` requires integers. The type checker determines which operations a concrete type supports. For example, integer equality does not imply Vec equality.
 
-The logical operators are `!`, `&&`, and `||`. The last two short-circuit. The bitwise operators are `~`, `&`, `|`, `^`, `<<`, and `>>`. Assignment and compound assignment are statements.
+The logical operators are `!`, `&&`, and `||`, with the last two short-circuiting. The bitwise operators are `~`, `&`, `|`, `^`, `<<`, and `>>`. Assignment and compound assignment are statements, not expressions.
 
 To combine different concrete numeric types, convert explicitly with `Type(value)`.
 
@@ -179,7 +179,7 @@ let truncated = i32(3.9);           // 3
 let negative = i32(-3.9);           // -3
 ```
 
-Integer-to-integer conversions check the target range. A float-to-integer conversion truncates toward zero before checking the range. Conversions known to fail are compile errors. At runtime, converting an out-of-range value, NaN, or infinity to an integer panics.
+Integer-to-integer conversions check the target range, and float-to-integer conversions truncate toward zero before checking it. Conversions known to fail at compile time are compile errors; at runtime, converting an out-of-range value, NaN, or infinity to an integer panics.
 
 Fixed-width integer addition, subtraction, and multiplication wrap.
 
@@ -234,7 +234,7 @@ func calculate() i32 {
 
 A function type records its parameter types and modes, return type, and error type. Parameter labels are omitted, so calls through function values use positional arguments only.
 
-A function literal can capture local variables from the function that creates it. Capture happens when the literal is evaluated. Values such as numbers are copied at that point. Capturing a Vec or Box shares the same object. Captured bindings are read-only within the function value, and shared objects remain mutable through their APIs. The reader returned below keeps working after the scope that created it has exited.
+A function literal can capture local variables from its enclosing function when the literal is evaluated: direct values such as numbers are copied, while a Vec or Box continues to share the same object. Captured bindings are read-only inside the function value, though shared objects remain mutable through their APIs. The reader returned below keeps working after its creating scope exits.
 
 ```wz
 func make_reader(seed i32) (func() i32) {
@@ -248,7 +248,7 @@ func read_value() i32 {
 }
 ```
 
-A plain `func` copies its captured values. A `move func(...) { ... }` transfers the owned values it captures, such as a Vec. Values such as numbers still copy normally. Reinitialize a binding before reading it after a move.
+A plain `func` copies its captured values, whereas `move func(...) { ... }` transfers the owned values it captures, such as a Vec, while still copying direct values such as numbers. A moved binding cannot be read until it is reinitialized.
 
 ```wz
 func moved_capture() i32 {
@@ -260,7 +260,7 @@ func moved_capture() i32 {
 }
 ```
 
-A method can also be stored as a function value. Evaluating `value.method` saves a logical copy of the receiver. Rebinding the original variable or replacing its value fields leaves the saved copy intact. Reference fields, such as Vec fields, still share an object, and updates to its contents are visible through the saved receiver. A method with a `move Self` receiver can also be bound. Its function value can be copied and called repeatedly. Each call copies the saved receiver and moves the new copy into the method.
+A method can also be stored as a function value. Evaluating `value.method` saves a logical copy of the receiver: rebinding the original variable or replacing its value fields leaves the saved copy intact, while reference fields such as Vec still share their objects and expose updates through the saved receiver. A method with a `move Self` receiver can also be bound, copied, and called repeatedly—each call copies the saved receiver and moves that copy into the method.
 
 ```wz
 struct Counter {
@@ -339,7 +339,7 @@ for value in values {
 // total is 50
 ```
 
-All elements in a list must resolve to the same type. Type inference gives the same result regardless of element order. An empty list needs a type from context. A slice includes the start index and excludes the end index. You can omit either endpoint. The new Vec copies the selected elements.
+All elements in a list must resolve to the same type, and type inference does not depend on element order. An empty list needs a type from context. A slice is half-open (including the start index and excluding the end index), allows omitting either endpoint, and creates a new Vec copying the selected elements.
 
 Assigning a Vec shares the same container.
 
@@ -352,7 +352,7 @@ let copy = scores[0:2];
 copy[0] = 99;                // scores[0] is still 15
 ```
 
-`let` prevents reassignment and changes to the fields of a Woozy value. You can still change elements of a shared Vec. A slice copies each element by value. If an element is itself a Vec, the copy shares that inner container.
+`let` prevents reassignment and changes to the value fields of a binding, but still allows modifying elements of a shared Vec. A slice copies each element by value; if an element is itself a Vec, the slice still shares that inner container.
 
 `std/vec` provides operations to inspect the length and modify the container. Add `import "std/vec" as vec;` before using the following code in a function body.
 
@@ -367,9 +367,9 @@ let capacity = vec.capacity(items);
 vec.clear(items);          // Length is 0 and capacity is unchanged
 ```
 
-`vec.pop` returns `None` on an empty Vec. When `resize` grows a Vec, it fills the new elements with the given value. When it shrinks a Vec, it truncates the elements. `clear` keeps the allocated capacity. Since Vec assignment shares the container, changes are visible through every alias.
+`vec.pop` returns `None` on an empty Vec. `resize` fills new elements with the given value when growing and truncates when shrinking, while `clear` keeps the allocated capacity. Because Vec assignment shares the container, all of these operations are visible through every alias.
 
-Vec indices must be nonnegative. Out-of-bounds indices and invalid slices cause a Panic. You can update existing elements while iterating. Keep the length and storage of the Vec fixed during the loop, so avoid calling `push`, `pop`, `resize`, `clear`, or `reserve` on it.
+Vec indices must be nonnegative; out-of-bounds indices and invalid slices panic. You can update existing elements while iterating, but do not change the Vec's length or storage during the loop (avoid calling `push`, `pop`, `resize`, `clear`, or `reserve`).
 
 ### Shared cells and weak references
 
@@ -386,7 +386,7 @@ func shared_cell() i32 {
 }
 ```
 
-`Weak[T]` is a built-in type for storing a weak reference without extending the target's lifetime. `std/weak` provides three operations. Valid targets include Vec, function values, `Box[T]`, and reference-counted shared handles. Plain struct and enum values, strings, file and socket descriptors, and foreign Python or C objects cannot be used directly as targets. `weak.empty[T]()` creates an empty weak reference. `weak.downgrade[T](value)` creates one from an existing strong reference. `weak.upgrade(w)` returns an `option.Option[T]`. If the target has no strong references left, it returns `None`.
+`Weak[T]` is a built-in weak reference type that does not extend its target's lifetime, with `std/weak` providing three operations. Valid targets are Vec, function values, `Box[T]`, and reference-counted shared handles; plain struct and enum values, strings, file and socket descriptors, and foreign Python or C objects cannot be direct targets. `weak.empty[T]()` creates an empty weak reference, `weak.downgrade[T](value)` downgrades an existing strong reference, and `weak.upgrade(w)` returns `option.Option[T]`, yielding `None` once no strong references remain.
 
 ```wz
 import "std/option" as option;
@@ -434,7 +434,7 @@ impl Point {
 }
 ```
 
-Declare the type of every struct field. Initialize all fields when constructing a struct, since fields have no default values. `Self` is the type being implemented. The receiver is the first parameter of a method.
+Every struct field requires an explicit type and must be initialized at construction, since fields have no default values. `Self` refers to the type being implemented, and the receiver is always a method's first parameter.
 
 Once you have declared the type above, use it in a function body.
 
@@ -446,7 +446,7 @@ point.x = 6;
 // saved.x is still 3. point.x is 6.
 ```
 
-Structs copy field by field. An integer field gets an independent copy of its value. A Vec field continues to share the container. A struct bound with `let` does not allow direct field updates.
+Structs copy field by field: value fields such as integers get independent copies, while a Vec field continues to share its container. A struct bound with `let` does not allow direct field updates.
 
 ## 9. Enums and pattern matching
 
@@ -475,9 +475,9 @@ func accepted(verdict Verdict) bool {
 }
 ```
 
-Use `Verdict.Fail` for a variant without data. Call the constructor for a variant that carries data. `case Verdict.Pass(total):` extracts the score. `total` is visible only in that branch.
+Use `Verdict.Fail` for a variant without data and call the constructor for one that carries data. `case Verdict.Pass(total):` unpacks the score into `total`, which is visible only in that branch.
 
-`switch` cases do not fall through and must cover every possible value. The example above covers both variants. A switch on `bool` can list `true` and `false`. If you cannot list all values, add `default:`, `case _:`, or another catch-all branch.
+`switch` cases do not fall through and must cover every possible value. The example above covers both variants, and a switch on `bool` can list `true` and `false`; when values cannot be listed exhaustively, add `default:`, `case _:`, or another catch-all branch.
 
 ```wz
 func category(code i32) i32 {
@@ -496,7 +496,7 @@ The subject expression is evaluated once. A bare identifier pattern always creat
 
 ## 10. Ordinary parameters, move, and inout
 
-Ordinary parameters leave the caller's value available. Numeric values are copied and Vec values continue to share the container. The parameter binding itself is read-only. The following function changes a Vec element.
+Ordinary parameters leave the caller's value available: numeric values are copied, Vec values continue to share their container, and the parameter binding itself is read-only. The function below updates a Vec element:
 
 ```wz
 func replace_first(values Vec[i32], value i32) {
@@ -518,7 +518,9 @@ func changed() i32 {
 }
 ```
 
-`inout` accepts writable `var` bindings, existing `inout` parameters, their nested fields, and container elements. Examples include `swap(inout state.left, inout state.right)`, `bump(inout values[0])`, and `grow(inout items[1].count)`. Eligible locations can hold numbers, bools, finite structs or enums containing only trivial values recursively, Vec or Slice containers themselves, strings, function values, Weak or dyn values, and aggregates with owned fields. The callee can replace the entire value, releasing the old value exactly once. A single call can borrow distinct named fields or provably different literal indices separately. The compiler rejects overlapping access paths, conflicting accesses to the whole container, and dynamic index conflicts. Using `inout` with `Task` or a foreign C resource reports `E_CAPABILITY_UNAVAILABLE`. Vec and Slice handles can share an object through copied bindings, structs or enums, function return values, or closures. While an element is borrowed with `inout`, the compiler conservatively rejects other accesses that might alias it.
+`inout` accepts writable `var` bindings, existing `inout` parameters, their nested fields, and container elements—for example `swap(inout state.left, inout state.right)`, `bump(inout values[0])`, or `grow(inout items[1].count)`. Eligible locations include numbers, bools, finite structs or enums containing only trivial values recursively, Vec or Slice containers themselves, strings, function values, Weak or dyn values, and aggregates with owned fields. The callee can replace the entire value, releasing the old value exactly once. Using `inout` with `Task` or a foreign C resource reports `E_CAPABILITY_UNAVAILABLE`.
+
+A single call can borrow distinct named fields or provably different literal indices separately, while overlapping access paths, conflicting accesses to the whole container, and dynamic index conflicts are rejected. Because Vec and Slice handles can share an object through copied bindings, structs or enums, function return values, or closures, the compiler conservatively rejects other accesses that might alias an element while it is borrowed with `inout`.
 
 Use `move` to transfer ownership of a value.
 
@@ -580,7 +582,7 @@ func handled() i32 {
 }
 ```
 
-An ordinary enum can serve as an error type without implementing a special Error trait. A custom `Result[T, E]` is an ordinary value and does not trigger error propagation. The standard library's `std/result.Result[T,E]` is also an ordinary enum with `result.Result.Ok` and `result.Result.Err` variants. Write out the type arguments when constructing a generic enum, as in `result.Result[i32,i32].Ok(7)`. When matching it from another package, write `result.Result.Ok(value)`. Catching an error leaves any container changes or external operations already performed in effect.
+An ordinary enum can serve as an error type without implementing a special Error trait. A custom `Result[T, E]` is just ordinary data and does not propagate automatically; the standard library's `std/result.Result[T,E]` is likewise an ordinary enum with `result.Result.Ok` and `result.Result.Err` variants. Write out full type arguments when constructing a generic enum, as in `result.Result[i32,i32].Ok(7)`, and match it from another package with `result.Result.Ok(value)`. Catching an error does not roll back container changes or external operations that already happened.
 
 Runtime failures such as out-of-bounds access and integer division by zero cause a Panic, which a typed catch cannot recover from. Use `throws` for expected errors that callers need to handle.
 
@@ -616,7 +618,7 @@ func demonstrate() i32 {
 }
 ```
 
-Create a new binding first if a `defer` needs a snapshot. A deferred block can handle errors internally. It cannot `return`, `break`, or `continue` out of the deferred block or propagate a typed error from it.
+Create a new binding first if a `defer` needs a snapshot. A deferred block can handle errors internally, but it cannot `return`, `break`, or `continue` out of the deferred block or propagate a typed error from it.
 
 ## 13. Packages, files, and visibility
 
@@ -644,7 +646,7 @@ func main() i32 {
 }
 ```
 
-An import alias applies only in the file that declares it. Import names omit the `.wz` extension. Package imports must be acyclic, and functions can call each other recursively. Top-level declarations can define constants, types, functions, traits, and implementations. Top-level `let` and `var` bindings with dynamic initialization are currently unsupported.
+An import alias applies only in the file that declares it, and import names omit the `.wz` extension. Package imports must be acyclic, though functions can call each other recursively. Top-level declarations can define constants, types, functions, traits, and implementations; top-level `let` and `var` bindings with dynamic initialization are currently unsupported.
 
 ## 14. Generics and traits
 
@@ -690,7 +692,9 @@ func smaller[T Ordered](left T, right T) T {
 }
 ```
 
-`smaller[i32](12, 18)` returns `12`. When constructing a generic enum, supply all type arguments, as in `option.Option[i32].Some(1)`. From another package, match the variant with `option.Option.Some(value)`. Both `std/option.Option` and `std/result.Result` are ordinary generic enums. The shorter pattern `Option.Some(value)` is available inside the `std/option` package. The type must explicitly implement the trait, even if it already has a method with the same name. A type parameter can have at most one named constraint, and traits can themselves take type parameters. One type can implement the same trait with different type arguments. An ambiguous call is a compile error, and the expected return type does not resolve it.
+`smaller[i32](12, 18)` returns `12`. Supply all type arguments when constructing a generic enum, as in `option.Option[i32].Some(1)`, and match it from another package with `option.Option.Some(value)`. Both `std/option.Option` and `std/result.Result` are ordinary generic enums; the shorter pattern `Option.Some(value)` works only inside the `std/option` package.
+
+A type must explicitly implement a trait even if it already defines a method with the same name. A type parameter can have at most one named constraint, and traits themselves can take type parameters. One type can implement the same trait with different type arguments; an ambiguous call is a compile error and is not resolved from the expected return type.
 
 C++-style template specialization, const generics, and associated types are currently unsupported. For runtime polymorphism, convert a concrete value to a `dyn Trait` value and call a trait method on it.
 
@@ -749,13 +753,13 @@ func main() i32 {
 
 The loop evaluates its source once, saves a copy of the iterator, and advances that copy. In this example, `source.value` stays at 0. Reference fields such as Vec still share the same objects after copying. To advance your own mutable iterator variable, call `(inout cursor).next()`.
 
-The `next` method cannot declare `throws`. Use a Result as the element type `T` to report an error for an individual element. If a type implements Iterator with several different type arguments, a direct for-in loop is ambiguous. A generic function with a specific Iterator constraint can select the corresponding implementation. The loop requires an implementation of the standard trait, even if the type already has a method named `next`.
+The `next` method cannot declare `throws`; use a Result as the element type `T` to report per-element errors. If a type implements Iterator for multiple type arguments, a direct for-in loop is ambiguous, though a generic function with a specific Iterator constraint can select one. A method named `next` alone is not enough—the type must implement the standard trait.
 
 ## 15. Threads and shared data
 
 A thread entry point is a function without captures, and it receives its data through an argument. `thread.spawn[A](function, argument)` starts a thread, and `thread.join(job)` waits for it and returns an `i64` result. Both calls can throw `os.Error`.
 
-Passing a Vec to a thread shares the same container. When multiple threads access shared mutable data, protect it with a Mutex from `std/sync`. Use Condvar to wait for a shared condition and AtomicI64 for an atomic counter. Atomic reference counting protects the reference count itself. See [threads and synchronization](CONCURRENCY.md) for full examples and APIs.
+Passing a Vec to a thread shares the same container. When multiple threads access shared mutable data, protect it with a Mutex from `std/sync`; use Condvar to wait on a shared condition and AtomicI64 for an atomic counter. Atomic reference counting protects only the reference count itself and does not replace this synchronization. See [threads and synchronization](CONCURRENCY.md) for full examples and APIs.
 
 ### Async functions
 
@@ -793,6 +797,6 @@ Functions such as `std/fs.read_text` and `std/fs.write_text` open and close file
 
 ## Further reading
 
-The [quick start](QUICKSTART.md) focuses on the differences experienced programmers are likely to encounter. [SEMANTICS.md](SEMANTICS.md) defines the exact behavior of numbers, copying, errors, and cleanup. The [lexical and syntax reference](../baseline/LEXICAL_SYNTAX.md) covers literals and declarations. [System interfaces](OS.md) covers output, file I/O, and process operations. The [standard library guide](STDLIB.md) lists APIs and resource rules by module.
+The [quick start](QUICKSTART.md) focuses on the differences experienced programmers run into first. [SEMANTICS.md](SEMANTICS.md) defines the exact behavior of numbers, copying, errors, and cleanup; the [lexical and syntax reference](../baseline/LEXICAL_SYNTAX.md) covers literals and declarations; [System interfaces](OS.md) covers output, file I/O, and process operations; and the [standard library guide](STDLIB.md) lists APIs and resource rules by module.
 
 The chapter structure draws on the [Rust Book](https://github.com/rust-lang/book/blob/main/src/SUMMARY.md) and the [basics section of the Tour of Go](https://github.com/golang/website/blob/master/_content/tour/basics.article). The examples and language rules are specific to Woozy.

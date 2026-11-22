@@ -69,7 +69,7 @@
 
 本提案的内部选择：保持普通参数的短期 borrow；所有会被保存的读都执行类型化 copy；用已有 ID 标识拥有者和临时值；构造器先按源码顺序把成员放在独立拥有暂存槽，全部成功才提交完整值；Python 对自有 Vec 维护明确的语言拥有计数及 drop，不依赖 `__del__`。这些选择不增加源语言 API。
 
-初期元素类型限数值、bool、Unit、非捕获函数值，以及这些类型、Vec、有限 struct/enum 的非递归组合。分两步先 Vec[平凡值]，再嵌套 Vec/拥有聚合。普通泛型函数和泛型 struct/enum 在得到具体类型后适用同一规则。保持既有字面量 string profile；第一轮不放开动态 string、Vec[string] 或原来被拒的 string 成员。递归到 Vec 的布局虽可以有限，第一轮仍单独报告未支持，不能误报为无限值布局或宣称已处理强引用环。
+初期元素类型限数值、bool、Unit、非捕获函数值，以及这些类型、Vec、有限 struct/enum 的非递归组合。分两步推进：先支持 Vec[平凡值]，再扩展到嵌套 Vec 和拥有聚合。普通泛型函数和泛型 struct/enum 在得到具体类型后适用同一规则。保持既有字面量 string profile；第一轮不放开动态 string、Vec[string] 或原来被拒的 string 成员。递归到 Vec 的布局虽可以有限，第一轮仍单独报告未支持，不能误报为无限值布局或宣称已处理强引用环。
 
 ## 3. 最小共享记录与 API
 
@@ -135,15 +135,15 @@ TypeContext 仍是唯一公共类型表。实例字段替换可能生成新 Type
 | let、const、普通参数重新赋值 | 保持已有不可写/未规定处理；不因 move 后为空而自行允许 let 第二次赋值。若要开放另需用户确认 |
 | 条件/短路 | 只让实际求值的分支产生临时值；条件 full-expression 在进入分支/body 前结束。动态分支在合流处按所有可达状态合并，不能只检查源码扫描顺序 |
 
-实现时 ordinary 参数借用不是深层 readonly：通过 Vec 借用照样可以索引写入同一容器。借用存活期间不能 move/destroy 其拥有槽；别名 Vec 句柄指向同一对象不代表两个绑定槽重叠。whole-POD inout 延用根存储身份检查，扫描 callee、receiver、全部嵌套实参读/写，拒绝与其他访问重叠；不可由两个名字不同推断外部存储不重叠。
+实现时 ordinary 参数借用不是深层 readonly：通过 Vec 借用照样可以索引写入同一容器。借用存活期间不能 move 或 destroy 其拥有槽；别名 Vec 句柄指向同一对象不代表两个绑定槽重叠。whole-POD inout 沿用根存储身份检查，扫描 callee、receiver 和全部嵌套实参读/写，拒绝与其他访问重叠；不能只凭名字不同就推断外部存储不重叠。
 
-同一调用中，较早实参借用 x 后，较晚实参试图 move x，必须拒绝，不能为消除冲突偷偷把前一个实参改成 copy。重建整个 var 的 `=` 只需要取得槽地址，不读取旧值，moved 槽可以作该目标；复合赋值、字段位置及索引接收者仍要求相应基础值可读。Native 当前 `verify.cpp:296-310` 把 load/address 都要求为已初始化，接入重建时须区分“仅定位待写槽”与“读取值”。字段赋值求 RHS 期间还需保护基础拥有值，不能取得字段位置后又通过嵌套调用 move 整个基础值。
+同一调用中，较早实参借用 x 后，较晚实参试图 move x，必须拒绝，不能为了消除冲突偷偷把前一个实参改成 copy。重建整个 var 的 `=` 只需要取得槽地址、不读取旧值，moved 槽可以作该目标；复合赋值、字段位置及索引接收者仍要求相应基础值可读。Native 当前 `verify.cpp:296-310` 要求 load 和 address 都必须已初始化，接入重建时须区分“仅定位待写槽”与“读取值”。字段赋值求 RHS 期间还需保护基础拥有值，不能取得字段位置后又通过嵌套调用 move 整个基础值。
 
-分支只有一侧 move，合流得到 maybe_live，后续读或再次 move 拒绝；清理按实际 live 标志销毁。无条件完整 var 赋值可将所有进入状态变为 live。返回/throw 分支不参与其后正常合流。循环对入口、回边、continue（经过 step）求不动点：外层绑定本轮 move 且没有在每条回边重建，下一轮使用应拒绝；循环零次执行与 break 状态也参与循环后合流。不要每轮把状态重置成声明时的 live。
+如果只有一侧分支发生 move，合流得到 maybe_live，后续读取或再次 move 都会被拒绝；清理则按运行时的实际 live 标志销毁。无条件完整 var 赋值可将所有进入状态变为 live。返回/throw 分支不参与其后正常合流。循环对入口、回边、continue（经过 step）求不动点：外层绑定本轮 move 且没有在每条回边重建，下一轮使用应拒绝；循环零次执行与 break 状态也参与循环后合流。不要每轮把状态重置成声明时的 live。
 
-try 的 catch 输入来自 protected body 每个真实 typed-error 点的状态及该点完成的清理。后续实参错误发生在 move 后，catch 看到 moved；发生在 move 前，catch 看到原 live，合并时可能 maybe_live。handler 自己的错误走外层，不能拿 try 入口状态“恢复”所有绑定。正常 body 与可达 handler 的状态再合并。沿用当前类型/效果对完整源码的检查及实际可达流分析，不靠 errors 摘要代替状态。
+try 的 catch 输入来自 protected body 每个真实 typed-error 点的状态及该点完成的清理。后续实参错误发生在 move 后，catch 看到 moved；发生在 move 前，catch 看到原 live，合并时可能为 maybe_live。handler 自己的错误走外层，不能拿 try 入口状态“恢复”所有绑定。正常 body 与可达 handler 的状态再合并。沿用当前类型/效果对完整源码的检查及实际可达流分析，不靠 errors 摘要代替状态。
 
-defer 注册时不复制值、不立即冻结变量；在每个可能执行它的出口，检查其 body 实际访问的绑定状态。`Defer.references` 是定位外部引用的起点，仍需分析读、赋值目标及执行过程，不能把所有 Place 都误算成读取旧值。中间 move 后又在每条到达出口的路径重建，可以执行 defer；重建前若有可能抛错并离开该块，那个出口必须报错。未经过注册的分支没有该 defer，不能因此误拒 move。清理体也使用同一状态转移，LIFO 中先执行的 defer 对后执行者的影响要保留。
+defer 注册时不复制值、不立即冻结变量；在每个可能执行它的出口，检查其 body 实际访问的绑定状态。`Defer.references` 是定位外部引用的起点，仍需分析读、赋值目标及执行过程，不能把所有 Place 都误算成读取旧值。如果中途 move 后在每条到达出口的路径上都重新初始化，defer 可以正常执行；重建前若有可能抛错并离开该块，那个出口必须报错。未经过注册的分支没有该 defer，不能因此误拒 move。清理体也使用同一状态转移，LIFO 中先执行的 defer 对后执行者的影响要保留。
 
 模板在声明约束下检查一般的 copy/move/借用规则；不要求 TypeParameter 已知为平凡类型，也不把它擦成 Any。具体实例替换完成后重新分类字段、实例局部、Temporary、ValueUse 和退出清理；沿用实例预算及来源检查。新增 ForIn/Move 等节点的引用、defer 引用、模式/catch 绑定必须随实例改号。泛型普通返回 `return x` 对 Vec 实例为 retain，对拥有 struct 为递归 copy；非捕获函数实例的函数值本身无 ARC。
 
@@ -183,7 +183,7 @@ Slot 需补拥有种类（local owned / ordinary borrowed / move owned / inout�
 1. CFG 数据流继续维护 T08 尚未完成的退出清理栈；每帧的 next 从 defer 下标扩展为 action 下标。叠加活跃拥有者、借用、输出侧和部分构造暂存状态；合流、正常/错误返回不得留下未完成动作。已证明不可能执行的穷尽 enum default 仍按现有规则处理，不得为了让 drop 通过放松证明。
 2. `RequiredExits` 继续只读不可变 HIR，独立计算每份出口展开中的真实源码 call/exit 义务。新增 full-expression、copy/take/destroy/end_iteration 义务也从已验证 HIR 推导，按同一展开上下文逐份核对，不能读取 lowering 输出自证。只加标记、删掉实际 drop、将释放挪到另一份 defer 展开或不可达块，都必须拒绝。对于类型化 destroy，verifier 验证实际 opcode、对象/slot 和状态；LLVM 再将它生成真正 release/drop，运行测试核对最终效果。
 
-当前 call 检查核对 origin、签名、类型和展开次数（`verify.cpp:355-375,455-480,618-619,651-652,729-734`），不等于证明任意表达式都与源码等价。新增拥有检查不能把这些已有保证删掉，也不能声称计数本身证明了 release。需要强化 direct call 时应核对实际 callee 的函数来源；indirect call 保留已求值函数值及签名，不凭同签名猜目标。该项是阅读所得的检查范围说明，本次没有运行坏 NIR 注入测试。
+当前 call 检查核对 origin、签名、类型和展开次数（`verify.cpp:355-375,455-480,618-619,651-652,729-734`），不等于证明任意表达式都与源码等价。新增拥有检查不能把这些已有保证删掉，也不能声称计数本身证明了 release。需要强化 direct call 时应核对实际 callee 的函数来源；indirect call 保留已求值函数值及签名，不凭同签名猜目标。以上检查范围基于代码阅读得出，本次没有运行坏 NIR 注入测试。
 
 运行库只需要下列私有职责。`lang_rt_retain/lang_rt_release` 是 `SEMANTICS:131` 允许的实现符号；表中其余名字是内部概念名，不是源方法或已发布 ABI：
 
@@ -215,7 +215,7 @@ Python 使用相同 ValueUse、Temporary、LocalLifetime、FullExpression、Exit
 
 生成器为每个需要清理的块建立注册/初始化标志；即使没有 defer，只要有拥有局部，也必须生成对应清理。成功 return/typed throw 的结果先转入输出拥有者；TypedError.value 也是一个拥有者，匹配 handler 后交给 catch 槽并清空载体责任，未匹配则继续向外传，顶层报告后按普通错误出口处理载荷。普通借用参数函数退出不 drop 调用者句柄。
 
-现有 `except _rt.Panic → allow=False → raise` 与带条件 finally 的规则扩展到临时值、部分构造、迭代及局部销毁；Panic 在主体或某个清理中发生时，不自动执行剩余语言动作。不要新加无条件 finally 去释放 Vec 或 iteration token，造成与 native 不同的清理承诺。LoopContinue/SwitchBreak 属于结构化跳转，仍执行实际离开块的动作；typed catch 只匹配 TypedError。KeyboardInterrupt/SystemExit 不包装成 typed error，外部 Exception 转换留在 T10 的声明绑定处。
+现有 `except _rt.Panic → allow=False → raise` 与带条件 finally 的规则扩展到临时值、部分构造、迭代及局部销毁；Panic 在主体或某个清理中发生时，不自动执行剩余语言动作。不要新加无条件 finally 去释放 Vec 或 iteration token，避免给出与 native 不一致的清理保证。LoopContinue/SwitchBreak 属于结构化跳转，仍执行实际离开块的动作；typed catch 只匹配 TypedError。KeyboardInterrupt/SystemExit 不包装成 typed error，外部 Exception 转换留在 T10 的声明绑定处。
 
 Python 运行库的 logical type key 为 Vec 递归扩展，不能写入会话 TypeId；非活动 enum、TryCall/异常的未初始化正常侧不 drop。改动 runtime 后由 root 同步 `include/lang/backend/python.hpp` 的 runtime_version、嵌入文件和生成产物检查；不能让旧 `/3` runtime 加载新拥有代码。新增 finally 也计入现有生成深度限制，超限仍在发布文件前明确拒绝。
 
@@ -234,13 +234,13 @@ Python 运行库的 logical type key 为 Vec 递归扩展，不能写入会话 T
 | 索引/切片 Panic | 负数、越界、反向区间、端点越界均访问前失败，检查 Panic marker 与位置；普通 main 返回 101 无 marker，不误算 Panic |
 | 活跃遍历改长度 | 源方法名未冻结，源码用例 TODO；先测真实内部修改入口：别名修改后立即 break/return、删后恢复长度都应在第一次修改前 Panic，容器未被改写。此内部测试不能冒称源码调用已实现 |
 
-计数观察器属于测试配置，使用不抛错、无额外拥有引用的事件输出，记录稳定于一次运行的 object_id、逻辑类型键、源码位置、allocate/final_drop/free 及 live_objects。Native 观察器须链接进同一份 CLI 生成程序；Python 观察器读取实际生成代码调用的 Vec/copy/drop，不能让观察器额外 retain 而改变最后释放。不要比较两个进程的地址或裸 TypeId。
+计数观察器属于测试配置，使用不抛错、无额外拥有引用的事件输出，记录单次运行内稳定的 object_id、逻辑类型键、源码位置、allocate/final_drop/free 及 live_objects。Native 观察器须链接进同一份 CLI 生成程序；Python 观察器读取实际生成代码调用的 Vec/copy/drop，不能让观察器额外 retain 而改变最后释放。不要比较两个进程的地址或裸 TypeId。
 
 drop 事件只能在真实执行类型 drop/release 的位置产生；同样记录 free 和最终存活集合，配合运行库内存检查，不能由“计划含 destroy”生成成功事件。Native 编译器的 ASan 不覆盖生成程序与 runtime，后者需要单独启用合适检查。Panic 用例只核对已发生事件和禁止误执行的后续 defer，不要求进程终止前 live_objects 归零。本次所有这些观察均为 `not_run`。
 
 ## 9. 需要用户决定的未规定行为
 
-这些不由本提案批准。root 可先分派不受影响的步骤；涉及下列组合时保持明确未支持，问题必须连同最小源码形式询问，不能由 sema/两个后端分别选答案。
+以下未规定行为不由本提案拍板。root 可先分派不受影响的步骤；涉及下列组合时保持明确未支持，问题必须连同最小源码形式询问，不能由 sema 和两个后端各自选答案。
 
 | 未规定项 | 现有依据、具体影响 | 本次处理 |
 | --- | --- | --- |

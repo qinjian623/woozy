@@ -8,14 +8,14 @@
 
 唯一公共定义是 `include/lang/hir/hir.hpp`。旧 `TypeKind 0..13`、`NodeKind 0..32` 不变，尾部增加 `Vec` 及 `Move/VecInit/IndexRead/IndexPlace/VecSlice/ForIn`，后者编号为 33..38。
 
-- Vec 恰有一个 `type_args` 元素。内建名仍以 resolver 的身份识别，同名用户声明不变成内建 Vec。
-- 列表有同一种元素类型，空列表需要 Vec 上下文。整数/bool 不自动转换成容器。
+- Vec 恰有一个 `type_args` 元素。内建名仍以 resolver 的身份识别，同名用户声明不会被当成内建 Vec。
+- 列表中的所有元素必须同类型，空列表需要 Vec 上下文。整数和 bool 不会自动转换成容器。
 - 索引和切片端点保留自己的整数类型、数学十进制值及位模式，不提前转换成目标 `usize`。负值和越界值可通过静态检查，后续 runtime 应在实际访问前产生 Panic。
 - VecSlice 明确保存 start/end 是否存在，前端从 AST token 与 BracketItem 区分省略端点，后端不必重新解析冒号。
 - IndexPlace 保存接收者和索引计算，不代表可逃逸的元素地址，也不产生一个元素拥有值。let Vec 可索引写；`vec[i].field = rhs` 继续拒绝。
-- ForIn 使用 resolver 已建立的元素 SymbolId，独占一个循环 ScopeId 和每轮 body ScopeId。元素暂限只读拥有局部。集合求值一次，成功后交给隐藏集合拥有者并开始迭代登记；集合求值失败不结束未开始的登记。
+- ForIn 使用 resolver 已建立的元素 SymbolId，独占一个循环 ScopeId 和每轮 body ScopeId。循环元素暂限为只读拥有局部变量。集合求值一次，成功后交给隐藏集合拥有者并开始迭代登记；集合求值失败不结束未开始的登记。
 
-`classify_value(module, TypeId)` 返回 `ValueOps`：`trivial/vec/structure/enumeration/dependent/unsupported`、`needs_drop`、`pod_inout`、声明顺序的具体成员类型、enum 所属 variant 和拒绝原因。enum 的 fields 是各活动变体的备选描述，销毁时只能处理活动 variant。Vec 最后释放应逆索引销毁元素，聚合应逆声明顺序销毁；本阶段提供类型事实，没有生成这些 runtime 操作。
+`classify_value(module, TypeId)` 返回 `ValueOps`：`trivial/vec/structure/enumeration/dependent/unsupported`、`needs_drop`、`pod_inout`、声明顺序的具体成员类型、enum 所属 variant 和拒绝原因。enum 的 fields 是各活动变体的备选描述，销毁时只能处理活动 variant。Vec 最后释放应逆索引销毁元素，聚合应逆声明顺序销毁；本阶段只提供类型分类信息，还不生成这些 runtime 操作。
 
 生产者在写记录前将具体替换后的成员类型驻留在公共 TypeContext。分类器不返回私有布局表的 TypeId。有限嵌套泛型聚合可重复同一个声明；循环或不断扩张的拥有图仍拒绝。非捕获函数值本身为平凡值，不沿其签名当作拥有字段递归。
 
@@ -34,7 +34,7 @@
 
 OwnerRef 的 binding identity 为 SymbolId，其余为 HirNodeId。temporary 是表达式结果，return_output/error_output 是该出口的活动输出，iteration 是 ForIn 隐藏集合拥有者或迭代登记。只有 defer/end_iteration 的 TypeId 为 0。
 
-保存或返回的 Read 取得逻辑 copy；ordinary 调用直接借用绑定或字段，不为回避借用冲突偷偷 copy。较早实参的借用持续到调用返回或失败，期间较晚实参及其嵌套调用不能 move 同一个根槽。临时实参由调用者持有，到 full-expression 结束销毁。返回普通参数或保存到局部真实登记 copy。move 绑定先使源不可读，再产生拥有临时值；move 实参只在真正进入 callee 后转交。后续实参失败不会恢复源。
+保存或返回的 Read 取得逻辑 copy；ordinary 调用直接借用绑定或字段，不为回避借用冲突偷偷 copy。较早实参的借用持续到调用返回或失败，期间较晚实参及其嵌套调用不能 move 同一个根槽。临时实参由调用者持有，到 full-expression 结束销毁。返回普通参数或把它存进局部变量时，都会明确登记 copy。move 绑定先使源不可读，再产生拥有临时值；move 实参只在真正进入 callee 后转交。后续实参失败不会恢复源。
 
 赋值先计算目标一次并保护接收者，RHS 成功后取得新值再提交，按 Assign 的目标类型替换旧值，旧槽 live 时销毁一次、moved 时不销毁。ValueUse.take 表示成功提交；失败出口只清理已完成的临时前缀，不安装 RHS，不恢复已经发生的 move。没有保存可能因容器变化而失效的元素裸地址。
 
@@ -46,11 +46,11 @@ return/throw 先保存拥有输出，再销毁当前 full-expression 的剩余�
 
 ## 状态检查和独立验证
 
-实现位于 `src/hir/ownership.cpp`，没有前端对 LLVM 或 Python 的依赖。
+实现位于 `src/hir/ownership.cpp`，前端不依赖 LLVM 或 Python。
 
-拥有状态用 live/moved 的可能集合表示，普通参数和 inout 的借用类别另存。分支和短路只合并实际可达结果；循环计算入口、零次执行、回边、continue 和 break 的固定点。try 汇集每个真实调用失败点的状态，赋值 RHS 失败不提交，handler 中再次失败传到外层。defer 经过注册点才执行，退出时分析实际状态，先执行的 defer 对后执行者的写入保留。
+拥有状态用 live/moved 的可能集合表示，普通参数和 inout 的借用类别另存。分支和短路只合并实际可达结果；循环计算入口、零次执行、回边、continue 和 break 的固定点。try 汇集每个真实调用失败点的状态，赋值 RHS 失败不提交，handler 中再次失败传到外层。defer 只有在路径经过注册点后才执行，退出时按该点实际状态分析，先执行的 defer 对后续 defer 的写入影响保持传递。
 
-生产者和验证器使用相同的确定性推导函数，但验证器不读取提交的 ownership 或 actions 来生成期望：它从已检查的结构、类型、解析身份和源码次序重新计算，然后逐项核对。原 T08 检查继续独立重算错误、目标、退出作用域和 defer 投影。新增源码检查核对列表/切片/索引/for-in/move 构造是否遗漏，检查拥有读取、move、具体泛型身份、类型标注、调用来源和实参次序。这里没有宣称验证任意优化后 HIR 与源码完全等价。
+生产者和验证器使用相同的确定性推导函数，但验证器不读取提交的 ownership 或 actions 来生成期望：它从已检查的结构、类型、解析身份和源码次序重新计算，然后逐项核对。原 T08 检查继续独立重算错误、目标、退出作用域和 defer 投影。新增源码检查核对列表/切片/索引/for-in/move 构造是否遗漏，检查拥有读取、move、具体泛型身份、类型标注、调用来源和实参次序。这并不宣称能验证任意优化后的 HIR 都与源码完全等价。
 
 普通参数非法 move 用 `E_CALL_ARGUMENT`。已移动读取、重复 move、可能已移动合流和 defer 读取用 `E_OWNERSHIP_USE_AFTER_MOVE`。不支持的合法组合用 `E_CAPABILITY_UNAVAILABLE`，坏 HIR 用 `E_IR_INVALID`。没有新增诊断编号。
 
@@ -66,14 +66,13 @@ return/throw 先保存拥有输出，再销毁当前 full-expression 的剩余�
 
 测试入口为 `tests/ownership/static_test.cpp`，原 18 份项目及 cases.json 原样保留。`static-extra/independent` 是新增独立源码项目。最终实际命令、环境、失败日志、逐项 CLI JSON、hash 和未执行项记录在 `/tmp/language-t09-static-20261104/{report.md,summary.json,checks/}`；构建结果以这些文件为准，不引用旧任务的通过数量。
 
-
 ## root 证据修正（2026-11-04，唯一一次）
 
 初版任务 `e092e7c2` 被退回，不是已接受依赖。本次 `language-t09-static-correction-20261104` 的 `root_evidence_correction_count=1`，共同版本和旧编号不变。
 
-- Move 由不可变源码操作数决定类别。剥去括号后若为 Name，独立查询 resolver 并按所属具体函数的泛型改号表取得实际 SymbolId，必须对应 Move.binding，不能改为 Read-copy 子节点。计算临时的 Move 不能伪造绑定。
-- VecSlice 除省略标记外，逐一检查 receiver、start、end 与各自真实 AST 输入的身份和次序，只允许略去括号、一元加号等透明包装。一起交换 children/start/end、再重算全部拥有记录，也不能通过验证。
-- cleanup 返回可选的正常状态。内部合法无限循环没有正常状态时，不再执行更早 defer、外层清理或原定 return/error/jump；分支仍可正常结束的部分继续分析。真正外逃的 return/break/continue/typed error 仍拒绝。
+- Move 的类别由不可变源码操作数决定。剥去括号后若为 Name，独立查询 resolver 并按所属具体函数的泛型改号表取得实际 SymbolId，必须对应 Move.binding，不能改为 Read-copy 子节点。计算临时的 Move 不能伪造绑定。
+- VecSlice 除省略标记外，逐一检查 receiver、start、end 与各自真实 AST 输入的身份和次序，只允许略去括号、一元加号等透明包装。即使同时交换 children/start/end 并重算全部拥有记录，也无法通过验证。
+- cleanup 返回可选的正常状态。如果清理体内含合法的无限循环、没有正常出口，就不再执行更早 defer、外层清理或原定 return/error/jump；如果仅部分分支不终止，其余仍可正常结束的分支继续分析。真正外逃的 return/break/continue/typed error 仍拒绝。
 - Call 与 ConstraintCall 共用实参借用、ValueUse、CallLifetime 和失败前缀推导。未实例化模板也按已知 trait 签名检查先借用后 move；不自动 copy，也不关闭已支持的普通 trait 调用。
 
 修正测试包括用真实前端 HIR 同时改树和重算记录的反例，以及括号、具体泛型身份、省略/嵌套切片、不终止清理的可达性、普通 scalar trait、不同拥有绑定及具体实例对照。实际构建、root helper 对照、128 次 CLI 和输入 hash 结果保存在 `/tmp/language-t09-static-correction-20261104/`；初版目录保留不动。本次静态修正没有运行 ARC/drop/Vec；后续 Python 执行见 `T09_PYTHON.md`，T09 仍为 in_progress。

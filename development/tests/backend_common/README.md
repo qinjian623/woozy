@@ -4,7 +4,7 @@
 
 ## 数据
 
-- `schema`: `compiler-dev/backend-common-fixtures/1`，合同 `compiler-dev/1`。
+- `schema`: `compiler-dev/backend-common-fixtures/1`，契约 `compiler-dev/1`。
 - 15 个项目：11 个正常返回 `0`，4 个运行时 `panic`。
 - 成功案例的预期直接按 `docs/SEMANTICS.md` 计算，不读取未来后端输出。
 - `inout-argument-order` 单独标 `requires_inout: true`；其余案例不需要 inout。
@@ -31,7 +31,7 @@
 | panic-dynamic-conversion | panic | 动态 `i8(i32 128)` 越界 |
 | panic-negative-shift | panic | i32 值左移动态 i8 移位量 -1 |
 
-`cases.json` 的每个 `check` 都通过 `rule` 引用完整规范来源，并给出具体计算。Panic 案例用 `trigger` 给出触发值和原因，记录非 Panic 路径 `main` 返回 0，但不规定 Panic 的精确退出码或诊断文字。
+`cases.json` 中每条 `check` 都通过 `rule` 引用完整规范来源并给出具体计算；Panic 案例则用 `trigger` 写明触发值、原因以及非 Panic 路径 `main` 返回 0。
 
 ## 已执行检查（HEAD 7c49989）
 
@@ -50,7 +50,7 @@ build/frontend-debug/lang_module_check <fixture>/lang.toml
 - T05 native 生成/链接/运行：`not_run`。
 - T06 Python 生成/运行：`not_run`。
 
-所以本记录只证明源码可解析、名称和模块可解析，不能证明 T04 完成，更不能证明 T05/T06 通过。
+因此本记录只证明源码通过了语法、名称和模块解析，不能说明 T04 完成，更不能说明 T05/T06 通过。
 
 ## 未使用或未规定的项
 

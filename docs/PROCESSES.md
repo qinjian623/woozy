@@ -69,7 +69,7 @@ func main() i32 throws os.Error {
 
 `arguments[0]` 也由调用者提供，通常写程序名。`spawn` 和 `execve` 不解释 shell 命令字符串；需要 shell 时，明确调用 `/bin/sh` 并传 `-c` 及命令。程序路径、参数和环境条目都不能含 NUL。
 
-`spawn_with` 在返回前确认 exec 是否成功。路径不存在等 exec 错误会直接抛出 `os.Error`，失败的子进程会被回收。成功启动后仍要调用 `wait` 或 `waitpid`；子进程自行退出码非零不会自动变成 Woozy 的 typed error。
+`spawn_with` 在返回前确认 exec 是否成功。路径不存在等 exec 错误会直接抛出 `os.Error`，失败的子进程会被回收。成功启动后仍要调用 `wait` 或 `waitpid`；子进程退出码非零不会自动变成 Woozy 的 typed error。
 
 `WaitStatus` 有 `pid i32` 和原始 `status i32` 两个字段。`WNOHANG` 暂时没有可报告状态时 `pid == 0`。先用 `exited(status)` 判断正常退出，再取 `exit_status(status)`；信号退出用 `signaled` 和 `term_signal`。还可以用 `stopped`、`stop_signal`、`continued`、`core_dumped` 检查其他状态。
 
@@ -89,7 +89,7 @@ func main() i32 throws os.Error {
 
 字符串接口严格检查 UTF-8；Linux 传入非 UTF-8 参数或环境值时，抛出 `os.Error.System(84,0)`。需要保留它们时选择 bytes 接口。环境名不能为空，不能含 `=` 或 NUL，环境值不能含 NUL。
 
-`setenv` 和 `unsetenv` 在运行库内同步修改环境；它们不会改变已经运行的子进程。`spawn`、`spawnp` 和 `execv` 读取当前环境，`spawn_with` 和 `execve` 只使用明确传入的环境。不要假定两个分别调用的环境操作会一起完成。
+`setenv` 和 `unsetenv` 在运行库内同步修改环境；它们不会改变已经运行的子进程。`spawn`、`spawnp` 和 `execv` 读取当前环境，`spawn_with` 和 `execve` 只使用明确传入的环境。不要假定两次分别调用的环境操作会一起完成。
 
 `execve_bytes(path Vec[u8], arguments Vec[Vec[u8]], env Vec[Vec[u8]])` 与 `spawn_bytes(path, arguments, env, input, output, error)` 接受原始字节；其余返回和错误规则与字符串版本相同。bytes 版本也不能传入 NUL。
 
@@ -132,7 +132,7 @@ macOS arm64 用 `sigwait` 同步接收信号。这个接口只返回信号编号
 
 多线程 fork 后，子进程只保留调用 fork 的线程。其他线程持有的业务锁状态仍被复制，不会自动解锁；这些线程在子进程也不会回来解锁。调用方要在 fork 前安排好业务锁和数据访问。这个线程保留规则与 [Linux fork](https://man7.org/linux/man-pages/man2/fork.2.html) 相同。
 
-Woozy 会修复自己的分配器等内部锁，使子进程可以使用运行库；它不会重置用户 Mutex 或 Condvar。继承的 ARC 引用计数不会减去已消失线程持有的引用，部分引用可能一直保留到 exec 或进程退出。子进程通常应尽快调用 exec，优先用 `spawn` 完成“启动另一个程序”的需求。
+Woozy 会修复自己的分配器等内部锁，使子进程可以使用运行库；它不会重置用户 Mutex 或 Condvar。继承的 ARC 引用计数不会减去已消失线程持有的引用，部分引用可能一直保留到 exec 或进程退出。子进程通常应尽快调用 exec；要启动另一个程序时，优先用 `spawn`。
 
 macOS arm64 上，C 代码需要创建子进程时，可调用导出的 Woozy 函数，由该函数使用 `std/process.fork` 或 `std/process.spawn`。直接调用 libc 的 `fork()` 会绕过 Woozy 的文件描述符继承保护，以及子进程的分配器、GC 和 async 状态恢复。
 

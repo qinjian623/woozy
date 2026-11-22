@@ -30,13 +30,13 @@ f64->f32 一次 RNE 且有限溢出为带符号 Infinity。当前 Vec、move 和
 
 ## 执行检查
 
-`native.floating` 经正式 CLI load/resolve/check/build，独立运行 ELF 的 main。
-`float_probe.cpp` 再通过 VerifiedHIR/VerifiedModule 发射，要求目标文件与正式 CLI
-的 program.o 逐字节相同。观察器解析该次发射的优化前 LLVM，以实际生成函数的
-FunctionType 构造调用，将真实返回值 bitcast 后写出；没有通过 C++ 私有聚合 ABI
-读取值。观察程序由同版本 Clang 在 O0/O2 编译执行；保留 before/after/observe LLVM、
-完整 argv/退出/stdout/stderr、所有源及生成文件 hash 和每条实际位模式。观察程序先
-用 stmxcsr 读取自身运行时的环境，检查上述 RNE/subnormal 要求。
+`native.floating` 通过正式 CLI 完成 load/resolve/check/build，并独立运行生成的 ELF 的 main。
+`float_probe.cpp` 再经 VerifiedHIR/VerifiedModule 重新发射，要求产出的目标文件与正式 CLI
+的 program.o 逐字节一致。观察器解析这次发射的优化前 LLVM，按实际生成函数的
+FunctionType 构造调用，把真实返回值 bitcast 后写出，不经由 C++ 私有聚合 ABI
+读取值。观察程序由同版本 Clang 在 O0/O2 下编译执行，保留 before/after/observe LLVM、
+完整 argv/退出码/stdout/stderr、所有源及生成文件的 hash 和每条实际位模式。观察程序先
+用 stmxcsr 读取自身运行时的浮点环境，验证上述 RNE/subnormal 要求。
 
 - 原 `tests/floating` 的 12 个正例 main 全部运行，包括两个原 baseline 副本。
   原 76 个 probe 每个优化等级逐项调用，按原 class/bits/sign/bool 比较；NaN 不比较
@@ -57,13 +57,13 @@ FunctionType 构造调用，将真实返回值 bitcast 后写出；没有通过 
 非法 unary、混宽/整数操作数、错误比较结果类型、缺操作数/结果。
 原 scalar、POD、字符串及 T08 测试继续运行。
 
-共享检查现已启用两端严格浮点，过时拒绝断言已改为实际接受检查。主代理最终
-GNU Debug、GNU Release和Clang22 ASan/UBSan各34/34，LLVM关闭26/26。
-正式同源程序在三种构建中比较9660项返回值（含NaN分类和布尔值），结果一致；
-Python运行库为/3。原19清理、27泛型、floating及baseline输入未改。
+共享检查现已启用两端严格浮点，过时的拒绝断言已改为实际接受检查。主代理最终
+GNU Debug、GNU Release 和 Clang22 ASan/UBSan 各 34/34，关闭 LLVM 时为 26/26。
+正式同源程序在三种构建中比对了 9660 项返回值（含 NaN 分类和布尔值），结果一致。
+Python 运行库版本为 /3。原有的 19 项清理、27 项泛型、floating 及 baseline 输入均未改动。
 
-ASan/UBSan仅检查编译器，不包含生成ELF、预编译LLVM或LeakSanitizer。
-编译和测试使用固定Python3.12.15，不修改系统解释器。
+ASan/UBSan 仅检查编译器本身，不包含生成的 ELF、预编译 LLVM 或 LeakSanitizer。
+编译和测试使用固定的 Python 3.12.15，不修改系统解释器。
 
 ## 浮点比较常量
 

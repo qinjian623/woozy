@@ -17,11 +17,11 @@
 
 ## 捕获式 C 回调
 
-用户已确定带 userdata、注册期间保留捕获值、注销等待在途调用、不允许 throws。实现说明见 [C_RETAINED_CAPTURING_CALLBACKS.md](../docs/C_RETAINED_CAPTURING_CALLBACKS.md)，用法见 [调用 C 库](../../docs/FFI.md)。
+需求规则已由用户确定：带 userdata、注册期间保留捕获值、注销时等待在途调用、不允许 throws。实现说明见 [C_RETAINED_CAPTURING_CALLBACKS.md](../docs/C_RETAINED_CAPTURING_CALLBACKS.md)，用法见 [调用 C 库](../../docs/FFI.md)。
 
-四个 Pi-Ollama DeepSeek Flash worker 分别编写前端、运行库、Native 代码生成和真实 C/Source 测试。首版发现的外层 SAFE 清理、并发 close 等待和借用退出顺序已修正。私有整合版相关 11/11 CTest 通过；13 个 Source 项目在 O0/O2 下运行通过，包括 Weak 清理观察和 move-only 注册句柄的函数捕获。正式 CTest 固定要求所有 Source 用例实际执行。
+四个 Pi-Ollama DeepSeek Flash worker 分别编写前端、运行库、Native 代码生成和真实 C/Source 测试，并修正了首版发现的外层 SAFE 清理、并发 close 等待和借用退出顺序问题。私有整合版中相关 11/11 项 CTest 通过，13 个 Source 项目在 O0/O2 下运行通过（含 Weak 清理观察和 move-only 注册句柄的函数捕获），正式 CTest 强制要求所有 Source 用例实际执行。
 
-代码已整合到主目录，重新构建成功；完整 **176/176 CTest 通过（191.60 秒）**，FFI01 已完成。新增 Source CTest 固定 require，未把跳过项计为通过。
+代码已整合到主目录并重新构建成功，完整 **176/176 CTest 通过（191.60 秒）**，FFI01 已完成。新增的 Source CTest 同样强制要求实际执行，不把跳过项计为通过。
 
 ## 保留的限制和后续工作
 

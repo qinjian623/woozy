@@ -33,8 +33,8 @@ pub func to_vec[T](value Slice[T]) Vec[T]
 
 - 运行时值是 inline 24 字节 `{owner Vec pointer, start u64, length u64}`；
   不创建新的 heap 节点，不复制元素存储。
-- 强边是 `ownerVec`：每个拥有 Slice copy 会 retain owner 并 begin 一个
-  iteration pin；drop 先清空 descriptor，再 end pin 和 release owner。
+- 强引用边指向 `ownerVec`：每次复制拥有型 Slice 都会 retain owner 并开启一次
+  iteration pin；drop 时先清空 descriptor，再结束 pin 并 release owner。
 - 普通借用参数不额外 retain/drop；return/move/赋值、struct/enum/Vec 嵌套和
   临时值按 HIR ownership 记录正常 copy/drop。
 - owner 绑定清理后 view 仍有效：view 持有 owner 的强引用；最后一个 view 释放
@@ -44,11 +44,11 @@ pub func to_vec[T](value Slice[T]) Vec[T]
   reserve/resize 可以是无操作。
 - 空 view 也 retain + pin，因此同样阻止结构修改。
 - `view[i]` 读取元素的正常逻辑副本（拥有元素会 copy/retain）；`view[i] = value`
-  替换元素，与 Vec 一样遵守 `let` 只禁止重绑定、不冻结对象内容。
+  替换元素，与 Vec 一样，`let` 只禁止重新绑定、不冻结对象内容。
 - 元素替换和别名读取共享 owner 元素；本步骤不添加深层 `noalias` 证明，用户仍需
   自行同步并发别名访问。
-- 索引先做 signed 动态值检查，再做相对/绝对 bounds 检查；负的 signed 索引不能
-  绕过 bounds。越界、`start > end`、端点超出当前 view 都是 Panic。
+- 索引先做 signed 动态值检查，再做相对和绝对 bounds 检查；负的 signed 索引无法
+  绕过 bounds。越界、`start > end` 或端点超出当前 view 都会触发 Panic。
 - `to_vec` 的结果容器独立；修改结果容器槽不会改变原 view，但其中的内层引用元素
   仍是普通逻辑 copy。
 
@@ -63,13 +63,13 @@ pub func to_vec[T](value Slice[T]) Vec[T]
   `lang_slice_sub_v1`、`lang_slice_at_v1`、`lang_slice_length_v1`，以及
   `lang_vec_slice_v1`（`to_vec`）、`lang_vec_set_v1`（拥有元素替换）、
   `lang_vec_begin/end_v1`（Vec 遍历/结构保护）。
-- Slice 遍历不额外 pin；Slice 自身已有 lifetime pin，`iteration_end` 对 Slice
-  是无操作，退出计划的 Slice drop 负责 end pin + release。
+- 遍历 Slice 时不额外加 pin：Slice 自身已有 lifetime pin，`iteration_end` 对 Slice
+  是无操作，结束 pin 和 release 由退出计划中的 Slice drop 负责。
 - 索引/切片 IR 必须绑定真实 HIR：`IndexRead`/`IndexPlace`/`VecSlice` 的
   receiver、index/endpoint 顺序和 presence 都按 HIR children 的精确 Source
-  identity 校验；`vec_check`/`vec_set` 带 `IndexPlace` origin，`vec_set` 和
-  `vec_element_address` 必须有同 origin、同 receiver/index 且支配写入的 bounds
-  check。不能用同类型或相邻指令冒充。伪造元数据在 helper/emit 之前由
+  identity 校验；`vec_check`/`vec_set` 携带 `IndexPlace` origin，`vec_set` 和
+  `vec_element_address` 在写入前必须由同 origin、同 receiver/index 的 bounds
+  check 支配，不能用同类型或相邻指令冒充。伪造元数据会在 helper/emit 之前被
   NativeIR verifier 拒绝。
 - Python 后端遇到 `Slice[T]`/`std/slice` 明确返回
   `E_CAPABILITY_UNAVAILABLE`，不悄悄退化为 Vec 复制。既有 Vec/string/inout 和
@@ -80,7 +80,7 @@ pub func to_vec[T](value Slice[T]) Vec[T]
 - 仅 Native/64 提供 source Slice；Python source Slice 不提供。
 - C 绑定已有 `Ptr`/`PtrMut` 和 Buffer 接口；field/index `inout`、owning mutable
   place 的重叠访问检查仍属于 LANG03 后续步骤，本步骤没有把它们标成完成。
-- Slice 的 owner 强边已经可供后续 GC 遍历，但本步骤不伪装自动 GC 已完成；不改变
+- Slice 指向 owner 的强边已经可供后续 GC 遍历，但本步骤不包含自动 GC，也不改动
   GC/Weak/alloc/thread/process 的实现。
 - 不提供 Slice 常量、`inout Slice`、Slice 深复制、跨线程同步或自动 noalias。
 - 低层 `runtime/native/slice.cpp/.hpp` 本步骤未修改；只把它加入 Native runtime
@@ -98,12 +98,12 @@ pub func to_vec[T](value Slice[T]) Vec[T]
   ALLOC/FREE 平衡、Vec create/free、retain/release、pin begin/end 平衡。
 - panic 用例断言退出码 101 和 `LANG_NATIVE_PANIC:v1:<cause>:` 记录。
 - 负例断言 `E_CAPABILITY_UNAVAILABLE` / `E_TYPE_MISMATCH`，且不生成 program。
-- `forged_test.cpp`：真实 load/check/lower 后，篡改 Slice system op、origin、
+- `forged_test.cpp`：执行真实 load/check/lower 后，篡改 Slice system op、origin、
   slice result type、endpoint presence、read inputs、set result type、check index，
   以及用户独立复核发现的 6 个 source-identity 变体（vec_slice 端点交换、
-  vec_read 错 index/receiver、vec_check 错 index、vec_set 错 index/receiver）、
-  同错 check+set 和删除 check；全部由 NativeIR verifier 以 `E_IR_INVALID` 拒绝。
-  变体使用已有、支配且类型正确的 SSA operands，HIR 不变。
+  vec_read 错 index/receiver、vec_check 错 index、vec_set 错 index/receiver），
+  外加同错 check+set 和删除 check；全部由 NativeIR verifier 以 `E_IR_INVALID` 拒绝。
+  所有变体均使用已有、支配且类型正确的 SSA operands，不改动 HIR。
 
 推荐命令（本工作树私有构建，LLVM 22.1.8）：
 

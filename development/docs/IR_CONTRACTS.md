@@ -142,12 +142,12 @@ struct HirFunction {
 
 `VerifiedHirModule` 是包含只读 HirModule、规范版本、功能配置、目标配置和绑定摘要的受控结果包装，只能由语义验证阶段构造。已按 Python 配置验证的包装不能直接冒充按 native 配置验证；公共结构可以复用，目标相关检查结果分别保存。
 
-T07 的模板与具体函数使用同一种 HIR 节点和 TypeContext。模板中已有声明和约束的
-TypeParameter 是已绑定类型；具体执行函数中不得残留它或模板专用调用。
+T07 的模板与具体函数共用同一种 HIR 节点和 TypeContext。在模板所属声明和约束环境中绑定的
+TypeParameter 属于已绑定类型。具体执行函数中不得残留 TypeParameter 或模板专用调用。
 `sema::check_types` 与 `hir::verify_types` 只返回静态检查结果，不授予后端生成权限。
-唯一发布函数 `hir::verify` 深复制数据并检查所选后端已支持的操作，才构造
-VerifiedHirModule。后端支持检查只遍历具体函数及其可达节点、实际使用的类型；
-未实例化模板及类型池中未使用的条目不作为拒绝生成的理由。
+唯一发布函数 `hir::verify` 在深拷贝数据并确认所选后端支持所有用到的操作后，才构造
+VerifiedHirModule。后端支持检查只遍历具体函数、其可达节点以及实际使用的类型；
+未实例化的模板和类型池中未使用的条目不作为拒绝生成的理由。
 
 ## 5.1 trait 应用身份
 
@@ -166,15 +166,15 @@ struct ConstraintCall { TraitRef trait; SymbolId method; ... };
 ```
 
 无参 trait 使用空 `args`，它仍是一项 bound，不是多约束列表。`TraitDecl.params`
-保存真实声明参数；本批这些参数无约束。`ImplDecl.trait` 的实参可以引用 impl
+保存真实声明参数；本批这些参数不带约束。`ImplDecl.trait` 的实参可以引用 impl
 自身参数，包括只出现在 trait 应用中、不出现在 Self 或方法签名中的 phantom
-参数；这些参数仍进入方法实例键。`ConstraintCall.trait` 随所属模板实例替换。
+参数；这些参数仍会进入方法实例键。`ConstraintCall.trait` 随所属模板实例替换。
 
-约束缓存、递归检测和 overlap 判断使用 `(实际类型, trait 声明, 完整有序实参)`，
-不能只按 trait `SymbolId`。同一声明的 impl 重叠必须联合求解 Self 与全部实参，
+约束缓存、递归检测和 overlap 判断统一使用 `(实际类型, trait 声明, 完整有序实参)`，
+不能只按 trait `SymbolId` 区分。同一声明的 impl 重叠必须联合求解 Self 与全部实参，
 共享同一个替换表。具体实例最终仍是普通 `Call`，不保留 `ConstraintCall` 或未
-替换的 `TypeParameter`；后端不接触 trait 分派。验证器从真实 Source 重建声明、
-实参顺序、bound、impl 与方法签名，不能只信 producer 记录或可改缓存。
+替换的 `TypeParameter`；后端不接触 trait 分派。验证器须从真实 Source 重建声明、
+实参顺序、bound、impl 与方法签名，不能轻信 producer 记录或可变缓存。
 
 ## 6 调用和求值计划
 
@@ -258,7 +258,7 @@ struct Pattern {
 };
 ```
 
-variant、binding、literal 三者互斥；literal 不能带 payload。无三者才是 wildcard。原五字段聚合初始化保持原意。integer 保存目标规范化十进制值和目标位模式，float 保存目标精度位模式（含符号零），string 保存解码后的完整 UTF-8 字节。验证器从真实 LiteralPattern Source 和实际目标类型重新解码并核对类别、值、位模式和字节；不能只信 producer 的值，也不能删除 literal 后把普通 `case` Source 冒充 default。普通 `_` 必须来自 BindPattern，只有起始 token 确为 `default` 的 Case 可作为 wildcard Source。
+variant、binding、literal 三者互斥；literal 不能带 payload。三者都为空时才是 wildcard。原有的五字段聚合初始化保持原意。integer 保存目标规范化十进制值和目标位模式，float 保存目标精度位模式（含符号零），string 保存解码后的完整 UTF-8 字节。验证器须从真实 LiteralPattern Source 和实际目标类型重新解码，并核对类别、值、位模式和字节；不能只信 producer 的记录，也不能删除 literal 后把普通 `case` Source 冒充 default。普通 `_` 必须来自 BindPattern，只有起始 token 确为 `default` 的 Case 才能作为 wildcard Source。
 
 普通 `case` 的 Pattern Source 必须精确等于本 Case AST 的 `children[0]` 的 NodeRef 与 span；default wildcard 必须精确等于本 Case 的 Source 并保留 `default` token 核对；variant payload 的 Source 必须精确对应当前 AST payload child，而不是只落在父 span 内的任意后代。泛型实例只替换类型/绑定并保留真实 Source 身份。
 
@@ -322,35 +322,35 @@ Native IR 采用块参数形式表达跨块值，局部可变绑定先表示为�
 词法允许但原生目标不支持的外部 Python 操作应在目标能力检查时拒绝，不得在 Native IR 中放一个未定义地址的 Python 调用占位符。
 
 显式数值转换沿用原有 `integer_convert` / `Op::convert` 记录与全部字段：子节点类型
-是源类型，结果类型是目标类型。允许 integer→integer（范围检查）、float→integer
-（先按源 IEEE 值向零截断，再检查截断后的数学整数范围；NaN、无穷和越界是 Panic）、
-integer→float（直接按目标 f32/f64 精度做一次 RNE），以及全部 f32/f64 源目标对：
-f32→f32、f64→f64、f32→f64 和 f64→f32。f32→f64 精确扩宽；f64→f32 按源 f64 精确
-值做一次 RNE，有限溢出得到带符号 Infinity，保留 ±0 和 NaN 分类，不进入浮点到整数
-的 Panic 规则。bool 参与以及非数值源/目标仍是无效 IR；转换嵌套沿用同一记录。float
-同宽保留已舍入的源位模式；f64→f32 常量折叠使用目标 f32 位模式，不经 host double。
-`Op::convert` 的 `origin` 指向
-同函数真实 HIR `integer_convert`，其源/目标必须与指令一致；实际 SSA 输入还必须
-是完整 HIR operand 的结果，不能仅替换为位于该 operand SourceSpan 内的同型子表达式。
-透明 `copy`/`borrow` 链只按实际 ValueId 跟随。不新增 NodeKind、字段或 Native ABI。
+为源类型，结果类型为目标类型。允许 integer→integer（带范围检查）、float→integer
+（先按源 IEEE 值向零截断，再检查截断后的数学整数范围；NaN、无穷和越界均触发 Panic）、
+integer→float（直接按目标 f32/f64 精度做一次 RNE），以及全部 f32/f64 组合：
+f32→f32、f64→f64、f32→f64 和 f64→f32。其中 f32→f64 精确扩宽；f64→f32 按源 f64 精确
+值做一次 RNE，有限溢出得到带符号 Infinity，保留 ±0 和 NaN 分类，不走浮点到整数
+的 Panic 规则。涉及 bool 或非数值源/目标的转换仍是无效 IR；嵌套转换沿用同一记录。同宽
+浮点转换保留已舍入的源位模式；f64→f32 常量折叠使用目标 f32 位模式，不经 host double。
+`Op::convert` 的 `origin` 必须指向同函数的真实 HIR `integer_convert`，且源/目标类型
+与指令一致；实际 SSA 输入必须是完整 HIR operand 的结果，不能仅替换为该 operand
+SourceSpan 内的同型子表达式。透明 `copy`/`borrow` 链只按实际 ValueId 追踪。不新增
+NodeKind、字段或 Native ABI。
 
 当前平凡值实现追加 `struct_init`、`enum_init`、`field_read`、`field_address`、
 `load_indirect`、`store_indirect`、`enum_test`、`enum_payload`，保留原操作编号。
-字段与变体使用已解析的 SymbolId；地址结果的 TypeId 表示所指值类型，地址不能
+字段与变体使用已解析的 SymbolId；地址结果的 TypeId 表示所指值的类型，地址不能
 作为普通值使用。载荷读取要求所有进入路径都经过同一 SSA 枚举值对应变体的
 真分支。存储布局替换使用私有 TypeContext 副本，其新增 ID 不进入公开 Native IR。
 具体结构和检查见 `include/lang/ir/native.hpp` 与 `docs/NATIVE_SCALARS.md`。
 
 2026-11-09 追加 `vec_element_address`，保留全部旧操作编号。其结果是某个
-已检查 Vec 元素的地址，类型为该元素类型；必须紧跟在参数完全相同的
+已检查 Vec 元素的地址，类型为该元素类型；指令必须紧跟在参数完全相同的
 `vec_check` 之后，`origin` 指向真实 HIR `index_place`。该地址只能沿
 `field_address` 链用于所在赋值的一次字段 `load_indirect`/`store_indirect`/
-`replace_indirect`，不能 return、传给调用、普通 store 或充当 inout。
+`replace_indirect`，不能用于 return、传参、普通 store 或作为 inout 参数。
 拥有字段仍以 `replace_indirect` 执行旧字段 drop，非拥有字段不得使用该操作；
 地址逃逸、缺少 bounds check、receiver/index 与 HIR place 不符或重复字段写入
 均由独立 verifier 报 `E_IR_INVALID`。每个地址创建点及其派生字段的
-`load_indirect`/`store_indirect`/`replace_indirect` 还要沿真实 SSA 值身份和
-`field_address` 链找到容器的拥有槽，并按现有 ownership 数据流证明该槽在该
+`load_indirect`/`store_indirect`/`replace_indirect` 还须沿真实 SSA 值身份和
+`field_address` 链定位到容器的拥有槽，并按现有 ownership 数据流证明该槽在当前
 路径仍存活；调用、typed throw 边和 CFG 合流不得提前释放 receiver。
 
 ### 9.3 可失败调用
@@ -430,10 +430,10 @@ Python 后端接收 `VerifiedHirModule`、目标语义配置和已锁定的绑�
 ## T08 已实施的静态记录
 
 实际 C++ 字段、编号、稀疏退出记录规则、Verifier 独立重算和泛型复制要求见
-[T08_STATIC.md](T08_STATIC.md)。这些字段仍使用本节原有 TypeId/SymbolId/ScopeId/
-HirNodeId，不增加身份图。`check_types`/`verify_types` 接受静态 T08，具体函数的
+[T08_STATIC.md](T08_STATIC.md)。这些字段继续使用本节原有的 TypeId/SymbolId/ScopeId/
+HirNodeId，不新增身份图。`check_types`/`verify_types` 接受静态 T08，但具体函数中的
 throws、Try、Defer、Throw 仍由共用后端支持检查明确拒绝；`hir::verify` 的唯一发布
-入口及不可变快照要求保持。本文概念 Native IR 的 TryCall/ErrorReturn 尚未在本轮实现。
+入口和不可变快照要求保持不变。本文概念 Native IR 的 TryCall/ErrorReturn 在本轮尚未实现。
 
 ## 2026-11-11：有类型的系统调用操作
 

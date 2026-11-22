@@ -74,12 +74,12 @@ python3 tests/async_parameter_copy/run_parameter_copy.py \
   [--only param-weak-await] [--opt 0]
 ```
 
-The nine non-string positives plus `reject-resource-copy` still run with no IR
-driver. Selecting `param-string-await` without `--ir-driver` is rejected; an
-`--ir-driver` without that case is also rejected. Supplying `--helper` remains
+The nine non-string positives and `reject-resource-copy` run without an IR
+driver. Selecting `param-string-await` without `--ir-driver`, passing
+`--ir-driver` without selecting that case, or passing `--helper` are all
 rejected. `--role reference|candidate` is required. The reference role may
 pass `--trace-allow` for its own compiled-in `lang_native_helper`; a candidate
-Source trace allows only this role's CLI and the fixed LLVM tools.
+Source build trace allows only the candidate CLI and the fixed LLVM tools.
 
 For every positive case and opt the mode runs a public Source build, the
 original `program` execution, a link from this build's `program.o`, the
@@ -107,50 +107,52 @@ Commands run through `selfhost/corpus.py::_run_process_impl` with the original
 180s per-command limit (`min(timeout, 60)` for readelf). Each command records
 argv, cwd, the real integer exit, `timed_out`, `cleanup_complete`,
 `abandoned_pipes`, `timeout_s`, and raw stdout/stderr files. Timeouts, signals,
-incomplete cleanup, and abandoned pipes fail the case. Every Source build, IR
-emit, observer link, program execution and observer execution runs under
-exec-only strace (`execve,execveat`) with a separate exact whitelist: this
-role's CLI plus fixed LLVM tools for a Source build, only the sealed Nativeobs
-driver for IR, only fixed clang/ld.lld for the observer link, and only the
-published program or observer ELF for execution. Evidence directories must be
-new; the runner refuses to overwrite a non-empty output directory and keeps
-failed evidence. A summary, the command log, and an immediately written
-`case.json` are saved even when a case raises. Input, CLI, runtime, header,
-observer, and tool hashes are captured before and after the run. With
-`--resource-root`, the same stdlib tree is hashed before the first build and
-again when the run finishes, including case failures.
-The stdlib before value remains `resources.stdlib_tree_sha256`; the final
-comparison records `stdlib_tree_sha256_after` and `stdlib_tree_unchanged`.
-A changed or missing tree fails the run, including the summary's failure status.
-`--snapshot-root LABEL=PATH` writes full per-file SHA maps before and after the
-run and fails if the tree changes. `--extra-input LABEL=PATH` does the same for
-one file, such as the seed, helper, hosted runtime, observation driver, build
-report or source maps. The runner does not use a heartbeat as an input.
+incomplete cleanup, and abandoned pipes fail the case.
 
-`--self-test` runs short controls against the same validators and process
-runner: missing `program.o`, wrong program/observer stdout, program stderr,
-observer panic or junk lines, missing or duplicate FREE, below-minimum
-allocation, wrong resource diagnostic, residual published files, empty and
-string selections, and a timed-out grandchild that holds the stderr pipe.
-The pure Python stdlib control accepts an unchanged tree and rejects one file
-change against the saved before value. The old saved self-test JSON contains
-17 checks; the SH12g stdlib amendment made 19. SH12o adds controls for a
-string selection without an IR driver, an IR driver without the string case,
-an exact driver SHA mismatch, a C++ helper named as the IR driver, a missing
-or empty before.ll, a before.ll without `lang_text_concat_v1`, failed IR
-metadata, and a real before.ll path/flag/hash round trip through the same
-`public_ir_emit` validator. It does not delete or weaken the old controls.
+Every Source build, IR emit, observer link, program execution, and observer
+execution runs under exec-only strace (`execve,execveat`) with its own exact
+allowlist: the role's CLI plus fixed LLVM tools for a Source build, only the
+sealed Nativeobs driver for IR emit, only fixed clang/ld.lld for the observer
+link, and only the published program or observer ELF for execution. Use a new
+directory for evidence. The runner refuses to overwrite a non-empty directory
+and keeps failed evidence. Even when a case raises an exception, the
+runner writes `case.json` immediately along with the command log and summary.
 
-This mode covers all eleven cases with this role's published object when the
-IR driver is supplied. The generic corpus schema does not express the
-observer, static-ELF or before.ll assertions recorded by this private runner;
-the proposal records them as runner-only evidence and leaves all rows
-disabled.
+Input, CLI, runtime, header, observer, and tool hashes are captured before and
+after the run. With `--resource-root`, the stdlib tree is hashed before the
+first build (`resources.stdlib_tree_sha256`) and again when the run finishes,
+even after case failures (`stdlib_tree_sha256_after` and
+`stdlib_tree_unchanged`). A changed or missing tree fails the run and marks
+the summary as failed. `--snapshot-root LABEL=PATH` writes full per-file SHA
+maps before and after the run and fails on any change;
+`--extra-input LABEL=PATH` does the same for a single file (such as the seed,
+helper, hosted runtime, observation driver, build report, or source maps). The runner does
+not treat a heartbeat as an input.
+
+`--self-test` exercises the same validators and process runner with short
+controls: missing `program.o`, wrong program/observer stdout, unexpected
+program stderr, observer panic or junk lines, missing or duplicate FREE,
+below-minimum allocation, wrong resource diagnostic, residual published files,
+empty and string selections, and a timed-out grandchild holding the stderr
+pipe. The pure-Python stdlib check accepts an unchanged tree and rejects a
+single-file modification against the pre-run hash. The original saved
+self-test JSON had 17 checks, the SH12g stdlib check brought the count to 19,
+and SH12o adds controls for selecting the string case without an IR driver,
+passing an IR driver without the string case, an exact driver SHA mismatch,
+passing a C++ helper as the IR driver, a missing or empty before.ll, a
+before.ll without `lang_text_concat_v1`, failed IR metadata, and a real
+before.ll path/flag/hash round trip through `public_ir_emit`, without removing
+or weakening earlier controls.
+
+With the IR driver supplied, this mode covers all eleven cases using the
+role's published object. Because the generic corpus schema cannot represent
+the observer, static-ELF, or before.ll assertions checked by this runner, the
+proposal records them as runner-only evidence and leaves all rows disabled.
 
 ## SH12g records
 
-The runner now compares the stdlib after value. Original SH12g records remain
-unchanged.
+The runner now compares the post-run stdlib hash. Original SH12g records
+remain unchanged.
 
 The two final SH12g r2 rounds used C++ reference `565` and the old Wz compiler
 `2c11`, with 20 public builds per role. These records do not validate the newer
@@ -170,12 +172,13 @@ manual builds (`/tmp/t2`, `/tmp/t3`) also lack this runner's strict process
 flags. Those missing fields stay unknown; no failed or partial directory was
 deleted, overwritten, or counted as a passing r2 result.
 
-The old runner saved the stdlib before value ahead of its first build, but
-saved no stdlib after value. The independent review at
+The old runner recorded the pre-run stdlib hash before its first build, but
+did not record a post-run hash. The independent review at
 `checks/SH12g-async-parameter-copy-independent-review-20261114.md` separately
-read the same trees at 03:56:13/03:56:14 UTC and found both unchanged. That is
-a dated supplemental after check, not a reconstructed field in the old runs.
-This amendment makes future runs record and compare their own after value.
+hashed the same trees at 03:56:13/03:56:14 UTC and confirmed both were
+unchanged; that serves as a dated supplemental check rather than a
+reconstructed field in the old runs. Subsequent runs record and compare their
+own post-run hash.
 
 The old two-compiler records remain disabled and historical. The eleventh
 case, `param-string-await`, now has an implementation path through the

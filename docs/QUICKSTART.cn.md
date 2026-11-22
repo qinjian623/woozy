@@ -69,11 +69,13 @@ let empty Vec[i32] = [];   // 空列表需要元素类型信息
 let title string = "Woozy";
 ```
 
-参数和返回类型必须写明；省略返回类型表示 `Unit`。局部绑定可以推断类型。普通参数绑定只读，需要重新赋值时建立自己的 `var`。`const` 初始值必须在编译期确定，不执行普通函数调用，也不能创建 Vec 或外部对象。
+参数和返回类型必须写明；省略返回类型表示 `Unit`。局部绑定可以推断类型。普通参数绑定只读，需要重新赋值时另建局部 `var`。`const` 初始值必须在编译期确定，不能执行普通函数调用，也不能创建 Vec 或外部对象。
 
 整数类型有 `i8/i16/i32/i64`、`u8/u16/u32/u64` 和目标字宽的 `isize/usize`；浮点类型为 `f32/f64`。不同具体数值类型不隐式混算，转换用 `T(value)`。字面量可以从上下文取得类型。
 
-定宽整数加减乘会回绕，整数除法向零截断；整数除零、动态转换为整数时越界、非法移位会产生 Panic，编译时已知失败的转换直接报错。浮点除零按 IEEE 规则得到无穷或 NaN。`bool` 不与整数互换。`string` 是不可变 UTF-8 值；`text.len`、索引和切片按 Unicode 码点计算，索引得到 `u32`。字符串支持 `+`、整体 `var` 上的 `+=`、`==` 和大小比较，比较按 UTF-8 字节内容进行，不做 Unicode 正规化。`std/text` 的 `bytes` 和 `from_bytes` 显式转换 `Vec[u8]`，后者严格检查 UTF-8 并抛出 `text.Error`。字符串插值仍未支持；`const` 字符串只接受编译期能确定的值。
+定宽整数加减乘会回绕，整数除法向零截断；整数除零、动态转整数越界和非法移位会产生 Panic，编译期已知会失败的转换直接报错。浮点除零按 IEEE 规则得到无穷或 NaN。`bool` 不与整数互换。
+
+`string` 是不可变 UTF-8 值；`text.len`（来自 `std/text`）、索引和切片都按 Unicode 码点计算，索引得到 `u32`。字符串支持 `+`、整体 `var` 上的 `+=`、`==` 和大小比较，比较按 UTF-8 字节内容进行，不做 Unicode 正规化。与 `Vec[u8]` 互转需用 `std/text` 的 `bytes` 和 `from_bytes`，后者严格检查 UTF-8，非法时抛出 `text.Error`。暂不支持字符串插值；`const` 字符串只接受编译期能确定的值。
 
 注释写 `// ...` 或 `/* ... */`，块注释不嵌套。常用运算符有 `+ - * / %`、`== != < <= > >=`、`! && ||` 和整数位运算；`%` 只用于整数。
 
@@ -162,9 +164,9 @@ if total == 10 {
 } // total 是 11
 ```
 
-条件必须是 `bool`，`&&` 和 `||` 短路；赋值不是表达式。循环统一使用 `for`，支持三段式、条件式、`for-in` 和无条件循环。`break`、`continue` 会执行实际离开词法块中的 `defer`。
+条件必须是 `bool`，`&&` 和 `||` 短路；赋值不是表达式。循环统一使用 `for`，支持三段式、条件式、`for-in` 和无条件循环。`break`、`continue` 会执行实际离开的词法块里的 `defer`。
 
-自定义 for-in 实现 `std/iter.Iterator[T]`，其 `next(cursor inout Self)` 返回 `std/option.Option[T]`，不抛错。循环对表达式只求值一次，推进私有迭代器副本；引用字段仍共享对象。Some 产生元素，None 结束。见[教程示例](TUTORIAL.cn.md#自定义迭代器)。
+要让自定义类型支持 for-in，需实现 `std/iter.Iterator[T]`，其 `next(cursor inout Self)` 返回 `std/option.Option[T]` 且不抛错。循环对迭代表达式只求值一次，推进私有的迭代器副本；引用字段仍共享对象。Some 产生元素，None 结束。见[教程示例](TUTORIAL.cn.md#自定义迭代器)。
 
 `switch` 没有分支穿透，必须覆盖全部可能值；无法列全时写 `default` 或 `_`。每个分支有自己的作用域。裸标识符模式会建立新绑定，即使外层有同名 `const`，也不会当作常量匹配。
 
@@ -228,7 +230,9 @@ Vec 赋值共享同一个容器，没有隐式深复制；`let` 不禁止修改�
 
 `std/vec` 提供 `empty`、`make`、`len`、`capacity`、`reserve`、`push`、`pop`、`resize` 和 `clear`。`pop` 返回 `Option[T]`；`resize` 变大时用给定值填充，变小时截断；`clear` 保留容量。Vec 赋值共享容器，这些调用会影响所有别名。遍历期间不要 push、pop、resize、clear 或 reserve，只修改已有元素。
 
-`std/box.Box[T]` 是共享的可变值单元；复制 Box 得到同一个单元，`box.get` 读取，`box.set` 替换。`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`，目标已无强引用时得到 `None`。Weak 可以放在 struct、enum、Vec 和泛型值中。接口见 [标准库](STDLIB.md)。
+`std/box.Box[T]` 是共享的可变值单元；复制 Box 得到同一个单元，`box.get` 读取，`box.set` 替换。
+
+`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`，目标已无强引用时得到 `None`。Weak 可以放在 struct、enum、Vec 和泛型值中。接口见 [标准库](STDLIB.md)。
 
 顶层声明：
 
@@ -252,7 +256,9 @@ increment(inout answer);       // answer 是 10
 
 普通参数不消耗调用者的值；返回或保存参数时按其类型复制或保留共享引用。`move` 转移整个拥有值，原绑定在重新初始化前不可读；普通参数不能直接移动，要先建立本地副本。
 
-`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)`、`bump(inout items[0])` 或 `replace(inout holder.items)`。位置可以是数值、bool、只含平凡值的有限 struct/enum，也可以是纯 Woozy 拥有值：Vec、Slice、string、函数值、Weak、dyn trait object、线程/同步运行时句柄和含这些字段的 struct/enum。被调用方可以整体、按字段或按元素替换它们，旧值恰好释放一次；`Task` 和外部 C resource 的 `inout` 仍报 `E_CAPABILITY_UNAVAILABLE`。同一次调用中不同具名字段或可证明不同的字面量索引可以同时借用，重叠路径、整容器访问、动态索引冲突和不属于本地/参数的临时位置会被拒绝；从 `inout` 参数 `move` 出和闭包捕获 `inout` 参数也会拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象；元素 `inout` 借用期间，其他可能携带该容器的实参或未知间接 callee 会保守报错。
+`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)`、`bump(inout items[0])` 或 `replace(inout holder.items)`。位置可以是数值、bool、只含平凡值的有限 struct/enum，也可以是纯 Woozy 拥有值：Vec、Slice、string、函数值、Weak、dyn trait object、线程/同步运行时句柄和含这些字段的 struct/enum。被调用方可以整体、按字段或按元素替换它们，旧值恰好释放一次；`Task` 和外部 C resource 的 `inout` 仍报 `E_CAPABILITY_UNAVAILABLE`。
+
+同一次调用中，不同具名字段或可证明不同的字面量索引可以同时借用；重叠路径、整容器访问、动态索引冲突、不属于本地或参数的临时位置，以及从 `inout` 参数 `move` 出值或由闭包捕获 `inout` 参数，都会被拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象，因此元素 `inout` 借用期间，其他可能携带该容器的实参或未知的间接调用都会保守报错。
 
 方法不会自动移动或取得可写访问。首位 Self 参数声明为 `move` 或 `inout` 时，值调用分别写 `(move value).take()`、`(inout value).change()`；类型名调用则继续明确传入全部参数。
 
@@ -367,7 +373,7 @@ func main() i32 {
 }
 ```
 
-模块由目录中的 `.wz` 文件组成，`app/geometry` 对应源码根下的 `geometry/`；包依赖不能循环。其他导入首段需要在项目清单声明；导入 Python 库也要有对应绑定声明，源码检查不会执行外部库。
+模块由目录中的 `.wz` 文件组成，`app/geometry` 对应源码根下的 `geometry/`；包依赖不能循环。其他导入路径的首段需要在项目清单中声明；导入 Python 库也要有对应绑定声明，源码检查不会执行外部库。
 
 运行示例见 [BUILD.md](../development/docs/BUILD.md)。逐步讲解见 [教程](TUTORIAL.cn.md)，标准库接口和资源规则见 [标准库](STDLIB.md)，数值、共享、错误和清理的完整规则见 [SEMANTICS.md](SEMANTICS.md)。
 

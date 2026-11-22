@@ -34,7 +34,7 @@
 | `model(x)`、`mse_loss/backward/zero_grad/step` | 保持实例调用及真实 autograd；所有普通 Python 失败按 py.Error 传播；无 closure 的 step、zero_grad、backward 返回 Unit |
 | 200 次循环、train 返回和 main | 沿用已实现的整数/循环/throws/清理；train 返回零维真实 Tensor，main 可以忽略它 |
 
-最小范围需要普通外部参数、普通返回、局部持有/赋值和 py.Error catch/传播，以独立小例证明拥有与失败处理。原 04 不使用外部 move/inout、索引、实例数据属性、外部函数值逃逸或外部对象放入 Vec/聚合；这些组合本轮保持 E_CAP，不影响现有非外部 T09 支持。`device` 按绑定声明的 `string` 检查，不新增字面量或设备值限制；设备合法性与 shape、动态 dtype 等由宿主运行时判断，宿主异常按既有 py.Error 处理（`docs/SEMANTICS.md:169`）。CPU 仅是本轮 A08 真实执行、依赖锁定和支持声明的验证范围，不扩大 GPU 验证声明；通用字符串表达式的既有未支持诊断保留，不新增 device 特判。
+最小范围需要普通外部参数、普通返回、局部持有/赋值和 py.Error catch/传播，以独立小例证明拥有与失败处理。原 04 不使用外部 move/inout、索引、实例数据属性、外部函数值逃逸或外部对象放入 Vec/聚合；这些组合本轮继续报 `E_CAPABILITY_UNAVAILABLE`，不影响现有非外部 T09 支持。`device` 按绑定声明的 `string` 检查，不新增字面量或设备值限制；设备合法性与 shape、动态 dtype 等由宿主运行时判断，宿主异常按既有 py.Error 处理（`docs/SEMANTICS.md:169`）。CPU 仅是本轮 A08 真实执行、依赖锁定和支持声明的验证范围，不扩大 GPU 验证声明；通用字符串表达式的既有未支持诊断保留，不新增 device 特判。
 
 不增加 GPU、AMP、DDP、torch.compile、自定义 Module、回调语法、通用迭代或 Tensor 运算符。不得隐式添加 `item/detach/cpu/numpy/clone/copy`，也不将 ndarray/Tensor 转成 Vec/list。语法依据包括精确文件 `baseline/LEXICAL_SYNTAX.md` 第 13 节和 `baseline/samples/README.md` 的“绑定解析约定”；后者不是独立绑定 schema。
 
@@ -55,9 +55,9 @@
 | `return_type/error_type/ownership.return` | 正常值与 throws 分开；Unit/unit、外部引用/python_reference、值/value 必须匹配；错误类型精确到 `lang.py.Error` | 输出值只在成功时产生；错误只在失败时产生并进入既有 ExitPlan；禁止自动 Result 或标量化 |
 | `ownership.storage/effects` | copy、view_or_alias、host_defined、no_tensor_storage 与句柄拥有分开；保存 RNG、修改、保留、autograd、消耗迭代器等声明 | 不自行执行额外复制；有副作用的调用不得删除/重排；`consumes_iterator` 不表示消费源绑定的拥有权 |
 
-语义检查还需拒绝重复 id、未知类型/owner、非法构造归属、错误的返回拥有组合和不可调用目标。相同外部函数名的不同 id 是候选，不当成多个普通符号；确定选择失败用 `E_CALL_ARGUMENT`，类型不匹配用 `E_TYPE_MISMATCH`，坏绑定用 `E_BINDING_INVALID`，遗漏效果用 `E_EFFECT_UNHANDLED`。保留所有旧 code 和 enum 编号。
+语义检查还需拒绝重复 id、未知类型或 owner、非法构造归属、错误的返回拥有组合和不可调用目标。同名外部函数的不同 id 作为重载候选，不当成多个普通符号；无法确定唯一候选时用 `E_CALL_ARGUMENT`，类型不匹配用 `E_TYPE_MISMATCH`，坏绑定用 `E_BINDING_INVALID`，遗漏效果用 `E_EFFECT_UNHANDLED`。所有旧错误码和 enum 编号保持不变。
 
-生成时先按源码顺序保存被调用者和全部实参，再按已选参数的 kind/name 组装位置及关键字；参数名只能来自已验证描述。省略参数不占值槽，不把后面的值误填进空位；无法用宿主调用规则表达的组合在检查时拒绝，不能填 None。
+代码生成时，先按源码顺序保存被调用者和全部实参，再按已选形参的 kind 和 name 组装位置实参与关键字实参；参数名只能来自已验证描述。省略的可选参数不占值槽，不能把后面的值误填进空位；无法用宿主调用规则表达的组合在检查阶段直接拒绝，不能自动补 None。
 
 现有模块测试有刻意精简的旧 JSON：`tests/modules/project_test.cpp`。完整 schema 检查应由 root 指定在正式绑定读取阶段执行，或由 root 更新对应测试格式；不能擅自把旧模块用例解释成完整 T10 绑定，也不能让宽松模块读取替代正式检查。
 
@@ -68,7 +68,7 @@
 1. 将 `Project.bindings` 的原文解析成带绑定项 SourceSpan 的声明表，再在同一个 HirModule 内生成带 TypeId 的外部描述表。保留声明 id、bundle 内容摘要、模块/owner、宿主属性序列、参数限制、返回/错误/拥有/效果。SymbolId 关联导出描述或候选组；类型沿用 ForeignOpaque + binding。会话内 ForeignBindingId 仅用于索引；输出和缓存用契约、模块、稳定 id、内容摘要，不能写裸编号作持久身份。
 2. 在现有 `CalleeKind` 尾部增加所需 foreign 种类，Call 增加选中绑定和省略参数信息，沿用 signature/callee/args。constructor 不新增普通函数符号；Linear 本身也不变成 Function 类型。`model(x)` 的 callee 是 Linear 对象，signature 来自已选 callable 描述。
 3. 在 NodeData/NodeKind 尾部增加一个外部读取节点（暂称 `ForeignRead`）：固定绑定，可选接收者；dtype 读取产出声明值，函数/构造/方法目标读取产出仅供紧邻外部 Call 使用的内部调用目标。后者可用相应 Function TypeId 描述签名，但不能成为本轮可保存/返回的源函数值。方法读取必须先求 receiver，再取方法，随后才求实参；callable 直接持有实例，不取 forward。每次外部读取与实际调用各有自己的 py.Error 出口。
-4. 在 `ValueKind` 尾部追加外部引用及错误载荷所需分类，`needs_drop=true`、`pod_inout=false`；沿用现有 ValueUse、临时、借用、局部和输出记录。内部方法目标需保护其接收者到调用成功/失败，且不得用非捕获函数值的平凡分类跳过保活。具体采用接收者借用还是内部拥有临时，由 root 在同一记录格式内定下。
+4. 在 `ValueKind` 尾部追加外部引用及错误载荷所需分类，`needs_drop=true`、`pod_inout=false`；沿用现有 ValueUse、临时、借用、局部和输出记录。内部方法目标需保护其接收者到调用成功/失败，且不得用非捕获函数值的平凡分类跳过保活。具体采用接收者借用还是内部拥有临时值，由 root 在同一记录格式内定下。
 
 拆开读取与调用，是为了正确处理 `obj.method(arg())`：若取方法已失败，arg 根本不执行；其错误出口不能假设 arg 的 move 或临时已发生。`ForeignRead` 必须有真实源位置、独立失败前缀及清理；被调用者读取也不能藏进求完全部参数后的调用 helper。无需增加通用求值框架。
 
@@ -108,15 +108,15 @@ Python 对象和 Vec 使用不同类型操作。Vec 有语言定义的容器共�
 | 后续实参/取属性/实际调用失败 | 只清理实际完成的临时前缀，结束已开始的借用，再执行离开词法块的 defer 与局部清理；未成功的返回槽不销毁 |
 | py.Error | 新增 runtime 的 Error 载荷，保存原异常类型、消息、cause/traceback、源操作位置；error_payload_copy 复制载荷持有关系，原异常可共享，不复制或重复 take 同一个 TypedError 载体 |
 
-异常桥接只包住已知外部读取/调用，先原样传播内部 TypedError，再捕获普通 Exception，构造稳定类型键 `lang.py.Error` 的 TypedError，并保留原 cause。Panic、KeyboardInterrupt、SystemExit 等 BaseException 不转换，不能用整个生成函数的 except Exception 掩盖生成器错误。Error 作为普通错误载荷也使用 Owner/Frame：传播前保护，catch take 一次，未捕获时 runner 输出可用原因和源位置再 drop；不同生成模块按逻辑类型键匹配。导入缺包/锁不匹配由执行前环境检查报告，不伪装成源码类型错误；源码操作中的宿主失败才按绑定桥接。
+异常桥接只包住已知的外部读取和调用：先原样传播内部 TypedError，再捕获普通 Exception，构造稳定类型键为 `lang.py.Error` 的 TypedError 并保留原 cause。Panic、KeyboardInterrupt、SystemExit 等 BaseException 不做转换，也不能在整段生成函数外层套一个 except Exception 来掩盖生成器自身错误。Error 作为普通错误载荷同样使用 Owner/Frame：传播前保活，进入 catch 时 take 一次，未捕获时由 runner 输出原因和源位置后再 drop；不同生成模块之间按逻辑类型键匹配。导入缺包或版本锁不匹配由执行前环境检查报告，不伪装成源码类型错误；只有源码操作触发的宿主失败才按绑定桥接。
 
-Python 生成/runtime 在现有文件里增加这些处理，并同步 runtime 版本及嵌入文件，不另写一套清理。普通参数重赋值仍 E_CAP；本轮不开放外部 move/inout，已有纯语言 move 规则保持不变。
+Python 生成器和 runtime 在现有文件里补充这些处理，并同步 runtime 版本及嵌入文件，不另写一套清理机制。普通参数重赋值仍报 `E_CAPABILITY_UNAVAILABLE`；本轮不开放外部 move/inout，已有的纯语言 move 规则保持不变。
 
 ## 6. 属性、索引和还未规定的事项
 
-原 04 只需模块导出值和声明的方法取值。`np.float32` 来自 values，`model.parameters` 来自 method，constructor 来自同名类型的 callable；不能用通用 getattr 推断未知成员。根据 INTEROP/BACKENDS，外部属性失败必须计入 py.Error，现有 values 没有 error_type 字段，本轮可由“外部读取可能失败”这条规范固定推导并保存在节点中，无须让用户重新决定。
+原 04 只需要模块导出值和已声明的方法取值。`np.float32` 来自 values，`model.parameters` 来自 method，constructor 来自同名类型的 callable；不能用通用 getattr 推断未知成员。根据 INTEROP/BACKENDS，外部属性失败必须计入 py.Error；现有 values 没有 error_type 字段，本轮按“外部读取可能失败”这条规范固定推导并保存在节点中，无须让用户重新决定。
 
-schema 没有 property getter/setter、getitem/setitem、切片或迭代 next 的声明种类，也没有它们的返回/错误/拥有规则。原 04 不需要这些操作，遇到外部索引或数据属性先 E_CAP，不走 Vec IndexRead/IndexPlace。不能把普通名为 `__getitem__` 的 method 自动当成所有索引规则，也不能假设负下标、切片复制或别名行为。
+schema 尚未定义 property getter/setter、getitem/setitem、切片或迭代 next 的声明种类，也没有规定它们的返回、错误和拥有规则。原 04 不需要这些操作，遇到外部索引或数据属性先报 `E_CAPABILITY_UNAVAILABLE`，不走 Vec IndexRead/IndexPlace。不能把名为 `__getitem__` 的普通 method 自动当成通用索引规则，也不能假设负下标、切片复制或别名行为。
 
 | 问题 | 谁回答、是否影响原 04 |
 | --- | --- |
@@ -143,13 +143,13 @@ schema 没有 property getter/setter、getitem/setitem、切片或迭代 next �
 
 以下全部是后续计划，本次均 `not_run`；不安装依赖或执行训练。
 
-1. **无真实库的静态检查。** 用纯声明 bundle 和原 04 建项目；在无 numpy/torch 的隔离环境令 PATH 中 Python 启动入口记录并失败，检查 check/build 不启动 Python、不导入库、不初始化 GPU。正例含原 04、普通参数保存/返回同一对象、省略 dtype、命名实参乱序；device 按声明的 string 检查，不因字符串内容新增 E_CAP，非 string 参数按类型拒绝；若宿主因设备参数失败，在独立错误测试中核对 py.Error。反例含错 dtype、未知标签/成员、重复/缺参数、位置限定/关键字限定、歧义、漏 throws、外部 inout/索引及 native 使用。断言 code、span、状态，不能只做 syntax-only。
-2. **公共 HIR 的独立正反对照。** 真正由前端生成正例再 verify；保留 builder 和绑定声明别名后修改，已发布包装应不变。破坏绑定/owner/省略/参数次序/读取错误出口和拥有记录，即使重算提交记录也应拒绝；合法不同接收者/不同参数作对照，不能只验证一批坏数据都被拒绝。两端现有 T09/数值/错误测试应继续通过。
-3. **真实依赖 conformance。** 在明确的 CPython 3.12 精确版本和 CPU 环境锁定 NumPy/PyTorch、wheel 来源/sha256、平台与运行时版本。当前 toolchain.lock 只有 Python 3.12.15 等 T00 记录，没有 NumPy/PyTorch 锁；policy 也只要求 T10 实测，不能猜版本。逐项确认 15 个 callable 的参数/省略/返回与错误、2 个 dtype 值、构造和身份；DTypeSpec/ParameterIterator 是 opaque_protocol，不要求宿主存在同名类；不能误用 isinstance(np.float32, np.dtype) 检查 DTypeSpec。确认无 closure 的 step 以及其他 Unit 操作真实返回 None。失败留在 draft，不计 passed。
-4. **从原源码生成并执行。** 临时项目原样复制 04 并核对摘要，使用 root 配置的 std 及明确绑定；运行真实 `woozyc check/build --backend python`，再用锁定解释器执行输出的 `program.py`。CLI 当前不保存 `Output.symbols`；测试辅助程序可经真实前端和 emitter API 读取它来定位生成 train，核对其生成代码与 CLI 输出一致，再调用同一个 CLI 生成模块；不能假设已存在导出名或新 CLI 参数，也不修改原 train。分别记录生成摘要、命令、退出码、stdout/stderr 和环境。手写 `numpy_torch_reference.py` 单独执行作为对照，不能复制为生成结果。
-5. **A08 的独立观察。** 数据 `(128,1)/float32`，满足 y=2x+1；seed=7、Linear(1,1)、CPU、lr=0.1，200 次 backward、step 和 zero_grad，201 次模型调用，hook 确实执行，参数确实更新。返回真实零维 CPU float32 Tensor，requires_grad/grad_fn 符合 autograd；loss 有限、非负、较初始下降且 `<1e-3`；与参考最终 loss 按 `rtol=1e-5, atol=1e-6` 比较。数值读取只在测试端显式进行。用只读观察夹具/宿主 hook 取得数据和次数，不改生成函数逻辑；移除 hook 会失败的独立断言证明不会把 forward 误认成实例调用。
-6. **独立对象与错误小例。** 由 `.wz` 生成普通参数回传/本地保存，宿主检查 is 和原地修改的可见效果；验证 ndarray view 共享存储、显式 tensor 导入复制、返回 loss 保留图。用测试专用声明/宿主夹具测试 receiver→属性→实参顺序、后续实参失败、构造失败、cause/traceback/span、catch 前清理和跨生成模块错误匹配；另测内部 TypedError、Panic、KeyboardInterrupt、SystemExit 不被二次包装。夹具不冒充真实 NumPy/PyTorch conformance 或训练。
-7. **输出失败保留旧文件。** schema/类型/能力/verify/emit 失败或取消时不产生 Output、不触碰已有 program.py/langrt.py。root 在写入阶段用暂存和回滚保护旧内容，测试先放已知旧文件，注入写入及第二次替换失败，核对旧摘要；新目录失败无成功文件。现有代码尚无进程中止后的成组恢复保证，若要求覆盖该故障，root 需另补恢复并验证；不把它写成已实现。运行失败也不删除已有编译输出。
+1. **无真实库的静态检查。** 用纯声明 bundle 和原 04 构建项目；在未安装 numpy/torch 的隔离环境中，把 PATH 里的 Python 启动入口替换为“记录调用并失败”的替身，确认 check/build 不会启动 Python、不导入库、不初始化 GPU。正例涵盖原 04、普通参数保存或返回同一对象、省略 dtype 和乱序命名实参；device 按声明的 string 检查，不因字符串内容新增 `E_CAPABILITY_UNAVAILABLE`，非 string 参数按类型拒绝；宿主因设备参数失败的情况则在独立错误测试中核对 py.Error。反例涵盖错误 dtype、未知标签或成员、重复/缺少参数、位置限定/关键字限定违规、重载歧义、遗漏 throws、外部 inout/索引以及 native 后端使用。每项都断言错误码、span 和状态，不能只做 syntax-only。
+2. **公共 HIR 的独立正反对照。** 由前端真实生成正例再送入 verify；保留 builder 和绑定声明别名后对其进行修改，确认已发布的只读包装不受影响。篡改绑定、owner、省略参数、参数次序、读取错误出口或拥有记录后，即使重新计算提交记录也必须拒绝；同时用合法的不同接收者和不同参数作为正对照，避免只测坏数据被拒绝。两端现有的 T09、数值和错误测试也应继续通过。
+3. **真实依赖 conformance。** 在明确的 CPython 3.12 精确版本和 CPU 环境下锁定 NumPy/PyTorch、wheel 来源及 sha256、平台与运行时版本。当前 toolchain.lock 只有 Python 3.12.15 等 T00 记录，没有 NumPy/PyTorch 锁；policy 也只要求 T10 实测，不能靠猜测填版本。逐项验证 15 个 callable 的参数、省略、返回与错误，以及 2 个 dtype 值、构造和对象身份；DTypeSpec/ParameterIterator 是 opaque_protocol，不要求宿主存在同名类，也不能误用 isinstance(np.float32, np.dtype) 检查 DTypeSpec。同时确认无 closure 的 step 及其他 Unit 操作确实返回 None。验证失败的绑定留在 draft，不计为 passed。
+4. **从原源码生成并执行。** 在临时项目中原样复制 04 并核对摘要，使用 root 配置的 std 和显式绑定；运行真实的 `woozyc check/build --backend python`，再用锁定解释器执行输出的 `program.py`。由于 CLI 目前不保存 `Output.symbols`，测试辅助程序可通过真实前端和 emitter API 读取它来定位生成的 train，核对其生成代码与 CLI 输出一致后再调用同一份 CLI 生成模块；不能假设已存在固定导出名或新 CLI 参数，也不修改原 train。分别记录生成摘要、命令、退出码、stdout/stderr 和环境。手写 `numpy_torch_reference.py` 单独运行作为对照，不能直接充当生成结果。
+5. **A08 的独立观察。** 输入数据为 `(128,1)/float32`，满足 y=2x+1；使用 seed=7、Linear(1,1)、CPU、lr=0.1，执行 200 次 backward、step 和 zero_grad、201 次模型调用，并确认 hook 实际执行、参数实际更新。返回值必须是真实零维 CPU float32 Tensor，requires_grad/grad_fn 符合 autograd；loss 有限、非负、低于初始值且 `<1e-3`，与参考最终 loss 按 `rtol=1e-5, atol=1e-6` 比较。数值读取只在测试端显式完成，通过只读观察夹具或宿主 hook 收集数据和调用次数，不改生成函数逻辑；另加一条独立断言，移除 hook 时必须失败，以此确认没有把 forward 误认成实例调用。
+6. **独立对象与错误小例。** 由 `.wz` 生成普通参数回传和本地保存用例，在宿主侧检查 is 身份和原地修改是否可见；验证 ndarray view 共享存储、显式 tensor 导入会复制数据、返回的 loss 保留计算图。用测试专用声明和宿主夹具验证 receiver→属性→实参的求值顺序、后续实参失败、构造失败、cause/traceback/span、catch 前清理以及跨生成模块错误匹配；另测内部 TypedError、Panic、KeyboardInterrupt 和 SystemExit 不会被二次包装。这类夹具只测机制，不冒充真实 NumPy/PyTorch conformance 或训练。
+7. **输出失败保留旧文件。** schema、类型、能力、verify 或 emit 失败或被取消时，不产生 Output，也不触碰已有的 program.py/langrt.py。root 在写入阶段用暂存和回滚保护旧内容；测试先放入已知旧文件，分别注入写入失败和第二次替换失败后核对旧摘要，并确认在新目录中失败时不会留下成功文件。现有代码尚不保证进程突然中止后的成组原子恢复，如果要求覆盖此类故障，需由 root 另行补齐并验证，不能写成已实现。运行失败也不得删除已有的编译输出。
 
 每条记录按 ACCEPTANCE 使用 passed/failed/skipped/not_run/unsupported；没有真实依赖时集成为 not_run，T10 不完成。只有原 04 的真实生成程序、锁定依赖 CPU 执行、独立对象/错误正反对照及现有相关测试均通过后，root 才能标记所声明的 T10 子集完成。
 

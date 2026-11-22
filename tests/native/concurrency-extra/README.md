@@ -31,9 +31,9 @@ Both use `CLOCK_MONOTONIC` absolute deadlines. Each retry recomputes the
 remaining duration, so EINTR/EAGAIN/spurious wakeups do not restart the full
 timeout. Huge positive values saturate at a kernel-safe futex duration.
 
-`lang_thread_wait_v1` is now the same implementation with timeout `-1`, and
-`lang_condvar_wait_v1` the same implementation with timeout `-1`; their old
-observable behavior is unchanged.
+`lang_thread_wait_v1` and `lang_condvar_wait_v1` now delegate to their
+`_wait_for_v1` counterparts with timeout `-1`; their existing observable
+behavior is unchanged.
 
 ## Wz integration status: not_run
 
@@ -71,7 +71,7 @@ python3 tests/native/concurrency-extra/run.py \
   --clang /path/to/clang++
 ```
 
-The driver checks O0/O2, static ELF (no `INTERP`/`NEEDED`), normal exits,
-expected misuse Panics (`LANG_NATIVE_PANIC:v1:runtime-handle-misuse`),
-compiles/runs `runtime_timeout_test.cpp` at O0 and O2, and builds/runs
-`static_timeout_fixture.cpp` with `-nostdlib -static` at O0 and O2.
+At both O0 and O2, the driver checks static ELFs (no `INTERP`/`NEEDED`), normal
+exits, and expected misuse Panics (`LANG_NATIVE_PANIC:v1:runtime-handle-misuse`);
+it also builds and runs `runtime_timeout_test.cpp` and the `-nostdlib -static`
+`static_timeout_fixture.cpp`.

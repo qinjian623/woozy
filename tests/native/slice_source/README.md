@@ -45,8 +45,8 @@ python3 tests/native/slice_source/run_slice_source.py \
 
 Candidate mode runs the Wz driver (`load -> resolve -> check -> lower ->
 snapshot -> dump -> emit`) and then the fixed LLVM `verify -> opt -> verify ->
-llc` steps.  It counts **147** top-level commands: the original 107 logic plus
-40 new fixed LLVM commands (10 verify-before, 10 opt, 10 verify-after, 10 llc).
+llc` steps.  It counts **147** top-level commands: the original 107 commands plus
+40 fixed LLVM commands (10 verify-before, 10 opt, 10 verify-after, 10 llc).
 The Wz entry build is a separate one-command build with a 1800s budget.
 
 ## Wz entry builder
@@ -61,12 +61,11 @@ the O2 binary with SHA-256
 the earlier O0 driver `430ae2f6...` is a historical prefix only, not the final
 result.  `--skip-build` validates that report and the sealed component without
 rebuilding.  The builder pins the 116-file ed1 Source map and the fixed
-37-file stdlib; it does not change the historical nativeobs builder.  After the
-build process returns, the known process record is persisted before resource
-hashing, artifact reads, or strict build-JSON checks.  A later failure
-therefore leaves `process` populated with exact exit, the three cleanup
-booleans, raw bytes/SHA, argv, cwd, and actual timeout instead of
-`status:running` with `process:null`.
+37-file stdlib; it does not change the historical nativeobs builder.  After the build process returns, the builder persists the process record before
+hashing resources, reading artifacts, or running strict build-JSON checks.  If a
+later step fails, `process` still holds the exact exit code, the three cleanup
+booleans, raw stdout/stderr bytes and SHA-256 digests, argv, cwd, and actual
+timeout instead of `status:running` with `process:null`.
 
 ## Assertions retained
 
@@ -82,8 +81,8 @@ booleans, raw bytes/SHA, argv, cwd, and actual timeout instead of
   asserted.
 - 11 Panic fixtures at O0/O2: normal exit 101, original cause
   (`active-iteration`, `vec-index`, `vec-slice`), empty stdout.
-- 3 Native type rejections: normal native int exit 1, strict JSON
-  `status:error`, original `E_TYPE_MISMATCH`, no program.  Strict parsing
+- 3 Native type rejections: normal integer exit 1, strict JSON
+  `status:error`, original `E_TYPE_MISMATCH`, and no program.  Strict parsing
   rejects `NaN`, `Infinity`, `-Infinity`, and exponent overflow such as
   `1e1000` at any nesting depth; normal finite zero/negative/positive
   decimals remain valid.
@@ -128,13 +127,13 @@ final reference107, final candidate147) plus **2 component builds**, for
 python3 -B tests/native/slice_source/test_controls.py
 ```
 
-The pure controls install spawn/exec/socket guards before importing the
-runner and builder, and do not launch any external process.  They cover the
-original exact int exit/flags, rejection signal/timeout/launch-failure, strict
-finite JSON (including exponent overflow), trace loss, missing four IR files,
-weak observer evidence, the explicit fresh-output guard, legacy repeat
-subdirectories, invalid timeouts, and actual mocked builder main failures for
-malformed/error/non-finite/fake success plus preservation of a known process
-after a later resource error.
+The pure controls install spawn, exec, and socket guards before importing the
+runner and builder, so they launch no external processes.  They check exact
+integer exit codes and cleanup flags, signal/timeout/launch failures on
+rejection cases, strict finite JSON parsing (including exponent overflow), lost
+strace output, missing IR files (all four), weak observer evidence, the explicit
+fresh-output guard, legacy repeat subdirectories, invalid timeouts, mocked
+builder main failures (malformed, error, non-finite, or fake-success JSON), and
+persistence of a recorded process after a subsequent resource error.
 
 Root review: new and sealed builds use the same finite JSON success check and require empty diagnostics. Sixteen pure tests cover non-empty error diagnostics and malformed saved stdout with missing or true build_json_ok; historical build reports are not rewritten.

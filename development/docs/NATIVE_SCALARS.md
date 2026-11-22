@@ -1,19 +1,18 @@
 # T05 原生标量实现与交接
 
-本文保留此前阶段记录。当前 Vec、拥有字段及 move 执行范围见 [T09_EXECUTION.md](T09_EXECUTION.md)。
+本文保留此前各阶段的开发记录。当前 Vec、拥有字段及 move 的执行范围见 [T09_EXECUTION.md](T09_EXECUTION.md)。
 
-原生严格f32/f64四则、负号、六种比较和复合赋值已实现，见
-[浮点执行说明](../tests/native/STRICT_FLOAT.md)。原76探针及两个baseline副本已实际执行。
-当前三种完整构建各34/34、LLVM关闭26/26；后文保留各开发阶段的记录。
+原生严格 f32/f64 的四则运算、一元负号、六种比较和复合赋值已实现，见
+[浮点执行说明](../tests/native/STRICT_FLOAT.md)。原 76 项探针及两个 baseline 副本均已实际执行。
+当前三种完整构建各 34/34 通过，关闭 LLVM 构建为 26/26；后文保留各开发阶段的历史记录。
 
-原生后端已支持typed throws/catch和词法块defer，见
-[错误与清理执行说明](../tests/native/T08_EXECUTION.md)。throws函数采用成功位和
-分别保存正常值、错误值的输出参数，入口未处理错误打印稳定类型键并退出1。
-运行库原接口`lang-native-scalars/1`保留。以下聚合、字符串和标量小节保留各阶段记录。
+原生后端已支持 typed throws/catch 和词法块 defer，见
+[错误与清理执行说明](../tests/native/T08_EXECUTION.md)。throws 函数使用成功位，并分别用输出参数保存正常值和错误值；入口未处理的错误会打印稳定类型键并退出 1。
+运行库原有接口 `lang-native-scalars/1` 保持不变。下文聚合、字符串和标量小节保留对应阶段的记录。
 
-常量字符串已支持UTF-8字面量、局部复制/重新绑定及普通参数/返回，见
-[字符串实现](CONSTANT_STRINGS.md)。三种完整构建各28/28，关闭LLVM22/22；
-该字符串阶段未实现动态字符串、ARC或严格浮点；后续浮点执行结果见上方说明。
+常量字符串已支持 UTF-8 字面量、局部复制/重新绑定及普通参数/返回，见
+[字符串实现](CONSTANT_STRINGS.md)。该阶段三种完整构建各 28/28 通过，关闭 LLVM 为 22/22；
+当时未实现动态字符串、ARC 或严格浮点，后续浮点执行结果见上方说明。
 
 
 ## 2026-11-04：平凡值 struct/enum
@@ -78,21 +77,13 @@ enum-eval-order、finite-function-field、function-fields。
 工作区外的两套逐项 JSON。另对同一对象使用 Clang/LLD 22.1.8 独立链接、执行，
 并核对与 CLI 生成程序完全相同的退出值及 stdout/stderr。
 
-主代理已合并共享检查，并把 sema.t07 改为按实际 backend/word_bits 创建聚合
-程序。native单独集成时接受native、拒绝Python；Python集成后两端均接受。
-native阶段GNU Debug、GNU Release和Clang22
-ASan/UBSan完整CTest各25/25通过，无排除项。另加入宽整数嵌套泛型enum复制和
-函数字段改写两个项目，各构建O0/O2通过。原27个fixtures和cases.json未改。
-agent原始共享补丁和预期补丁保留在外层reviews/，未作为源文件提交。
-主代理的实际运行记录保存在外层checks/t07-native-pod-root-verification.json。
-两后端合并后完整CTest各26/26，源码比较记录另见外层
-checks/t07-pod-backend-comparison.json；运行库、ARC及严格浮点运算的限制仍然保留。
+主代理已合并共享检查，并将 sema.t07 改为按实际的 backend/word_bits 创建聚合程序。
+仅集成 native 时接受 native、拒绝 Python；Python 后端也集成后两端均接受。
+native 阶段下，GNU Debug、GNU Release 和 Clang22 ASan/UBSan 的完整 CTest 各 25/25 通过，无排除项；另新增宽整数嵌套泛型 enum 复制和函数字段改写两个项目，各构建的 O0/O2 均通过。
+原有 27 个 fixtures 和 cases.json 未改动。agent 的原始共享补丁和预期补丁保留在外层 reviews/，未作为源文件提交；主代理的实际运行记录保存在外层 checks/t07-native-pod-root-verification.json。
+两后端合并后完整 CTest 各 26/26 通过，源码比较记录见外层 checks/t07-pod-backend-comparison.json；运行库、ARC 及严格浮点运算的限制维持不变。
 
-首轮检查记录与修正后的结果分别保留：首轮新增样例误用了浮点一元负号和
-缺括号的函数返回类型，capability 也误拒既有裸字符串 HIR 测试；这一次修正
-只调整新增样例，并将字符串拒绝限定到拥有字段。裸字符串 HIR 既有验证行为
-保持不变，native emitter 仍拒绝字符串生成。首次 CMake 选中 3.12.14 后，
-通过 LANG_PYTHON312 指定已有的 3.12.15；未修改 Python 安装或测试预期。
+首轮检查记录与修正后的结果分开保留：首轮新增样例误用了浮点一元负号和缺少括号的函数返回类型，capability 检查也误拒了既有的裸字符串 HIR 测试。此次修正只调整新增样例，并将字符串拒绝限定在拥有字段上；裸字符串 HIR 的既有验证行为不变，native emitter 仍拒绝字符串生成。首次 CMake 选中了 3.12.14，随后通过 LANG_PYTHON312 指定已有的 3.12.15，未改动 Python 安装或测试预期。
 
 以下保留先前阶段的接口与检查记录。
 
@@ -100,12 +91,12 @@ operation_id：`language-t05-native-scalars-20261103`。契约：`compiler-dev/1
 基础 HEAD：`b8ccf384a16e85141994995fe1869fd5fc084100`。
 
 2026-11-04：root 已接入正式 `woozyc build --backend native --out-dir DIR --opt 0|2`，
-输出 program.o 和 program，构建不运行程序。GNU Debug、GNU Release、Clang22
-ASan/UBSan 各21/21组测试通过，包含正式CLI的34次主项目执行和2次普通返回7对照。
-组件的独立62次ELF执行另有记录；两组数字不重复合计为不同源码数。
+输出 program.o 和 program，构建阶段不运行程序。GNU Debug、GNU Release 与 Clang22
+ASan/UBSan 各 21/21 组测试通过，其中包括正式 CLI 的 34 次主项目执行和 2 次普通返回 7 对照。
+组件独立的 62 次 ELF 执行另行记录，两组数字不合并计作不同源码数。
 
-本文件下方保留组件实现和早期验证记录。T05整项仍为in_progress，
-简单结构体和常量字符串需在T07接口发布后补齐。
+下文保留组件实现和早期验证记录。此时 T05 整体仍为 in_progress，
+简单结构体和常量字符串留待 T07 接口发布后补齐。
 
 ## 2026-11-04：T07 具体标量实例
 
@@ -153,11 +144,10 @@ nested-copy、enum-empty、enum-payload、field-evaluation-order）在 O0/O2 各
 覆盖 callee 只求值一次且先于实参、命名实参源码顺序、inout 转传、整数回绕、
 除法/移位/转换 Panic 和无 Panic 的普通非零返回。
 
-本次 GNU 16.2.1 Debug 与 Release 各 22/22 CTest passed，包含 native.ir、
-native.llvm、native.cli、native.generics、sema.t07；显式排除旧 python.projects
-分类错误，由另一任务处理，本次记为 not_run。Clang ASan/UBSan 留给 root 统一运行，
-本次未运行。T05/T07 整项状态不变；聚合、字符串、ARC、foreign 和严格浮点执行
-不在本次实现范围内。
+本次 GNU 16.2.1 Debug 与 Release 各 22/22 项 CTest 通过，包含 native.ir、
+native.llvm、native.cli、native.generics 和 sema.t07；旧的 python.projects 存在分类错误并交由另一任务处理，本次显式排除并记为 not_run。Clang ASan/UBSan 留给 root 统一执行，
+本次未运行。T05/T07 整体状态不变；聚合、字符串、ARC、foreign 和严格浮点执行
+不在本次范围内。
 
 复现命令（`tc` 由调用者指定为已有外层 toolchains，不安装软件）：
 
@@ -172,15 +162,15 @@ ctest --test-dir /tmp/language-native-t07-debug --output-on-failure \
   -E '^python.projects$'
 ```
 
-Release 使用独立目录及 `-DCMAKE_BUILD_TYPE=Release`。实际命令、构建日志、完整
-CLI 参数与输出留在 `/tmp/language-native-t07-{debug,release}*`；每套的
+Release 使用独立目录和 `-DCMAKE_BUILD_TYPE=Release`。实际命令、构建日志及完整
+CLI 参数与输出留在 `/tmp/language-native-t07-{debug,release}*`；每套构建的
 `tests/native/{cli-results,generic-results}/results.json` 保存完整执行记录。
-原worktree的 `tests/native/generic-results.json` 已保留在外层
-checks/t07-native-worker-report.json，含源码SHA-256、ELF检查和执行结果，未加入源代码仓库。
+原 worktree 的 `tests/native/generic-results.json` 已保留在外层
+checks/t07-native-worker-report.json，包含源码 SHA-256、ELF 检查和执行结果，未提交到源代码仓库。
 
-主代理合并两后端后，GNU Debug、Release和Clang22 ASan/UBSan完整测试各24/24通过，
-不再排除Python项目。7个公共源码的O0/O2及Python结果一致，另交叉运行两后端的
-6个附加源码，均符合预期。记录见外层checks/t07-native-python-comparison.json。
+主代理合并两后端后，GNU Debug、Release 和 Clang22 ASan/UBSan 的完整测试各 24/24 通过，
+不再排除 Python 项目。7 个公共源码在 O0/O2 和 Python 下的结果一致，另交叉运行了两后端的
+6 个附加源码，均符合预期。记录见外层 checks/t07-native-python-comparison.json。
 
 ## API 与 CMake
 
@@ -212,7 +202,7 @@ add_subdirectory(src/backend/native)
 ```
 
 该片段定义 `lang_native_ir`、`lang_native`、`lang_native_runtime` 和
-`lang_native_helper`。LLVM 只出现在 native 目标中；`woozyc` 链接前端、Python发射器和进程工具，不链接LLVM或CPython。
+`lang_native_helper`。LLVM 只链接到 native 目标中；`woozyc` 链接前端、Python 发射器和进程工具，不链接 LLVM 或 CPython。
 不应把 lang_native 链接到 check 或未来的 LSP 目标。
 
 helper 的参数：
@@ -226,15 +216,15 @@ lang_native_helper --project MANIFEST
 lang_native_helper --project MANIFEST --check-only [--format json]
 ```
 
-默认入口为入口模块中的 main；名字选择发生在 helper 这个调用者内，库只接收 ID。
-helper 明确选择 native 后端，保留清单字宽。每次进程只执行一次真实
-load/resolve/check，再执行 lower/verify/LLVM/对象输出；没有 HIR 跨进程序列化。
-`--check-only` 只报告静态结果，不声称后端支持该字宽。生成成功的 JSON 标记
-`phase=object`，链接和执行由调用者完成。诊断写 stderr，退出码采用共享 PhaseResult；
-输出写入失败为 `E_INPUT_IO`/2。
+默认入口是入口模块中的 main；按名字查找入口在 helper 调用侧完成，库接口只接收 ID。
+helper 显式指定 native 后端并保留清单字宽。单次进程只执行一次完整的
+load/resolve/check，随后执行 lower/verify/LLVM/对象输出，不做 HIR 跨进程序列化。
+`--check-only` 只报告静态检查结果，不表示后端支持对应字宽。生成成功时 JSON 标记
+`phase=object`，链接和执行由调用方负责。诊断输出到 stderr，退出码沿用共享 PhaseResult；
+输出文件写入失败返回 `E_INPUT_IO`/2。
 
-正式 build CLI 通过 helper 的 --out-dir 模式生成并链接；显式对象输出模式仍供测试使用。
-build 默认不执行程序；执行步骤属于本测试 runner。
+正式 build CLI 通过 helper 的 --out-dir 模式完成生成和链接，显式对象输出模式保留给测试使用。
+build 默认不运行产物，执行步骤由测试 runner 负责。
 
 ## 实现规则
 
@@ -433,22 +423,22 @@ build/native-cli/woozyc build --project tests/fixtures/core/lang.toml \
 build/core/native/program
 ```
 
-默认O0；目标仅支持 x86_64-unknown-linux-gnu。正式模式输出共享诊断JSON，
-对象私有模式仍保留先前元信息格式。helper 和链接器通过直接argv调用，
-临时文件在同一输出目录创建，程序最后替换；源码错误不修改已有输出。
-独立审查发现第二次替换失败时旧object可能被覆盖，已补目的文件类型检查和旧文件备份。
-第二次替换报错会恢复旧object；没有旧object时移除新文件。恢复失败保留备份并报告位置。
-Python的同类发布代码一并修复。两个后端各3项实际文件替换故障测试通过，含恢复失败；
-这不保证进程被中断或掉电时两个文件同时替换。
+默认优化等级为 O0，目标仅支持 x86_64-unknown-linux-gnu。正式模式输出共享诊断 JSON，
+私有对象输出模式沿用先前的元信息格式。helper 和链接器均通过 argv 直接调用；
+临时文件在同一输出目录创建，最终再替换目标程序，源码报错不会改动已有输出。
+独立审查发现第二次替换失败时可能覆盖旧 object，现已补充目标文件类型检查和旧文件备份：
+第二次替换失败时会恢复旧 object（原本不存在则删除新文件），若恢复失败则保留备份并报告路径。
+Python 后端的同类发布逻辑已一并修复。两个后端各 3 项文件替换故障测试通过（含恢复失败场景）；
+这套机制不保证进程被强制中断或掉电时两个文件原子同步替换。
 
-主目录实际报告位于外层 checks/t05-native-cli-verification.json；
-独立对象测试位于 checks/t05-root-runtime-verification.json。
-上文 tests/native/verification.json、ctest.json 和 first-run-failures.json 为
-原组件worktree的历史记录，没有复制进源代码仓库。
+主目录的实际报告位于外层 checks/t05-native-cli-verification.json，
+独立对象测试报告位于 checks/t05-root-runtime-verification.json。
+前文提到的 tests/native/verification.json、ctest.json 和 first-run-failures.json 属于
+原组件 worktree 的历史记录，未复制到源代码仓库。
 
-集成的首次ASan构建暴露运行库误继承编译器检查选项，造成 __asan_* 和 __ubsan_*
-链接未定义。已对生成程序使用的运行库设置 -fno-sanitize=all，
-编译器、helper、HIR/CFG和发射器继续检查；重新运行21/21通过。
-预编译LLVM、目标程序和该运行库不包含在ASan覆盖声明内，LeakSanitizer未运行。
+集成后的首次 ASan 构建暴露出运行库误继承编译器检查选项的问题，导致链接时报 __asan_* 和 __ubsan_*
+未定义。现已为目标程序链接的运行库单独设置 -fno-sanitize=all，
+编译器、helper、HIR/CFG 和发射器仍保留 sanitizer 检查，重跑 21/21 通过。
+预编译 LLVM、生成的目标程序和该运行库不在 ASan 覆盖范围内，LeakSanitizer 未运行。
 
-待完成：T07发布后接入简单聚合与静态字符串，继续明确拒绝尚未实施的操作。
+待完成：T07 发布后接入简单聚合与静态字符串，其余尚未实施的操作继续明确拒绝。

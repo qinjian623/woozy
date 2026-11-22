@@ -8,9 +8,9 @@ root_evidence_correction_count: `1`
 
 本目录保存 T09 的独立源码项目、静态/运行预期和当前执行的入口。`cases.json` 的 `schema` 字段只是数据格式标签。初版 18 个项目的历史检查记录保留在 `current_check`；2026-11-09 追加 13 个经过 Vec 的递归值项目，原 18 份源码和 manifest 未改。
 
-初版 task 已 rejected，不作为 accepted dependency。初版 root 证据审查后只做一次修正：`defer-before-destroy` 使用显式 `i64(values[0])`；`for-in-element-copy` 增加写后 `value` 断言并让首轮修改后续槽。其余 16 份源码和 18 份 manifest 与初版快照逐字一致。
+初版任务已被退回，不作为已接受依赖。初版 root 证据审查后只做了一次修正：`defer-before-destroy` 使用显式 `i64(values[0])`；`for-in-element-copy` 增加写后 `value` 断言，并让首轮修改后续槽。其余 16 份源码和 18 份 manifest 与初版快照逐字一致。
 
-当前 32 个项目的 `expected_static` 由 `sema.t09` 实际执行；Native 和 Python ownership runner 读取同一清单，构建/运行、真实 alloc/free 与语言引用计数观察由 `native.ownership`、`python.ownership` 执行。新增 `recursive-for-in-early-exits` 检查递归元素遍历的 continue、break、return 和 typed throw。`recursive-generic-growth` 以固定预算 `E_CAPABILITY_UNAVAILABLE` 拒绝；三个无限按值布局项目保持 `E_TYPE_MISMATCH`；`recursive-cycle-retained` 不要求零存活，必须单独观察语言 refs 保持非零。
+当前 32 个项目的 `expected_static` 由 `sema.t09` 实际执行；Native 和 Python ownership runner 读取同一清单，由 `native.ownership` 和 `python.ownership` 执行构建、运行、真实 alloc/free 以及语言引用计数观察。新增 `recursive-for-in-early-exits` 检查递归元素遍历的 continue、break、return 和 typed throw。`recursive-generic-growth` 按固定预算报 `E_CAPABILITY_UNAVAILABLE` 拒绝；三个无限按值布局项目保持 `E_TYPE_MISMATCH`；`recursive-cycle-retained` 不要求零存活，必须单独观察语言 refs 保持非零。
 
 ## 布局与计数
 
@@ -52,7 +52,7 @@ tests/ownership/
 - `docs/BACKENDS.md` §5 ARC 与原生运行库接口、§6 Python 降级要求；
 - `DEVELOPMENT.md` D10（Vec 共享引用）与阶段未覆盖使用 `E_CAPABILITY_UNAVAILABLE`。
 
-没有使用未冻结的标准库方法名。Vec 的长度修改 API 名称没有在冻结规范中给出，本目录不发明 `push`、`append`、`truncate` 等源 API；活跃遍历长度修改的正例和“修改前 Panic”反例留作 TODO，见 `observation_policy.length_modification`。
+本目录不使用未冻结的标准库方法名。由于冻结规范未给出 Vec 长度修改 API 的名称，这里不发明 `push`、`append`、`truncate` 等源 API；活跃遍历期间修改长度的正例和“修改前 Panic”反例留作 TODO，见 `observation_policy.length_modification`。
 
 ## 正例的未来预期
 
@@ -126,9 +126,9 @@ woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend python 
 | 未来 native/Python 生成与执行 | `not_run` |
 | 未来 drop/retain/release 计数与顺序 | `not_run` |
 
-当前完整 check 的 native/python 各 18 个 `E_CAPABILITY_UNAVAILABLE` 都发生在文件中的第一个 `Vec` 类型，不是未来反例的预期诊断，也不是正例的所有权通过。不得据此把任何案例标成 T09 已实现或运行通过。`cases.json` 的 `current_check` 记录 native；逐项 Python 原始输出在 `/tmp/language-t09-ownership-fixtures-correction-20261104/checks.json`。
+当前完整 check 在 native 和 python 两侧各报 18 个 `E_CAPABILITY_UNAVAILABLE`，都停在文件中的第一个 `Vec` 类型，既不是未来反例的预期诊断，也不是正例的所有权通过，不能据此把任何案例标成 T09 已实现或运行通过。`cases.json` 的 `current_check` 记录 native；逐项 Python 原始输出在 `/tmp/language-t09-ownership-fixtures-correction-20261104/checks.json`。
 
-两处修正只解决普通 i64/i32 显式转换和加强 for-in 的可观察断言；它们通过语法检查且未来预期自洽，**不代表 Vec、所有权、后端或运行已经实现**。
+两处修正只补齐了普通 i64/i32 显式转换并加强了 for-in 的可观察断言，它们通过语法检查且未来预期自洽，**不代表 Vec、所有权、后端或运行已经实现**。
 
 ## 析构、retain/release 与未观测项
 
@@ -144,11 +144,11 @@ woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend python 
 
 1. Vec 长度修改方法的名称未冻结：没有写 `push`、`append`、`truncate`、`remove` 等调用；活跃遍历中“修改长度必须在修改前 Panic”的正例/反例留作 TODO。
 2. 冻结文本只说 Vec 索引是“非负整数”，没有单独冻结索引表达式的具体整数类型；`for-in-element-copy` 和 `panic-vec-index` 使用 `i32` 动态索引。如果 T09 接口决定只接受某一具体整数类型，应先更新规范并复核这两个案例，不静默改预期。
-3. 普通参数借用不可直接 move 尚无固定专用诊断，其 code 为 null；5个已移动绑定反例已使用既有 E_OWNERSHIP_USE_AFTER_MOVE，不把已公布的码误列为缺项。
+3. 普通参数借用不可直接 move 尚无固定专用诊断，其 code 为 null；5 个已移动绑定反例沿用既有 E_OWNERSHIP_USE_AFTER_MOVE，不把已公布的码误列为缺项。
 4. 没有单独的 enum 活动 payload 销毁或“部分构造失败只逆序销毁已完成成员”项目；这需要能在构造实参中抛错并观察已完成成员 drop 的运行期支持，留作后续测试。
-5. 没有单独覆盖 A07 的借用逃逸、同一存储同时作为 inout 与另一访问、受限借用期间销毁或移动拥有者；本批 18 例优先用户指定的 Vec/move/defer/error/Panic 主路径。
+5. 没有单独覆盖 A07 的借用逃逸、同一存储同时作为 inout 与另一访问、受限借用期间销毁或移动拥有者；本批 18 例优先覆盖用户指定的 Vec/move/defer/error/Panic 主路径。
 6. 初版 18 例没有 runtime 记录；2026-11-09 的递归值批次已由 Native/Python runner 实际执行并记录 alloc/free、drop 元素逆序和语言 refs。初版案例也随之由同一 runner 覆盖，但历史 `current_check` 仍只表示 `e808169` 的拒绝结果。
 7. 有意保留的语言强引用自环已由专用进程/observer 覆盖；没有实现循环回收、弱引用、线程、捕获闭包或外部 Python/C++ 对象所有权。自环结果不能写成“已回收”或“GC 已实现”。
-8. 没有把当前 `E_CAPABILITY_UNAVAILABLE` 当作未来语义通过，也没有为适应当前 checker 修改未来预期或规范。
+8. 没有为迁就当前 checker 修改未来预期或规范，也不把当前 `E_CAPABILITY_UNAVAILABLE` 当作未来语义通过。
 
-root 集成补充：诊断码采用既有公开定义，18份源码与修正交付逐字一致；独立复核及实际检查保存在外层 checks/t09-fixtures-root/correction/ 和 checks/t09-fixtures-independent/。源码数值、事件及生命周期目标仍未执行。
+root 集成补充：诊断码采用既有公开定义，18 份源码与修正交付逐字一致；独立复核及实际检查保存在外层 checks/t09-fixtures-root/correction/ 和 checks/t09-fixtures-independent/。源码数值、事件及生命周期目标仍未执行。

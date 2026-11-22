@@ -20,7 +20,7 @@
   catalog 的 `refreeze` 字段。
 - Root 工作区在冻结时仍有 97 个未跟踪的进行中组件文件和 1 个已修改的已跟踪
   文件 (`contracts/selfhost.json`)。catalog 只冻结 `git ls-files` 的已跟踪路径；
-  这些未跟踪文件没有盲当已接受源码。因此 `formal_freeze_ready=false`。
+  这些未跟踪文件没有被盲目当作已接受源码。因此 `formal_freeze_ready=false`。
 - 2026-11-13 本轮把 285 个此前 `public_cli`/`adaptation_required` 的 project case
   补成可执行预期：271 个 generics 静态/运行 case 和 14 个原先缺运行预期的
   accept case。当前 368 enabled（83 旧 + 285 新）、712 disabled、683
@@ -29,8 +29,8 @@
   dependency 改为 component，3 个孤儿 fixture 保持 required；没有用批量标签
   掩盖缺口。
 - 全语料、完整自举、stage1/2/3、完整 Source corpus、Native 候选 O0/O2 正例仍为
-  `not_run`。本轮只把 stage0 当参考编译器抓取真实预期，没有把 stage0-as-candidate
-  的 build 当通过。
+  `not_run`。本轮只把 stage0 当作参考编译器抓取真实预期，没有把 stage0-as-candidate
+  的 build 当作通过。
 
 ### 1.1 本轮精确启用范围
 
@@ -51,7 +51,7 @@
 `run_move.py`、`run_nested_patterns.py`、`run_receiver_modes.py`、
 `run_self_modes.py`、`run_unbound_methods.py`，以及 `tests/native/run_generics.py`
 的 `tests/native/{generics,pod,pod-reject}`、`positional` 和 `cases.json` 正例。
-名字含 `reject` 但 runner 明确当正例的 case（如
+名字含 `reject` 但 runner 明确当作正例的 case（如
 `aggregate-inout/reject-alias/field-place`、`method-move/trait-generic-move-reject`、
 `self-modes/reject-index-inout`、`generic-traits/reject-own-generic` 的 check-only）
 按 runner 实际断言处理，没有用文件名批量改标签。
@@ -155,11 +155,11 @@ Native 发布物检查现在扫描 `out/` 下全部条目，包括 `program.o`�
 - runner 状态只允许 `public_cli`、`component`、`adaptation_required`、`unmapped`；
 - 缺失/未知状态、重复 runner、未分类 `runner_source`、非 runner 路径进入 runner 表
   都是完整性错误；
-- 所有 runner 分类必须有非空 reason，`component` 尤其不能只删待适配记录；
+- 所有 runner 分类都必须填写非空 reason，`component` 尤其不能只删除待适配记录而不说明原因；
 - case 必须有合法 `enabled`、`support`、`adaptation`；有 runner 时必须有合法
   `runner_status`；启用 case 必须是 `public_cli` + `adaptation=ready`；
-- `unmapped`、`unclassified` runner 以及非法 case 分类都会使 coverage 产生 gap，
-  不会 exit 0。
+- `unmapped`、`unclassified` runner 以及非法 case 分类都会导致 coverage 报缺口，
+  不会返回 exit 0。
 
 ### 2.5 run_expectation 必须有实际、可检查的断言
 
@@ -532,10 +532,9 @@ python3 tests/selfhost/corpus_test.py \
 清单必须记录该语料目录实际使用的字节。源码哈希改变仍会失败，参数不会放宽冻结检查。本轮使用 3d7139b 的临时 clone 和只更新一个已知变化
 `contracts/selfhost.json` hash 的临时清单，完整小测试退出 0；冻结清单本身没有刷新 hash。使用未更新的原清单仍因该哈希失配而非零退出。这次没有运行 368 项已启用子集、完整语料或三代自举。
 
-本轮派生脚本与 checks/SH10f-corpus-public-cli-20261113/ 原始证据保留在 agent 工作树 `<worktree>`；该相对路径和生成命令指这个工作目录，不是安装后的编译器接口。Root已补五项not_ready分类断言；这批结果只是参考C++兼容性记录，完整候选对照和相对exec修复另行检查。
+本轮派生脚本与 checks/SH10f-corpus-public-cli-20261113/ 原始证据保留在 agent 工作树 `<worktree>`；这里的相对路径和生成命令针对该工作目录，不是安装后的编译器接口。Root 已补齐五项 not_ready 分类断言；这批结果只是参考 C++ 兼容性记录，完整候选对照和相对 exec 修复另行检查。
 
-相对exec路径拒绝已与bootstrap修正合并；保留绝对路径白名单、超时/信号和有限清理检查。完整Source候选、完整语料和三代构建仍未执行。
-
+相对 exec 路径拒绝已与 bootstrap 修正合并，同时保留绝对路径白名单、超时/信号和限时清理检查。完整 Source 候选、完整语料和三代构建仍未执行。
 
 ## 重复执行与线程池用例（2026-11-14）
 
@@ -666,12 +665,12 @@ index 或远端，未重编、未跑全候选、stage2/3 或 116 源构建。对
 
 ### Woozy 浮点观察器
 
-`10d3f79` 加入了通过真实 Woozy 前端和双后端执行的观察器。其 Native O0/O2
-共 6440 个值、Python 3438 个值与原金值相符，普通输出另与接受的 stage1
-逐字比较。脚本补修后，5 项小测试、9 项实际失败控制及全部保留数值重验通过。
+`10d3f79` 加入了经由真实 Woozy 前端和双后端执行的观察器。其 Native O0/O2
+共 6440 个值、Python 3438 个值与原金值相符，普通输出另与已接受的 stage1
+逐字比较。脚本补修后，5 项小测试、9 项实际失败控制及全部保留数值重新验证通过。
 原交付的脚本问题和原记录保持不变；Root 补修版本单独记录，不追改历史结果。
-Python 14 个补充项目/9 个观察仍未运行，完整语言语料和自举也未通过。
+Python 14 个补充项目和 9 个观察仍未运行，完整语言语料和自举也尚未通过。
 
-源码清单新增该 driver 源码及两个脚本，分配到停用的 component 用例；旧1250项
-和881个启用用例不变。当前1251项、370项停用，文件2840条、runner235项。
-tracked 库存检查为零错误，未扫描 Root 未跟踪目录。
+源码清单新增了该 driver 源码及两个脚本，并分配到停用的 component 用例；原有的 1250 项
+和 881 个启用用例不变。当前共 1251 项、370 项停用，文件 2840 条、runner 235 项。
+tracked 库存检查为零错误，未扫描 Root 的未跟踪目录。

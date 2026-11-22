@@ -77,7 +77,7 @@ appends to the public table.
 `packagecheck/` stages the accepted `model`, `hir`, `types`, `nativeir`,
 `foreign`, `pattern` packages from the repository (or `--extra-source` for
 packages still landing elsewhere) plus the complete `nativeverify` package and
-runs a package-internal self test.  When `hirverify` is absent only the
+runs a package-internal self test.  When `hirverify` is absent, only the
 facade file `nativeverify.wz` is skipped (single-file syntax check instead);
 all other verifier logic is still type-checked, and the shared containers,
 copy and obligation helpers are executed.  The self test covers ordered
@@ -101,7 +101,7 @@ value.
 
 ## Dependency snapshots used for algorithm checks
 
-`packagecheck/` and `obligationstest/` accept accepted packages from another
+`packagecheck/` and `obligationstest/` can load accepted packages from another
 tree through `--extra-source <tree>/selfhost/src`.  The latest accepted
 inputs are `valueops/valueops.wz`
 `19149ef4e0cb4a76d6dfd52425eb4c3a552004bf04d84577aa9dd7785723a460`

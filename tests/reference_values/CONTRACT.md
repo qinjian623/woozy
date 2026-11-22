@@ -31,10 +31,10 @@ or runtime spelling.
 
 Out of scope for this package:
 
-- No new compiler/runtime/stdlib API or configuration.
-- No temporary mock of `Weak`, closure capture, bound methods, or HIR fields.
-- No source registration in an existing RED suite or shared CMake.
-- No build/run claim while the feature is absent.
+- New compiler, runtime, or stdlib APIs or configuration.
+- Temporary mocks of `Weak`, closure capture, bound methods, or HIR fields.
+- Registering sources in an existing RED suite or shared CMake.
+- Claiming build or run results before the feature exists.
 
 ## 2 User-visible behavior covered
 
@@ -119,13 +119,11 @@ Out of scope for this package:
 
 ## 3 Fixtures and expected values
 
-All manifests use `backend = "native"` and `word_bits = 64`. Except for the
-explicit Native-only thread case, Python/64 is intended to use the same
-project through the existing CLI. `thread-capture-scalar-arg` declares
-`backends: ["native"]` because std/thread is Native-only by user decision; a
-Python run must report it `not_run`/`unsupported`, never as passed. Positive
-cases assert `main` return `0` and internal scalar or container checks; they do
-not parse stdout.
+All manifests use `backend = "native"` and `word_bits = 64`. Except for
+`thread-capture-scalar-arg` (`backends: ["native"]`, see §2), Python/64 is
+intended to run the same projects through the existing CLI. Positive cases
+assert `main` returns `0` along with internal scalar or container checks; they
+do not parse stdout.
 
 | # | Fixture | Kind | Independent expectation |
 |---|---|---|---|
@@ -275,9 +273,6 @@ source cases.
 - `tests/reference_values/fixtures/<id>/src/main.wz`
 - `tests/reference_values/cases.json`
 - `tests/reference_values/CONTRACT.md` (this file)
-
-No shared CMake, compiler source, runtime source, stdlib source, or existing
-test registration is changed.
 
 Root final review: the successful indirect call also has throws Failure; its
 main now declares that effect. Numeric and cleanup expectations are unchanged.

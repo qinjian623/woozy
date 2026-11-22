@@ -1,8 +1,8 @@
 # 自举后端接口
 
-范围是现有完整 Native/Python 后端。新编译器不能调用旧 C++ frontend、lower、verify、emitter 或 helper。LLVM、Clang、LLD 和既有运行库继续使用。测试对照程序可以链接旧实现。
+本接口覆盖现有完整的 Native 和 Python 后端。新编译器不得调用旧 C++ frontend、lower、verify、emitter 或 helper；LLVM、Clang、LLD 和既有运行库继续沿用。测试对照程序允许链接旧实现。
 
-`app/wzcc/nativeir` 是已接受的可变 CFG 记录包。Module.hir 为原始 HirModule，不能凭构造记录取得已验证身份。TypeId 为 usize；可选值仍用 Option，0 的意义沿用原记录。
+`app/wzcc/nativeir` 是已接受的可变 CFG 记录包。Module.hir 保存原始 HirModule，直接构造该记录不会获得已验证状态。TypeId 为 usize；可选值仍用 Option，0 的含义沿用原记录。
 
 ```text
 nativelayout.AggregateTypes { module hir.HirModule, context types.Context }
@@ -21,7 +21,7 @@ nativelower.lower(input hirverify.VerifiedHirModule) nativeverify.VerifyResult
 nativeirdump.dump(input nativeir.Module) string throws model.SupportError
 ```
 
-layout 是 `src/ir/layout.hpp` 的直接移植，context 是独立的类型表。Native verify 先独立深复制全部 CFG 和 HIR，再重新验证 HIR 及完整 CFG/所有权规则，成功后保存副本；snapshot 再复制，不能共享可写 Vec。lower 检查 Native/64、执行全部转换、调用 verify；诊断顺序和失败分类沿用 C++。lower 不创建 VerifiedModule，也不自行跳过验证。
+layout 直接移植自 `src/ir/layout.hpp`，其中的 context 是独立的类型表。Native verify 会先深复制全部 CFG 和 HIR，再重新验证 HIR 以及完整的 CFG 和所有权规则，通过后保存副本；snapshot 每次同样返回新副本，不共享可写 Vec。lower 负责检查 Native/64、执行全部转换并调用 verify，诊断顺序和失败分类沿用 C++；lower 不直接创建 VerifiedModule，也不跳过验证。
 
 layout 由 Native verifier worker 单独编写，lower 与后续 emitter 共同使用，其他 worker 不复制或改动它。lower/dump 由 lower worker 编写。各包不得导入 sema，不能循环依赖。
 
@@ -45,4 +45,4 @@ nativeemit.EmitResult { state, failure, diagnostics, value Option[Output] }
 nativeemit.emit(input nativeverify.VerifiedModule,entry usize,options Options) EmitResult
 ```
 
-上述入口是纯文本生成，工具执行由 CLI 负责。普通 O0 调 opt 验证；async O0 还需 default<O0> 拆分协程；O2 使用 default<O2>，前后均验证。llc 产生对象后才执行适用的链接步骤，全部成功后发布输出文件。共享记录和各组函数的精确声明见 SELFHOST_NATIVEEMIT.md。
+上述入口只做纯文本生成，外部工具调用由 CLI 负责。普通 O0 调用 opt 验证；async O0 额外需要 default<O0> 拆分协程；O2 使用 default<O2>，优化前后都要验证。llc 生成目标文件后再执行相应的链接步骤，全部成功后才发布输出文件。共享记录和各组函数的精确声明见 SELFHOST_NATIVEEMIT.md。

@@ -3,17 +3,17 @@
 operation_id: language-t07-source-fixtures-20261104
 契约版本：compiler-dev/1。
 
-27 个独立项目；manifest 相对仓库根目录。诊断码未发布，省略 diagnostic_code，由 expected_static.reason 说明错误，留给 root 登记。预期不随当前实现的 E_CAPABILITY_UNAVAILABLE 调整。
+包含 27 个独立项目，manifest 路径均相对仓库根目录。由于诊断码尚未发布，用例省略 diagnostic_code，先用 expected_static.reason 说明错误，留待 root 登记。用例预期不因当前实现报 E_CAPABILITY_UNAVAILABLE 而改写。
 
-规范依据：docs/SEMANTICS.md §2 的分支作用域、§3 的上下文推断与位宽规则、§5 的命名实参源码求值顺序和枚举穷尽性、§6 的泛型约束、唯一 impl、实例去重及递归预算、§7 的值字段递归复制；docs/FRONTEND.md 类型检查约定及 baseline/grammar.ebnf 的构造和模式语法。baseline/samples/05_traits.wz 提供显式 impl 示例。无限值布局依据有限值表示及递归值字段要求拒绝，具体诊断码待登记。只读接口提案未视为已实施。
+规范依据包括：docs/SEMANTICS.md §2 的分支作用域、§3 的上下文推断与位宽规则、§5 的命名实参源码求值顺序与枚举穷尽性、§6 的泛型约束、唯一 impl、实例去重与递归预算、§7 的值字段递归复制；以及 docs/FRONTEND.md 的类型检查约定和 baseline/grammar.ebnf 的构造与模式语法。baseline/samples/05_traits.wz 提供显式 impl 示例。无限值布局依据有限值表示和递归值字段规则要求拒绝，具体诊断码待登记。只读接口提案不视为已实施。
 
-每个反例安排一项语义错误。未覆盖普通参数重新赋值、Vec、throws、foreign、复杂拥有值或浮点执行。字段顺序项目使用明确声明的 inout 参数。runtime_expected.main_return 表示整数返回值，reason 解释计算。跨包别名去重须另检查实例数量，运行返回 7 不能证明去重。同类型递归应接受，扩张递归应受预算限制，不绑定预算数值。
+每个反例只安排一项语义错误，暂未覆盖普通参数重新赋值、Vec、throws、foreign、复杂拥有值或浮点执行。字段求值顺序用例使用显式声明的 inout 参数。runtime_expected.main_return 记录整数返回值，reason 说明计算过程。跨包别名去重需另外检查实例数量，单靠运行返回 7 不能证明去重。同类型递归应接受，扩张递归应受预算限制，但不绑定具体预算数值。
 
-自检 passed：27 个 ID 唯一，manifest 全部存在、可按 TOML 读取且 package.name=app。正反例数量：{'accept': 13, 'reject': 14}。
+自检 passed：27 个 ID 互不重复，全部 manifest 均存在、可按 TOML 解析且 package.name=app。正反例数量为 accept 13 个、reject 14 个。
 
-语法验证 passed：现成 `build/frontend-debug/woozyc check --syntax-only <file>` 的逐文件实际退出码如下。首轮字段顺序例的参数模式位置写错，修正为 `n inout i32` 后重新验证全部源文件。
+语法验证 passed：使用现成 `build/frontend-debug/woozyc check --syntax-only <file>` 逐文件运行，实际退出码见下表。首轮字段求值顺序用例写错了参数模式位置，修正为 `n inout i32` 后已重新验证全部源文件。
 
-类型检查 not_run，执行 not_run。当前 checker 预计 E_CAPABILITY_UNAVAILABLE；未用完整 checker 验证此预测。语法通过未证明类型检查、执行通过或 T07 功能完成。
+类型检查和执行均为 not_run。当前 checker 预计会返回 E_CAPABILITY_UNAVAILABLE，但尚未用完整 checker 验证这一判断。语法通过不代表类型检查通过、程序可执行或 T07 已完成。
 
 | 文件 | 实际退出码 |
 | --- | --- |
@@ -46,4 +46,4 @@ operation_id: language-t07-source-fixtures-20261104
 | fixtures/unused-template/src/main.wz | 0 |
 | fixtures/used-template/src/main.wz | 0 |
 
-主代理补充：跨包例改为清单显式依赖dep，两个别名指向同一dep声明；多实例例加入局部变量及无捕获函数字面量，后续需检查两实例的所有身份互异。补充后的语法和名称检查另见外层checks/t07-independent-fixtures-review.json，仍未执行T07类型或运行检查。
+主代理补充：跨包用例改为在清单中显式依赖 dep，让两个别名指向同一个 dep 声明；多实例用例补充了局部变量和无捕获函数字面量，后续需核对两个实例的各项身份互不相同。补充后的语法和名称检查记录见外层 checks/t07-independent-fixtures-review.json，仍未执行 T07 的类型检查或运行检查。

@@ -100,7 +100,7 @@ It does not recompute Mandelbrot. The same correct/negative byte checks apply.
 
 `prepare.py` loads `tests/performance/sieve/prepare.py` through `importlib`
 under the unique module name `_mandelbrot_reuse_sieve_prepare`. It reuses only
-the already-read generic helpers: `need`, `now`, `file_rec`, `manifest_text`,
+the generic helpers: `need`, `now`, `file_rec`, `manifest_text`,
 `tool`, `run_program`, `require_exit`, `verify_ir`, `build_langc`,
 `parse_functions`, `parse_loop_sections`, `parse_undefined`, `elf_checks`, and
 the function/label regexes. Sieve's algorithm, `main()`, `parse_args()`, task
@@ -173,6 +173,6 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
   --cpu 4
 ```
 
-The output directory must not already exist. A passed run is a correctness and
-artifact check, not a formal performance measurement; no measurement stage is
-provided by this fixture.
+The output directory must not already exist. A passing run verifies correctness
+and build artifacts only; this fixture does not include a formal measurement
+stage.

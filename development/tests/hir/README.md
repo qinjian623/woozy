@@ -9,12 +9,11 @@
 所有接口位于 `lang::hir`：
 
 - `TypeContext::intern(Type) -> TypeId`、`find(TypeId) -> const Type*`、`size()`。
-  TypeId 从 1 开始，0 永远无效。find 返回的指针可能被后续 intern 重分配失效，跨驻留调用应保存 ID。`intern` 对错误形状或不存在的类型引用抛
-  `std::invalid_argument`；语义诊断由 checker 产生。相同类型驻留一次，编号随
-  确定的插入顺序确定。Function 的参数 mode/result/throws 参与身份，标签不参与。
+  TypeId 从 1 开始，0 永远无效。find 返回的指针可能因后续 intern 触发重分配而失效，跨驻留调用应保存 ID。`intern` 遇到非法形状或不存在的类型引用时抛出
+  `std::invalid_argument`；语义诊断由 checker 产生。相同类型只驻留一次，按插入顺序确定编号。Function 的参数 mode/result/throws 参与身份，标签不参与。
   名义类型以声明 SymbolId 区分，ForeignOpaque 另保存 binding ID；这些表示目前不能进入 Verified。
 - `Config { Backend backend; unsigned word_bits; }`；backend 为 `native/python`，
-  word_bits 为 32/64，必须与拥有的 Project 一致。
+  word_bits 为 32/64，必须与所属 Project 一致。
   `bit_width(Type, Config)` 取得整数/浮点的位宽；Isize/Usize 使用配置，不使用宿主宽度。
 - `HirModule { resolved, identity, types, config, functions, nodes, scopes }`。
   `resolved` 为 `shared_ptr<const modules::ResolvedProject>`，拥有符号和源码。
@@ -47,7 +46,7 @@
   成功才有 value；结构损坏或当前不支持的数据返回 `E_IR_INVALID`，FailureKind::internal，
   exit_code 3，phase 使用诊断 schema 已有的 lowering。源程序的 `E_CAPABILITY_UNAVAILABLE` 等应由 checker 提前报告。
   取消返回 PhaseState::cancelled、无 value、exit_code 130。
-- `VerifiedHirModule` 无公开/default 构造，只有 verify 可以创建；提供只读
+- `VerifiedHirModule` 没有公开构造函数或默认构造函数，只能由 verify 创建；提供只读
   `module()/config()/version()`。内部为 `shared_ptr<const HirModule>`。
   发布时复制 builder、ResolvedProject、Project、各 AstFile，避免保留的可写别名改动结果。
   SourceSnapshot 使用 support 的不可变对象。调用者不得在 verify 复制期间并发修改 builder。
@@ -62,8 +61,8 @@
 检查类型存在性、操作数/结果类型、整数数学值范围及位模式、符号身份与声明种类/原文、
 源码节点及区间、函数签名和参数、完整且唯一的调用参数匹配、求值顺序、标签和模式、
 作用域归属、初始化先于使用、写权限、跳转种类及同函数包围关系。
-对正常返回做保守分析：非 Unit 函数不能正常结束；只有字面量 true 且没有可达的、指向
-该循环的 break 的 For 才认定为不正常结束。Block 在已终结的语句之后不再累计 break；
+对正常返回做保守分析：非 Unit 函数不能正常结束；只有条件为字面量 true 且不含指向自身的
+可达 break 的 For，才会被判定为不会正常结束。Block 在已终结的语句之后不再累计 break；
 内层循环的 break 不作为外层循环的退出。If 条件为 BoolLiteral 时只累计实际分支的
 正常出口和 break；其它条件仍保守检查各分支，不在 verifier 内做数值常量折叠。
 纯 const 项目可以没有函数、节点和作用域；游离节点或作用域仍被拒绝。checker 必须
@@ -145,18 +144,20 @@ HIR passed: valid function/direct+value calls/loop, 74 corruptions, cancellation
 
 ## inout 扩展实测
 
-2026-11-03，T04 checker 分工只修改本实现和指定测试，没有修改公共头。
-新增正例包括可写 var、被调函数内参数赋值、直接调用、函数值调用、两个不同绑定的
-inout 调用，以及把 inout 参数继续传入 inout；同一有效 inout HIR 分别按 native/python
-和 32/64 位四种配置验证。新增 14 个 inout 损坏案例检查声明 mode 不符、字面量/Read 冒充
+2026-11-03，T04 checker 分工只修改本实现和指定测试，未修改公共头。
+新增正例包括可写 var、被调函数内给参数赋值、直接调用、函数值调用、两个不同绑定的
+inout 调用，以及把 inout 参数继续传入 inout；同一份有效 inout HIR 分别按 native/python
+和 32/64 位四种配置验证。新增 14 个 inout 损坏案例，覆盖声明 mode 不符、字面量/Read 冒充
 Place、只读绑定、错误类型/模式、children 顺序、错误作用域/所属函数、同绑定普通读取
-（含嵌套表达式）、非平凡参数及重复 inout。另有真实 parse/resolve 的无限循环正例：
-`for var i i32 = 0; true; i += 1 { continue; break; }`，其不可达 break 不应造成缺失
-return 诊断；把 continue 改为 Noop 后会正常退出循环，第 15 个新增损坏案例必须拒绝。
-补充测试从真实 parse/resolve 结果建立 HIR，覆盖 `for g(); false; g() {}` 的表达式初始化、
-纯 const 项目、`if true { return 1; }`、`if false ... else ...`，以及常量 false 分支中的
-break 不导致外层无限循环正常退出；改变成 true 分支则必须要求 return。空函数列表中
-的游离节点/作用域和 false 条件无 else 的缺失 return 也分别拒绝。
+（含嵌套表达式）、非平凡参数及重复 inout。
+
+控制流和边界补充测试基于真实 parse/resolve 结果建立 HIR：无限循环正例
+`for var i i32 = 0; true; i += 1 { continue; break; }` 中的不可达 break 不应引发缺失
+return 诊断，而把 continue 改为 Noop 后循环可以正常退出，第 15 个新增损坏案例必须拒绝。
+此外还覆盖 `for g(); false; g() {}` 的表达式初始化、纯 const 项目、`if true { return 1; }`、
+`if false ... else ...`，以及常量 false 分支中的 break 不导致外层无限循环正常退出
+（改为 true 分支则必须要求 return）；空函数列表中的游离节点或作用域，以及条件为 false 且无
+else 时的缺失 return 也均被拒绝。
 
 独立编译命令：
 

@@ -73,26 +73,26 @@ enum class ValueKind { /* existing values unchanged */ function, weak };
 
 1. **顺序**：source 首次使用、深度优先、包含嵌套 literal body；每个 lambda 都重新按 `origin` 查自己的 `local`，不跨 lambda 复用 local。外层 literal 的遍历把嵌套 literal 的 grandparent 引用也纳入，形成传递捕获；中间 lambda 与内部 lambda 各自有 local，内部 creator source 指向中间 lambda 的某个 capture.local，origin 仍是 grandparent 的原声明。
 2. **只读**：lambda body 中 capture local 作为入口已初始化的 ordinary borrowed 值；Sema 在 Name/Place/Move 查 `locals` 前先用该函数的 `capture_by_origin` 把 occurrence origin 换成 capture.local；赋值、`Move`、whole-binding `inout` 拒绝。Vec/Box 等共享对象内容仍按普通别名规则可修改。`HirFunction.captures`、HIR verifier、ownership `gather/run` 和 flow state 都要登记；不在函数退出 drop 环境字段。
-3. **普通 func**：creator 的普通 `Read` 产生一次拥有副本（owned Read 的既有 copy/retain）；FunctionValue child 用 `take` 一次把该结果装入 env，不能再额外 copy/retain。非拥有值直接 take/bitcopy。
+3. **普通 func**：creator 的普通 `Read` 产生一次拥有副本（owned Read 的既有 copy/retain）；FunctionValue child 用 `take` 将该结果一次性装入 env，不能再额外 copy/retain。非拥有值直接 take/bitcopy。
 4. **move func**：只对真实外层 binding 的 owning capture 生成合成 `Move{binding=source}`，由 FunctionValue child `take`；其他非 owning capture 普通复制。若 move func 要消耗的是外层 lambda 的 capture.local（只读继承值），拒绝，不能把外层只读 capture 当成可 move 的本地 binding。
 5. **合成 Move 验证**：普通 Move 仍走 `hir.cpp` 原严格分支。受限分支仅当 Move 是 FunctionValue capture child、父 FunctionValue.move_capture 为真时启用；验证父 source 是真实 Unary(move,FunctionLiteral)、FunctionValue symbol/type_args 对应真实 literal、Move.binding 是 creator source、source 的 origin/type 与该 capture 一致、capture 顺序一致。伪造 move_capture、普通 func 被改成 take、替换 binding、普通 Move 冒充 capture child 均报 `E_IR_INVALID`。
 6. **泛型实例**：creator 的 `CaptureSource.source/type` 用 creator 的 renamed/substitution；lambda `CaptureBinding.local/type` 用 lambda 自己的 renamed/substitution；`origin` 保持原声明 SymbolId。不要假定外层与内层 renamed 表相同。`instance_records/template_symbols` 要把 capture local 纳入 `originals/renamed`，但单独验证其为 capture local（有 origin、无 definition/declaration），不能套用普通源码 binding 的 definition 检查；`instance_body`、Sema `transform_node`、`source_lambda_value` 同步处理 local/source 分离。
-7. **环境构造**：先完成每个 child 的一次 take/copy，再用 Vec 初始化一行按 capture 字段顺序安装；env 只保存值，不保存外层地址。分配/复制失败为 Panic；capture 来源只有 read/move，不引入 typed throw，Panic 路径不作语言清理承诺。env 的 copy/drop/trace 由 capture 字段 TypeId 生成。
+7. **环境构造**：先完成每个 child 的一次 take/copy，再按 capture 字段顺序初始化单行 Vec；env 只保存值，不保存外层地址。分配/复制失败为 Panic；capture 来源只有 read/move，不引入 typed throw，Panic 路径不作语言清理承诺。env 的 copy/drop/trace 由 capture 字段 TypeId 生成。
 
 ## 5. Fn 调用、IR 与 Native/Python
 
 - `LangFn{code,env}`；所有存储/间接 code 统一 C ABI：`R code(void *env, P0..., [value_out,error_out])`。无捕获值用缓存 thunk（忽略 env，调用原函数）；有捕获值 code 就是带 env 的 lambda 入口。Fn 的 copy/drop 只对非 null env retain/release；即使 env 内含不可复制资源，Fn 本身仍可复制（共享 env）。
-- `Op::function` 仍产生 Fn 值并保留真实 source SymbolId（C callback 的 `function_value_symbols` 不能记 thunk）。`Op::call` 的 callee operand 仍是 Fn；emitter 读 origin 的真实 HIR Call：direct 调 `functions.at(direct_symbol)`，原 signature；indirect 从 operand 取 code/env，调 env-first signature。不得仅凭“类型相同”认目标。
+- `Op::function` 仍产生 Fn 值并保留真实 source SymbolId（C callback 的 `function_value_symbols` 不能记 thunk）。`Op::call` 的 callee operand 仍是 Fn；emitter 读取 origin 对应的真实 HIR Call：direct 调用 `functions.at(direct_symbol)` 并使用原 signature，indirect 从 operand 拆出 code/env 并使用 env-first signature，不得仅凭“类型相同”认定目标。
 - `Exit::try_call` 的 `Terminator.origin` 指向真实 HIR Call；emitter 同样按 origin 区分 direct/indirect。直接形式用原 signature + 现有 value/error outputs；间接形式用 env-first code，outputs 仍按现有 throws 顺序。`Instruction.function` 仅作 direct dump 元数据，必须等于 HIR `direct_symbol`；不新增 opcode。
 - 间接 callee 是拥有临时值时，lower 在 callee 求值后、args 之前 `begin_borrow`；成功/错误退出用既有 ExitPlan/full-expression end_borrow。Python 在 callee 求值后、args 前 `_frame.borrow`，成功/错误 cleanup 对称 end。callee 的拥有副本留到完整表达式结束。
 - `classify_value`：Function 返回 `ValueKind::function`、`needs_drop=true`、`pod_inout=false`；Weak 返回 `ValueKind::weak`、`needs_drop=true`、`pod_inout=false`；`inout_data_type` 对 Function/Weak 返回 false。Vec[Fn]、struct/enum[Fn] 的 copy/drop/trace 递归处理。Python `emit_type` 对 Function/Weak 发 `_rt.ValueType('function')`/`'weak'`；Native `value_op` 对 Function/Weak 处理 env/control retain/release。
 - C callback：`check_c_callback`、HIR verifier、IR/native emitter 都显式拒绝 `captures` 或 `bound`；只接受非捕获静态函数源。callback_bridge/trampoline 继续用真实 source C ABI，不把 env thunk 当 callback symbol。
-- thread/task：thread context 第一个字段是 `LangFn`，第二个是 `A`；entry 调 `fn.code(fn.env,arg)`。`thread_bridge` 的 copy/drop 无论 A 是否 owning 都要生成并分别处理 Fn env 与 A；当前只看 `owning(argument)` 会漏掉 scalar A 的 capturing entry。`std/task` 的 entry/payload 随 Fn 值 copy/drop/trace 自动变化，仍需真实源码测试；thread runtime ABI 本身不改。
+- thread/task：thread context 第一个字段是 `LangFn`，第二个是 `A`；entry 调 `fn.code(fn.env,arg)`。`thread_bridge` 的 copy/drop 无论 A 是否 owning 都要生成并分别处理 Fn env 与 A；当前实现只检查 `owning(argument)`，会漏掉标量 A 对应的捕获型入口。`std/task` 的 entry/payload 随 Fn 值 copy/drop/trace 自动变化，仍需真实源码测试；thread runtime ABI 本身不改。
 - 常量：`ConstantValue::FunctionValue` 只允许 captures 为空、无 bound、move_capture=false；Native 发 `{thunk,null}`，Python 发裸 `_fN`。const 中捕获 literal 明确拒绝。
 
 ## 6. Bound method 与 Weak/Box
 
-**Bound method**：`value.method` 普通 Self 在创建时普通复制 receiver；`(move value).method` 显式 move 到 env。两种都要求 receiver `ordinary_copyable`。value type 是方法 signature 去掉首个 Self。Native adapter `R adapter(void *env, remaining args...)`：ordinary Self 直接把 env 字段按 borrowed 参数传；move Self 每次调用先 `copy_value(receiver_type, env_field)`，把独立副本交给 move Self，绝不 take/清空 env 字段；typed error 由方法自身的 move 参数清理处理。Python `_boundN` 同样 `ops.copy(_env.get(0)[0])` 后调用；不缓存可消耗副本。inout Self 绑定报 `E_CALL_ARGUMENT`/capability；bound Fn 可复制、可重复调用，无 FnOnce。
+**Bound method**：普通 Self 的 `value.method` 在创建时按普通规则复制 receiver；`(move value).method` 则显式 move 到 env。两种形式都要求 receiver 满足 `ordinary_copyable`，函数值类型为方法 signature 去掉首个 Self。Native 适配器签名为 `R adapter(void *env, remaining args...)`：ordinary Self 直接按 borrowed 参数传入 env 字段；move Self 每次调用先执行 `copy_value(receiver_type, env_field)`，把独立副本交给 move Self，绝不 take 或清空 env 字段；typed error 由方法自身的 move 参数清理逻辑处理。Python 的 `_boundN` 同样先调用 `ops.copy(_env.get(0)[0])` 再转发，不缓存可消耗副本。绑定 inout Self 报 `E_CALL_ARGUMENT`/capability；bound Fn 可复制、可重复调用，不引入 FnOnce。
 
 **Weak 类型/API**：builtin `Weak[T]`；`std/weak.empty[T]() Weak[T]`、`downgrade[T](T) Weak[T]`、`upgrade[T](Weak[T]) Option[T]`。没有 `is_alive`/`is_empty`；空/失效通过 `upgrade` 返回 `None` 观察。copy/drop 为普通值操作。
 
@@ -166,7 +166,7 @@ enum class ValueKind { /* existing values unchanged */ function, weak };
 - Weak[Fn] `{null,code}` 由有 env 的失败 downgrade 伪造；dead `{null,null}` 升级出 Fn；Weak canonical 目标用错声明/解包用户单字段 struct；Weak 升级后再多一次 retain。
 - C callback 接受 captures/bound；thread context 在 scalar A 时漏 Fn env copy/drop。
 
-通过标准：上述负例均 `E_IR_INVALID`/明确 capability 诊断；正例在真实源码 O0/O2/Python 运行；不把单个 function-value case 通过写成 LANG01/MEM02 完成。
+通过标准：上述负例均报 `E_IR_INVALID` 或明确的 capability 诊断；正例在真实源码的 O0/O2 与 Python 下运行通过；不能把单个 function-value 用例通过写成 LANG01/MEM02 完成。
 
 ## Root 补充：字段交接与未具体化类型
 
@@ -178,4 +178,4 @@ enum class ValueKind { /* existing values unchanged */ function, weak };
 
 本版修正了独立检查 C1–C7，以及复核 R1/I1/I2。它授权实现者按唯一 schema 分别修改前端、Native 和 Python；运行与负测试完成前不得把功能标为完成。
 
-阶段 A 已编译这些共用字段，并保留对非默认捕获/绑定、capture lifetime 及 Weak 类型的明确拒绝。独立检查 46 项前端、11 项静态和旧函数值执行通过，Root 新 schema 及相关 12 项也已通过。后续前端负责逐项加入真实源码与所有权验证后移除对应拒绝；不得只关闭检查。
+阶段 A 已编译这些共用字段，并保留对非默认捕获/绑定、capture lifetime 及 Weak 类型的明确拒绝。独立检查中 46 项前端、11 项静态和旧函数值执行用例通过，Root 新 schema 及相关 12 项也已通过。后续前端需逐项补齐真实源码与所有权验证后再移除对应拒绝，不能只关闭检查。

@@ -17,7 +17,7 @@ parallel owners). For every positive case it runs the real lexer, parser,
 resolver, Sema, independent HIR verifier, NativeIR lowering and independent
 NativeIR verifier.
 
-The test additionally proves by construction:
+The test also checks:
 
 - capture order, origin/local/type identity and read-only capture lifetimes;
 - nested transitive captures (inner source is the outer capture local while the

@@ -66,7 +66,7 @@ tests/floating/
 - NaN 只检查 `isNaN()`；零检查 `isZero()`/`isNegative()`；其他值输出 `bitcastToAPInt()` 的 canonical 位模式。
 - `tools/apfloat_oracle.cpp` 只是测试工具，不进入 `woozyc`，不给前端增加 LLVM 依赖。
 
-实际使用的工具链位于工作区外的 `toolchains/llvm-22.1.8` 和 `toolchains/libxml2-legacy-2.13.9/usr/lib`；逐字机器路径与构建日志保存在外层检查目录，不写入本目录。下面命令用占位变量表示这些路径。
+实际使用的工具链位于工作区外的 `toolchains/llvm-22.1.8` 和 `toolchains/libxml2-legacy-2.13.9/usr/lib`；具体本机路径与构建日志保存在外层检查目录，不写入本目录。下面命令用占位变量表示这些路径。
 
 构建/运行命令（实际日志保存在工作区外）：
 
@@ -117,7 +117,7 @@ woozyc check --project tests/floating/fixtures/<id>/lang.toml --format json
 - 两个 baseline 副本与原件字节一致，原文件 sha256 也一致：
   - `01_basics.wz`: `9dc35ed667c94f551120007ad2c6ff9288970d2e27ba442bbf14b9258018b96e`
   - `05_traits.wz`: `d435ed5a30cfe75600bd982e12e27ec59306181c5fe998aba05751370bd3c961`
-- 2026-11-11 同步修改 `01_basics.wz` 原件及副本中的扩展名说明注释，更新上述摘要和库存记录，并重新核对全部 18 份源码与清单摘要；没有重跑本节的浮点观察。
+- 2026-11-11 同步修改 `01_basics.wz` 原件及副本中的扩展名说明注释，更新上述摘要和登记记录，并重新核对全部 18 份源码与清单摘要；没有重跑本节的浮点观察。
 - 76 条探针逐条与 `oracle/vectors.tsv` 的 class/bits/sign（或 bool 值）一致；NaN 条目的 bits/sign 为 `null` 表示不比较；固定宽度 hex 全部通过。
 - 原 62 条探针对象与本轮修正前的 `cases.json` 逐字段相同；`vectors.tsv` 中原 62 行逐行相同，只新增 14 行。
 - 本修正新增的 14 条为：2 条 f32 double-rounding 陷阱、f32/f64 各 6 条 bool 对照。
@@ -152,20 +152,11 @@ woozyc check --project tests/floating/fixtures/<id>/lang.toml --format json
 
 ## 当前预期分类（显式数值转换实施后）
 
-`language-explicit-numeric-conversions-20261106` 实施 float→int 与 int→float 显式转换后，
-`cases.json` 的静态分类为 accept 13 / reject 5（`case_count` 仍为 18，探针仍为 76 条）。
-唯一改变分类的是 `reject-dynamic-float-int-conversion`：它只声明一个参数为 f64 的转换函数，
-`main` 直接返回 0；check 接受，实际运行不做转换，因此 `runtime_expected.main_return = 0`、
-`probes` 为空。其源码/清单字节未改。其余 12 个正例和 5 个反例的 `expected_static`、探针
-签名和位值期待都不变；原 62 条探针与 `oracle/vectors.tsv` 原行未改。
+`language-explicit-numeric-conversions-20261106` 实施 float→int 与 int→float 显式转换后，`cases.json` 的静态分类变为 accept 13 / reject 5（`case_count` 仍为 18，探针仍为 76 条）。唯一改变分类的是 `reject-dynamic-float-int-conversion`：它只声明了一个参数为 f64 的转换函数，`main` 直接返回 0；check 通过，实际运行不执行转换，因此 `runtime_expected.main_return = 0`、`probes` 为空，源码和清单字节均未改动。其余 12 个正例和 5 个反例的 `expected_static`、探针签名和位值预期都不变，原 62 条探针与 `oracle/vectors.tsv` 原行也未改动。
 
-当前编译器的实际结果（本操作记录，不覆盖上面 aacd448 历史表）：11 个浮点正例与 2 个
-baseline 副本仍按后端能力各自检查/执行（`tests/native/run_floating.py`、
-`tests/python/run_floating.py` 的实际记录）；5 个反例仍为 Source 类型错误
-（`E_TYPE_MISMATCH`）或能力缺失（`E_CAPABILITY_UNAVAILABLE`）。本目录不重新声明
-T05 后续或 T07/T09 的整体完成。
+当前编译器的实际结果（本操作记录，不覆盖上面的 aacd448 历史表）：11 个浮点正例与 2 个 baseline 副本仍按后端能力分别检查和执行（见 `tests/native/run_floating.py`、`tests/python/run_floating.py` 的实际记录）；5 个反例仍报 Source 类型错误（`E_TYPE_MISMATCH`）或能力缺失（`E_CAPABILITY_UNAVAILABLE`）。本目录不重新宣称 T05 后续或 T07/T09 整体完成。
 
-未来严格浮点（T05 后续）静态检查、native/Python 生成和执行均为 `not_run`。即使未来 `main` 返回 0，也不能证明观察了 probe 的浮点结果；必须按 `cases.json` 中的实际生成函数类型调用探针并读取返回值和位模式。
+未来严格浮点（T05 后续）静态检查、native/Python 生成和执行均为 `not_run`。即使未来 `main` 返回 0，也不能证明已经观察到 probe 的浮点结果；必须按 `cases.json` 中记录的实际生成函数类型调用探针，读取返回值和位模式。
 
 ## 修正记录
 

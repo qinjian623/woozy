@@ -7,7 +7,7 @@ worker-owned contract; the root integrator moves the final wording into
 Scope: HTTP/1.1 request and response message syntax, framing, encoding, and
 buffered reads over the existing `std/net.Socket` transport. TLS, HTTPS, URI
 resolution, connection pools, redirects, authentication, and application
-routing are outside this module. The module never claims TLS support.
+routing are outside this module.
 
 The codec is written in Woozy and uses only the existing Native standard
 library. It does not add intrinsics or compiler/runtime changes.
@@ -76,8 +76,7 @@ pub func header_text_values(headers Vec[Header], name string) Vec[string] throws
 encode still apply byte-level token/control validation. `value_text`,
 `header_text`, and `header_text_values`
 decode with `std/text.from_bytes`; invalid UTF-8 throws `Error.InvalidUtf8`.
-Use the raw `Header` constructor when the application truly needs obs-text
-bytes.
+Use the raw `Header` constructor when the application needs obs-text bytes.
 
 ## Limits and lookup helpers
 
@@ -264,7 +263,7 @@ incoming `Content-Length`/`Transfer-Encoding` fields, rejects
 `Transfer-Encoding`, checks that any supplied `Content-Length` values agree
 with `body.len()`, and emits exactly one canonical
 `Content-Length: <body.len()>`. A missing body is encoded as length zero, never
-as a closed-delimited body.
+as a close-delimited body.
 
 For HEAD and 304 responses the body must be empty; `Transfer-Encoding` is
 rejected, and a supplied `Content-Length` must be well formed and is emitted
@@ -317,7 +316,7 @@ without loss. `pending(reader)` returns the retained byte count.
 All I/O failures are `Error.Io(os.Error)`. The reader retries
 `os.Error.Interrupted`; `WouldBlock` is surfaced through `Error.Io` so
 nonblocking callers can decide when to poll. `write_*` uses `net.send_all` and
-surfaces short-write/real errors as `Error.Io`. `read_request_head` and
+surfaces short-write and OS errors as `Error.Io`. `read_request_head` and
 `read_response_head` do not consume a body; a caller must finish it with the
 matching body function, use the combined read function, or close the
 connection.

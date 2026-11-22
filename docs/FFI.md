@@ -91,7 +91,7 @@ woozyc build --project lang.toml --backend native --out-dir build/native
 ./build/native/program
 ```
 
-程序退出 0，没有输出。`requires_hosted: true` 表示该绑定需要 hosted 运行环境，因此清单必须写 `[build.native] runtime = "hosted"`。省略时默认仍是 `freestanding`，加载这种绑定会在检查阶段以 `E_CAPABILITY_UNAVAILABLE` 拒绝；默认 freestanding 核心程序不变。
+程序以退出码 0 退出，没有输出。`requires_hosted: true` 表示该绑定需要 hosted 运行环境，因此清单必须写 `[build.native] runtime = "hosted"`。省略时默认仍是 `freestanding`，加载这种绑定会在检查阶段以 `E_CAPABILITY_UNAVAILABLE` 拒绝。
 
 ## 2 清单、模块和导出名
 
@@ -123,9 +123,9 @@ C record 的 `size`、`align` 和字段 `offset` 必须符合自然 C 布局。�
 
 ## 4 所有权、错误和回调
 
-`Ptr`、`Buffer` 和 record 都是非拥有值，语言不会因为它们离开作用域而释放指针目标。C 返回的借用指针即使标成 `ownership: "borrowed"`，也不会自动释放；有效期间由 C 库保证，需要释放时由声明中的 C API 负责。
+`Ptr`、`Buffer` 和 record 都是非拥有值，语言不会因为它们离开作用域而释放指针目标。标为 `ownership: "borrowed"` 的 C 返回指针同样不会自动释放；其有效期由 C 库保证，需要释放时由声明中的 C API 负责。
 
-`resource` 是拥有值：复制一个拥有副本会调用 `retain_symbol`，每个拥有副本清理时都会调用 `release_symbol`；目标何时析构由库在最后一次引用释放时决定。callable 返回 resource 时必须使用 `ownership: "owned"`，并给出与 resource 声明一致的释放符号。若 resource 没有 `retain_symbol`，普通复制会被拒绝；借用值不调用释放。owned 值的生命周期由声明管理。
+`resource` 是拥有值：复制一个拥有副本会调用 `retain_symbol`，每个拥有副本清理时都会调用 `release_symbol`；目标何时析构由库在最后一次引用释放时决定。callable 返回 resource 时必须使用 `ownership: "owned"`，并给出与 resource 声明一致的释放符号。若 resource 没有 `retain_symbol`，普通复制会被拒绝；借用值不调用释放。
 
 C 调用没有 `throws` 效果，也不会自动把错误变成 `py.Error`。C 返回的错误码仍是声明类型上的普通值；`errno` 通过声明的获取接口读取，例如 glibc 的 `__errno_location()` 返回 `PtrMut[i32]`，或 getter 直接返回 `i32`。`ownership` 字段只描述值、借用、拥有或 `Unit`，不是错误处理机制。
 
@@ -161,7 +161,7 @@ let sub = events.subscribe(func(value i32) i32 {
 // sub 离开作用域时自动注销；此前 C 可以继续调用这个闭包。
 ```
 
-注册句柄只能移动，不能复制。注册期间保留闭包及其捕获值；注销等待正在执行的回调和借用句柄的 C 调用结束，再释放捕获值。若绑定另外导出了注销符号对应的“单个资源参数、Unit 返回”函数，也可提前调用它；重复注销无效，注销后不能再调用使用该句柄的 C 操作。在自己的回调内注销同一注册会 Panic。
+注册句柄只能移动，不能复制。注册期间保留闭包及其捕获值；注销时会等待正在执行的回调和借用该句柄的 C 调用结束，再释放捕获值。若绑定另外导出了注销符号对应的“单个资源参数、Unit 返回”函数，也可提前调用它；重复注销无效，注销后不能再调用使用该句柄的 C 操作。在自己的回调内注销同一注册会 Panic。
 
 资源声明不填写 `release_symbol` 或 `retain_symbol`。两处 userdata 都必须是 `PtrMut[Unit]`，可以位于各自参数列表的任意位置。回调不能 `throws`。注册失败以空指针表示；此时 C 必须已停止并等待所有回调结束。正常注销也必须保证返回后再无回调，包括尚未进入 Woozy 的派发。绑定声明不能替代 C 库的这些保证。C 注册仍保留捕获图时，GC 不会替程序注销；这类外部注册形成的强引用循环需要保留句柄并显式 close，之后才能由 Woozy 回收。
 
@@ -170,8 +170,8 @@ let sub = events.subscribe(func(value i32) i32 {
 ## 5 当前限制
 
 - 不支持 C 可变参数、数组/union/packed/bitfield record，也不支持在 Woozy 中构造 record 或修改 record 字段。
-- 只接受 C 符号。C++ 库可以提供 `extern "C"` 接口，再按 C 声明使用。当前支持 Linux x86_64 和 macOS arm64 的 C ABI。直接调用 C++ ABI、名称修饰符号或 C++ 类型不受支持。
+- 只接受 C 符号。C++ 库可以提供 `extern "C"` 接口，再按 C 声明使用。当前支持 Linux x86_64 和 macOS arm64 的 C ABI；不支持直接调用 C++ ABI、名称修饰符号或 C++ 类型。
 - 保存捕获闭包仅支持上述带 userdata、返回指针句柄的注册接口；不支持抛错 callback、状态码加输出参数的注册接口，或没有 userdata 的 C API。TLS 专用 ABI 不作为公共库接口提供。
-- 清单不提供任意链接器参数，也没有跳过库名或目录校验的入口；能链接什么由经过校验的 native 依赖决定。
+- 清单不提供任意链接器参数，也没有跳过库名或目录校验的入口；只能链接经过校验的 native 依赖。
 
 更多语言规则见 [语言规则](SEMANTICS.md)，标准库接口见 [标准库](STDLIB.md)，系统接口见 [系统接口](OS.md)，可运行项目见 [示例目录](../examples/)。

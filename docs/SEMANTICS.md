@@ -4,16 +4,16 @@
 
 ## 1 与语法规范的关系
 
-[LEXICAL_SYNTAX.md](../baseline/LEXICAL_SYNTAX.md) 规定表层语法；本文件规定值、求值、错误和资源行为。现有 EBNF 与原型不因此成为完整语义检查器。下面明确标为未支持的表达会被解析，但检查阶段必须报告 `E_CAPABILITY_UNAVAILABLE`。
+[LEXICAL_SYNTAX.md](../baseline/LEXICAL_SYNTAX.md) 规定表层语法；本文件规定值、求值、错误和资源行为。现有 EBNF 与原型不因此成为完整语义检查器。下文明确标为未支持的语法形式会被解析，但检查阶段必须报告 `E_CAPABILITY_UNAVAILABLE`。
 
 当前不扩充 `?`、`null`、指针运算符、`class`、默认参数或宏。`auto` 推断通过 `let/var` 省略类型表达。
 
 ## 2 名称与模块
 
-- 普通名字采用一个词法命名空间，绑定带 kind；先选择最近绑定，再检查是否为所需种类。类型位置不会绕过同名局部变量去寻找外层类型。
+- 普通名称共用一个词法命名空间，每个绑定带有 kind；查找时先选最近绑定，再检查是否符合所需种类。类型位置不会绕过同名局部变量去寻找外层类型。
 - 同一作用域重名报错；嵌套局部作用域允许遮蔽，诊断可附可选提醒。预定义名称在最低优先级 prelude；`Self` 仅在 trait/impl 上下文有效。
 - import alias 只在当前文件有效；同包顶层声明在包内共享；`pub` 导出，不允许公开接口泄漏不可访问的私有类型。
-- 包依赖必须为 DAG；循环导入在解析依赖图时报告完整循环路径。函数之间的递归允许，与包循环不同。
+- 包依赖必须为 DAG；循环导入在解析依赖图时报告完整循环路径。允许函数间递归，这与包循环导入不同。
 - 第一版顶层只实施 `const`、类型、函数、trait/impl。顶层 `let/var` 即使可解析，也报告未支持；不引入隐式动态模块初始化。
 - 同一包的所有源文件必须声明一致的 package 名。导入路径以项目清单映射为准，磁盘枚举顺序不能改变含义。
 
@@ -30,12 +30,11 @@
 | switch 的 case/default | 每个分支建立隐式词法作用域，模式绑定只在本分支有效 |
 | catch 的错误绑定 | 与对应 catch 体同一作用域，不进入其他 catch 或 try 后方 |
 
-
 ## 3 基础类型与推断
 
 实现 `bool`、`i8/i16/i32/i64`、`u8/u16/u32/u64`、`isize/usize`、`f32/f64`、`string`、`Unit`。`isize/usize` 宽度来自目标描述；Python profile 初期按其声明的目标字宽工作，禁止直接按运行 Python 的宿主宽度推断。
 
-整数和浮点字面量先保留未定类型常量。有上下文时检查目标类型，无上下文时默认 i64/f64。负整数字面量在完成一元负号语义后检查范围，允许最小负整数；不能在 lexer 中先把正数字面量塞进宿主 i64。
+整数和浮点字面量先作为未定类型常量保留。有上下文时检查目标类型，无上下文时默认 i64/f64。负整数字面量在完成一元负号语义后检查范围，允许最小负整数；不能在 lexer 中先把正数字面量塞进宿主 i64。
 
 变量之间不隐式混合有符号、无符号、不同位宽或整数与浮点；字面量可以受上下文约束。赋值、实参、返回值均使用这一规则。显式转换使用 `T(x)`。整数到整数转换做范围检查；浮点到整数先向零截断，再按截断后的数学整数检查目标范围，NaN、无穷或越界产生 Panic。整数到浮点按目标精度采用 round-to-nearest ties-to-even。编译期能确定转换失败时直接报源码错误，只有动态失败才产生 Panic。这里规定转换行为，具体已支持的组合仍以两后端实现记录为准。
 
@@ -61,7 +60,7 @@ const 允许纯 struct/enum 的递归常量构造，以及常量字段读取；�
 | 移位量为负或不小于位宽 | Panic；不能把非法移位直接交给 LLVM |
 | 比较 | 按已经确定的有符号性选择指令 |
 
-移位左操作数必须为整数，右操作数允许任意整数类型，但先在其数学取值上检查有效范围。bitwise 运算其他两操作数要求同一具体整数类型。
+移位左操作数必须为整数，右操作数允许任意整数类型，但先在其数学取值上检查有效范围。其他 bitwise 运算的两个操作数要求同一具体整数类型。
 
 字面量超出目标类型范围与已定类型表达式运算回绕不同：`let x i8 = 128;` 是静态错误；`let x i8 = 127; let y = x + 1;` 得到 -128。常量折叠必须复用同一套数值规则。
 
@@ -83,7 +82,7 @@ Python 的 f32 标量运算需显式舍入；浮点除零、NaN 和无穷不能�
 - 命名实参先按书写顺序求值到临时值，再按签名排列。重排参数不能重排副作用。
 - 赋值目标的地址/索引先求值一次，再求右值；复合赋值不能重复计算下标或接收者。
 - `if/for` 条件必须是 bool。赋值不是表达式，没有隐式真假转换。
-- struct 字段按声明顺序布局的逻辑顺序记录；构造实参仍按源码顺序求值。底层 ABI 布局由目标降低单独决定，不承诺与 C++ 相同。
+- struct 字段按声明顺序记录逻辑布局；构造实参仍按源码顺序求值。底层 ABI 布局由目标降低单独决定，不承诺与 C++ 相同。
 - `return expr` 先求值并保存拥有的返回结果，再执行退出路径的清理。返回值不能借用即将释放的局部存储。
 - 非 Unit 函数所有可达正常结束路径必须返回；无限循环和无正常返回的 Panic 可作为终结路径。
 - `switch` 无 fallthrough，分支按源码顺序匹配。覆盖按实际值域判定：没有 default 时，只要已证明所有值都被覆盖即可接受；否则报源码错误。枚举必须覆盖全部变体（真正空枚举按既有规则无值可覆盖），bool 必须同时列出 true/false，确实列全的有限整数域可省略 default；float、string 和未列全的整数常量不能单独证明穷尽。任何合法类型都可以用 `_`、裸标识符或显式 default 作总匹配，Vec、POD、函数值和 Unit 不因此获得新的相等运算。
@@ -99,8 +98,7 @@ Python 的 f32 标量运算需显式舍入；浮点除零、NaN 和无穷不能�
 
 用户类型实现 `std/iter.Iterator[T]`，其 `next(inout Self)` 返回 `std/option.Option[T]`。`for item in expression` 对 expression 只求值一次，按普通复制规则建立私有可写迭代器，再反复调用 next；Some 产生本轮元素，None 结束。原迭代器的普通值字段不随副本推进，Vec、Box 等引用字段仍指向共享对象。next 不抛错；逐项错误可通过 Result 类型的元素表达。
 
-同一类型有多个不同Iterator实参实现时，for报歧义，不根据循环体或预期返回类型猜元素类型。Vec、Slice和string保留原有迭代规则。
-
+同一类型有多个不同 Iterator 实参实现时，for 报歧义，不根据循环体或预期返回类型猜元素类型。Vec、Slice 和 string 保留原有迭代规则。
 
 ## 6 泛型和 trait
 
@@ -110,7 +108,7 @@ Python 的 f32 标量运算需显式舍入；浮点除零、NaN 和无穷不能�
 
 `dyn Trait` 和 `dyn Trait[Args]` 是显式 trait object 类型。具体值在具有唯一完整 trait 实现时可以转换为对应的 dyn 类型；转换按普通值规则复制拥有数据，`move` 则先转移再装箱。dyn 方法按 trait 声明顺序进入 vtable，调用时使用对象内的具体实现。trait object 的复制共享同一个装箱值，最后一次销毁释放装箱值和其中的拥有字段；`Vec[dyn Trait]` 的元素复制/销毁使用同一规则。`Convert[i32]` 与 `Convert[bool]` 是不同的 dyn 类型，不共享 vtable 或实现选择。
 
-作为 dyn 使用的 trait 必须对象安全：每个方法有普通 `self Self` 接收者，所有非接收者参数必须是 ordinary；`move` 或 `inout` 参数（包括 `move i32`）同样对象不安全。方法不能声明自身的泛型参数，不能抛出 typed error，不能返回 `Self`，也不能在非接收者参数中使用 `Self`；这些限制在声明 dyn 类型或构造对象时以 `E_OBJECT_UNSAFE` 报告。重叠或歧义实现仍在声明阶段拒绝。暂不支持把 dyn 方法当函数值、dyn 的泛型方法或 dyn 作为 impl 目标；也不支持特化、关联类型和重叠 impl。
+作为 dyn 使用的 trait 必须对象安全：每个方法有普通 `self Self` 接收者，所有非接收者参数必须是 ordinary；`move` 或 `inout` 参数（包括 `move i32`）同样对象不安全。方法不能声明自身的泛型参数，不能抛出 typed error，不能返回 `Self`，也不能在非接收者参数中使用 `Self`；这些限制在声明 dyn 类型或构造对象时以 `E_OBJECT_UNSAFE` 报告。重叠或歧义实现仍在声明阶段拒绝。暂不支持把 dyn 方法当函数值、dyn 的泛型方法，以及把 dyn 作为 impl 目标；也不支持特化与关联类型。
 
 泛型函数体依据声明约束检查，调用时解析实参、满足约束，并对实际使用的具体组合单态化。不同包的实例化使用规范化类型键去重；无限递归实例化和超预算产生诊断，不让编译器耗尽资源。
 
@@ -152,15 +150,15 @@ struct 按字段声明逆序销毁，enum 按活动载荷字段逆序销毁，Ve
 
 `py.Error` 可作为 `Vec` 元素、struct 字段和 enum payload 保存，也可位于嵌套泛型值中；它支持普通复制、整体 move、返回、越过 catch 继续持有以及再次 `throw`/`catch`。复制共享同一个语言 Error 载荷和原 Python `Exception`、cause、traceback 对象，不做异常深复制；语言 drop 只释放该拥有槽，不承诺 Python 立即析构，也不依赖 `__del__` 执行语言清理。上述容器的既有复制/销毁顺序、move 后不可读和部分 move 限制不变。普通外部引用（如 ndarray/Tensor）和 `py.Error` 的聚合保存只在对应 Python 后端范围开放，不扩大 Native FFI；外部 callable 仍不能作为聚合成员保存。
 
-std/map、std/set 是以共享 Vec 实现的有类型容器，复制共享同一容器。std/json 的 Number 保存十进制原文，需要时显式转换；数组和对象最多嵌套256层。Native C 绑定支持有类型的 Ptr/PtrMut 和 Buffer/BufferMut，指针与缓冲区索引必须在 unsafe 块中进行；Buffer 检查长度，Ptr 的有效地址和生命期由调用者保证。
+std/map、std/set 是以共享 Vec 实现的有类型容器，复制共享同一容器。std/json 的 Number 保存十进制原文，需要时显式转换；数组和对象最多嵌套 256 层。Native C 绑定支持有类型的 Ptr/PtrMut 和 Buffer/BufferMut，指针与缓冲区索引必须在 unsafe 块中进行；Buffer 检查长度，Ptr 的有效地址和生命期由调用者保证。
 
-Native/64 和 Python/64 提供 `Slice[T]` 和 `std/slice` 的 `view`、`len`、`sub`、`to_vec`。视图使用半开区间，持有 owner Vec 并保护其存储；共享别名在视图存活时改变长度或扩容会先 Panic。Slice 切片产生子视图，Vec 切片继续复制元素；`to_vec` 新建容器并按普通规则复制元素。两后端均按普通规则复制和清理 Slice；Python 还会在循环回收时处理视图持有的 owner。字段和索引的可写位置已支持 `inout`，包括 Vec/Slice、string、函数值、Weak、dyn 和含拥有字段的聚合本身。
+Native/64 和 Python/64 提供 `Slice[T]` 和 `std/slice` 的 `view`、`len`、`sub`、`to_vec`。视图使用半开区间，持有 owner Vec 并保护其存储；共享别名在视图存活时改变长度或扩容会先 Panic。Slice 切片产生子视图，Vec 切片继续复制元素；`to_vec` 新建容器并按普通规则复制元素。两后端均按普通规则复制和清理 Slice；Python 还会在循环回收时处理视图持有的 owner。
 
 Native C 函数按绑定声明的固定签名调用，错误码是普通返回值，不自动转成 throws 或 py.Error。C resource 的每次拥有复制调用 retain_symbol，每个拥有副本清理时调用 release_symbol，由库决定最后一次引用释放时的析构；未声明 retain_symbol 的普通复制会被拒绝。借用指针和 C record 不自动释放目标。具体声明及限制见 [调用 C 库](FFI.md)。
 
 ### 7.2 参数模式和移动
 
-- 普通参数不消费调用者拥有值。调用期间保证值存活；如果被调用方返回或存储参数，必须生成合法 copy/retain 使新持有者获得自己的所有权。普通参数绑定只读，不能给参数名重新赋值；需要改值时显式创建 var 局部变量。异步调用在创建Task时复制普通拥有参数，直到任务结束或被清理；值字段复制，Vec等仍共享对象。对象内容能否修改继续按其类型和已声明操作的规则判断，不因参数绑定只读就改变。
+- 普通参数不消费调用者拥有值。调用期间保证值存活；如果被调用方返回或存储参数，必须生成合法 copy/retain 使新持有者获得自己的所有权。普通参数绑定只读，不能给参数名重新赋值；需要改值时显式创建 var 局部变量。异步调用在创建 Task 时复制普通拥有参数，并持有到任务结束或被清理；值字段复制，Vec 等仍共享对象。对象内容能否修改继续按其类型和已声明操作的规则判断，不因参数绑定只读就改变。
 - `move` 参数消费一个拥有值。对已有绑定必须显式 `move x`；被移动绑定在重新初始化前不可读。初期只允许整个拥有绑定或临时值，不实施部分字段移动。
 - `inout` 参数独占可写存储访问，不得逃逸、保存到对象或被捕获。可写位置包括整体 `var`、已有 `inout` 参数、其字段链（如 `obj.nested.field`）和可绑定容器元素（如 `items[i]`、`items[i].field`）。整个位置可以是数值/bool、递归只含平凡值的有限 struct/enum，或纯 Woozy 拥有值：Vec、Slice、string、函数值、Weak、dyn trait object、线程/同步运行时句柄，以及含这些字段的 struct/enum。这些类型按已有规则复制与清理，因此允许整体、字段或元素替换；struct/enum 仍是按字段复制的值。`Task` 句柄的完成生命周期归执行器所有，外部 C resource 没有可核对的 retain/release 配对，两者继续报 `E_CAPABILITY_UNAVAILABLE`；`Unit` 不是可写值位置。索引位置的接收者可以是通过 `let` 持有的 Vec/Slice（元素写入修改共享容器），但字段位置的基础绑定必须可写；位置最终必须能追溯到本地或参数存储，临时容器不作为可借用根。
 - 同一调用中不能把重叠存储同时作为 `inout` 与另一种访问传入。不同的具名字段可以同时作为非重叠 `inout`；相同或前缀字段路径、整容器访问、以及同一容器的动态索引继续保守拒绝。不同字面量索引可证明不重叠时可以同时借用。Vec/Slice 是共享句柄：复制到其他绑定、struct 字段、enum 载荷、函数返回值或闭包环境后，源码 SymbolId 不同不能证明对象不同。元素地址借用期间，其他实参若可能携带同一容器（包括间接 callee 的未知捕获环境），编译期保守拒绝；不得为未知别名生成 noalias。
@@ -196,11 +194,11 @@ Native 与 Python 后端都会自动回收由 Vec、Box 和闭包环境形成的
 
 原生内部降低采用成功标记及 value/error 两个输出通道。成功仅初始化 value，失败仅初始化 error；非活动侧禁止读取或销毁。这个内部调用约定未承诺二进制稳定；不能直接用作 C/C++ 公共 ABI。
 
-Python 生成代码可通过专用异常承载源语言 typed error。编译期按 TypeId 检查匹配，生成产物用稳定逻辑类型身份或生成的类型对象匹配；会话内 TypeId 裸编号不能写入跨模块缓存。外部 Python `Exception` 在绑定边界转换为 `py.Error` 并保留 cause/traceback。`py.Error` 与其他拥有值一样可存入 Vec/struct/enum；复制共享原异常对象，清理不保证宿主立即析构。不捕获所有 `BaseException`；KeyboardInterrupt、SystemExit 以及本语言 Panic 不能被误包装。
+Python 生成代码可通过专用异常承载源语言 typed error。编译期按 TypeId 检查匹配，生成产物用稳定逻辑类型身份或生成的类型对象匹配；会话内 TypeId 裸编号不能写入跨模块缓存。外部 Python `Exception` 在绑定边界转换为 `py.Error` 并保留 cause/traceback（其聚合保存与复制清理规则见 7.1 节）。不捕获所有 `BaseException`；KeyboardInterrupt、SystemExit 以及本语言 Panic 不能被误包装。
 
 Panic 表示除零、非法移位、越界等不可由 typed catch 恢复的运行失败。native 顶层终止程序；Python 使用 `langrt.Panic`（BaseException 子类）由生成的顶层 runner 转为失败诊断。两端不保证 Panic 后执行语言清理；Python 生成的 finally 必须避免把 Panic 路径误当普通错误路径执行语言 defer。由 Python 自身触发的对象析构也不作为可移植清理承诺。
 
-错误离开 main 时输出错误诊断并以非零状态结束。正常 `main() i32` 返回整数状态，`main() Unit` 返回成功；支持是否声明 typed throws。程序退出码不与 `woozyc` 检查命令退出码混为一谈。
+错误离开 main 时输出错误诊断并以非零状态结束。正常 `main() i32` 返回整数状态，`main() Unit` 返回成功；两种签名都支持声明或不声明 typed throws。程序退出码不与 `woozyc` 检查命令退出码混为一谈。
 
 ## 9 defer 和销毁顺序
 
@@ -230,8 +228,6 @@ ndarray/Tensor 的 shape、device、动态 dtype 和运行状态默认是运行�
 
 ## 闭包与 Weak
 
-闭包捕获创建时的逻辑值，捕获绑定只读；Vec 等共享对象的内容仍可通过已有接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 移动全部实际捕获的拥有值，不提供逐变量捕获列表。
-
-绑定 `move Self` 方法产生的函数值可复制、可重复调用。每次调用先按普通规则复制接收者，再把该副本移交给方法；不能复制的接收者禁止绑定。不增加只能调用一次的函数类型。
+闭包捕获与 `move Self` 方法值绑定规则见 7.2 节；语言不增加只能调用一次的函数类型。
 
 `Weak[T]` 是内建类型；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。Weak 接受 Vec、函数值、有引用计数的共享句柄和 `std/box.Box[T]`。普通按值 struct/enum、string、文件/套接字描述符及外部 Python/C 对象不直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从强引用建立 Weak，`weak.upgrade(w)` 返回 `std/option.Option[T]`；目标已经没有强引用时得到 `None`。Weak 不延长目标寿命。Box 是共享的可变值单元，复制 Box 保持同一个单元的身份；`box.new`、`box.get`、`box.set` 已支持 Native 和 Python。

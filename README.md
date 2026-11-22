@@ -36,7 +36,7 @@ Most of the guides below are in Chinese.
 
 Woozy release packages target Linux x86_64 and Apple Silicon. Both include `woozyc`, the standard library, runtime files, and pinned LLVM tools. On a Mac, native programs target macOS 14.4 or later and compiling them requires the Xcode Command Line Tools or another installed macOS SDK.
 
-With curl and Python 3.12 or later, run this command to check [GitHub Releases](https://github.com/qinjian623/woozy/releases) and confirm an install or upgrade.
+This command checks for a new release and asks before installing or upgrading. It requires curl and Python 3.12 or later. [GitHub Releases](https://github.com/qinjian623/woozy/releases)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
@@ -54,7 +54,7 @@ Install or upgrade without a prompt.
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --yes
 ```
 
-The installer prefers stable releases when available. An installed pre-release can move to a newer pre-release or stable version. It verifies the archive before switching `~/.local/bin/woozyc`, and keeps previous versions. Add `~/.local/bin` to your `PATH` if needed. Use `--prefix DIR` for a different user installation directory.
+The installer prefers stable releases when available; an installed pre-release can upgrade to a newer pre-release or a stable release. It verifies the archive before switching `~/.local/bin/woozyc` and keeps previous versions. Add `~/.local/bin` to your `PATH` if needed, or pass `--prefix DIR` to install into another directory.
 
 If `~/.local/bin/woozyc` points to a source build or a package without release metadata, specify a separate prefix to keep that installation.
 
@@ -82,7 +82,7 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-This prints `Hello, world!`. Executing Python output requires Python 3.12. Package builds use the system Make or Ninja, and TLS requires a separately built addon. See the [build guide](development/docs/BUILD.md#安装自举版工具链) and the [standard library guide](docs/STDLIB.md).
+This prints `Hello, world!`. Running generated Python code requires Python 3.12. Package builds use the system Make or Ninja, and TLS requires a separately built addon. See the [build guide](development/docs/BUILD.md#安装自举版工具链) and the [standard library guide](docs/STDLIB.md).
 
 ## Editor setup
 
@@ -96,39 +96,39 @@ Omit `--editor` to configure Neovim and Emacs. See the [editor guide](developmen
 
 ## Language basics
 
-Types follow names, as in `count i32`. Local bindings can infer their types. Function parameters require an explicit type. Simple statements end with a semicolon.
+Types follow names, as in `count i32`. Local bindings can infer their types, while function parameters require explicit types. Simple statements end with a semicolon.
 
-A `var` binding can be reassigned and its value fields can be modified. A `let` binding permits neither. Structs and enums copy field by field. Assigning a Vec shares the container. Slicing creates a new Vec, and reference-valued elements can still be shared.
+A `var` binding can be reassigned and have its value fields modified; a `let` binding allows neither. Structs and enums copy field by field. Assigning a Vec shares the container, while slicing creates a new Vec whose reference-valued elements can still be shared.
 
-A `string` is an immutable UTF-8 value. `text.len`, indexing, and slicing count Unicode code points, and indexing returns a `u32`. The `+` operator creates a new string. Equality and ordering compare bytes without Unicode normalization. String `+=` applies only to a whole `var` binding. Use `std/text` to convert explicitly between strings and `Vec[u8]`.
+A `string` is an immutable UTF-8 value. Indexing, slicing, and `text.len` (from `std/text`) count Unicode code points, and indexing returns a `u32`. The `+` operator creates a new string, while equality and ordering compare bytes without Unicode normalization. String `+=` applies only to a whole `var` binding. Use `std/text` to convert explicitly between strings and `Vec[u8]`.
 
-Ordinary parameters leave arguments available to the caller, and parameter names are read-only. Write `move` at the call site to transfer ownership, or `inout` to let the callee modify the caller's variable.
+Ordinary parameters leave arguments available to the caller, and parameter bindings are read-only. Write `move` at the call site to transfer ownership, or `inout` to let the callee modify the caller's variable.
 
-Function values can capture local bindings when they are created. Captured bindings are read-only. Shared objects such as Vec and Box can still be modified through their APIs. A plain `func` copies the captured values. A `move func(...) { ... }` transfers the owned values it captures. Saving `value.method` saves a logical copy of the receiver. Rebinding the original variable or replacing its value fields leaves that copy intact, while reference fields such as Vec still share their contents.
+Function values can capture local bindings when created. Captured bindings are read-only, though shared objects such as Vec and Box can still be modified through their APIs. A plain `func` copies captured values, whereas `move func(...) { ... }` moves the owned values it captures. Storing `value.method` keeps a logical copy of the receiver: rebinding the original variable or replacing its value fields leaves that copy intact, while reference fields such as Vec still share their contents.
 
-Declare propagating errors with `throws E`. A caller can catch the error or declare that it propagates the same error type. A `defer` runs when its lexical block exits, with the most recently registered action running first. Panics such as integer division by zero and out-of-bounds access are outside typed error handling.
+Declare propagating errors with `throws E`; callers either catch the error or declare the same error type. A `defer` runs when its lexical block exits, with the most recently registered action running first. Panics such as integer division by zero and out-of-bounds access are outside typed error handling.
 
-Declare generics with `[T]` or `[T Trait]` and implement traits explicitly. The dynamic trait types `dyn Trait` and `dyn Trait[Args]` support dynamic dispatch for object-safe methods, storage in `Vec[dyn Trait]`, and copying, moving, and destruction. Trait applications with different type arguments have distinct identities, such as `Convert[i32]` and `Convert[bool]`. Template specialization and associated types are unavailable.
+Declare generics with `[T]` or `[T Trait]` and implement traits explicitly. The dynamic trait types `dyn Trait` and `dyn Trait[Args]` support dynamic dispatch for object-safe methods, storage in `Vec[dyn Trait]`, and copying, moving, and destruction. Trait applications with different type arguments have distinct identities, such as `Convert[i32]` and `Convert[bool]`. Template specialization and associated types are not supported.
 
 ## Current support
 
-Woozy supports integers and floating-point numbers, strings, function values and capturing closures, structs and enums, Vec and Slice, constrained generics, traits and `dyn Trait`, modules, typed `throws`, and block-scoped `defer`. It can generate native code or Python code. Both backends follow the same language rules.
+Woozy supports integers and floating-point numbers, strings, function values and capturing closures, structs and enums, Vec and Slice, constrained generics, traits and `dyn Trait`, modules, typed `throws`, and block-scoped `defer`. It can generate native or Python code, and both backends follow the same language rules.
 
-The [standard library](docs/STDLIB.md) covers I/O, filesystems, text and collections, JSON, math, time, random numbers, networking, processes, and concurrency. The system interfaces support native programs on Linux x86_64 and macOS arm64. Their names and argument order follow C conventions. Calls throw declared errors on failure, and incorrect lock operations panic. Woozy has no raw syscall API.
+The [standard library](docs/STDLIB.md) covers I/O, filesystems, text and collections, JSON, math, time, random numbers, networking, processes, and concurrency. The system interfaces target native programs on Linux x86_64 and macOS arm64 using C-style names and argument order; calls throw declared errors on failure, incorrect lock operations panic, and there is no raw syscall API.
 
 `std/http` supports HTTP/1.1. `std/http_server` provides an async HTTP/1.1 server with keep-alive, pipelining, nonblocking backpressure, request/body/idle/write timeouts, `Expect: 100-continue`, and graceful stop/drain/abort. `std/unicode` provides Unicode 18 normalization, case folding, and grapheme clusters. `std/timezone` supports named time zones, daylight saving time, and local-time conversion.
 
-Use `std/thread` to start threads with capture-free functions and explicit arguments and to join them. `std/sync` provides mutexes, condition variables, and atomic integers. Shared mutable data requires synchronization by the program. Atomic ARC protects reference counts only.
+Use `std/thread` to spawn threads with capture-free functions and explicit arguments and to join them; `std/sync` provides mutexes, condition variables, and atomic integers. Programs must synchronize shared mutable data themselves—atomic ARC protects reference counts only.
 
-Both backends collect pure Woozy cycles of strong references involving Vec, Box, and closure environments. The native backend also supports async/await, timer and file descriptor waits, and collection of pure Woozy reference cycles involving tasks that are unstarted or complete. Creating a Task copies and retains its ordinary owned arguments. The executor runs on one thread, and async is currently available only on the native backend. See [threads and async](docs/CONCURRENCY.md). The host manages cycles within foreign Python or C objects.
+Both backends collect pure Woozy cycles of strong references involving Vec, Box, and closure environments. The native backend also supports async/await, timer and file descriptor waits, and collection of pure Woozy reference cycles involving unstarted or completed tasks. Creating a Task copies and retains its ordinary owned arguments. The executor is single-threaded, and async is currently available only on the native backend; see [threads and async](docs/CONCURRENCY.md). The host manages cycles within foreign Python or C objects.
 
-`std/rwlock` provides read-write locks, and `std/cancel` provides cooperative cancellation. `std/channel` supports bounded and unbounded queues, timeouts, and cancellable waits. `std/task` provides fixed-size thread pools and futures. Shut down the pool explicitly with `shutdown`.
+`std/rwlock` provides read-write locks, and `std/cancel` provides cooperative cancellation. `std/channel` supports bounded and unbounded queues, timeouts, and cancellable waits. `std/task` provides fixed-size thread pools and futures; shut pools down explicitly with `shutdown`.
 
-`std/box` provides the shared mutable cell `Box[T]`. `Weak[T]` is a built-in weak reference type, with `empty`, `downgrade`, and `upgrade` provided by `std/weak`. Targets include Vec, function values, `Box[T]`, and reference-counted shared handles. A weak reference leaves the target's lifetime unchanged. Upgrading returns an `Option[T]`.
+`std/box` provides the shared mutable cell `Box[T]`. `Weak[T]` is a built-in weak reference type, with `empty`, `downgrade`, and `upgrade` in `std/weak`. Valid targets include Vec, function values, `Box[T]`, and reference-counted shared handles. A weak reference does not extend its target's lifetime, and upgrading returns an `Option[T]`.
 
-Native programs can declare and call typed C functions and pass C records with natural layout, pointers, and buffers. C can call a capture-free, non-throwing function immediately or retain it for later use. Indexing pointers and buffers requires an `unsafe` block. C error codes remain explicit. Libraries that require libc need the hosted runtime. Ordinary native programs run independently.
+Native programs can declare and call typed C functions and pass C records with natural layout, pointers, and buffers. C can call a capture-free, non-throwing function immediately or retain it for later use. Indexing pointers and buffers requires an `unsafe` block, and C error codes remain explicit. Libraries that require libc need the hosted runtime, while ordinary native programs run independently.
 
-`std/process` supports spawn, exec, wait, arguments, and environment variables. `std/signal` supports synchronous signal waits, and `std/ipc` provides shared memory and synchronization across processes. After a multithreaded fork, only the calling thread remains in the child. The program is responsible for its own locks. The child should usually exec promptly.
+`std/process` supports spawn, exec, wait, arguments, and environment variables. `std/signal` supports synchronous signal waits, and `std/ipc` provides shared memory and cross-process synchronization. After a multithreaded fork, only the calling thread survives in the child; the program is responsible for its own locks, and the child should usually exec promptly.
 
 Default arguments are not yet supported.
 

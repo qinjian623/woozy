@@ -73,8 +73,8 @@ pub func close[T](pipe Channel[T]);
   重置为 `None`，因此重置旧槽不会使返回值悬空或重复释放。
 - unbounded 扩容时，按 `head` 开始的逻辑顺序复制 `size` 个 `Option[T]` 到新
   ring，再把 `head` 置零并替换 ring 句柄。旧 ring 的引用在复制完成后释放；
-  这个顺序保证扩容搬移不丢失、不重复 drop 拥有元素。扩容也覆盖 ring 已回绕、
-  `head` 非零后再次填满的情况。
+  这个顺序保证扩容搬移不丢失、不重复 drop 带所有权的元素。扩容也覆盖 ring
+  已回绕、`head` 非零后再次填满的情况。
 
 ## 实现结构
 
@@ -84,7 +84,7 @@ pub func close[T](pipe Channel[T]);
 - 队列是 `Vec[option.Option[T]]` 环形缓冲区。bounded 一次分配 `capacity` 个
   `None` 槽；unbounded 从空开始，第一次需要时增长到 8 个槽，之后满时翻倍。
 - 所有状态转换在 Mutex 下进行；条件变量只用来等待状态变化，条件本身每轮
-  重新检查，允许无通知返回。
+  重新检查，允许伪唤醒。
 - 不使用固定 sleep、宿主线程库或额外 FFI。线程创建仍由调用方通过
   `std/thread.spawn` 提供。
 
@@ -95,8 +95,8 @@ pub func close[T](pipe Channel[T]);
 - 不提供 Python 后端实现；当前线程/同步接口本身以 Native Linux x86_64 为准。
 - `capacity == 0` 通过语言整数除零 Panic 终止程序（`division-by-zero`），
   不使用新的宿主错误接口。
-- 测试和契约不声称内存泄漏检测或形式化证明；ARC 正确性由真实拥有 payload
-  的并发运行、校验和与进程正常退出覆盖。
+- 本模块的测试和契约不包含内存泄漏检测或形式化证明；ARC 正确性由带所有权
+  payload 的并发运行、校验和以及进程正常退出覆盖。
 
 ## 验证
 
@@ -113,8 +113,8 @@ python3 tests/native/channels/run_channels.py \
 
 工作树验证时，已构建 CLI 的 `LANG_STD_SOURCE_ROOT` 指向主仓库 stdlib；为避免
 修改其它标准库，使用私有 mount namespace 把一份包含本模块的临时 stdlib 副本
-绑定到该路径后运行，未在主 stdlib 写入或留下文件。正式构建从包含本模块的
-仓库配置时不需要该绑定。每次 build/run 都有有限超时，stdout/stderr 保存在
+绑定到该路径后运行，未在主 stdlib 写入或留下文件。从包含本模块的仓库正常
+配置构建时不需要该绑定。每次 build/run 都有有限超时，stdout/stderr 保存在
 `--out` 下，`summary.json` 记录 CLI 哈希、环境、源码哈希、退出状态和失败项。
 本次保存的完整日志在 `/tmp/channel-verification/pass{1,2,3}/`。
 
@@ -141,7 +141,7 @@ python3 tests/native/channels/run_channels.py \
 - `owned-payload`：bounded 容量 11，4×4 线程传递含 `string`、`Vec[i64]` 和
   enum payload 的 struct；发送后修改调用方标量字段，验证队列副本仍正确；
   另测 `Channel[string]` 和 `Channel[Vec[i64]]`。
-- `unbounded-owned`：600 个拥有 payload 在无消费者时全部驻留并多次扩容；
+- `unbounded-owned`：600 个带所有权的 payload 在无消费者时全部驻留并多次扩容；
   另构造 `head` 非零后填满再扩容的顺序测试，逐项验证 payload。
 - `capacity-zero`：O0/O2 均以退出码 101 和
   `LANG_NATIVE_PANIC:v1:division-by-zero:` 终止。

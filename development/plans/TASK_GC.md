@@ -1,7 +1,7 @@
 # Task / coroutine frame 的 GC 接入
 
 设计对象是 Native 的 Future、LLVM coroutine 和 Slot.owner/active。
-普通async参数私有复制已合入2c9cd64，Hosted Thread清理修正已合入973328d。Source frame metadata、Task图跟踪与fork恢复已在Root验证副本组合，通过Frame32、内存24及相关21项CTest；已合入主分支228cee9；主目录完整171/171 CTest通过（152.93秒）。下文记录实现要求和保留限制。
+普通 async 参数的私有复制已合入 2c9cd64，Hosted Thread 清理修正已合入 973328d。Source frame metadata、Task 图跟踪与 fork 恢复已在 Root 验证副本中组合，通过 Frame 32、内存 24 及相关 21 项 CTest，已合入主分支 228cee9；主目录完整 171/171 CTest 通过（152.93 秒）。下文记录实现要求和保留限制。
 
 ## 1. 保留 executor 强引用，不给 collector 增加协程 finalizer
 
@@ -49,7 +49,7 @@ static void task_gc_clear(void *) noexcept;
 // invalidate_weak = nullptr；本次不新增 Weak[Task]。
 ```
 
-`task_gc_trace` 调用 frame_ops->trace(gc_state, ...)。`task_gc_clear` 检查第 1 节条件，调用 clear_owners；未启动的 Pending 随后通过共同的完成/摘列表代码变为 Cancelled。不能只改 status 而留下 g_all、ready、waiter、epoll 记录。
+`task_gc_trace` 调用 frame_ops->trace(gc_state, ...)。`task_gc_clear` 检查第 1 节条件，调用 clear_owners；未启动的 Pending 随后通过统一的完成与摘除列表逻辑变为 Cancelled。不能只改 status 而留下 g_all、ready、waiter、epoll 记录。
 
 ## 3. typed metadata 放在 coroutine 中，不计算 frame 偏移
 
@@ -68,7 +68,7 @@ metadata 结构是编译器内部类型：
 metadata、slot、flag 都通过现有 coroutine 内的 LLVM alloca 创建。把 metadata 地址发布到 Future 后，CoroSplit 必须把这批逃逸地址及其存储放进 heap frame。生成的 typed 回调根据自己已知的 metadata 结构 GEP，再用对应 TypeId 的 LLVM 类型读取 slot；不从 handle 猜 CoroSplit 的字段编号，不在 C++ 中解释 i1 flag。
 
 - `trace`：对每个 active=true 且 `has_strong_edge(type)` 的槽调用 `gc_trace_value`；再追踪有效的 promise 拥有值。每个实际 ARC owner 恰好计一次，重复指向同一对象也分别计边。
-- `clear_owners`：按逆序处理 active owner，**先清 active，再调用该类型的 drop**；随后按 promise 状态/拥有位丢弃有效结果或错误。重复调用没有动作。
+- `clear_owners`：按逆序处理 active owner，**先清 active，再调用该类型的 drop**；随后按 promise 状态/拥有位丢弃有效结果或错误。重复调用为空操作。
 - await 的 Task 临时值必须在 owner slot 中跨挂起保存。当前运行库的 `waiting_on` 和 `waiters` 双向链各持一份真实强引用，必须分别计边；不能重复计算源码 await 槽，也不能漏掉运行库新增的引用。ready、g_all 仍是借用指针；kActive 是执行器的外部根。
 - timer/fd Future 没有 frame / Wz 强边，不注册 GC；Vec[Task] 指向它们的边可按现有 collector 规则指向未注册叶对象。
 
@@ -116,12 +116,12 @@ normal/error/cancel 的源码清理结束后进入 async.final，再完成普通
 
 ## 7. 必须实际通过的检查
 
-1. O0/O2：未启动 Task↔Vec、已完成 result↔Vec、typed error↔Vec 三类循环；observer 确认 Future、frame、Vec 最终各 free 一次，而非只看 exit0。保留当前 gc-task-cycle 小例。
+1. O0/O2：未启动 Task↔Vec、已完成 result↔Vec、typed error↔Vec 三类循环；observer 确认 Future、frame、Vec 最终各 free 一次，而不是只看退出码 0。保留当前 gc-task-cycle 小例。
 2. source Task 复制/聚合/Vec/closure 持有；删掉一个 alias 不 free，删掉最后一个 alias 后正常 free；重复 await 拥有型 result/error 后值仍有效。
 3. 普通 Vec/string/closure/聚合参数在调用方出块后仍可用；move 参数只 drop 一次；never-started、success、typed error、cancel 四种退出分别检查。
 4. 悬挂任务只剩 executor 根时，其他线程施加 GC 压力仍不回收；defer 读取 frame 内值；cancel/shutdown 后 defer 恰执行一次且 frame 最终 free。GC clear callback 中不得 resume 或执行该 defer。
 5. 使用实例私有输出目录；构建前后 LLVM 检查 metadata 与所有逃逸 slot/flag 地址确实属于 heap frame，O2 不得留下发布后的栈地址；检查未初始化/已 move slot 不被 trace。
-6. 原 ASan registry/waiter UAF 小例、hosted async 与纯 Woozy GC 原7例保留；带外部资源时确认其 release 发生在 world_resume 后，或明确诊断拒绝未实现字段。
+6. 原 ASan registry/waiter UAF 小例、hosted async 与纯 Woozy GC 原有 7 例继续保留；带外部资源时确认其 release 发生在 world_resume 后，或明确诊断拒绝未实现字段。
 
 以上是待实现设计，未运行新测试；不需要改 gc.cpp 的候选、pin、clear-check 或统计定义。
 

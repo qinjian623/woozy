@@ -26,20 +26,24 @@ The accepted standalone primitives were re-run, not inferred from old reports:
 Hashes and logs are in `outputs/tmp/woozy-weak-handle-sites/`.
 
 ## 2. Accepted contracts that must not change
+
 `runtime/native/weak.hpp` is authoritative: `LangWeakControl` is 16 bytes
-(atomic `u64 weak_refs`, `void *target`); the strong count is always the
-target's offset-0 atomic `u64`; `owner_slot` is null initially, points to one
-real control, or holds permanent closed tag `1`; downgrade requires a strong
-reference; final release calls `lang_weak_detach_v1` once before free; closed
-tag is a harmless no-op; `lang_weak_invalidate_slot_v1` permanently closes the
-slot and clears the target without allocation, free, or user code under lock;
-fork uses `lang_weak_fork_prepare/parent/child_v1`.
+(atomic `u64 weak_refs`, `void *target`), and the strong count is always the
+target's offset-0 atomic `u64`. `owner_slot` starts null, points to one real
+control, or holds the permanent closed tag `1`. Downgrade requires a strong
+reference, final release calls `lang_weak_detach_v1` once before free, and the
+closed tag is a harmless no-op. `lang_weak_invalidate_slot_v1` permanently
+closes the slot and clears the target without allocation, free, or user code
+under lock. Fork uses `lang_weak_fork_prepare/parent/child_v1`.
+
 `runtime/native/gc.hpp` is also authoritative: `LangGcOps.invalidate_weak` is
 the trailing optional callback. The collector pins every candidate, calls every
 `invalidate_weak`, and only then calls the first `clear` (`gc.cpp` pinned /
 invalidate / clear loops). `gc.hpp`, `gc.cpp`, and `weak.cpp` need no semantic
 change for the sites below.
+
 ## 3. Eligible actual targets
+
 | Source type | Actual object and strong header | Current final path | Weak slot |
 | --- | --- | --- | --- |
 | `Vec[T]` | `LangVec`, `refs` offset 0, size 72 | `lang_vec_release_v1`: CAS to 0, acquire fence, iteration check, drop initialized payload, free data then descriptor | append at 72; `&vec->weak_control` |
@@ -51,10 +55,12 @@ change for the sites below.
 `ipc.Mutex`, `ipc.Condvar`, and `ipc.Semaphore` are views over `ipc.Memory`
 plus an offset; they are not independent ARC identities and are not targets.
 The projected `LangVec` slot keeps the aligned header at 80, so payload offsets
-and the observer ABI do not move. `LangHandle` grows 24 to 32; text payloads and
-embedded handle-first objects shift by eight bytes but keep `refs` 0, `kind` 8,
-`destroy` 16.
+and the observer ABI do not move. `LangHandle` grows from 24 to 32 bytes; text
+payloads and embedded handle-first objects shift by eight bytes but keep
+`refs` 0, `kind` 8, `destroy` 16.
+
 ## 4. Not eligible or not implemented
+
 - `string`: `LangText` is a four-word value whose `owner` is a `LangHandle` of
   kind `text`. It has a strong count, but the confirmed list excludes strings.
 - `os.File` and `net.Socket`: plain `descriptor i32` values, no ARC and no
@@ -74,7 +80,9 @@ embedded handle-first objects shift by eight bytes but keep `refs` 0, `kind` 8,
   `io.Writer`: nominal structs whose state lives in Vec cells. They are not in
   the confirmed list. Do not unwrap arbitrary single-Vec structs; that would
   silently make every library wrapper weakable. `Box[T]` is the exception.
+
 ## 5. Canonical slot lifecycle
+
 1. Construction writes the canonical slot to null before publication.
    `lang_vec_new_v1` must write it; `allocate_object` (sync), native/hosted
    thread state, IPC `Mapping`, and text owner allocation must also do so.
@@ -92,17 +100,21 @@ embedded handle-first objects shift by eight bytes but keep `refs` 0, `kind` 8,
 6. `lang_vec_set_v1`, `lang_vec_resize_v1`, and `lang_vec_clear_v1` change
    elements, not Vec identity. They must not detach or invalidate the Vec slot;
    replaced elements use their own final paths.
+
 The accepted order (drop payload, detach, free) is safe because the strong
 count is already zero: upgrade fails at `refs == 0` before detach. Detach must
 not be after free or skipped on the final branch. For handles, detach belongs
 in the shared release function before `handle->destroy`, covering caller-side
 and runner-side final release.
+
 ## 6. GC white candidates and clear
+
 Preserve the accepted order: snapshot; trace/count edges; mark external roots;
 retain every candidate (pin) before any clear; call `invalidate_weak` for every
 candidate before the first clear; clear and re-trace, panicking on surviving
 edges; release pins and count `collected` only when the pin was the last strong
 count.
+
 For a `LangVec` or `LangHandle` candidate, `invalidate_weak` is exactly
 `lang_weak_invalidate_slot_v1(&object->weak_control)`, with no user code or
 allocation. After this, no downgrade can install a new control and no upgrade
@@ -111,6 +123,7 @@ callback that tries to upgrade a white peer must fail; unsafe self-resurrection
 leaves the slot permanently closed. Box needs no separate GC type: its cell Vec
 is the traced node and its `invalidate_weak` closes the cell slot. Nominal
 wrappers are not independent weak nodes.
+
 ## 7. Fork, thread self-reference, and cancellation
 `gc_runtime.hpp` fixes the full order:
     alloc prepare -> weak prepare -> gc prepare -> world prepare ->

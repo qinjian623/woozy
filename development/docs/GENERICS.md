@@ -64,7 +64,7 @@ let/const、普通参数、临时值、字段和索引不能经此入口作为�
 
 自由泛型函数现在也支持满足 trait 约束的数字/bool inout 及既有具体函数值，见下文；固有方法数字/bool inout 同样单列说明。普通参数只是接收或返回带 inout 的 callback 时，不按目标函数自身的 inout 处理，保留原有合法调用。嵌套 FunctionType、struct/enum callback 字段具体化后也检查 inout 数据类型：合法模板中的真实 T 可以保留，具体非 scalar 数据报源级 `E_CAPABILITY_UNAVAILABLE`，不能落成内部 HIR 错误。具体函数与实例不能残留 T，Place、模板来源和重复存储检查仍保留。
 
-主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各45/45，关闭 LLVM 为33/33，共168项，无跳过。每个 LLVM 构建的新测试有5条记录，其中2条为check，3条为Native O0/O2和Python3.12.15实际执行。独立组合程序另验证先取得inout后的后参抛错、callee自身抛错与defer恢复、return先复制再清理、循环continue/break，以及不同事件值区分的命名实参源码顺序；Python23个Frame无残留。scalar inout没有动态begin/end-borrow调用，空borrow列表不被记成观察到借用登记次数。
+主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各45/45，关闭 LLVM 为33/33，共168项，无跳过。每个 LLVM 构建的新测试有5条记录，其中2条为check，3条为Native O0/O2和Python3.12.15实际执行。独立组合程序另验证先取得inout后的后参抛错、callee自身抛错与defer恢复、return先复制再清理、循环continue/break，以及用不同事件值区分的命名实参源码顺序；Python23个Frame无残留。scalar inout没有动态begin/end-borrow调用，空borrow列表不计入借用登记次数。
 
 ## 固有方法的 move 参数
 
@@ -114,7 +114,7 @@ ordinary self 借用、参数求值顺序、共享副本、throws/defer 和枚�
 
 inout 实参必须是整体可写绑定；该批数据类型具体化后接受数字/bool，后续批次已把同一入口扩展到有限平凡 struct/enum 整体绑定，见〈平凡 struct/enum 的整体 inout〉。let、普通借用参数、字段、索引、临时值及同存储冲突继续拒绝。receiver 先求值一次，命名实参按书写顺序求值；callee 已写入的数值在 typed throw 后仍可见，后参抛错时 callee 不执行。返回值先保存再执行 defer，拥有 move 参数仍按原有顺序清理。
 
-来源合格也必须检查完整嵌套类型图。ordinary callback 内的合法 inout 不算外围函数自身的 inout；依赖泛型参数的 callback inout 仍限数字/bool，与 Self/泛型参数无关的固定平凡聚合 callback 合法；具体非平凡 callback、返回类型及名义字段内 inout 仍报源级 `E_CAPABILITY_UNAVAILABLE`。实际 move/inout self、绑定或静态未绑定方法值继续拒绝；受约束固有方法和 trait 非 self 参数见下文；`check_function_value_inout` 保持原样，没有新增 HIR 字段、后端接口或运行库。
+即使来源符合要求，也必须检查完整的嵌套类型图。ordinary callback 内的合法 inout 不算外围函数自身的 inout；依赖泛型参数的 callback inout 仍限数字/bool，与 Self/泛型参数无关的固定平凡聚合 callback 合法；具体非平凡 callback、返回类型及名义字段内 inout 仍报源级 `E_CAPABILITY_UNAVAILABLE`。实际 move/inout self、绑定或静态未绑定方法值继续拒绝；受约束固有方法和 trait 非 self 参数见下文；`check_function_value_inout` 保持原样，没有新增 HIR 字段、后端接口或运行库。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各47/47，关闭 LLVM 为33/33，共174项，无跳过，包含T10绑定和CLI测试。每个 LLVM 配置的新增2个方法 inout 项目有6次正式 Native O0/O2/Python 执行、6次私有观察、4次check及2次拒绝构建；旧方法 move 的11个项目仍有33次正式执行。独立2个新项目另有6次执行、6次观察和8次别名反例检查。标量 inout 没有动态 borrow 登记；生成 Native 程序和预编译 LLVM 未声称全部经过 sanitizer 插桩。
 
@@ -146,7 +146,7 @@ Native 曾在 try 成功 return 后的不可达拥有调用处报内部错误；
 
 原 before 源码未改，Native O0/O2 和 Python 均实际返回规定的7，不可达的 mix/[55] 没有执行或分配Vec。死catch、双return join、非尾部删槽、零活槽和真实throws后继续尾部调用均有检查。没有删掉或放宽验证器：可达拥有槽的initializer、清理或槽身份被破坏时仍报E_IR_INVALID。
 
-本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭LLVM为33/33，共180项，无跳过，包含两项T10。每LLVM配置新增5个源码项目的15次正式执行、10次Native私有观察及3个坏IR拒绝控制；原样before另以正式CLI构建并执行Native O0/O2/Python，均返回7。独立6组Source/API检查和23次坏IR修改通过，另4个自有案例的12次正式执行/12次观察通过。47个原保护文件及2个验证器保持原字节；生成Native与预编译LLVM未声称全部有sanitizer插桩。
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭LLVM为33/33，共180项，无跳过，包含两项T10。每LLVM配置新增5个源码项目的15次正式执行、10次Native私有观察及3个坏IR拒绝对照；原样before另以正式CLI构建并执行Native O0/O2/Python，均返回7。独立6组Source/API检查和23次坏IR修改通过，另4个自有案例的12次正式执行/12次观察通过。47个原保护文件及2个验证器保持原字节；生成Native与预编译LLVM未声称全部有sanitizer插桩。
 
 ## 受约束固有方法的 move 与数字/bool inout
 
@@ -217,7 +217,7 @@ trait 定义的每个类型参数可以带一个已有 trait 约束，例如 `tr
 
 每次应用 trait 时，用同一替换表代入实际 Self 和全部有序参数，逐项检查声明的约束。检查包括没有调用的 impl 头、函数、类型及方法自身参数上的约束；所有声明收集完成后再检查，后声明的类型和 impl 不影响结果。字段补全后重新检查约束实参的完整类型，包含函数及名义类型字段中的 inout；不支持的数据类型在源码检查阶段报 `E_CAPABILITY_UNAVAILABLE`，不会推迟到内部 HIR 错误。约束实参具体化后才出现的嵌套 inout 也重新检查，模板中的合法占位参数使用其所属声明的真实类型环境。
 
-泛型转交使用已声明的证明。例如 `trait Use[A Code]` 对应的 `[A Code, T Use[A]]` 合法；省略 A 的 Code 约束时，不从 `T Use[A]`、方法体或预期返回类型反推。缺少实现、错误的有序实参或错误 Self 都报源码类型错误。已有完整 trait 身份、重叠 impl、phantom 实例键及 ordinary 接收者规则保持。
+泛型转交只依据已声明的约束。例如 `trait Use[A Code]` 对应的 `[A Code, T Use[A]]` 合法；省略 A 的 Code 约束时，不从 `T Use[A]`、方法体或预期返回类型反推。缺少实现、错误的有序实参或错误 Self 都报源码类型错误。已有完整 trait 身份、重叠 impl、phantom 实例键及 ordinary 接收者规则保持。
 
 两个后端仍执行具体普通 Call，无新增运行时分派。非 self move、平凡聚合整体 inout、throws/defer 沿用已有规则；依赖类型参数的受限 callback、实际 self move/inout、方法值及捕获闭包没有扩大。测试覆盖真实 Self/兄弟参数、泛型 impl/方法与跨包转交、未调用非法声明，以及直接和成功重算所有权后的坏 HIR。
 
@@ -225,21 +225,18 @@ trait 定义的每个类型参数可以带一个已有 trait 约束，例如 `tr
 
 泛型 trait 的 ordinary 方法现在可以声明一个或多个自身类型参数，每个参数可无约束或带一个已有 trait bound。值调用、具体 `Type.method(...)`、受约束的 `T.method(...)`、显式与既有推断、泛型 impl、跨包公开 trait、泛型转交及非捕获 lambda 沿用同一实例化过程。impl 可按位置改名方法自身参数，声明与 impl 的参数个数、标签、返回/throws 以及完整 bound 必须对应；未调用的原型也检查。
 
-方法自身 bound 可以引用所属 trait 的真实 Self 和有序 trait 实参，例如 `trait Use[A]{func read[U Tag[A]](owner Self,x U)i32;}` 与 `func own[U Tag[Self]]`。这些名称属于原型的环境，不进入方法的 own 参数列表或实例键。原型与 impl 先建立 `Self`、trait 实参和全部 own 参数的位置替换，再比较 bound 与签名；纯 alpha 改名保持身份，真正不同的 bound 仍报源级类型错误。
+方法自身 bound 可以引用所属 trait 的真实 Self 和有序 trait 实参，例如 `trait Use[A]{func read[U Tag[A]](owner Self,x U)i32;}` 与 `func own[U Tag[Self]]`。这些名称属于原型的环境，不进入方法的 own 参数列表或实例键。原型与 impl 先建立 `Self`、trait 实参和全部 own 参数的位置替换，再比较 bound（含其有序 trait 实参）与签名；纯 alpha 改名保持身份，真正不同的 bound 仍报源级类型错误。
 
 实例仍按真实 impl 方法 SymbolId 与完整 `[impl 实参..., 方法实参...]` 缓存。仅由 trait 应用确定的 impl 参数和签名中未出现的 phantom own 参数都进入键；同一组合重复调用去重，不同组合即使签名相同也不合并。具体 `ConstraintCall` 从真实 Source 后缀和所属实例恢复方法实参，替换 Self、trait 实参及全部 own 参数后再验证 bound，最终仍是普通直接 `Call`。
 
 顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback 按替换后的实际数据类型检查，接受数字/bool 和有限平凡聚合。Self 参数模式及无捕获方法函数值的后续支持见各自章节，捕获闭包仍延后。泛型 trait 参数自身的 bound 见前节；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
 
-本批新 fixture 与 `run_generic_traits.py` 在两后端执行原三个 before 组合、参数 bound、Self bound、四组完整 phantom 实例和去重、显式/推断、跨包、转交、非捕获 lambda、Vec copy/返回、命名参数顺序及 typed-error/defer 事件；拒绝组合验证 fresh 构建不产物且 stale 旧字节保持。未新增公共 HIR/NodeKind、ABI、schema 或后端接口。
+本批新 fixture 与 `run_generic_traits.py` 在两后端执行原三个 before 组合、参数 bound、Self bound、四组完整 phantom 实例和去重、显式/推断、跨包、转交、非捕获 lambda、Vec copy/返回、命名参数顺序及 typed-error/defer 事件；拒绝组合验证 fresh 构建不生成产物，且 stale 旧字节保持不变。未新增公共 HIR/NodeKind、ABI、schema 或后端接口。
 
 结构体字段、枚举载荷和方法签名补全后，检查真实 Self、trait 参数和方法类型参数所依赖的完整回调类型，包括返回值、`throws`、递归类型和嵌套函数。`Holder[U]`、`Holder[A]` 和 `Holder[Self]` 中的依赖 inout 回调均在源码检查时报 `E_CAPABILITY_UNAVAILABLE`；固定 `Holder[i32]` 与非泛型 trait 已有的合法回调仍接受。
 
 验证器从真实 Source 重建 trait 参数列表、bound/impl 的有序应用和方法签名；
 同包内后声明的 nominal 在 bound 中与前置声明等价，不按未登记名称猜测 foreign。
-trait 原型（含泛型 trait）的 own bound 可引用该 trait 的真实 Self 和有序 trait 参数；原型与 impl 方法
-own bound 先建立 Self、trait 实参和全部方法 own 参数的位置替换，再比较有序
-trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source 错误。
 伪造、删除、换序或互换 TraitRef（含两个同签名 phantom 应用）、伪造 phantom
 实例键，以及重算 ownership 后再验证的坏图都报 `E_IR_INVALID`。外层冻结的
 原样 Source 覆盖同 Self 双 phantom、联合重叠/非重叠、跨包 ordinary Vec 与
@@ -280,13 +277,13 @@ Type/T 形式的实际首位 Self move/inout 已实施，范围见〈Type/T 形�
 
 ## 递归枚举模式
 
-枚举载荷可以继续使用限定变体模式，也可绑定或写通配符；支持多层、多载荷、泛型及跨包公开枚举。分支按源码顺序匹配，所有内部标签匹配成功后才建立该分支绑定，没有 fallthrough。两个后端均支持已有 POD 值和有限拥有聚合；计算产生的 switch 值只求值一次，POD 结果按普通 full-expression 清理，拥有的结果登记为真实 subject temporary，保留到所选分支的 defer、模式绑定和局部值清理完成之后，再按正常退出、return、throw、break、continue 的退出计划释放；早于外层作用域清理。内部 catch 不离开分支时继续持有；subject 求值失败不清理未产生的结果；嵌套 switch 按内到外释放；再次循环迭代每轮新建一次 subject。named 拥有 switch 保持原有借用与绑定 copy 行为不变。
+枚举载荷可以继续使用限定变体模式，也可绑定或写通配符，支持多层、多载荷、泛型及跨包公开枚举。分支按源码顺序匹配，所有内部标签匹配成功后才建立该分支绑定，没有 fallthrough。两个后端均支持已有 POD 值和有限拥有聚合。计算产生的 switch 值只求值一次：POD 结果按普通 full-expression 清理；拥有结果登记为真实 subject temporary，保留到所选分支的 defer、模式绑定和局部值清理完成后，再按正常退出、return、throw、break、continue 的退出计划释放，并早于外层作用域清理。内部 catch 不离开分支时继续持有该值；subject 求值失败时不清理未产生的结果；嵌套 switch 按从内到外顺序释放；循环再次迭代时每轮新建一次 subject。named 拥有 switch 保持原有借用与绑定 copy 行为不变。
 
 覆盖检查同时考虑所有载荷列。同一外层变体可由多个不同内部组合覆盖；部分重叠但仍匹配新值的后续分支合法，被前面多个分支联合覆盖的分支拒绝。缺少任何内部组合均报不穷尽。普通值或 Vec 位于前面的载荷列时，继续检查后面的枚举列；原空枚举规则保持。共享分析有工作量与深度限制，无法完成时拒绝编译，不将未知结果当成穷尽。
 
 HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定作用域，再重算覆盖。显式模式类型实参按所属函数实例替换，包括泛型非捕获 lambda；不直接将模板 T 与具体 i32 比较。Native 只在父标签匹配后读取活动载荷，所有测试成功后才复制拥有绑定；Python 使用递归短路判断。退出计划包括同一外层变体的后续内部组合，以及其 return、throw、break、continue 和 defer。
 
-整数/负数、bool、f32/f64、string 字面量模式及其在任意层 enum payload 中的组合现已按 SEMANTICS §5 的覆盖规则支持；完整 UTF-8 字节、嵌入 NUL、bool 全列、小整数域、float 的 IEEE 零重叠/Inf/NaN 落总匹配，以及裸名遮蔽同名 const 均有两后端执行验证。literal pattern 不建立局部、不复制拥有载荷。
+整数/负数、bool、f32/f64、string 字面量模式及其在任意层 enum payload 中的组合现已按 SEMANTICS §5 的覆盖规则支持；完整 UTF-8 字节、嵌入 NUL、bool 全列、小整数域、float 的 IEEE 零重叠/Inf/NaN 落入兜底匹配，以及裸名遮蔽同名 const 均有两后端执行验证。literal pattern 不建立局部、不复制拥有载荷。
 
 这项支持仍不包含部分字段 move、guard/or/range 模式或 switch 表达式。失败分支没有绑定 copy/store 的检查来自生成 CFG 和源码，零存活观察不能单独证明平衡 copy/release 从未发生。完整核心仍未完成，T07/T09 仍为 in_progress。
 
@@ -316,7 +313,7 @@ Type/T 入口支持普通参数、非 self move，以及非 self 顶层数字/bo
 
 无接收者的静态方法也可声明 move 参数。若原型是 `func echo[U](self move U) U`，首参仍是方法类型参数 U；即使调用为 `Host.echo[Host](move h)`，也不因 U 的具体类型等于 Self 而增加接收者。原型首参直接为 trait Self 且采用 move/inout 的情况，包括 owner 标签，本批继续报 `E_CAPABILITY_UNAVAILABLE`。固有静态方法保持已有声明判断，合法的 `Host.consume(value move Host)` 和 `i32.adjust(slot inout i32)` 不会因首参类型与实现类型相同而被改判。
 
-已有绑定仍须显式 move；临时值、按书写顺序求值的命名实参、普通共享副本、typed error、return 和 defer 沿用原规则。后续实参失败时，已经 move 的临时按逆序销毁，原绑定不会恢复可读；若更早的实参失败，尚未求值的 move 不发生。catch 同时接收 move 前的实参错误和 callee 接管后的同型错误时，所有权状态会合并，不能据此假定源绑定仍可读。实例仍按真实方法及完整 impl/方法实参保存，phantom 参数、真实 Source、Move.binding 与清理记录继续验证。
+已有绑定仍须显式 move；临时值、按书写顺序求值的命名实参、普通共享副本、typed error、return 和 defer 沿用原规则。后续实参失败时，已经 move 的临时值按逆序销毁，原绑定不会恢复可读；若更早的实参失败，尚未求值的 move 不发生。catch 同时接收 move 前的实参错误和 callee 接管后的同型错误时，所有权状态会合并，不能据此假定源绑定仍可读。实例仍按真实方法及完整 impl/方法实参保存，phantom 参数、真实 Source、Move.binding 与清理记录继续验证。
 
 非 self 顶层数字/bool 或有限平凡 struct/enum 整体 inout 见下节。依赖方法类型参数或 Self 的 inout callback 继续检查整个函数签名、替换后的 struct 字段及 enum 载荷；旧 ordinary-only Type/T 调用保留原行为。公共 HIR、NodeKind、后端接口和运行库未变。泛型 trait 已由前文〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move 和完整 ARC 仍未完成。T07/T09 保持 in_progress。
 
@@ -332,7 +329,7 @@ inout 必须传入可写的整体绑定；let、普通参数、临时值、字�
 
 HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证器核对真实 trait/impl、调用形式、参数顺序/标签/模式、整体 Place 及完整实例类型实参；方法类型参数保留为真实 TypeParameter，不替换成 Any。递归函数字段即使与外围签名使用同一 Function TypeId，也须检查其 callback 参数。
 
-测试包含 Native O0/O2 与 Python3.12.15 实际执行、写回和求值顺序、throw/defer、move 清理、同签名 phantom 实例、坏 HIR 及重算所有权后的拒绝。`tests/generics/run_method_inout.py` 还检查拒绝构建不会产生新程序或覆盖旧文件。旧合法控制与两个原始漏检源码分别保存在 `trait-ordinary-*-control`、`trait-function-cycle-reject` 和 `trait-type-inout-return-reject` 项目中。
+测试包含 Native O0/O2 与 Python3.12.15 实际执行、写回和求值顺序、throw/defer、move 清理、同签名 phantom 实例、坏 HIR 及重算所有权后的拒绝。`tests/generics/run_method_inout.py` 还检查拒绝构建不会产生新程序或覆盖旧文件。旧合法对照与两个原始漏检源码分别保存在 `trait-ordinary-*-control`、`trait-function-cycle-reject` 和 `trait-type-inout-return-reject` 项目中。
 
 方法值、捕获闭包、实际 self move/inout、字段/索引 inout、foreign 和动态 string 仍未开放。平凡聚合整体 inout 见下节。T07/T09 保持 in_progress。
 
@@ -346,7 +343,7 @@ HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证
 
 Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `Cell` 只承载可写绑定，普通读取和返回仍复制逻辑值。零尺寸/空 struct、Unit 字段和固定函数值字段都进入真实执行检查，函数字段被替换后实际调用；测试不比较 padding，只检查有效字段和活动变体。
 
-新增 `tests/generics/aggregate-inout/` 覆盖嵌套 POD、padding、enum 活动变体、显式/推断泛型、函数值、固有和 trait 方法、ConcreteType/T 调用、整体替换、字段修改、copy/return、throw/defer/求值顺序，以及 owning 聚合和别名拒绝。`tests/generics/run_aggregate_inout.py` 在两后端检查和执行，并对拒绝项目验证 fresh 构建不产物、已有目录不被覆盖。C++ 静态检查另覆盖 `ValueOps.pod_inout`、顶层 Unit/Function 拒绝、坏 HIR 字段和把 Place 改成 Read 后重算 ownership 仍拒绝。旧 constrained move/inout 拒绝项目因聚合 inout 变为合法，保留原输入未改，测试改用新增的含 Vec 字段版本作为拒绝控制。四配置的最终数量以本次交付日志为准。
+新增 `tests/generics/aggregate-inout/` 覆盖嵌套 POD、padding、enum 活动变体、显式/推断泛型、函数值、固有和 trait 方法、ConcreteType/T 调用、整体替换、字段修改、copy/return、throw/defer/求值顺序，以及 owning 聚合和别名拒绝。`tests/generics/run_aggregate_inout.py` 在两后端检查和执行，并对拒绝项目验证 fresh 构建不生成产物、已有目录不被覆盖。C++ 静态检查另覆盖 `ValueOps.pod_inout`、顶层 Unit/Function 拒绝、坏 HIR 字段和把 Place 改成 Read 后重算 ownership 仍拒绝。旧 constrained move/inout 拒绝项目因聚合 inout 变为合法，保留原输入未改，测试改用新增的含 Vec 字段版本作为拒绝对照。四配置的最终数量以本次交付日志为准。
 
 修正版进一步区分了三个来源问题：同一个泛型 nominal 声明的有限嵌套（如 `Box[Box[i32]]`）按具体类型实参的严格缩小判断值存储循环，不再仅因声明相同就当作无限布局；函数签名中的 nominal 回指不参与值布局环判断。trait callback 的 Self 依赖只从真实原型中的 trait Self SymbolId 判断，固定 `Pair` callback 即使 impl Self 也是 `Pair` 或 `i32` 也不被当作 Self 依赖；真正的 Self callback 按实际 Self 替换后检查，也接受有限平凡聚合。`slot inout Wrap[Self]` 在原型检查时把真实 Self 放入类型环境，具体 impl 仍按实际替换后的聚合检查，拥有字段的 Self 继续报 Source `E_CAPABILITY_UNAVAILABLE`。这些限制同时由独立 HIR 验证器按同一 raw prototype/Self 关系重查。
 
@@ -374,11 +371,11 @@ FunctionValue 的目标本身是 impl 方法或 raw prototype 时，来源检查
 
 ## 局部非捕获函数值 const 别名
 
-局部 `const` 现在可以把另一个已知的纯非捕获函数值常量再别名。范围包括自由函数、非捕获函数字面量、`Type.method`、`Type.method[U]`、泛型自由函数/方法实例，以及受约束模板中的 `T.method` / `T.method[U]`；同块、子块、多层、同名外层初始化和跨包公开常量后再局部别名使用同一规则。初始化式仍在声明前的环境中求值，新绑定在其完整解析后加入 `locals/constants`，运行时只读取真实局部槽。
+局部 `const` 现在可以为另一个已知的纯非捕获函数值常量再建别名。范围包括自由函数、非捕获函数字面量、`Type.method`、`Type.method[U]`、泛型自由函数/方法实例，以及受约束模板中的 `T.method` / `T.method[U]`；同块、子块、多层、同名外层初始化和跨包公开常量后再局部别名使用同一规则。初始化式仍在声明前的环境中求值，新绑定在其完整解析后加入 `locals/constants`，运行时只读取真实局部槽。
 
 别名初始化在 HIR 中保持真实 `Read`，没有把局部名统一 materialize 成 `FunctionValue`，也没有新增公共 HIR 字段、NodeKind、ABI、运行库 API 或捕获环境。检查器只在本绑定为 `const`、初始化节点确为 `Read`、其真实符号确为 `const` 且该符号已有的 `Constant` 记录带 function 元数据时，复制原符号和目标函数的完整有序 `type_args`。普通 `let`/`var`/参数、函数调用返回函数、field/index 取值、函数调用常量化、Vec/聚合 const 和普通函数 CTFE 均不放行；readonly、初始化前/出作用域/前向引用和常量环继续使用既有 Source 诊断。
 
-验证器独立于检查器的 `Constant` 表：函数类型的 const `Read` 在真实 Source 或已提交 payload 任一指向 const 时都必须通过现有 `resolved_source` 与 `instance.renamed` 核对两侧是同一真实 const 声明符号，payload 不能改成普通 let/参数来跳过检查；再按真实 Binding AST 走现有方法/自由函数/字面量/有序泛型实参来源路线；函数值 `const` Binding 的初始化 child 用现有 `source_input`（仅透明括号）绑定到真实 RHS，本地 const 别名必须保留 `Read` 且符号身份一致。模板与具体实例都检查，phantom 特化和克隆重命名按真实原符号恢复，不按名字猜测；坏 HIR 在直接/public verify 及成功重算 ownership 后仍报 `E_IR_INVALID`。
+验证器不依赖检查器的 `Constant` 表。对于函数类型的 const `Read`，只要真实 Source 或已提交 payload 任一侧指向 const，验证器就通过现有 `resolved_source` 与 `instance.renamed` 核对两侧是否为同一真实 const 声明符号，防止把 payload 改成普通 let 或参数来跳过检查，再按真实 Binding AST 走现有的方法、自由函数、字面量及有序泛型实参来源检查。函数值 `const` Binding 的初始化 child 通过现有 `source_input`（仅剥离透明括号）绑定到真实 RHS，本地 const 别名必须保留 `Read` 且符号身份一致。模板与具体实例都检查，phantom 特化和克隆重命名按真实原符号恢复，不按名字猜测；坏 HIR 在直接/public verify 及成功重算 ownership 后仍报 `E_IR_INVALID`。
 
 `tests/generics/unbound-method-values/local-const-aliases/` 和 `local-const-alias-strings/` 覆盖双后端检查、Native O0/O2、Python3.12.15、跨包 const、泛型两层实例、完整 trait 实参、method phantom、UTF-8 嵌入 NUL 字节、move/inout 与 typed throws 间接调用；新增拒绝项目验证 fresh 无输出、stale 字节不变。聚合 const、捕获闭包、普通函数 CTFE 和 T07/T09 的既有缺口保持不变。
 
@@ -402,7 +399,7 @@ move 仍只转交整体本地拥有绑定或临时值，普通借用参数、字
 字段/索引、非平凡拥有值、同存储读写重叠或重复 inout 不因接收者形式而放宽。
 
 接收者先且只求值一次，后面的实参按书写顺序求值，命名参数只决定对应形参。
-后实参抛错时，已移动的接收者临时在 catch 前清理，源绑定不恢复；callee 尚未
+后实参抛错时，已移动的接收者临时值在 catch 前清理，源绑定不恢复；callee 尚未
 进入。callee 抛错前的 inout 写回仍可见；返回值先保存，之后执行 defer 和销毁。
 两个后端沿用现有 Call/ConstraintCall、CallArg.mode、Move、Place 和退出计划，
 没有增加公共 HIR、ABI 或运行库接口。
@@ -412,10 +409,10 @@ T、完整有序 trait 实参、self/owner、拥有临时值、POD/标量 inout�
 callee 抛错/defer。`run_receiver_modes.py` 真实执行 Native O0/O2、Python3.12.15，
 并观察 Vec 与物理 Native 分配/释放以及 Python Frame。拒绝输入另检查两后端
 check 和 fresh/stale build 的准确诊断及输出字节保持。T07 另包含真实 receiver
-Source/模式/Place 绑定/完整 trait 实参变异，先验合法模块通过，再要求直接、
+Source/模式/Place 绑定/完整 trait 实参变异，先验证合法模块通过，再要求直接、
 发布以及成功重算 ownership 后均拒绝坏图。
 
-组合用例同时保留数值 `+(move x)` 作为普通接收者的合法控制，并检查整体 Move 后
+组合用例同时保留数值 `+(move x)` 作为普通接收者的合法对照，并检查整体 Move 后
 读取字段、再把该拥有结果作为普通 receiver 的成功及后参抛错。私有 ownership
 记录不再对没有存储身份的平凡 Move 结果登记借用；拥有 Move 的借用指向结果临时，
 不指向已消费的源绑定。观察器要求两次实际拥有借用均结束，且正常、错误退出后

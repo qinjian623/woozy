@@ -26,13 +26,13 @@ Make 入口默认构建三代，使用 `OPT=0`，每个包仍执行 LLVM 验证�
 
 ## 冻结输入与 stage0 实际来源
 
-脚本读取 stage0 同级的 `build.ninja` 和 `CMakeCache.txt`，要求 `LANG_ENABLE_LLVM=ON`。新版 C++ 编译器报告实际使用的标准库、helper、运行库和 LLVM 工具路径。旧版仍从 CMake 编译宏确定资源。报告记录路径、解析后的目标和文件哈希，每一代前后重新核对。链接改向其他文件也会记为 `input_changes`。另存在 `resources/stage0` 的 seed 和 helper 只用于核对文件字节，实际构建仍从原路径启动。
+脚本读取 stage0 同级的 `build.ninja` 和 `CMakeCache.txt`，要求 `LANG_ENABLE_LLVM=ON`。新版 C++ 编译器会主动报告实际使用的标准库、helper、运行库和 LLVM 工具路径；旧版仍从 CMake 编译宏确定资源。生成的报告会记下路径、解析后的目标和文件哈希，每一代构建前后都会重新核对，符号链接改向其他文件也会记为 `input_changes`。另存在 `resources/stage0` 的 seed 和 helper 只用来核对文件字节，实际构建仍从原路径启动。
 
-脚本把 stage0 实际 stdlib `.wz`、两个运行库归档与冻结副本逐字比较；无法解析宏、宏值冲突、路径缺失或字节不同都在 stage0 明确失败。每一代运行前后还会重新核对完整冻结输入：compiler `.wz`、compiler manifest、stdlib `.wz` 集合、native/hosted 归档、两个 Python runtime 文件、`resources/runtime` 的完整文件集合、实际解析后的工具路径和字节、seed/helper 及其 build 配置。新增、丢失或字节变化都会失败；缺失文件也作为可报告的输入变化记录（例如 before 为原哈希、after 为 missing），并在 `result.json` 的 `failed_stage` 和该代 `input_changes` 中保留阶段、路径和哈希。当前阶段发生任何异常都会把该 stage 标为 failed，不让未完成记录停留在 running。
+脚本会把 stage0 实际使用的 stdlib `.wz` 和两个运行库归档与冻结副本逐字节比较；无法解析宏、宏值冲突、路径缺失或字节不同，都会在 stage0 阶段直接失败。每一代运行前后还会重新核对全部冻结输入：compiler `.wz`、compiler manifest、stdlib `.wz` 集合、native/hosted 归档、两个 Python runtime 文件、`resources/runtime` 的全部文件、实际解析后的工具路径和字节，以及 seed/helper 及其 build 配置。任何新增、丢失或字节变化都会导致失败；缺失文件同样记录为输入变化（例如 before 为原哈希、after 为 missing），并在 `result.json` 的 `failed_stage` 和该代 `input_changes` 中保留阶段、路径和哈希。当前阶段发生任何异常都会把该 stage 标为 failed，避免未完成记录停留在 running。
 
-每次阶段启动前先写入 `stages` 记录，再执行构建；stdout、stderr、退出码、`timed_out`、`cleanup_complete` 和 `abandoned_pipes` 都会落盘。超时使用 `corpus.py` 的进程组和管道清理 helper，孙进程一并终止；脱离进程组并持有管道时有限返回并标记失败。超时或清理不完整绝不算 passed。
+每个阶段启动前先写入 `stages` 记录，再执行构建；stdout、stderr、退出码、`timed_out`、`cleanup_complete` 和 `abandoned_pipes` 都会落盘。超时清理复用 `corpus.py` 的进程组和管道清理 helper，会一并终止孙进程；若有子进程脱离进程组且仍持有管道，则在限定时间内返回并标记失败。超时或清理不完整一律不算 passed。
 
-exec 追踪中的相对 pathname 取决于被跟踪进程 cwd，strace 记录不足以恢复，bootstrap 和 corpus 都直接拒绝；绝对 `execve`/`execveat` 仍按允许集合核对，空 pathname 和无法解析的记录继续失败。
+exec 追踪中的相对 pathname 取决于被跟踪进程的 cwd，仅凭 strace 记录无法恢复，bootstrap 和 corpus 都会直接拒绝；绝对路径的 `execve`/`execveat` 仍按允许集合核对，空 pathname 和无法解析的记录继续判失败。
 
 完整移植完成后运行：
 

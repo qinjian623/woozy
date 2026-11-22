@@ -138,7 +138,8 @@ multi-word graph modification. `enter_critical` publishes the region under the
 registry lock and increments `critical_depth`. While it is nonzero, a `poll`
 that sees the request returns without changing ACTIVE or parking, and a
 repeated `register` also refuses to park an already-registered ACTIVE thread.
-The collector's scan therefore keeps seeing ACTIVE and wait/timeout. Inner
+The collector's scan therefore keeps seeing ACTIVE until the outer leave runs
+or the stop times out. Inner
 `leave_critical` calls only decrement the depth and never become safepoints.
 The outermost leave decrements to zero and, if the request is still active,
 publishes PARKED under the lock, notifies outside the lock, and waits for
@@ -255,12 +256,12 @@ when all of these hold under the registry lock:
 * `safe_depth == 0`;
 * `critical_depth == 0`.
 
-Unregistered threads return false and are not auto-registered. The query does
-not set the request, does not change state, and never resumes, releases, or
-consumes a successful stop. In particular, the collector holding a successful
-stop gets false, and calling this function does not let it skip its explicit
-`lang_gc_world_resume_v1`. All threads are false while another collector owns a
-stop, because no second collection can start in that state.
+For unregistered threads, the query returns false without auto-registering
+them. It does not set the request, change state, or resume, release, or
+consume a successful stop. In particular, the collector holding an active stop
+gets false and must still call `lang_gc_world_resume_v1` explicitly. It also
+returns false on every thread while another collector owns a stop, since no
+second collection can start in that state.
 
 The intended future use is an automatic entry poll deciding whether a
 collection may be considered at a critical function entry. It is advisory: a
@@ -317,9 +318,10 @@ Leave behavior:
 * A callback can fork from its current thread scope; the world child hook
   preserves callback_depth, the token stack pointer, and one node reference per
   active token. The child must still execute the same LIFO leaves. Copied
-  tokens, tokens used after leave, a callback that never returns through its
-  scope, or a nonexistent node are misuse; terminal Panic or process-exit
-  leakage, never silent removal of another registration. Forking from inside a
+  tokens, tokens used after leave, callbacks that never return through their
+  scope, or a nonexistent node are misuse and result in a terminal Panic or
+  process-exit leakage, never silent removal of another registration. Forking
+  from inside a
   kernel clear/trace callback is handled by the controller/fork restrictions,
   not this token API.
 
@@ -636,8 +638,8 @@ gettid.
 `/tmp/gc-callback-independent-pi-20261112/review.json`): the existing-node
 `lang_gc_world_register_v1` park condition checked `critical_depth` but not
 `callback_depth`. A repeated register inside an ACTIVE callback with a pending
-stop parked the callback mid graph update and let the collector stop on a
-half-written Pair. The condition now also requires `callback_depth == 0`;
+stop parked the callback in the middle of a graph update and let the collector
+stop on a half-written Pair. The condition now also requires `callback_depth == 0`;
 repeated register returns false without parking. A permanent real-pthread
 Pair regression writes `a`, waits for the request, calls register, writes
 `b/sum`, leaves the callback, and verifies a successful stop sees only the
