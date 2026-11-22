@@ -42,7 +42,13 @@ With curl and Python 3.12 or later, run this command to check [GitHub Releases](
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
 ```
 
-Use `--check` to report the available version without installing anything, or `--yes` to install or upgrade without a prompt.
+Check for a new version without installing it.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --check
+```
+
+Install or upgrade without a prompt.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --yes

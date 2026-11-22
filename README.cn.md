@@ -40,7 +40,13 @@ Woozy 安装包面向 Linux x86_64 和 Apple Silicon，均包含 `woozyc`、标�
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 -
 ```
 
-加 `--check` 只查版本。用下面这条命令可跳过询问，直接安装或升级。
+只查可用版本。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --check
+```
+
+跳过询问，直接安装或升级。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qinjian623/woozy/main/install.py | python3 - --yes
