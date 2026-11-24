@@ -921,9 +921,32 @@ func e_value_system_call(instruction nativeir.Instruction,
                         reference: "0"));
                 }
                 if operation == 42 {
-                    var actual Vec[Value] = [];
-                    vec.push(actual, args[0]);
-                    runtime("lang_vec_clear_v1", "void", actual, inout state);
+                    if owning(element, inout state) {
+                        runtime("lang_vec_clear_v1", "void", [args[0]], inout state);
+                    } else {
+                        let length = vec_field(args[0], 1, "i64", inout state);
+                        let initialized = vec_field(args[0], 2, "i64", inout state);
+                        let used = c_binop("or", "i64", length.reference,
+                            initialized.reference, inout state);
+                        let present = c_icmp("ne", "i64", used.reference, "0", inout state);
+                        let function_index = current_function(state);
+                        let clear = new_block(function_index, "vec.clear", inout state);
+                        let done = new_block(function_index, "vec.cleared", inout state);
+                        c_cond_branch(present, clear, done, inout state);
+                        position(clear, inout state);
+                        let iterations = e_vec_iterations_acquire(args[0], inout state);
+                        let pinned = c_icmp("ne", "i64", iterations.reference, "0",
+                            inout state);
+                        guard(pinned, 8, instruction.source, inout state);
+                        for field in [usize(2), usize(1)] {
+                            let address = c_gep(VEC_TYPE, args[0], field, inout state);
+                            let suffix = vec_memory(true, inout state);
+                            append("store i64 0, ptr " + address.reference + suffix,
+                                inout state);
+                        }
+                        c_branch(done, inout state);
+                        position(done, inout state);
+                    }
                     return option.Option[Value].Some(Value(type_name: "i8",
                         reference: "0"));
                 }

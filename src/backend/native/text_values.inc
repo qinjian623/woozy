@@ -182,8 +182,35 @@
     }
     case SystemOperation::vec_resize:
       runtime("lang_vec_resize_v1", builder.getVoidTy(), {args[0], args[1], element_storage(element(), args[2])}); break;
-    case SystemOperation::vec_clear:
-      runtime("lang_vec_clear_v1", builder.getVoidTy(), {args[0]}); break;
+    case SystemOperation::vec_clear: {
+      if (owning(element())) {
+        runtime("lang_vec_clear_v1", builder.getVoidTy(), {args[0]});
+        break;
+      }
+      auto *length = vec_field(args[0], 1, builder.getInt64Ty());
+      auto *initialized = vec_field(args[0], 2, builder.getInt64Ty());
+      auto *present = builder.CreateICmpNE(
+          builder.CreateOr(length, initialized), builder.getInt64(0));
+      auto *function = builder.GetInsertBlock()->getParent();
+      auto *clear = llvm::BasicBlock::Create(context, "vec.clear", function);
+      auto *done = llvm::BasicBlock::Create(context, "vec.cleared", function);
+      builder.CreateCondBr(present, clear, done);
+      builder.SetInsertPoint(clear);
+      auto *iterations = builder.CreateLoad(
+          builder.getInt64Ty(),
+          builder.CreateStructGEP(vec_type, args[0], 4));
+      iterations->setAtomic(llvm::AtomicOrdering::Acquire);
+      iterations->setAlignment(llvm::Align(8));
+      vec_memory(iterations, true);
+      guard(builder.CreateICmpNE(iterations, builder.getInt64(0)), 8, i.source);
+      for (unsigned field : {2u, 1u}) {
+        auto *address = builder.CreateStructGEP(vec_type, args[0], field);
+        vec_memory(builder.CreateStore(builder.getInt64(0), address), true);
+      }
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+      break;
+    }
     case SystemOperation::vec_try_move_trivial:
       return runtime("lang_vec_try_move_trivial_v1", builder.getInt1Ty(),
                      {args[0], args[1], args[2], args[3]});
