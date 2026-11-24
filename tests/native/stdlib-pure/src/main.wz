@@ -25,7 +25,9 @@ func main() i32 throws strconv.Error {
     if !math.signbit(math.ceil(-0.25)) || !math.signbit(math.trunc(-0.25)) || !math.signbit(math.round(-0.25)) { return 11; }
     if math.round(-0.5) != -1.0 || math.round(0.49999999999999994) != 0.0 { return 12; }
     let max = 1.7976931348623157e308;
-    if math.fma(max,2.0,-max) != max || math.ldexp(0.5,4) != 8.0 || math.frexp(8.0).fraction != 0.5 { return 13; }
+    let normal = math.frexp(8.0);
+    if math.fma(max,2.0,-max) != max || math.ldexp(0.5,4) != 8.0 ||
+       normal.fraction != 0.5 || normal.exponent != 4 { return 13; }
     if math.sin(0.0) != 0.0 || math.cos(0.0) != 1.0 || math.pow(2.0,8.0) != 256.0 { return 14; }
     if !math.signbit(math.min(-0.0,0.0)) || math.signbit(math.max(-0.0,0.0)) { return 15; }
     var caught = false;
@@ -52,6 +54,17 @@ func main() i32 throws strconv.Error {
        math.isnan(infinity) || !math.isinf(infinity) || math.isfinite(infinity) ||
        math.isnan(subnormal) || math.isinf(subnormal) || !math.isfinite(subnormal) ||
        !math.isfinite(-0.0) { return 28; }
+    let tiny = math.frexp(-subnormal);
+    let boundary = math.frexp(strconv.parse_f64("2.225073858507201e-308"));
+    if tiny.fraction != -0.5 || tiny.exponent != -1073 ||
+       boundary.fraction != 0.9999999999999998 || boundary.exponent != -1022 { return 29; }
+    let zero = math.frexp(-0.0);
+    let unbounded = math.frexp(infinity);
+    let invalid = math.frexp(negative_nan);
+    if zero.fraction != 0.0 || !math.signbit(zero.fraction) || zero.exponent != 0 ||
+       unbounded.fraction != infinity || unbounded.exponent != 0 ||
+       !math.isnan(invalid.fraction) || !math.signbit(invalid.fraction) ||
+       invalid.exponent != 0 { return 30; }
     if strconv.parse_f64("1.7976931348623158e308") != max { return 23; }
     let long_non_ascii = text.repeat("0", 16384) + "é";
     try {
