@@ -56,7 +56,7 @@ func main() i32 {
     code = tail(lone,65536,"a","\r");
     if code != 0 { return 800 + code; }
     let mixed = text.repeat("a",65534) + "\r\n" + "z";
-    code = tail(mixed,65535,"a","z");
+    code = tail(mixed,65536,"a","z");
     if code != 0 { return 900 + code; }
     return 0;
 }
