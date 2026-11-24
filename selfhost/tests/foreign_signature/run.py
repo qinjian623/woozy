@@ -187,10 +187,10 @@ def validate_registry_entries() -> None:
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
         229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
               '"bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},'),
-        231: ('{SystemOperation::heap_pin_begin, "__woozy_heap_pin_begin", '
-              '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
-        232: ('{SystemOperation::heap_pin_end, "__woozy_heap_pin_end", '
-              '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
+        231: ('{SystemOperation::vec_pin_begin, "__woozy_vec_pin_begin", '
+              '"Unit", {"Vec[A]"}, 1, "std/vec", 1},'),
+        232: ('{SystemOperation::vec_pin_end, "__woozy_vec_pin_end", '
+              '"Unit", {"Vec[A]"}, 1, "std/vec", 1},'),
         233: ('{SystemOperation::text_cursor_at, "__woozy_text_cursor_at", '
               '"u64", {"string", "usize"}, 2, "std/text"},'),
         234: ('{SystemOperation::text_cursor_read, "__woozy_text_cursor_read", '
@@ -216,12 +216,12 @@ def validate_registry_entries() -> None:
         229: ('OperationSpec(operation: 229, name: "__woozy_vec_try_move_trivial", '
               'result: "bool", parameters: ["Vec[A]", "usize", "usize", "usize"], '
               'owner: "std/vec", type_arity: 1)'),
-        231: ('OperationSpec(operation: 231, name: "__woozy_heap_pin_begin", '
+        231: ('OperationSpec(operation: 231, name: "__woozy_vec_pin_begin", '
               'result: "Unit", parameters: ["Vec[A]"], '
-              'owner: "std/heap", type_arity: 1)'),
-        232: ('OperationSpec(operation: 232, name: "__woozy_heap_pin_end", '
+              'owner: "std/vec", type_arity: 1)'),
+        232: ('OperationSpec(operation: 232, name: "__woozy_vec_pin_end", '
               'result: "Unit", parameters: ["Vec[A]"], '
-              'owner: "std/heap", type_arity: 1)'),
+              'owner: "std/vec", type_arity: 1)'),
         233: ('OperationSpec(operation: 233, name: "__woozy_text_cursor_at", '
               'result: "u64", parameters: ["string", "usize"], '
               'owner: "std/text", type_arity: 0)'),
