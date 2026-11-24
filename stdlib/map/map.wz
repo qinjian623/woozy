@@ -141,9 +141,28 @@ pub func get[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
     }
 }
 
+// contains follows get's captured table, hash and bucket selection.
 pub func contains[K hash.Hash,V](values Map[K,V], key K) bool {
-    switch get(values, key) {
-        case option.Option.Some(found): return true;
+    // The compiler inspects the entry type without touching the table.
+    // Keep the original copy and drop when either can call foreign code.
+    if __woozy_map_probe_requires_copy[Vec[Vec[Entry[K,V]]]](values.buckets) {
+        switch get(values, key) {
+            case option.Option.Some(found): return true;
+            case option.Option.None: return false;
+        }
+    }
+    let buckets = values.buckets[0];
+    let index = bucket_index(key, vec.len(buckets));
+    let bucket = buckets[index];
+    switch find_index(bucket, key) {
+        case option.Option.Some(position): {
+            if position < vec.len(bucket) { return true; }
+            // A callback shortened the bucket after find_index captured
+            // position. Keep the bounds failure that get would raise instead
+            // of turning it into a hit.
+            let rejected = bucket[position];
+            return true;
+        }
         case option.Option.None: return false;
     }
 }

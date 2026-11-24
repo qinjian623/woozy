@@ -168,12 +168,16 @@ func d_promise_slot(promise Value, layout PromiseLayout, error bool,
 // C resource reachability (rejects stopped-world C releases before output).
 
 pub func type_owns_c_resource(type_id usize, state inout Emitter) bool throws Error {
-    var active = vec.empty[usize]();
-    return d_type_owns_c_resource(type_id, active, 0, inout state);
+    return d_type_owns_c_resource(type_id, vec.empty[usize](), 0, false, inout state);
+}
+
+// Indirect payloads can be defined in another emitted object.
+func map_probe_requires_copy(type_id usize, state inout Emitter) bool throws Error {
+    return d_type_owns_c_resource(type_id, vec.empty[usize](), 0, true, inout state);
 }
 
 func d_type_owns_c_resource(type_id usize, active Vec[usize], depth u32,
-                            state inout Emitter) bool throws Error {
+                            indirect bool, state inout Emitter) bool throws Error {
     if depth > 64 { return true; }
     // Read the whole-flag values before any nested inout calls.
     let closure_owns = state.d.closure_owns_c_resource;
@@ -183,10 +187,10 @@ func d_type_owns_c_resource(type_id usize, active Vec[usize], depth u32,
     if d_kind_is(value.kind, model.TypeKind.Vec) ||
        d_kind_is(value.kind, model.TypeKind.Slice) {
         if vec.len(value.type_args) == 0 { throw invalid("container type has no element type"); }
-        return d_type_owns_c_resource(value.type_args[0], active, depth + 1, inout state);
+        return d_type_owns_c_resource(value.type_args[0], active, depth + 1, indirect, inout state);
     }
-    if d_kind_is(value.kind, model.TypeKind.Function) { return closure_owns; }
-    if d_kind_is(value.kind, model.TypeKind.TraitObject) { return trait_box_owns; }
+    if d_kind_is(value.kind, model.TypeKind.Function) { return indirect || closure_owns; }
+    if d_kind_is(value.kind, model.TypeKind.TraitObject) { return indirect || trait_box_owns; }
     if d_kind_is(value.kind, model.TypeKind.NominalStruct) ||
        d_kind_is(value.kind, model.TypeKind.NominalEnum) {
         if d_contains_id(active, type_id) { return false; }
@@ -195,7 +199,7 @@ func d_type_owns_c_resource(type_id usize, active Vec[usize], depth u32,
         if d_kind_is(value.kind, model.TypeKind.NominalStruct) {
             let fields = aggregate_fields(type_id, option.Option[usize].None, inout state);
             for field in fields {
-                if d_type_owns_c_resource(field.type_id, active, depth + 1, inout state) {
+                if d_type_owns_c_resource(field.type_id, active, depth + 1, indirect, inout state) {
                     found = true;
                     break;
                 }
@@ -206,7 +210,7 @@ func d_type_owns_c_resource(type_id usize, active Vec[usize], depth u32,
                 if found { break; }
                 let variant_fields = aggregate_fields(type_id, option.Option[usize].Some(variant.symbol), inout state);
                 for variant_field in variant_fields {
-                    if d_type_owns_c_resource(variant_field.type_id, active, depth + 1, inout state) {
+                    if d_type_owns_c_resource(variant_field.type_id, active, depth + 1, indirect, inout state) {
                         found = true;
                         break;
                     }

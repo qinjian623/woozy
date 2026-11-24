@@ -201,6 +201,14 @@ if(BUILD_TESTING)
     endif()
   endfunction()
   lang_add_stdlib_panic_fixture(deque_overflow stdlib_containers/oversized_reserve allocation-size-overflow)
+  lang_add_stdlib_panic_fixture(map.contains_reentry stdlib_containers/panic-map-contains-reentry vec-index)
+  if(LANG_PYTHON312)
+    add_test(NAME stdlib.map.contains_reentry.python COMMAND "${LANG_PYTHON312}" -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/stdlib_project_test.py"
+      $<TARGET_FILE:woozyc> "${CMAKE_CURRENT_SOURCE_DIR}/tests/stdlib_containers/panic-map-contains-reentry/lang.toml"
+      python --expect-panic "LANG_PANIC: Vec index out of bounds")
+    set_tests_properties(stdlib.map.contains_reentry.python PROPERTIES TIMEOUT 240)
+  endif()
   lang_add_stdlib_panic_fixture(heap.compare_alias_push stdlib_containers/panic-reentrant-push active-iteration)
   lang_add_stdlib_panic_fixture(sort.compare_alias_push stdlib_sort/fixtures/panic-compare-alias-push active-iteration)
   lang_add_stdlib_panic_fixture(sort.key_alias_push stdlib_sort/fixtures/panic-key-alias-push active-iteration)

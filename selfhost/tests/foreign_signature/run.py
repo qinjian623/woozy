@@ -30,14 +30,14 @@ MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. ID 230 was retired.
-EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 239))
+EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 240))
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
 NEW_OPERATIONS = tuple(operation for operation in EXPECTED_OPERATION_IDS
                        if operation >= 213)
 # Signatures made only of compiler builtins need no standard type module.
 NO_MODULE_OPERATIONS = frozenset({215, 220, 222, 223, 224, 225, 226,
                                   227, 228, 229, 231, 232, 233, 234,
-                                  235, 236, 237, 238})
+                                  235, 236, 237, 238, 239})
 EXPECTED_OWNER_ARITY = {
     213: ("std/os", 0), 214: ("std/os", 0), 215: ("std/os", 0),
     216: ("std/os", 0), 217: ("std/os", 0), 218: ("std/os", 0),
@@ -243,6 +243,8 @@ def validate_registry_entries() -> None:
               '"bool", {"Vec[A]", "Vec[A]"}, 2, "std/vec", 1},'),
         238: ('{SystemOperation::vec_rotate_right_one, "__woozy_vec_rotate_right_one", '
               '"bool", {"Vec[A]", "usize", "usize"}, 3, "std/vec", 1},'),
+        239: ('{SystemOperation::map_probe_requires_copy, "__woozy_map_probe_requires_copy", '
+              '"bool", {"Vec[A]"}, 1, "std/map", 1},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -320,6 +322,9 @@ def validate_registry_entries() -> None:
         238: ('OperationSpec(operation: 238, name: "__woozy_vec_rotate_right_one", '
               'result: "bool", parameters: ["Vec[A]", "usize", "usize"], '
               'owner: "std/vec", type_arity: 1)'),
+        239: ('OperationSpec(operation: 239, name: "__woozy_map_probe_requires_copy", '
+              'result: "bool", parameters: ["Vec[A]"], '
+              'owner: "std/map", type_arity: 1)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:

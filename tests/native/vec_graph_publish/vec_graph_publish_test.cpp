@@ -875,6 +875,7 @@ std::atomic<uint64_t> g_rotate_exit_ready{0};
 std::atomic<uint64_t> g_rotate_stop_checks{0};
 bool g_rotate_armed = false;
 bool g_rotate_require_stop = false;
+bool g_rotate_toward_end = false;
 int32_t (*g_rotate_saved_enter_critical)(void) noexcept = nullptr;
 void (*g_rotate_saved_leave_critical)(int32_t) noexcept = nullptr;
 
@@ -884,27 +885,27 @@ uint64_t rotate_chunk_elements() {
   return chunk ? chunk : 1;
 }
 
-// Check the exact rotation state after `completed` guarded chunks. The carried
-// element starts outside the Vec, so after each chunk the range [hole, last]
-// is one right rotation of the original bytes, and every slot is initialized.
+uint64_t rotate_original_slot(uint64_t index, uint64_t moved) {
+  const uint64_t last = kRotateSlots - 1;
+  if (g_rotate_toward_end) {
+    const uint64_t carry = last - moved;
+    if (index == carry) return last;
+    return index > carry ? index - 1 : index;
+  }
+  if (index == moved) return 0;
+  return index < moved ? index + 1 : index;
+}
+
+// The completed chunks rotate only the affected end of the original range.
 void rotate_check_expected(uint64_t completed) {
   CHECK(g_rotate_outer != nullptr);
   CHECK(g_rotate_outer->length == kRotateSlots);
   CHECK(g_rotate_outer->initialized == kRotateSlots);
   CHECK(g_rotate_outer->data != nullptr);
-  const uint64_t first = 0;
-  const uint64_t last = kRotateSlots - 1;
-  const uint64_t span = last - first;
   const uint64_t covered = completed * rotate_chunk_elements();
-  const uint64_t hole = covered >= span ? first : last - covered;
+  const uint64_t moved = covered < kRotateSlots ? covered : kRotateSlots - 1;
   for (uint64_t index = 0; index < kRotateSlots; ++index) {
-    LangVec *expected = nullptr;
-    if (index < hole)
-      expected = g_rotate_original[index];
-    else if (index == hole)
-      expected = g_rotate_original[last];
-    else
-      expected = g_rotate_original[index - 1];
+    LangVec *expected = g_rotate_original[rotate_original_slot(index, moved)];
     CHECK(expected != nullptr);
     CHECK(slot_value(g_rotate_outer, index) == expected);
   }
@@ -920,6 +921,7 @@ void rotate_check_expected(uint64_t completed) {
         ++actual_edges;
     }
     CHECK(actual_edges == expected_edges);
+    CHECK(g_rotate_owners[owner_index]->refs == expected_edges);
   }
 }
 
@@ -965,8 +967,8 @@ void rotate_drop(void *slot) noexcept {
   lang_vec_release_v1(target);
 }
 
-int mode_rotate_multichunk_gc() {
-  CHECK(lang_gc_program_init_v1() == LANG_GC_PROGRAM_OK);
+void check_rotate_multichunk_gc(bool toward_end) {
+  g_rotate_toward_end = toward_end;
   const uint64_t base = gc_test_alloc_live();
 
   for (auto *&owner : g_rotate_owners) owner = new_inner();
@@ -1023,7 +1025,9 @@ int mode_rotate_multichunk_gc() {
     CHECK(lang_gc_world_unregister_v1());
   });
 
-  CHECK(lang_vec_rotate_right_one_v1(g_rotate_outer, 0, kRotateSlots - 1));
+  const uint64_t first = toward_end ? 0 : kRotateSlots - 1;
+  const uint64_t last = toward_end ? kRotateSlots - 1 : 0;
+  CHECK(lang_vec_rotate_right_one_v1(g_rotate_outer, first, last));
   g_rotate_require_stop = false;
   g_rotate_armed = false;
   hooks_v1.enter_critical = g_rotate_saved_enter_critical;
@@ -1040,17 +1044,20 @@ int mode_rotate_multichunk_gc() {
   lang_vec_release_v1(g_rotate_outer);
   CHECK(g_rotate_copies == 0);
   CHECK(g_rotate_drops == kRotateSlots);
-  // Final release drops highest slot first from the fully rotated order
-  // [original[last], original[0], ..., original[last-1]]. Repeated references
-  // therefore stay at their exact multiplicity and every edge drops once.
+  // Final release drops every edge once in reverse slot order.
   for (uint64_t drop_index = 0; drop_index < kRotateSlots; ++drop_index) {
     const uint64_t slot_index = kRotateSlots - 1 - drop_index;
-    LangVec *expected = slot_index == 0
-                            ? g_rotate_original[kRotateSlots - 1]
-                            : g_rotate_original[slot_index - 1];
+    LangVec *expected = g_rotate_original[rotate_original_slot(
+        slot_index, kRotateSlots - 1)];
     CHECK(g_rotate_drop_order[drop_index] == expected);
   }
   CHECK(gc_test_alloc_live() == base);
+}
+
+int mode_rotate_multichunk_gc() {
+  CHECK(lang_gc_program_init_v1() == LANG_GC_PROGRAM_OK);
+  check_rotate_multichunk_gc(true);
+  check_rotate_multichunk_gc(false);
   CHECK(lang_gc_program_finish_v1() == LANG_GC_PROGRAM_OK);
   std::puts("VEC_GRAPH_ROTATE_MULTICHUNK_GC_OK");
   return 0;

@@ -710,7 +710,9 @@ func system_call_expression(state inout EmitState, node hir.HirNode, id usize,
         tags = "{" + join_text(entries) + "}";
     }
     var call_text = "";
-    if spec.operation == 197 {
+    if spec.operation == 239 {
+        call_text = "False"; // Python cannot store Native C resources.
+    } else if spec.operation == 197 {
         call_text = "_rt.Slice.create(" + join_text(args) + ")";
     } else if spec.operation == 199 {
         call_text = args[0] + ".sub(" + args[1] + ", " + args[2] + ")";

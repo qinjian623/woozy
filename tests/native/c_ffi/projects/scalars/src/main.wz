@@ -1,6 +1,8 @@
 package app;
 import "fixture/lib" as fixture;
 import "std/ffi" as ffi;
+import "std/map" as map;
+import "std/vec" as vec;
 
 func callback(value i32, context u64) i32 {
     return value + i32(context);
@@ -38,6 +40,48 @@ func early_resource(value i32) i32 {
     let resource = fixture.cf_resource_new(value);
     if value < 0 { return 1; }
     return fixture.cf_resource_value(resource) - value;
+}
+
+struct ResourcePayload { resource fixture.OwnedResource; }
+
+func check_resource_container_operations() i32 {
+    let one = fixture.cf_resource_new(1);
+    let two = fixture.cf_resource_new(2);
+    let three = fixture.cf_resource_new(3);
+    let fourth = fixture.cf_resource_new(4);
+    let values Vec[ResourcePayload] = [ResourcePayload(resource: one),
+        ResourcePayload(resource: two), ResourcePayload(resource: three)];
+    let new_value = ResourcePayload(resource: fourth);
+
+    // Count the C calls, since checking final reference counts alone cannot
+    // detect replacements of the element-wise path with a byte move.
+    var retains = fixture.cf_resource_retain_calls();
+    var releases = fixture.cf_resource_release_calls();
+    vec.insert(values, 0, new_value);
+    if fixture.cf_resource_retain_calls() - retains != 5 ||
+       fixture.cf_resource_release_calls() - releases != 4 { return 70; }
+    if vec.len(values) != 4 || fixture.cf_resource_value(values[0].resource) != 4 ||
+       fixture.cf_resource_value(values[1].resource) != 1 ||
+       fixture.cf_resource_value(values[3].resource) != 3 { return 71; }
+
+    retains = fixture.cf_resource_retain_calls();
+    releases = fixture.cf_resource_release_calls();
+    let removed = vec.remove_at(values, 0);
+    if fixture.cf_resource_retain_calls() - retains != 7 ||
+       fixture.cf_resource_release_calls() - releases != 7 { return 72; }
+    if fixture.cf_resource_value(removed.resource) != 4 || vec.len(values) != 3 ||
+       fixture.cf_resource_value(values[0].resource) != 1 ||
+       fixture.cf_resource_value(values[1].resource) != 2 ||
+       fixture.cf_resource_value(values[2].resource) != 3 { return 73; }
+
+    let lookup = map.new[i32,ResourcePayload]();
+    map.insert(lookup, 1, new_value);
+    retains = fixture.cf_resource_retain_calls();
+    releases = fixture.cf_resource_release_calls();
+    if !map.contains(lookup, 1) { return 74; }
+    if fixture.cf_resource_retain_calls() - retains != 4 ||
+       fixture.cf_resource_release_calls() - releases != 4 { return 75; }
+    return 0;
 }
 
 func main() i32 {
@@ -128,6 +172,9 @@ func main() i32 {
     if fixture.cf_resource_live() != 0 { return 48; }
     if early_resource(12) != 0 { return 49; }
     if fixture.cf_resource_live() != 0 { return 50; }
+    let resource_ops = check_resource_container_operations();
+    if resource_ops != 0 { return resource_ops; }
+    if fixture.cf_resource_live() != 0 { return 76; }
 
     if fixture.cf_apply(callback, 100, 23) != 123 { return 39; }
     if fixture.cf_apply_point(point_cb, 7) != 2211 { return 54; }

@@ -1241,6 +1241,9 @@ class Emitter {
         }
         std::string call;
         switch (spec->operation) {
+        case SystemOperation::map_probe_requires_copy:
+          call = "False"; // Python cannot store Native C resources.
+          break;
         case SystemOperation::slice_view:
           call = "_rt.Slice.create(" + join(args) + ")";
           break;

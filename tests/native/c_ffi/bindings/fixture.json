@@ -756,6 +756,28 @@
       }
     },
     {
+      "id": "fixture.cf_resource_retain_calls",
+      "module": "fixture/lib",
+      "name": "cf_resource_retain_calls",
+      "symbol": "cf_resource_retain_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_resource_release_calls",
+      "module": "fixture/lib",
+      "name": "cf_resource_release_calls",
+      "symbol": "cf_resource_release_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
       "id": "fixture.cf_apply",
       "module": "fixture/lib",
       "name": "cf_apply",

@@ -65,6 +65,8 @@ typedef struct {
 } cf_resource;
 
 static int32_t live_resources;
+static int32_t resource_retain_calls;
+static int32_t resource_release_calls;
 cf_resource *cf_resource_new(int32_t value) {
   cf_resource *r = (cf_resource *)malloc(sizeof *r);
   if (!r) return NULL;
@@ -73,9 +75,14 @@ cf_resource *cf_resource_new(int32_t value) {
   ++live_resources;
   return r;
 }
-void cf_resource_retain(cf_resource *r) { if (r) ++r->refs; }
+void cf_resource_retain(cf_resource *r) {
+  if (!r) return;
+  ++resource_retain_calls;
+  ++r->refs;
+}
 void cf_resource_release(cf_resource *r) {
   if (!r) return;
+  ++resource_release_calls;
   if (--r->refs == 0) {
     --live_resources;
     free(r);
@@ -84,6 +91,8 @@ void cf_resource_release(cf_resource *r) {
 int32_t cf_resource_value(cf_resource *r) { return r ? r->value : -1; }
 int32_t cf_resource_refs(cf_resource *r) { return r ? r->refs : -1; }
 int32_t cf_resource_live(void) { return live_resources; }
+int32_t cf_resource_retain_calls(void) { return resource_retain_calls; }
+int32_t cf_resource_release_calls(void) { return resource_release_calls; }
 
 typedef int32_t (*cf_callback)(int32_t, uint64_t);
 int32_t cf_apply(cf_callback callback, uint64_t context, int32_t value) {

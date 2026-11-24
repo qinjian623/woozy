@@ -743,6 +743,13 @@ func e_value_system_call(instruction nativeir.Instruction,
     switch instruction.system {
         case option.Option.None: throw invalid("system operation missing");
         case option.Option.Some(operation): {
+            if operation == 239 {
+                let witness = value_type(state, instruction.inputs[0]);
+                if map_probe_requires_copy(witness, inout state) {
+                    return option.Option[Value].Some(e_true());
+                }
+                return option.Option[Value].Some(e_false());
+            }
             if operation == 188 || operation == 189 {
                 let layout = lower_type(instruction.type_id, inout state);
                 let out = storage(layout, inout state);
@@ -883,6 +890,10 @@ func e_value_system_call(instruction nativeir.Instruction,
                 return option.Option[Value].Some(extended);
             }
             if operation == 238 {
+                let receiver = type_of(state, value_type(state, instruction.inputs[0]));
+                if type_owns_c_resource(receiver.type_args[0], inout state) {
+                    return option.Option[Value].Some(e_false());
+                }
                 let rotated = runtime("lang_vec_rotate_right_one_v1", "i1", args, inout state);
                 return option.Option[Value].Some(rotated);
             }

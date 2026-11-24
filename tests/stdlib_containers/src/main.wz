@@ -1198,6 +1198,35 @@ func test_map_bucket_growth() i32 {
     return 0;
 }
 
+struct ReentrantMapKey {
+    id i32;
+    target box.Box[map.Map[ReentrantMapKey,Vec[i32]]];
+    calls Vec[i32];
+}
+impl hash.Hash for ReentrantMapKey {
+    func hash(value Self) u64 { return u64(value.id); }
+    func equals(left Self, right Self) bool {
+        if left.id != right.id { return false; }
+        if vec.len(right.calls) != 0 {
+            right.calls[0] += 1;
+            map.clear(box.get(right.target));
+        }
+        return true;
+    }
+}
+func test_map_contains_reentry() i32 {
+    let values = map.new[ReentrantMapKey,Vec[i32]]();
+    let target = box.new(values);
+    let entry = ReentrantMapKey(id: 10, target: target, calls: []);
+    let data Vec[i32] = [19];
+    map.insert(values, entry, data);
+    let calls Vec[i32] = [0];
+    let query = ReentrantMapKey(id: 10, target: target, calls: calls);
+    if !map.contains(values, query) { return 428; }
+    if !map.is_empty(values) || data[0] != 19 || calls[0] != 1 { return 429; }
+    return 0;
+}
+
 func main() i32 {
     var failure = test_empty();
     if failure != 0 { return failure; }
@@ -1255,5 +1284,7 @@ func main() i32 {
     if failure != 0 { return failure; }
     failure = test_set_algebra();
     if failure != 0 { return failure; }
-    return test_map_bucket_growth();
+    failure = test_map_bucket_growth();
+    if failure != 0 { return failure; }
+    return test_map_contains_reentry();
 }

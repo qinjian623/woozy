@@ -607,46 +607,77 @@ extern "C" bool lang_vec_extend_trivial_v1(LangVec *values,
   values->length = length;
   return true;
 }
-extern "C" bool lang_vec_rotate_right_one_v1(
-    LangVec *v, uint64_t first, uint64_t last) noexcept {
-  // last is the final initialized slot in the rotated range. The caller has
-  // already appended the new owning value, so every slot through last exists.
-  if (first > last || last >= v->length || last >= v->initialized)
-    vec_panic(4);
-  // Trivial elements keep the existing try_move_trivial path in std/vec.
-  if (!has_owner_ops(v)) return false;
-  if (first == last) return true;
-  // The public insert path already checked this before its push. Keep the
-  // private operation safe for direct runtime callers too.
-  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
-  // The carry is the new element at `last`; keeping it outside the Vec while
-  // slots move lets every CriticalGuard exit observe each owner exactly once.
-  StageBuffer carry;
-  if (!carry.reserve(v->stride)) return false;
-  copy_bytes(carry.data(), element(v, last), v->stride);
-  // Bound one graph-critical publication window to a small byte range. Each
-  // iteration rotates one chunk right: the overlap-safe move replaces the
-  // current hole with the preceding element, then the carried element fills
-  // the new hole before the guard is released. Thus every exit sees a complete
-  // initialized prefix and the exact original owner multiset, never a partial
-  // element. No copy/drop callback or allocation runs inside the guard.
+namespace {
+// Each guarded chunk restores the carried element to the vacated slot, so
+// the collector sees the same initialized slots and exact owner multiplicities
+// at every critical exit. A failed carry allocation leaves all bytes unchanged.
+bool move_range_one_bounded(LangVec *v, uint64_t first, uint64_t last,
+                            bool toward_end) noexcept {
   constexpr uint64_t kRotationChunkBytes = 4096;
   uint64_t chunk = kRotationChunkBytes / v->stride;
   if (!chunk) chunk = 1;
-  uint64_t hole = last;
-  while (hole > first) {
-    uint64_t count = hole - first;
+  StageBuffer carry;
+  if (!carry.reserve(v->stride)) return false;
+  if (toward_end) {
+    copy_bytes(carry.data(), element(v, last), v->stride);
+    uint64_t hole = last;
+    while (hole > first) {
+      uint64_t count = hole - first;
+      if (count > chunk) count = chunk;
+      const uint64_t start = hole - count;
+      const uint64_t bytes = checked_payload_bytes(count, v->stride);
+      {
+        lang::native::gc_program::CriticalGuard guard;
+        copy_bytes(element(v, start + 1), element(v, start), bytes);
+        copy_bytes(element(v, start), carry.data(), v->stride);
+      }
+      hole = start;
+    }
+    return true;
+  }
+  copy_bytes(carry.data(), element(v, first), v->stride);
+  uint64_t hole = first;
+  while (hole < last) {
+    uint64_t count = last - hole;
     if (count > chunk) count = chunk;
-    const uint64_t start = hole - count;
     const uint64_t bytes = checked_payload_bytes(count, v->stride);
     {
       lang::native::gc_program::CriticalGuard guard;
-      copy_bytes(element(v, start + 1), element(v, start), bytes);
-      copy_bytes(element(v, start), carry.data(), v->stride);
+      copy_bytes(element(v, hole), element(v, hole + 1), bytes);
+      copy_bytes(element(v, hole + count), carry.data(), v->stride);
     }
-    hole = start;
+    hole += count;
   }
   return true;
+}
+} // namespace
+
+extern "C" bool lang_vec_rotate_right_one_v1(
+    LangVec *v, uint64_t first, uint64_t last) noexcept {
+  // The first argument ordering selects the direction without a new private
+  // operation: first <= last rotates that range toward the end (insert), while
+  // first > last rotates [last, first] toward the front (remove). The insert
+  // path is unchanged. Both directions check the range and active pin before
+  // moving bytes without invoking callbacks.
+  if (first <= last) {
+    // last is the final initialized slot in the rotated range. The caller has
+    // already appended the new owning value, so every slot through last exists.
+    if (last >= v->length || last >= v->initialized) vec_panic(4);
+    // Trivial elements keep the existing try_move_trivial path in std/vec.
+    if (!has_owner_ops(v)) return false;
+    if (first == last) return true;
+    // The public insert path already checked this before its push. Keep the
+    // private operation safe for direct runtime callers too.
+    if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+    return move_range_one_bounded(v, first, last, true);
+  }
+  // first > last: left rotation of the fully initialized suffix [last, first].
+  if (first >= v->length || first >= v->initialized) vec_panic(4);
+  if (!has_owner_ops(v)) return false;
+  // remove_at uses the fully initialized suffix ending at the final slot.
+  if (v->initialized != v->length || first + 1 != v->length) return false;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  return move_range_one_bounded(v, last, first, false);
 }
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {

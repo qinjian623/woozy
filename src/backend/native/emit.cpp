@@ -224,7 +224,7 @@ class Emitter {
     bool trace = false;
   };
   bool type_owns_c_resource(TypeId id, std::set<uint64_t> &active,
-                            unsigned depth) {
+                            unsigned depth, bool indirect) {
     if (depth > 64)
       return true; // conservative: reject rather than run a C release late
     const auto &t = type(id);
@@ -233,7 +233,7 @@ class Emitter {
       return true;
     case hir::TypeKind::Vec:
     case hir::TypeKind::Slice:
-      return type_owns_c_resource(t.type_args.at(0), active, depth + 1);
+      return type_owns_c_resource(t.type_args.at(0), active, depth + 1, indirect);
     case hir::TypeKind::NominalStruct:
     case hir::TypeKind::NominalEnum: {
       if (!active.insert(id.value).second)
@@ -241,7 +241,7 @@ class Emitter {
       bool found = false;
       if (t.kind == hir::TypeKind::NominalStruct) {
         for (auto field : aggregates.fields(id))
-          if (type_owns_c_resource(field.type, active, depth + 1)) {
+          if (type_owns_c_resource(field.type, active, depth + 1, indirect)) {
             found = true;
             break;
           }
@@ -250,7 +250,7 @@ class Emitter {
           if (found)
             break;
           for (auto field : aggregates.fields(id, variant.symbol))
-            if (type_owns_c_resource(field.type, active, depth + 1)) {
+            if (type_owns_c_resource(field.type, active, depth + 1, indirect)) {
               found = true;
               break;
             }
@@ -260,16 +260,16 @@ class Emitter {
       return found;
     }
     case hir::TypeKind::Function:
-      return module_closure_owns_c_resource;
+      return indirect || module_closure_owns_c_resource;
     case hir::TypeKind::TraitObject:
-      return module_trait_box_owns_c_resource;
+      return indirect || module_trait_box_owns_c_resource;
     default:
       return false;
     }
   }
-  bool type_owns_c_resource(TypeId id) {
+  bool type_owns_c_resource(TypeId id, bool indirect = false) {
     std::set<uint64_t> active;
-    return type_owns_c_resource(id, active, 0);
+    return type_owns_c_resource(id, active, 0, indirect);
   }
   AsyncFrameGcPlan build_async_frame_gc(
       const ir::Function &f, llvm::StructType *promise_layout,

@@ -379,7 +379,7 @@ func system_op_category(operation u32) u32 {
     }
     if spec.owner == "std/unicode" || spec.owner == "std/text" ||
        spec.owner == "std/vec" || spec.owner == "std/strconv" ||
-       spec.owner == "std/math" {
+       spec.owner == "std/math" || spec.name == "__woozy_map_probe_requires_copy" {
         return 0;
     }
     return 3;

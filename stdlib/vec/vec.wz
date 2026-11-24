@@ -65,6 +65,17 @@ pub func remove_at[T](values Vec[T], index usize) T {
         let rejected = values[index];
         return rejected;
     }
+    // Owning elements move as bytes with no retain/drop pair per shifted slot.
+    // The private operation rotates the suffix left in bounded chunks and
+    // leaves the original element in the final slot; pop_last then transfers
+    // that ownership out and publishes the shorter length. It checks the
+    // active pin before any write. Trivial elements, unsupported initialization
+    // and a temporary carry-allocation failure decline before writing, so the
+    // pure source fallback below still runs.
+    if index + 1 < length &&
+       __woozy_vec_rotate_right_one[T](values, length - 1, index) {
+        return pop_last(values);
+    }
     let last = pop_last(values);
     if index == length - 1 {
         return last;

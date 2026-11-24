@@ -47,10 +47,13 @@ bool lang_vec_try_move_trivial_v1(LangVec *, uint64_t destination,
 // Private std/vec.extend fast path. Returns false for element kinds or states
 // that need the owning element path, so the public loop keeps its semantics.
 bool lang_vec_extend_trivial_v1(LangVec *, LangVec *) noexcept;
-// Private std/vec.insert fast path. Rotates the initialized range
-// [first, last] one slot toward the end without invoking element callbacks.
-// Returns false without changing the Vec when the range is trivial or the
-// one-element carry cannot be allocated, so the public shift loop still runs.
+// Private std/vec storage-move fast path. first <= last rotates the
+// initialized range [first, last] one slot toward the end without invoking
+// element callbacks. first > last rotates [last, first] one slot toward the
+// front, leaving the carried first element in the final slot. Each chunk
+// preserves the initialized prefix and its owner multiplicities. Trivial
+// elements, unsupported initialization, and allocation failure for the carry
+// return false before modifying the Vec.
 bool lang_vec_rotate_right_one_v1(LangVec *, uint64_t first,
                                   uint64_t last) noexcept;
 LangVec *lang_vec_slice_v1(LangVec *, uint64_t, uint64_t) noexcept;

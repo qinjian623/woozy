@@ -229,6 +229,100 @@ static void test_rotate_right_one() {
   drops.clear();
 }
 
+static void test_rotate_left_one() {
+  // Trivial elements decline without touching slots or allocating.
+  auto *trivial = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+  for (int i : {1, 2, 3, 4}) lang_vec_init_v1(trivial, &i);
+  const auto trivial_allocations = allocation;
+  if (lang_vec_rotate_right_one_v1(trivial, 3, 1) ||
+      allocation != trivial_allocations)
+    std::abort();
+  for (int i = 0; i < 4; ++i)
+    if (*static_cast<int *>(lang_vec_at_v1(trivial, i)) != i + 1)
+      std::abort();
+  lang_vec_release_v1(trivial);
+
+  // Reverse argument order rotates a suffix toward the front. The final slot
+  // receives the carried first element, which pop_last can transfer out.
+  for (uint64_t stride : {4u, 12u, 33u, 80u}) {
+    for (uint64_t length : {2u, 7u, 1200u}) {
+      const uint64_t lows[] = {0, length / 2, length - 2};
+      for (uint64_t low : lows) {
+        const uint64_t high = length - 1;
+        if (low >= high) continue;
+        std::vector<unsigned char> original(length * stride);
+        for (uint64_t i = 0; i < length; ++i) {
+          const int value = static_cast<int>(2000 + i);
+          std::memcpy(original.data() + i * stride, &value, sizeof(value));
+          for (uint64_t byte = sizeof(value); byte < stride; ++byte)
+            original[i * stride + byte] =
+                static_cast<unsigned char>(i * 19 + byte * 5);
+        }
+        auto *v = lang_vec_new_v1(length, stride, copy, drop);
+        for (uint64_t i = 0; i < length; ++i)
+          lang_vec_init_v1(v, original.data() + i * stride);
+        drops.clear();
+        const auto before = allocation;
+        if (!lang_vec_rotate_right_one_v1(v, high, low)) std::abort();
+        const auto added = allocation - before;
+        if (added != (stride > 64 ? 1u : 0u)) std::abort();
+        if (!drops.empty() || v->length != length ||
+            v->initialized != length)
+          std::abort();
+        auto source = [&](uint64_t index) {
+          if (index == high) return low;
+          return index >= low ? index + 1 : index;
+        };
+        for (uint64_t i = 0; i < length; ++i) {
+          if (memcmp(lang_vec_at_v1(v, i),
+                     original.data() + source(i) * stride, stride) != 0)
+            std::abort();
+        }
+        lang_vec_release_v1(v);
+        std::vector<int> expected_drops;
+        for (uint64_t i = length; i > 0; --i)
+          expected_drops.push_back(static_cast<int>(2000 + source(i - 1)));
+        if (drops != expected_drops) std::abort();
+      }
+    }
+  }
+
+  // A not fully initialized Vec declines without changing its prefix, so the
+  // public fallback keeps its starting length/initialized conditions.
+  drops.clear();
+  auto *partial = lang_vec_new_v1(4, sizeof(int), copy, drop);
+  for (int i : {1, 2}) lang_vec_init_v1(partial, &i);
+  const auto partial_allocations = allocation;
+  if (lang_vec_rotate_right_one_v1(partial, 1, 0) ||
+      allocation != partial_allocations || partial->length != 4 ||
+      partial->initialized != 2 || !drops.empty())
+    std::abort();
+  lang_vec_release_v1(partial);
+  drops.clear();
+
+  // A failed carry allocation returns false before any slot changes.
+  auto *oom = lang_vec_new_v1(4, 80, copy, drop);
+  unsigned char fill[80] = {};
+  for (int i = 0; i < 4; ++i) {
+    const int value = 60 + i;
+    std::memcpy(fill, &value, sizeof(value));
+    lang_vec_init_v1(oom, fill);
+  }
+  const auto oom_before = allocation;
+  fail_at = allocation + 1;
+  const bool oom_result = lang_vec_rotate_right_one_v1(oom, 3, 1);
+  const auto oom_used = allocation;
+  fail_at = 0;
+  if (oom_result || oom_used != oom_before + 1 || oom->length != 4 ||
+      oom->initialized != 4 || !drops.empty())
+    std::abort();
+  for (int i = 0; i < 4; ++i)
+    if (*static_cast<int *>(lang_vec_at_v1(oom, i)) != 60 + i)
+      std::abort();
+  lang_vec_release_v1(oom);
+  drops.clear();
+}
+
 static void test_trivial_extend() {
   for (uint64_t stride : {1, 3, 4, 12, 32, 33}) {
     auto *values = lang_vec_new_v1(3, stride, nullptr, nullptr);
@@ -592,7 +686,15 @@ int main(int argc, char **argv) {
     int first = 1, second = 2;
     lang_vec_init_v1(v, &first);
     lang_vec_init_v1(v, &second);
-    (void)lang_vec_rotate_right_one_v1(v, 1, 0);
+    (void)lang_vec_rotate_right_one_v1(v, 1, 2);
+    return 9;
+  }
+  if (mode == "rotate-left-bounds") {
+    auto *v = lang_vec_new_v1(2, sizeof(int), copy, drop);
+    int first = 1, second = 2;
+    lang_vec_init_v1(v, &first);
+    lang_vec_init_v1(v, &second);
+    (void)lang_vec_rotate_right_one_v1(v, 2, 0);
     return 9;
   }
   if (mode == "rotate-pin") {
@@ -602,6 +704,15 @@ int main(int argc, char **argv) {
     lang_vec_init_v1(v, &second);
     (void)lang_vec_begin_v1(v);
     (void)lang_vec_rotate_right_one_v1(v, 0, 1);
+    return 9;
+  }
+  if (mode == "rotate-left-pin") {
+    auto *v = lang_vec_new_v1(2, sizeof(int), copy, drop);
+    int first = 1, second = 2;
+    lang_vec_init_v1(v, &first);
+    lang_vec_init_v1(v, &second);
+    (void)lang_vec_begin_v1(v);
+    (void)lang_vec_rotate_right_one_v1(v, 1, 0);
     return 9;
   }
   if (mode == "null-iteration-resize") {
@@ -668,6 +779,7 @@ int main(int argc, char **argv) {
   if (single) return single;
   test_trivial_range_move();
   test_rotate_right_one();
+  test_rotate_left_one();
   test_trivial_extend();
 
   std::puts("reverse-index-and-prefix-ok");

@@ -1,0 +1,32 @@
+package app;
+import "std/box" as box;
+import "std/hash" as hash;
+import "std/map" as map;
+
+struct Key {
+    id i32;
+    target box.Box[map.Map[Key,Vec[i32]]];
+    remove_match bool;
+}
+impl hash.Hash for Key {
+    func hash(value Self) u64 { return u64(value.id); }
+    func equals(left Self, right Self) bool {
+        if left.id != right.id { return false; }
+        if right.remove_match {
+            let entry = Key(id: right.id, target: right.target, remove_match: false);
+            map.remove(box.get(right.target), entry);
+        }
+        return true;
+    }
+}
+func main() i32 {
+    let values = map.new[Key,Vec[i32]]();
+    let target = box.new(values);
+    let entry = Key(id: 10, target: target, remove_match: false);
+    let data Vec[i32] = [19];
+    map.insert(values, entry, data);
+    // equals removes the matched slot before contains can confirm the hit.
+    let query = Key(id: 10, target: target, remove_match: true);
+    map.contains(values, query);
+    return 1;
+}

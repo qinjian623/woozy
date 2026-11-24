@@ -72,7 +72,10 @@ enum class SystemOperation : uint16_t {
   text_cursor_slice = 235,
   text_count_rune = 236,
   vec_extend_trivial = 237,
-  vec_rotate_right_one = 238
+  // first <= last rotates toward the end; first > last rotates [last, first]
+  // toward the front. One private operation keeps both storage moves bounded.
+  vec_rotate_right_one = 238,
+  map_probe_requires_copy = 239
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -179,7 +182,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 67> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 68> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -207,6 +210,7 @@ inline constexpr std::array<SystemOperationSpec, 67> value_system_operations{{
   {SystemOperation::vec_pin_end, "__woozy_vec_pin_end", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
   {SystemOperation::vec_extend_trivial, "__woozy_vec_extend_trivial", "bool", {"Vec[A]", "Vec[A]"}, 2, "std/vec", 1},
   {SystemOperation::vec_rotate_right_one, "__woozy_vec_rotate_right_one", "bool", {"Vec[A]", "usize", "usize"}, 3, "std/vec", 1},
+  {SystemOperation::map_probe_requires_copy, "__woozy_map_probe_requires_copy", "bool", {"Vec[A]"}, 1, "std/map", 1},
   {SystemOperation::num_parse_i64, "__woozy_num_parse_i64", "Result[i64,i32]", {"string"}, 1, "std/strconv"},
   {SystemOperation::num_format_i64, "__woozy_num_format_i64", "string", {"i64"}, 1, "std/strconv"},
   {SystemOperation::num_parse_u64, "__woozy_num_parse_u64", "Result[u64,i32]", {"string"}, 1, "std/strconv"},
