@@ -208,6 +208,7 @@ pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-
 pub func graphemes(value string) Vec[string] {
     let total = text.len(value);
     if total == 0 { return vec.empty[string](); }
+    if total == 1 { return vec.make[string](1,value); }
     if text.byte_len(value) == total {
         return graphemes_ascii(value,total);
     }
