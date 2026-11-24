@@ -228,7 +228,8 @@ enum ActionKind {
   act_resize_shrink,
   act_clear,
   act_oom_reserve,
-  act_overflow_reserve
+  act_overflow_reserve,
+  act_extend
 };
 
 struct ChildAction {
@@ -275,6 +276,9 @@ void child_perform(void *raw) {
     lang_vec_reserve_v1(vec, UINT64_MAX / 2);
     break;
   }
+  case act_extend:
+    (void)lang_vec_extend_trivial_v1(action->vec, action->vec);
+    break;
   }
 }
 
@@ -970,6 +974,8 @@ void test_terminal_panics() {
   CHECK(expect_iteration_panic_without_mutation(act_resize_shrink,
                                                 "active-iteration"));
   CHECK(expect_iteration_panic_without_mutation(act_clear,
+                                                "active-iteration"));
+  CHECK(expect_iteration_panic_without_mutation(act_extend,
                                                 "active-iteration"));
 }
 

@@ -762,6 +762,10 @@ func e_value_system_call(instruction nativeir.Instruction,
                 let moved = runtime("lang_vec_try_move_trivial_v1", "i1", args, inout state);
                 return option.Option[Value].Some(moved);
             }
+            if operation == 237 {
+                let extended = runtime("lang_vec_extend_trivial_v1", "i1", args, inout state);
+                return option.Option[Value].Some(extended);
+            }
             if operation >= 34 && operation <= 42 {
                 let declared = type_of(state, instruction.type_id);
                 var element = instruction.type_id;

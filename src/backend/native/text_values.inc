@@ -187,6 +187,9 @@
     case SystemOperation::vec_try_move_trivial:
       return runtime("lang_vec_try_move_trivial_v1", builder.getInt1Ty(),
                      {args[0], args[1], args[2], args[3]});
+    case SystemOperation::vec_extend_trivial:
+      return runtime("lang_vec_extend_trivial_v1", builder.getInt1Ty(),
+                     {args[0], args[1]});
     case SystemOperation::vec_pin_begin:
       runtime("lang_vec_begin_v1", builder.getInt64Ty(), {args[0]}); break;
     case SystemOperation::vec_pin_end:

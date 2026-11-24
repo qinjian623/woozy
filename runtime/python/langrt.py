@@ -1790,6 +1790,9 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             args[0].end()
             return None
         if operation == 'vec_try_move_trivial': return False
+        # Private std/vec.extend fast path. Python keeps the public per-element
+        # loop, whose observable semantics match this handoff.
+        if operation == 'vec_extend_trivial': return False
         if operation == 'weak_empty': return Weak()
         if operation == 'weak_downgrade':
             # Box is a canonical wrapper around one private Vec cell.  The

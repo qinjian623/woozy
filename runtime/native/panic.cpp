@@ -298,12 +298,11 @@ class StageBuffer {
   unsigned char *data_ = inline_bytes_;
 };
 
-// Caller has already rejected active iterations and checked for overflow.
-void grow_storage(LangVec *v, uint64_t minimum) noexcept {
-  const uint64_t capacity = grown_capacity(v->capacity, minimum);
-  const uint64_t bytes = checked_payload_bytes(capacity, v->stride);
+// Publish storage only after allocation and copying succeed.
+bool try_replace_storage(LangVec *v, uint64_t capacity,
+                         uint64_t bytes) noexcept {
   void *data = lang_alloc_v1(bytes, 16);
-  if (!data) vec_panic(5);
+  if (!data) return false;
   if (v->initialized) {
     const uint64_t initialized_bytes =
         checked_payload_bytes(v->initialized, v->stride);
@@ -326,6 +325,14 @@ void grow_storage(LangVec *v, uint64_t minimum) noexcept {
     v->capacity = capacity;
     if (old_separate) lang_free_v1(old_data);
   }
+  return true;
+}
+
+// Caller has already rejected active iterations and checked for overflow.
+void grow_storage(LangVec *v, uint64_t minimum) noexcept {
+  const uint64_t capacity = grown_capacity(v->capacity, minimum);
+  const uint64_t bytes = checked_payload_bytes(capacity, v->stride);
+  if (!try_replace_storage(v, capacity, bytes)) vec_panic(5);
 }
 
 // Preserve an argument that points into storage which may be reallocated.
@@ -538,6 +545,51 @@ extern "C" bool lang_vec_try_move_trivial_v1(
     (void)checked_payload_bytes(limit, v->stride);
     copy_bytes(element(v, destination), element(v, source), count * v->stride);
   }
+  return true;
+}
+extern "C" bool lang_vec_extend_trivial_v1(LangVec *values,
+                                           LangVec *extra) noexcept {
+  // Managed elements and partially initialized vectors keep the public
+  // element loop so its copy callbacks, pin checks and index Panics still run.
+  if (has_owner_ops(values) || has_owner_ops(extra)) return false;
+  // Only an exactly fully initialized pair has the prefix this single
+  // publication produces. A longer initialized prefix is an internal raw
+  // state; copying it and then publishing length would shorten it, so leave
+  // every such state to the public loop.
+  if (values->initialized != values->length ||
+      extra->initialized != extra->length)
+    return false;
+  // A distinct descriptor over the destination payload would be invalidated
+  // by growth and could be overwritten by the copy. Treat that unknown shared
+  // storage as unsupported instead of guessing an owner relationship.
+  if (values != extra &&
+      (aliases_payload(values, extra->data) ||
+       aliases_payload(extra, values->data)))
+    return false;
+  if (values->stride != extra->stride) return false;
+  const uint64_t count = extra->length;
+  // An empty source changes nothing, so it succeeds even while pinned.
+  if (!count) return true;
+  if (__atomic_load_n(&values->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  // Overflow and allocation failure return false before publishing anything,
+  // so the public loop below keeps the original per-element failure order.
+  if (values->length > kMaxU64 - count) return false;
+  const uint64_t length = values->length + count;
+  if (!values->stride || length > kMaxU64 / values->stride) return false;
+  const uint64_t old_length = values->length;
+  if (length > values->capacity) {
+    const uint64_t capacity = grown_capacity(values->capacity, length);
+    if (capacity > kMaxU64 / values->stride ||
+        !try_replace_storage(values, capacity, capacity * values->stride))
+      return false;
+  }
+  // Resolve the source after growth: a self extend reads the current payload,
+  // while an independent source keeps its own storage. One overlap-safe copy
+  // publishes no partial element and invokes no callback.
+  copy_bytes(element(values, old_length), element(extra, 0),
+             count * values->stride);
+  values->initialized = length;
+  values->length = length;
   return true;
 }
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,

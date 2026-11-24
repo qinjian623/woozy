@@ -92,6 +92,7 @@ func main() i32 throws text.Error {
     vec.reserve[string](values, 4);
     vec.push[string](values, part);
     let length = vec.len[string](values);
+    vec.extend[string](values, values);
     let capacity = vec.capacity[string](values);
     let filled = vec.make[Box[string]](2, Box[string](value: joined));
     vec.resize[string](values, 3, joined);
