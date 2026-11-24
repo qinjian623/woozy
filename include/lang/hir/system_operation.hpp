@@ -78,8 +78,9 @@ enum class SystemOperation : uint16_t {
   map_probe_requires_copy = 239,
   text_cursor_read_back = 240,
   text_compact = 241,
-  // Same-width IEEE-754 bit reinterpretation used only by std/strconv's Ryu
-  // formatter. These are not public numeric conversion APIs.
+  // Same-width IEEE-754 bit reinterpretation used by std/strconv's Ryu
+  // formatter and std/math's classifiers. These are not public numeric conversion
+  // APIs.
   num_f32_bits = 242,
   num_f64_bits = 243
 };
@@ -457,6 +458,10 @@ inline const SystemOperationSpec *system_operation_spec(std::string_view name) {
 inline bool system_operation_allows_module(const SystemOperationSpec &spec,
                                           std::string_view logical_path) {
   if (logical_path == spec.owner) return true;
+  // std/math's classifiers reuse the private same-width f64 bit view provided by
+  // std/strconv. Keep the grant exact: only this operation, only std/math.
+  if (spec.operation == SystemOperation::num_f64_bits &&
+      logical_path == "std/math") return true;
   // std/unicode's single-pass grapheme slicer walks one source through the
   // shared std/text cursor primitives. Keep the grant exact: only these two
   // operations, only from std/unicode.

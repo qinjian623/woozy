@@ -94,6 +94,26 @@ func main() i32 {
     if x!=5 || !b {return 3;}
     return 0;
 }''',
+    'integer-and-bool-comparisons': '''
+func signed(low i64, high i64) bool {
+    return low < high && low <= high && high > low && high >= high &&
+           low != high && low == low && !(high < low) && !(low > low);
+}
+func unsigned(low u64, high u64) bool {
+    return low < high && low <= high && high > low && high >= high &&
+           low != high && low == low && !(high <= low) && !(low >= high);
+}
+func word(low isize, high isize, small usize, large usize) bool {
+    return low < high && large > small && !(large == small);
+}
+func flags(a bool, b bool) bool {return a != b && a == true && b == false;}
+func main() i32 {
+    if !signed(-9223372036854775808, 9223372036854775807) {return 1;}
+    if !unsigned(9223372036854775807, 18446744073709551615) {return 2;}
+    if !word(-1, 0, 0, 4294967296) {return 3;}
+    if !flags(true, false) {return 4;}
+    return 0;
+}''',
     'short-circuit-effects': '''
 func hit(x inout i32) bool {x+=1;return true;}
 func main() i32 {

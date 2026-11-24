@@ -9,4 +9,8 @@ func classify(value f64) i32 {
     return 0;
 }
 
+func check_signbit(value f64) bool { return math.signbit(value); }
+func check_isinf(value f64) bool { return math.isinf(value); }
+func check_isfinite(value f64) bool { return math.isfinite(value); }
+
 func main() i32 { return classify(1.0) - 3; }

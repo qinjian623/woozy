@@ -75,10 +75,19 @@ func binary_text(state EmitState, op hir.BinaryOp, left string, right string,
         return "_rt.text_binary('" + operation + "', " + left + ", " +
             right + ")";
     }
-    if kind_is(type_value.kind, model.TypeKind.Float) {
-        // CPython compares the stored binary64 values with exactly the IEEE
-        // result the runtime helper forwards to; the helper adds only a call
-        // and a width check. Keep arithmetic and rounding on float_binary.
+    if kind_is(type_value.kind, model.TypeKind.Float) ||
+       kind_is(type_value.kind, model.TypeKind.SignedInt) ||
+       kind_is(type_value.kind, model.TypeKind.UnsignedInt) ||
+       kind_is(type_value.kind, model.TypeKind.Isize) ||
+       kind_is(type_value.kind, model.TypeKind.Usize) ||
+       kind_is(type_value.kind, model.TypeKind.Bool) {
+        // CPython compares the stored values with exactly the IEEE or
+        // two's-complement result the runtime helper forwards to: floats are
+        // stored binary64 values, integer operands are exact Python ints and
+        // Bool operands are bool.  The helper adds only a call and a width
+        // check for these six comparisons, which never wrap.  Keep string
+        // ordering on text_binary and arithmetic/rounding on the helpers that
+        // carry the target width.
         switch op {
             case hir.BinaryOp.Equal:
                 return "(" + left + " == " + right + ")";
@@ -94,6 +103,8 @@ func binary_text(state EmitState, op hir.BinaryOp, left string, right string,
                 return "(" + left + " >= " + right + ")";
             default: {}
         }
+    }
+    if kind_is(type_value.kind, model.TypeKind.Float) {
         return "_rt.float_binary('" + operation + "', " + left + ", " +
             right + ", " + u32_text(type_value.bits) + ")";
     }
@@ -722,6 +733,10 @@ func system_call_expression(state inout EmitState, node hir.HirNode, id usize,
         call_text = args[0] + ".to_vec(" +
             type_ops_name(type_of(state.module, node.type_id).type_args[0]) +
             ")";
+    } else if spec.operation == 242 {
+        call_text = "_rt._float_bits(" + args[0] + ", 32)";
+    } else if spec.operation == 243 {
+        call_text = "_rt._float_bits(" + args[0] + ", 64)";
     } else {
         call_text = "_rt.value_call(" +
             python_string_literal(substring_from(spec.name, 8)) + ", " +

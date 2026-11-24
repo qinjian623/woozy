@@ -777,12 +777,18 @@ class Emitter {
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
-    if (type(operand).kind == TypeKind::String)
+    const auto &operand_type = type(operand);
+    if (operand_type.kind == TypeKind::String)
       return "_rt.text_binary('" + operation(op) + "', " + a + ", " + b + ")";
-    if (type(operand).kind == TypeKind::Float) {
-      // CPython compares the stored binary64 values with exactly the IEEE
-      // result the runtime helper forwards to; the helper adds only a call
-      // and a width check. Keep arithmetic and rounding on float_binary.
+    if (operand_type.kind == TypeKind::Float || integer(operand_type) ||
+        operand_type.kind == TypeKind::Bool) {
+      // CPython compares the stored values with exactly the IEEE or
+      // two's-complement result the runtime helper forwards to: floats are
+      // stored binary64 values, integer operands are exact Python ints and
+      // Bool operands are bool. The helper adds only a call and a width
+      // check for these six comparisons, which never wrap. Keep string
+      // ordering on text_binary and arithmetic/rounding on the helpers that
+      // carry the target width.
       switch (op) {
       case BinaryOp::equal:
         return "(" + a + " == " + b + ")";
@@ -799,9 +805,10 @@ class Emitter {
       default:
         break;
       }
-      return "_rt.float_binary('" + operation(op) + "', " + a + ", " + b +
-             ", " + std::to_string(type(operand).bits) + ")";
     }
+    if (operand_type.kind == TypeKind::Float)
+      return "_rt.float_binary('" + operation(op) + "', " + a + ", " + b +
+             ", " + std::to_string(operand_type.bits) + ")";
     return "_rt.binary('" + operation(op) + "', " + a + ", " + b + ", " +
            numeric(operand) + ")";
   }
@@ -1256,6 +1263,12 @@ class Emitter {
         case SystemOperation::slice_to_vec:
           call = args.at(0) + ".to_vec(" +
                  ops(type(n.type).type_args.at(0)) + ")";
+          break;
+        case SystemOperation::num_f32_bits:
+          call = "_rt._float_bits(" + args.at(0) + ", 32)";
+          break;
+        case SystemOperation::num_f64_bits:
+          call = "_rt._float_bits(" + args.at(0) + ", 64)";
           break;
         default:
           call = "_rt.value_call(" + string_literal(spec->name.substr(8)) +

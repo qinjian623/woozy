@@ -275,14 +275,19 @@ def ieee(pattern, bits):
     raise ValueError('unsupported IEEE width')
 
 
+_IEEE_PACK = {32: struct.Struct('>f').pack, 64: struct.Struct('>d').pack}
+
+
 def _float_bits(value, bits):
     """Encode one IEEE-754 value without changing its width.
 
     The standard library's struct codec preserves signed zero and infinity;
     NaN payloads follow the host IEEE value rather than a numeric conversion.
     """
-    fmt = {32: '>f', 64: '>d'}[bits]
-    return int.from_bytes(struct.pack(fmt, value), 'big')
+    try:
+        return int.from_bytes(_IEEE_PACK[bits](value), 'big')
+    except (MemoryError, OverflowError):
+        raise Panic('value library allocation failed') from None
 
 
 def _float_round(numerator, denominator, bits, negative=False):

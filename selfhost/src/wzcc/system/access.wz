@@ -2,6 +2,9 @@ package system;
 
 pub func allows_module(operation u32, owner string, logical_path string) bool {
     if logical_path == owner { return true; }
+    // std/math's classifiers reuse the private same-width f64 bit view provided
+    // by std/strconv. Keep the grant exact: only this operation, only std/math.
+    if operation == 243 && logical_path == "std/math" { return true; }
     // std/unicode's single-pass grapheme slicer walks one source through the
     // shared std/text cursor primitives. Keep the grant exact: only these two
     // operations, only from std/unicode.

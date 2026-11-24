@@ -65,6 +65,11 @@ def additional():
         for a in edges:
             probes.append(dict(function=f'neg{width}', arguments=[dict(type=f'f{width}', bits=f'{a:0{width // 4}x}')],
                                result=result(operation('neg', [a], width), width), expected_source='IEEE sign-bit inversion'))
+        if width == 64:
+            for a in edges + [rng.getrandbits(width) for _ in range(256)]:
+                probes.append(dict(function='signbit64', arguments=[dict(type='f64', bits=f'{a:016x}')],
+                                   result=dict(type='bool', **{'class': 'bool'}, value=bool(a >> 63)),
+                                   expected_source='IEEE-754 sign bit'))
         for a, b in pairs[:30]:
             probes.append(dict(function=f'compound{width}', arguments=[dict(type=f'f{width}', bits=f'{x:0{width // 4}x}') for x in (a, b)],
                                result=result(operation('compound', [a, b], width), width), expected_source='four exact ratios rounded after each assignment'))
