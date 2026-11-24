@@ -84,6 +84,11 @@ constexpr uint32_t kSmallClassCount =
     sizeof(kSmallClassSizes) / sizeof(kSmallClassSizes[0]);
 constexpr uint64_t kMaxSmallPayload =
     kSmallClassSizes[kSmallClassCount - 1] - sizeof(AllocHeader);
+// One direct-mmap region is retained for repeated large alloc/free.  This
+// keeps the large path's mmap/munmap and fresh-page faults off the hot loop
+// while adding at most one bounded region of retention.
+constexpr uint64_t kDirectCacheMinSize = 128 * 1024;
+constexpr uint64_t kDirectCacheMaxSize = 1 * 1024 * 1024;
 
 struct FreeSlot {
   FreeSlot *next;
@@ -104,8 +109,8 @@ struct ClassState {
   uint32_t empty_count;
 };
 
-// Pool metadata is shared between threads; direct mmap allocations do not
-// touch it. This lock needs no allocation, libc, or per-thread state.
+// Pool metadata and the one-slot direct cache are shared between threads.
+// This lock needs no allocation, libc, or per-thread state.
 uint32_t g_lock_next;
 uint32_t g_lock_serving;
 
@@ -137,6 +142,23 @@ struct PoolLockGuard {
 
 // Zero-initialized POD state; there is no static destructor or dynamic setup.
 ClassState g_classes[kSmallClassCount];
+// One cached direct-mmap region, protected by the existing pool lock.
+struct DirectCache {
+  void *base;
+  uint64_t size;
+};
+DirectCache g_direct_cache;
+
+// Caller holds the pool lock.  Dropping the retained direct page releases VA
+// before a failed mapping is retried; the cache is cold-path state only.
+static bool drop_direct_cache_locked() noexcept {
+  if (!g_direct_cache.base)
+    return false;
+  sys_munmap(g_direct_cache.base, g_direct_cache.size);
+  g_direct_cache.base = nullptr;
+  g_direct_cache.size = 0;
+  return true;
+}
 
 static inline uintptr_t align_up(uintptr_t value, uint64_t align) noexcept {
   return (value + align - 1) & ~static_cast<uintptr_t>(align - 1);
@@ -182,6 +204,8 @@ static inline uint32_t empty_page_limit(uint32_t class_index) noexcept {
 static PoolPage *new_pool_page(uint32_t class_index) noexcept {
   const uint64_t slot_size = kSmallClassSizes[class_index];
   void *base = map_private_pages(kPoolPageSize);
+  if (base == reinterpret_cast<void *>(-1) && drop_direct_cache_locked())
+    base = map_private_pages(kPoolPageSize);
   if (base == reinterpret_cast<void *>(-1))
     return nullptr;
 
@@ -285,7 +309,27 @@ extern "C" void *lang_alloc_v1(uint64_t size, uint64_t align) noexcept {
 
   uint64_t mmap_size = (needed + page_mask) & ~page_mask;
 
+  if (align <= kSmallAlignMax && mmap_size >= kDirectCacheMinSize &&
+      mmap_size <= kDirectCacheMaxSize) {
+    PoolLockGuard guard;
+    if (g_direct_cache.base && g_direct_cache.size == mmap_size) {
+      void *cached = g_direct_cache.base;
+      g_direct_cache.base = nullptr;
+      g_direct_cache.size = 0;
+      return reinterpret_cast<unsigned char *>(cached) + sizeof(AllocHeader);
+    }
+  }
+
   void *base = map_private_pages(mmap_size);
+  if (base == reinterpret_cast<void *>(-1)) {
+    bool dropped = false;
+    {
+      PoolLockGuard guard;
+      dropped = drop_direct_cache_locked();
+    }
+    if (dropped)
+      base = map_private_pages(mmap_size);
+  }
   if (base == reinterpret_cast<void *>(-1))
     return nullptr;
 
@@ -328,7 +372,18 @@ extern "C" void lang_free_v1(void *ptr) noexcept {
       }
     }
   } else {
-    sys_munmap(reinterpret_cast<void *>(owner), hdr->size);
+    auto *base = reinterpret_cast<void *>(owner);
+    const uint64_t size = hdr->size;
+    if (reinterpret_cast<void *>(hdr) == base &&
+        size >= kDirectCacheMinSize && size <= kDirectCacheMaxSize) {
+      PoolLockGuard guard;
+      if (!g_direct_cache.base) {
+        g_direct_cache.base = base;
+        g_direct_cache.size = size;
+        return;
+      }
+    }
+    sys_munmap(base, size);
   }
 }
 

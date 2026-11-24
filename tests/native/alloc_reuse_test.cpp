@@ -5,10 +5,13 @@
 #include <cerrno>
 
 #if defined(__x86_64__) && defined(__linux__)
+#include <cstdlib>
+#include <fcntl.h>
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -272,20 +275,8 @@ static int test_reuse_without_mmap() {
 #endif
 }
 
-static int run_reuse_without_mmap_isolated() {
 #if defined(__x86_64__) && defined(__linux__)
-  // Seccomp must not be installed in the process that owns the sanitizer
-  // runtime: returning from main would ask ASan to mmap its cleanup guard
-  // while mmap is denied.  The child installs the filter and leaves with
-  // _exit, so sanitizer cleanup in the unfiltered parent is unaffected.
-  const pid_t child = fork();
-  if (child < 0)
-    return 70;
-  if (child == 0) {
-    const int result = test_reuse_without_mmap();
-    _exit(result);
-  }
-
+static int wait_for_test_child(pid_t child) {
   int status = 0;
   for (;;) {
     const pid_t waited = waitpid(child, &status, 0);
@@ -300,6 +291,71 @@ static int run_reuse_without_mmap_isolated() {
   if (WIFSIGNALED(status))
     return 128 + WTERMSIG(status);
   return 72;
+}
+
+// Prime the direct cache and permit only enough address space for the next
+// request. That request must still succeed when the cached mapping is evicted.
+static int test_pressure_child(uint64_t size, uint64_t slack) {
+  char statm[128]{};
+  const int fd = open("/proc/self/statm", O_RDONLY);
+  if (fd < 0)
+    return 80;
+  const ssize_t count = read(fd, statm, sizeof(statm) - 1);
+  close(fd);
+  if (count <= 0)
+    return 81;
+  const long page_size = sysconf(_SC_PAGESIZE);
+  const auto pages = std::strtoull(statm, nullptr, 10);
+  if (page_size <= 0 || pages == 0)
+    return 82;
+  const auto before = static_cast<rlim_t>(pages) * page_size;
+
+  void *warm = lang_alloc_v1(512 * 1024, 16);
+  if (!warm)
+    return 83;
+  *static_cast<volatile unsigned char *>(warm) = 7;
+  lang_free_v1(warm);
+
+  rlimit limit{};
+  if (getrlimit(RLIMIT_AS, &limit) != 0)
+    return 84;
+  limit.rlim_cur = before + slack;
+  if (setrlimit(RLIMIT_AS, &limit) != 0)
+    return 85;
+
+  void *pointer = lang_alloc_v1(size, 16);
+  if (!pointer)
+    return size < 65536 ? 86 : 87;
+  *static_cast<volatile unsigned char *>(pointer) = 8;
+  lang_free_v1(pointer);
+  return 0;
+}
+
+static int run_pressure_isolated(uint64_t size, uint64_t slack) {
+  const pid_t child = fork();
+  if (child < 0)
+    return 70;
+  if (child == 0)
+    _exit(test_pressure_child(size, slack));
+  return wait_for_test_child(child);
+}
+#endif
+
+static int run_reuse_without_mmap_isolated() {
+#if defined(__x86_64__) && defined(__linux__)
+  // Seccomp must not be installed in the process that owns the sanitizer
+  // runtime: returning from main would ask ASan to mmap its cleanup guard
+  // while mmap is denied.  The child installs the filter and leaves with
+  // _exit, so sanitizer cleanup in the unfiltered parent is unaffected.
+  const pid_t child = fork();
+  if (child < 0)
+    return 70;
+  if (child == 0) {
+    const int result = test_reuse_without_mmap();
+    _exit(result);
+  }
+
+  return wait_for_test_child(child);
 #else
   return 77;
 #endif
@@ -310,6 +366,14 @@ static int run_reuse_without_mmap_isolated() {
 int main(int argc, char **argv) {
   if (argc > 1 && argv[1][0] == 'r' && argv[1][1] == 'e')
     return run_reuse_without_mmap_isolated();
+#if defined(__x86_64__) && defined(__linux__)
+  // Keep these first: the 4000-byte class must be cold in its isolated child.
+  int pressure = run_pressure_isolated(4000, 80 * 1024);
+  if (!pressure)
+    pressure = run_pressure_isolated(262144, 320 * 1024);
+  if (pressure)
+    return pressure;
+#endif
   int result = test_invalid_requests();
   if (!result)
     result = test_boundaries();
