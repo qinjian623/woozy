@@ -1218,9 +1218,16 @@ struct ReentrantMapKey {
     id i32;
     target box.Box[map.Map[ReentrantMapKey,Vec[i32]]];
     calls Vec[i32];
+    hash_calls Vec[i32];
 }
 impl hash.Hash for ReentrantMapKey {
-    func hash(value Self) u64 { return u64(value.id); }
+    func hash(value Self) u64 {
+        if vec.len(value.hash_calls) != 0 {
+            value.hash_calls[0] += 1;
+            map.clear(box.get(value.target));
+        }
+        return u64(value.id);
+    }
     func equals(left Self, right Self) bool {
         if left.id != right.id { return false; }
         if vec.len(right.calls) != 0 {
@@ -1233,13 +1240,35 @@ impl hash.Hash for ReentrantMapKey {
 func test_map_contains_reentry() i32 {
     let values = map.new[ReentrantMapKey,Vec[i32]]();
     let target = box.new(values);
-    let entry = ReentrantMapKey(id: 10, target: target, calls: []);
+    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: []);
     let data Vec[i32] = [19];
     map.insert(values, entry, data);
     let calls Vec[i32] = [0];
-    let query = ReentrantMapKey(id: 10, target: target, calls: calls);
+    let query = ReentrantMapKey(id: 10, target: target, calls: calls, hash_calls: []);
     if !map.contains(values, query) { return 428; }
     if !map.is_empty(values) || data[0] != 19 || calls[0] != 1 { return 429; }
+    return 0;
+}
+
+// A read has already captured the table when its hash callback clears the map.
+func test_map_hash_snapshot() i32 {
+    let values = map.new[ReentrantMapKey,Vec[i32]]();
+    let target = box.new(values);
+    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: []);
+    let before Vec[i32] = [19];
+    let calls Vec[i32] = [0];
+    let query = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: calls);
+
+    map.insert(values, entry, before);
+    switch map.get(values, query) {
+        case option.Option.Some(found): { if found[0] != 19 { return 161; } }
+        case option.Option.None: return 162;
+    }
+    if !map.is_empty(values) || calls[0] != 1 { return 163; }
+
+    map.insert(values, entry, before);
+    if !map.contains(values, query) { return 164; }
+    if !map.is_empty(values) || calls[0] != 2 { return 165; }
     return 0;
 }
 
@@ -1302,5 +1331,7 @@ func main() i32 {
     if failure != 0 { return failure; }
     failure = test_map_bucket_growth();
     if failure != 0 { return failure; }
-    return test_map_contains_reentry();
+    failure = test_map_contains_reentry();
+    if failure != 0 { return failure; }
+    return test_map_hash_snapshot();
 }
