@@ -200,8 +200,14 @@ pub func pop_back[T](values Deque[T]) option.Option[T] {
     if state.length == 0 { return option.Option[T].None; }
 
     let ring = state.capacity;
-    // length - 1 < ring whenever the deque is nonempty.
-    let position = ring_slot(state.head, state.length - 1, ring);
+    // length - 1 < ring whenever the deque is nonempty.  Inline the ring index
+    // so this path does not pay a second safepoint for the helper entry.
+    // Subtract first so head + offset is formed only when it stays below the
+    // ring, preserving the helper's no-overflow invariant.
+    let offset = state.length - 1;
+    let tail = ring - state.head;
+    var position = offset - tail;
+    if offset < tail { position = state.head + offset; }
     let stored = values.slots[position];
     values.cursor[0] = Cursor(head:state.head,length:state.length - 1,capacity:ring);
     values.slots[position] = option.Option[T].None;
@@ -231,8 +237,12 @@ pub func peek_back[T](values Deque[T]) option.Option[T] {
 pub func get[T](values Deque[T], index usize) option.Option[T] {
     let state = values.cursor[0];
     if index >= state.length { return option.Option[T].None; }
-    // index < length <= capacity.
-    let position = ring_slot(state.head, index, state.capacity);
+    // index < length <= capacity.  Inline the ring index so the hot read does
+    // not pay a second safepoint for the helper entry.  Subtract first so
+    // head + index is formed only when it stays below the ring.
+    let tail = state.capacity - state.head;
+    var position = index - tail;
+    if index < tail { position = state.head + index; }
     return values.slots[position];
 }
 
