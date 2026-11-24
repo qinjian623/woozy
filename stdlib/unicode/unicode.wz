@@ -9,12 +9,7 @@ pub func normalize(value string, form Form) string {
     // Valid UTF-8 has equal byte and scalar counts exactly when it is ASCII.
     // All four Unicode normalization forms leave ASCII unchanged.
     if text.byte_len(value) == text.len(value) { return value; }
-    switch form {
-        case Form.NFC: return __woozy_unicode_normalize(value,0);
-        case Form.NFD: return __woozy_unicode_normalize(value,1);
-        case Form.NFKC: return __woozy_unicode_normalize(value,2);
-        case Form.NFKD: return __woozy_unicode_normalize(value,3);
-    }
+    return wz_normalize(value,form);
 }
 pub func nfc(value string) string { return normalize(value,Form.NFC); }
 pub func nfd(value string) string { return normalize(value,Form.NFD); }
