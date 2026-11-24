@@ -1,0 +1,9 @@
+package system;
+
+pub func allows_module(operation u32, owner string, logical_path string) bool {
+    if logical_path == owner { return true; }
+    // Internal balanced Vec pins shared by the callback algorithms.
+    return (operation == 231 || operation == 232) &&
+        (logical_path == "std/algo" || logical_path == "std/heap" ||
+            logical_path == "std/sort");
+}

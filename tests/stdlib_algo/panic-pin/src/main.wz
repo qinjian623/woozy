@@ -1,0 +1,14 @@
+package app;
+
+import "std/algo" as algo;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values Vec[i32] = [3, 4];
+    let combine = func(sum i32, value i32) i32 {
+        vec.push(values, value);
+        return sum + value;
+    };
+    let result = algo.fold(values, 0, combine);
+    return 0;
+}

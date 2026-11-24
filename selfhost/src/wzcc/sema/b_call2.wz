@@ -15,7 +15,7 @@ func system_call(state inout Checker, r model.NodeRef, callee model.NodeRef,
                  target usize, spec system.OperationSpec) Expr throws Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if b_module_path(inout state, r.module) != spec.owner {
+    if !system.allows_module(spec.operation, spec.owner, b_module_path(inout state, r.module)) {
         throw unavailable(inout state, r,
             "system operations can only be called from their owner std module");
     }

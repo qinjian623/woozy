@@ -1,0 +1,16 @@
+package app;
+
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+func less(left i32, right i32) bool { return left < right; }
+
+func main() i32 {
+    let values Vec[i32] = [3, 4];
+    let key = func(value i32) i32 {
+        vec.clear(values);
+        return value;
+    };
+    sort.sort_by_key(values, key, less);
+    return 0;
+}

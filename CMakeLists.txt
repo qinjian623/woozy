@@ -137,6 +137,23 @@ if(BUILD_TESTING)
       endforeach()
     endif()
   endforeach()
+  foreach(path IN ITEMS stdlib_algo/panic-pin stdlib_sort/panic-pin stdlib_containers/panic-reentrant-push)
+    string(REPLACE "/" "." suite "${path}")
+    set(manifest "${CMAKE_CURRENT_SOURCE_DIR}/tests/${path}/lang.toml")
+    set(runner "${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/stdlib_project_test.py")
+    if(LANG_PYTHON312)
+      add_test(NAME ${suite}.python COMMAND "${LANG_PYTHON312}" -B
+        "${runner}" $<TARGET_FILE:woozyc> "${manifest}" python
+        --expect-panic "Vec length changes during iteration")
+    endif()
+    if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON)
+      foreach(mode IN ITEMS native-o0 native-o2)
+        add_test(NAME ${suite}.${mode} COMMAND "${LANG_TEST_PYTHON}" -B
+          "${runner}" $<TARGET_FILE:woozyc> "${manifest}" "${mode}"
+          --libxml "${LANG_TEST_LIBXML_DIR}" --expect-panic active-iteration)
+      endforeach()
+    endif()
+  endforeach()
   add_subdirectory(tests/generics)
   add_subdirectory(tests/trait_objects)
   add_subdirectory(tests/async_runtime)

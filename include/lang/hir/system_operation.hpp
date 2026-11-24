@@ -58,8 +58,8 @@ enum class SystemOperation : uint16_t {
   // Private std/heap active-iteration pin. The explicit IDs follow the
   // existing entries so they stay stable; the owner module restriction keeps
   // these out of public APIs.
-  heap_pin_begin = 231,
-  heap_pin_end = 232
+  vec_pin_begin = 231,
+  vec_pin_end = 232
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -169,8 +169,8 @@ inline constexpr std::array<SystemOperationSpec, 62> value_system_operations{{
   {SystemOperation::vec_resize, "__woozy_vec_resize", "Unit", {"Vec[A]", "usize", "A"}, 3, "std/vec", 1},
   {SystemOperation::vec_clear, "__woozy_vec_clear", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
   {SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", "bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},
-  {SystemOperation::heap_pin_begin, "__woozy_heap_pin_begin", "Unit", {"Vec[A]"}, 1, "std/heap", 1},
-  {SystemOperation::heap_pin_end, "__woozy_heap_pin_end", "Unit", {"Vec[A]"}, 1, "std/heap", 1},
+  {SystemOperation::vec_pin_begin, "__woozy_vec_pin_begin", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
+  {SystemOperation::vec_pin_end, "__woozy_vec_pin_end", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
   {SystemOperation::num_parse_i64, "__woozy_num_parse_i64", "Result[i64,i32]", {"string"}, 1, "std/strconv"},
   {SystemOperation::num_format_i64, "__woozy_num_format_i64", "string", {"i64"}, 1, "std/strconv"},
   {SystemOperation::num_parse_u64, "__woozy_num_parse_u64", "Result[u64,i32]", {"string"}, 1, "std/strconv"},
@@ -387,6 +387,15 @@ inline const SystemOperationSpec *system_operation_spec(std::string_view name) {
   for (const auto &spec : all_system_operations)
     if (spec.name == name) return &spec;
   return nullptr;
+}
+inline bool system_operation_allows_module(const SystemOperationSpec &spec,
+                                          std::string_view logical_path) {
+  if (logical_path == spec.owner) return true;
+  // Internal balanced Vec pins shared by the callback algorithms.
+  return (spec.operation == SystemOperation::vec_pin_begin ||
+          spec.operation == SystemOperation::vec_pin_end) &&
+         (logical_path == "std/algo" || logical_path == "std/heap" ||
+          logical_path == "std/sort");
 }
 // Private runtime handle type spellings. Only the owner std modules may use
 // them in source type syntax; ordinary generic values may contain or pass the

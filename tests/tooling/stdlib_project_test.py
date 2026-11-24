@@ -14,6 +14,7 @@ def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("mode", choices=("native-o0", "native-o2", "python"))
     parser.add_argument("--libxml")
+    parser.add_argument("--expect-panic")
     args = parser.parse_args()
     env = dict(os.environ)
     if args.libxml and Path(args.libxml).is_dir():
@@ -30,7 +31,14 @@ def main():
             command.extend(("--opt", args.mode[-1]))
         subprocess.run(command, cwd=temporary, env=env, check=True, timeout=180)
         run = [out / "program"] if native else [sys.executable, "-B", out / "program.py"]
-        subprocess.run(run, cwd=out, env=env, check=True, timeout=45)
+        if args.expect_panic:
+            result = subprocess.run(run, cwd=out, env=env, capture_output=True,
+                                    text=True, timeout=45)
+            if (result.returncode != 101 or result.stdout or
+                    args.expect_panic not in result.stderr):
+                raise AssertionError((run, result.returncode, result.stdout, result.stderr))
+        else:
+            subprocess.run(run, cwd=out, env=env, check=True, timeout=45)
 
 
 if __name__ == "__main__":
