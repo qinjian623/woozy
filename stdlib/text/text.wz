@@ -178,8 +178,49 @@ pub func join(values Vec[string], separator string) string {
     }
     return text_from_buffer(out);
 }
+// Return the cursor after the next occurrence. Zero denotes no match because
+// every scalar advances the cursor by at least one unit.
+func next_scalar(value string, needle u32, start u64, end u64) u64 {
+    var offset = start;
+    for offset < end {
+        let read = __woozy_text_cursor_read(value,offset);
+        offset += read & CURSOR_STEP_MASK;
+        if u32(read >> 32) == needle { return offset; }
+    }
+    return 0;
+}
+
+func replace_scalar(value string, old string, replacement string) string {
+    let needle = old[0];
+    let end = __woozy_text_cursor_at(value,len(value));
+    var matched = next_scalar(value,needle,0,end);
+    if matched == 0 { return value; }
+
+    let width = __woozy_text_cursor_at(old,1);
+    let out = vec.empty[u8]();
+    let inserted = bytes(replacement);
+    // Equal-width and expanding replacements cannot shorten the result.
+    if vec.len(inserted) >= byte_len(old) { vec.reserve(out,byte_len(value)); }
+    var start u64 = 0;
+    for matched != 0 {
+        let stop = matched-width;
+        if start < stop {
+            append_text(out,__woozy_text_cursor_slice(value,start,stop));
+        }
+        append_bytes(out,inserted);
+        start = matched;
+        matched = next_scalar(value,needle,start,end);
+    }
+    if start < end {
+        append_text(out,__woozy_text_cursor_slice(value,start,end));
+    }
+    return text_from_buffer(out);
+}
+
 pub func replace(value string, old string, replacement string) string {
-    if len(old) == 0 { return replace_empty(value,replacement); }
+    let length = len(old);
+    if length == 0 { return replace_empty(value,replacement); }
+    if length == 1 { return replace_scalar(value,old,replacement); }
     return join(split(value,old),replacement);
 }
 pub func repeat(value string, count usize) string {
