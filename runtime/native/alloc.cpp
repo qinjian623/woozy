@@ -64,10 +64,22 @@ constexpr uint32_t kMaxEmptyPages =
     static_cast<uint32_t>(kEmptyPageBudget / kPoolPageSize);
 static_assert(kMaxEmptyPages * kPoolPageSize == kEmptyPageBudget,
               "empty-page budget must hold whole pool pages");
+// Medium classes have fewer slots per 64 KiB page, so retaining sixteen empty
+// pages would buy little reuse while adding 1 MiB per class to the RSS cap.
+// Four pages (256 KiB) still cover bursty alloc/free reuse; the three added
+// classes therefore raise the worst-case retained pool by at most 768 KiB.
+constexpr uint32_t kMaxMediumEmptyPages = 4;
+// The published small-class ceiling.  Requests at or below its payload limit
+// keep their historical pooled-only behavior; only the added medium classes
+// may fall back to the direct mmap path when their 64 KiB page cannot map.
+constexpr uint64_t kLegacyClassMaxSize = 4096;
+constexpr uint64_t kLegacyMaxSmallPayload =
+    kLegacyClassMaxSize - sizeof(AllocHeader);
 constexpr uint64_t kAlignmentLimit = 0x10000000ULL;
 constexpr uint64_t kSmallAlignMax = 16;
 constexpr uint64_t kSmallClassSizes[] = {
-    32, 48, 64, 96, 128, 192, 256, 384, 512, 1024, 2048, 4096};
+    32, 48, 64, 96, 128, 192, 256, 384, 512, 1024, 2048,
+    kLegacyClassMaxSize, 8192, 16384, 32768};
 constexpr uint32_t kSmallClassCount =
     sizeof(kSmallClassSizes) / sizeof(kSmallClassSizes[0]);
 constexpr uint64_t kMaxSmallPayload =
@@ -159,6 +171,12 @@ static inline uint32_t class_for(uint64_t size) noexcept {
   return kSmallClassCount;
 }
 
+static inline uint32_t empty_page_limit(uint32_t class_index) noexcept {
+  return kSmallClassSizes[class_index] > kLegacyClassMaxSize
+             ? kMaxMediumEmptyPages
+             : kMaxEmptyPages;
+}
+
 // Caller holds the pool lock: both the mapping and the class bookkeeping are
 // shared-state updates, and the empty-page budget is checked under the lock.
 static PoolPage *new_pool_page(uint32_t class_index) noexcept {
@@ -248,8 +266,14 @@ extern "C" void *lang_alloc_v1(uint64_t size, uint64_t align) noexcept {
     return nullptr;
   uint64_t needed = header_space + size;
 
-  if (align <= kSmallAlignMax && size <= kMaxSmallPayload)
-    return small_alloc(size);
+  if (align <= kSmallAlignMax && size <= kMaxSmallPayload) {
+    void *pointer = small_alloc(size);
+    if (pointer || size <= kLegacyMaxSmallPayload)
+      return pointer;
+    // A newly pooled medium request can fail to map its 64 KiB page under a
+    // tight RLIMIT_AS.  Keep the historical direct mmap path available for
+    // those sizes; legacy small classes remain pooled-only.
+  }
 
 #if defined(__APPLE__)
   const uint64_t page_mask = static_cast<uint64_t>(getpagesize()) - 1;
@@ -291,7 +315,7 @@ extern "C" void lang_free_v1(void *ptr) noexcept {
       add_nonfull(page);
 
     if (page->active == 0) {
-      if (state.empty_count < kMaxEmptyPages) {
+      if (state.empty_count < empty_page_limit(page->class_index)) {
         // Keep the page on the nonfull list for later reuse.  The double-linked
         // list already holds any number of pages; only the budget is new.
         ++state.empty_count;
