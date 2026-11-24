@@ -7,22 +7,38 @@ const FORMAT_BUFFER usize = 21;
 
 func format_decimal(magnitude u64, negative bool) string {
     // Fill the buffer from the end so digits come out most-significant first.
-    // Division stops as soon as the quotient reaches zero, so every value has
-    // exactly one leading digit, including zero.
+    // Two decimal digits are produced per iteration, which halves the number
+    // of divisions and collector polls while preserving the exact value.
     let buffer = vec.make[u8](FORMAT_BUFFER, 0);
     var begin usize = FORMAT_BUFFER;
     var remaining = magnitude;
-    for {
+    for remaining >= 100 {
+        let pair = remaining % 100;
+        remaining /= 100;
+        begin -= 2;
+        buffer[begin] = u8(pair / 10) + 48;
+        buffer[begin + 1] = u8(pair % 10) + 48;
+    }
+    if remaining >= 10 {
+        begin -= 2;
+        buffer[begin] = u8(remaining / 10) + 48;
+        buffer[begin + 1] = u8(remaining % 10) + 48;
+    } else {
         begin -= 1;
-        buffer[begin] = u8(remaining % 10) + 48;
-        remaining /= 10;
-        if remaining == 0 { break; }
+        buffer[begin] = u8(remaining) + 48;
     }
     if negative {
         begin -= 1;
         buffer[begin] = 45;
     }
-    try { return text.from_bytes(buffer[begin:]); }
+    // Move the occupied suffix to the front in place. Destination indices are
+    // never above source indices, so this overlapping forward copy is safe.
+    let length = FORMAT_BUFFER - begin;
+    for var index usize = 0; index < length; index += 1 {
+        buffer[index] = buffer[begin + index];
+    }
+    vec.resize(buffer, length, 0);
+    try { return text.from_bytes(buffer); }
     catch error text.Error {
         // The bytes above are decimal ASCII digits and an optional minus.
         return "";

@@ -29,8 +29,23 @@ func parse_magnitude(value string, start usize, size usize) u64 throws Error {
     let cutoff = U64_MAX / 10;
     let last_digit = U64_MAX % 10;
     var magnitude u64 = 0;
+
+    // 10^19 - 1 = 9_999_999_999_999_999_999 < U64_MAX, so any 19 decimal
+    // digits fit. Consume that prefix without a per-digit overflow check.
+    var index = start;
+    var prefix_end = start + 19;
+    if prefix_end > size { prefix_end = size; }
+    for index < prefix_end {
+        let scalar = value[index];
+        if scalar < 48 || scalar > 57 { throw Error.InvalidSyntax; }
+        magnitude = magnitude * 10 + u64(scalar - 48);
+        index += 1;
+    }
+
+    // The remaining digits use the usual cutoff check. Once overflow is
+    // seen, keep validating suffixes so InvalidSyntax still wins.
     var overflow = false;
-    for var index = start; index < size; index += 1 {
+    for index < size {
         let scalar = value[index];
         if scalar < 48 || scalar > 57 { throw Error.InvalidSyntax; }
         let digit = u64(scalar - 48);
@@ -41,6 +56,7 @@ func parse_magnitude(value string, start usize, size usize) u64 throws Error {
                 magnitude = magnitude * 10 + digit;
             }
         }
+        index += 1;
     }
     if overflow { throw Error.OutOfRange; }
     return magnitude;
