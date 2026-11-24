@@ -114,7 +114,13 @@ pub func push_back[T](values Deque[T], value T) {
         state = values.cursor[0];
     }
     let ring = state.capacity;
-    let position = (state.head + state.length) % ring;
+    // length < ring after any growth. Subtracting the contiguous tail wraps
+    // the logical index without forming head + length, so it cannot overflow.
+    let tail = ring - state.head;
+    let index = state.length;
+    var position = index;
+    if index >= tail { position -= tail; }
+    else { position = state.head + index; }
     values.slots[position] = option.Option[T].Some(value);
     values.cursor[0] = Cursor(head:state.head,length:state.length + 1,capacity:ring);
 }
@@ -128,8 +134,11 @@ pub func push_front[T](values Deque[T], value T) {
     }
     let ring = state.capacity;
     // Moving backward from head may wrap through slot zero. capacity is never
-    // zero here because grow_to allocates a nonempty ring.
-    let position = (state.head + ring - 1) % ring;
+    // zero here because grow_to allocates a nonempty ring. A conditional wrap
+    // keeps exact-capacity rings on the same slot without a division.
+    var position = state.head;
+    if position == 0 { position = ring; }
+    position -= 1;
     values.slots[position] = option.Option[T].Some(value);
     values.cursor[0] = Cursor(head:position,length:state.length + 1,capacity:ring);
 }
@@ -187,7 +196,12 @@ pub func peek_front[T](values Deque[T]) option.Option[T] {
 pub func peek_back[T](values Deque[T]) option.Option[T] {
     let state = values.cursor[0];
     if state.length == 0 { return option.Option[T].None; }
-    let position = (state.head + state.length - 1) % state.capacity;
+    let tail = state.capacity - state.head;
+    let index = state.length - 1;
+    // index < capacity. Subtract the tail instead of forming head + index.
+    var position = index;
+    if index >= tail { position -= tail; }
+    else { position = state.head + index; }
     return values.slots[position];
 }
 
@@ -196,7 +210,12 @@ pub func peek_back[T](values Deque[T]) option.Option[T] {
 pub func get[T](values Deque[T], index usize) option.Option[T] {
     let state = values.cursor[0];
     if index >= state.length { return option.Option[T].None; }
-    let position = (state.head + index) % state.capacity;
+    let tail = state.capacity - state.head;
+    // index < length <= capacity. Subtract the tail instead of forming
+    // head + index, which could overflow near usize.MAX.
+    var position = index;
+    if index >= tail { position -= tail; }
+    else { position = state.head + index; }
     return values.slots[position];
 }
 
