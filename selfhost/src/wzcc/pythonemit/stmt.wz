@@ -581,6 +581,18 @@ func statement_inner(state inout EmitState, id usize,
             block(inout state, node, inout suite);
         case hir.NodeData.Binding(payload): {
             let value = expression(inout state, node.children[0], inout suite);
+            if !payload.writable {
+                let width = exact_unsigned_width(
+                    type_of(state.module, node_at(state, node.children[0]).type_id));
+                if width != 0 &&
+                   child_unsigned_width(state, node.children[0]) == width &&
+                   payload.symbol < vec.len(state.binding_widths) &&
+                   !ordered_contains(state.capture_locals, u64(payload.symbol)) {
+                    state.binding_widths[payload.symbol] = u8(width);
+                    state.binding_width_functions[payload.symbol] =
+                        u64(state.current) + 1;
+                }
+            }
             if owned(state, node_at(state, node.children[0]).type_id) {
                 line_hir(inout suite, symbol_name(payload.symbol) + " = _frame.slot(" +
                     owner_key(hir.OwnerKind.Binding, u64(payload.symbol)) + ", " +

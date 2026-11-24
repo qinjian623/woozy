@@ -135,6 +135,10 @@ class Emitter {
   // Proven unsigned width for an emitted eligible Binary node; zero is
   // unknown/non-bitwise. HIR node IDs index this immutable module once.
   std::vector<uint8_t> proven_widths;
+  // Proven unsigned width of a non-writable local Binding initializer, plus
+  // the function that emitted it. SymbolId indexes both module-wide vectors.
+  std::vector<uint8_t> binding_widths;
+  std::vector<uint64_t> binding_width_functions;
   bool owned(TypeId id) const {
     // Function/Weak are owning reference values. The shared classifier still
     // reports their stage-A result until its reference-values branch lands, so
@@ -825,12 +829,47 @@ class Emitter {
   unsigned proven_unsigned_width(HirNodeId id) const {
     return id.value < proven_widths.size() ? proven_widths[id.value] : 0;
   }
+  unsigned binding_unsigned_width(SymbolId symbol) const {
+    const auto index = symbol.value;
+    if (index >= binding_widths.size() ||
+        binding_width_functions[index] != static_cast<uint64_t>(current.value) + 1 ||
+        capture_locals.contains(symbol) || cells.contains(symbol))
+      return 0;
+    return binding_widths[index];
+  }
+  static bool literal_shift_below(const IntegerLiteral &literal,
+                                  unsigned width) {
+    return literal.bits < width &&
+           literal.decimal == std::to_string(literal.bits);
+  }
+  static bool constant_shift_below(const HirNode &n, unsigned width) {
+    switch (n.kind()) {
+    case NodeKind::integer_literal:
+      return literal_shift_below(std::get<IntegerLiteral>(n.data), width);
+    case NodeKind::constant_literal: {
+      const auto &value = std::get<ConstantLiteral>(n.data).value;
+      if (const auto *literal = std::get_if<IntegerLiteral>(&value.data))
+        return literal_shift_below(*literal, width);
+      return false;
+    }
+    default:
+      return false;
+    }
+  }
   unsigned child_unsigned_width(HirNodeId id) const {
     const auto &n = node(id);
     // A Binary child was emitted before this parent and either recorded its
-    // proven width or left zero. Never recurse through the child tree.
-    return n.kind() == NodeKind::binary ? proven_unsigned_width(id)
-                                        : leaf_unsigned_width(n);
+    // proven width or left zero. A Read reuses only the current function's
+    // verified non-writable local Binding proof. Never recurse through the
+    // child tree.
+    switch (n.kind()) {
+    case NodeKind::binary:
+      return proven_unsigned_width(id);
+    case NodeKind::read:
+      return binding_unsigned_width(std::get<Read>(n.data).symbol);
+    default:
+      return leaf_unsigned_width(n);
+    }
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
@@ -1211,23 +1250,40 @@ class Emitter {
       const auto op = std::get<Binary>(n.data).op;
       const bool bitwise = op == BinaryOp::bit_and ||
                            op == BinaryOp::bit_or || op == BinaryOp::bit_xor;
+      const bool shift =
+          op == BinaryOp::shift_left || op == BinaryOp::shift_right;
       unsigned width = 0;
       if (bitwise) {
         width = exact_unsigned_width(type(n.type));
         if (width != 0 &&
-            child_unsigned_width(n.children[0]) == width &&
-            child_unsigned_width(n.children[1]) == width) {
-          if (id.value < proven_widths.size())
-            proven_widths[id.value] = static_cast<uint8_t>(width);
-        } else {
+            (child_unsigned_width(n.children[0]) != width ||
+             child_unsigned_width(n.children[1]) != width))
           width = 0;
-        }
+      } else if (shift) {
+        width = exact_unsigned_width(type(n.type));
+        if (width != 0 &&
+            (child_unsigned_width(n.children[0]) != width ||
+             !constant_shift_below(node(n.children[1]), width)))
+          width = 0;
       }
+      if (id.value < proven_widths.size())
+        proven_widths[id.value] = static_cast<uint8_t>(width);
       if (width != 0) {
-        const char *symbol = op == BinaryOp::bit_and   ? " & "
-                             : op == BinaryOp::bit_or  ? " | "
-                                                       : " ^ ";
-        return value_save(suite, "(" + a + symbol + b + ")", id);
+        if (bitwise) {
+          const char *symbol = op == BinaryOp::bit_and   ? " & "
+                               : op == BinaryOp::bit_or  ? " | "
+                                                         : " ^ ";
+          return value_save(suite, "(" + a + symbol + b + ")", id);
+        }
+        if (op == BinaryOp::shift_right)
+          return value_save(suite, "(" + a + " >> " + b + ")", id);
+        const uint64_t mask = width == 64
+                                  ? ~uint64_t{0}
+                                  : (uint64_t{1} << width) - 1;
+        return value_save(suite,
+                          "((" + a + " << " + b + ") & " +
+                              std::to_string(mask) + ")",
+                          id);
       }
       return value_save(suite, binary(op, a, b, node(n.children[0]).type), id);
     }
@@ -1750,6 +1806,18 @@ class Emitter {
     case NodeKind::binding: {
       const auto &b = std::get<Binding>(n.data);
       auto value = expression(n.children[0], suite);
+      if (!b.writable) {
+        const auto width =
+            exact_unsigned_width(type(node(n.children[0]).type));
+        if (width != 0 &&
+            child_unsigned_width(n.children[0]) == width &&
+            b.symbol.value < binding_widths.size() &&
+            !capture_locals.contains(b.symbol)) {
+          binding_widths[b.symbol.value] = static_cast<uint8_t>(width);
+          binding_width_functions[b.symbol.value] =
+              static_cast<uint64_t>(current.value) + 1;
+        }
+      }
       if (owned(node(n.children[0]).type)) {
         line(suite,
              name(b.symbol) + " = _frame.slot(" +
@@ -2421,6 +2489,9 @@ public:
   Emitter(const HirModule &module, std::stop_token token, bool retry = false)
       : m(module), stop(token), fallback(retry) {
     proven_widths.assign(module.nodes.size(), 0);
+    const auto symbols = module.resolved ? module.resolved->symbols.size() : 0;
+    binding_widths.assign(symbols, 0);
+    binding_width_functions.assign(symbols, 0);
   }
   Output generate(SymbolId entry, const Options &options) {
     check_cancelled(stop);

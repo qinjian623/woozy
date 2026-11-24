@@ -60,6 +60,11 @@ add_test(NAME python.float_classification COMMAND "${LANG_PYTHON312}" -B
   "${CMAKE_CURRENT_LIST_DIR}/run_float_classification.py"
   $<TARGET_FILE:lang_python_emit> "${float_classification_fixture}/lang.toml")
 set_tests_properties(python.float_classification PROPERTIES TIMEOUT 180)
+set(immutable_uint_fixture "${CMAKE_CURRENT_LIST_DIR}/fixtures/immutable-uint")
+add_test(NAME python.immutable_uint COMMAND "${LANG_PYTHON312}" -B
+  "${CMAKE_CURRENT_LIST_DIR}/run_immutable_uint.py"
+  $<TARGET_FILE:lang_python_emit> "${immutable_uint_fixture}/lang.toml")
+set_tests_properties(python.immutable_uint PROPERTIES TIMEOUT 180)
 add_test(NAME python.cleanup COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py"
   --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"

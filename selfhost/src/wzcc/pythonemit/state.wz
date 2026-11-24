@@ -145,6 +145,12 @@ struct EmitState {
     // Proven unsigned width (0, 32 or 64) for an emitted eligible Binary,
     // indexed by the verified immutable HIR node ID.
     proven_widths Vec[u8];
+    // Proven width of a non-writable local Binding initializer and the
+    // SymbolId of the function that emitted it.  The marker prevents a
+    // generic instance, nested closure or retry from inheriting another
+    // function's proof.
+    binding_widths Vec[u8];
+    binding_width_functions Vec[u64];
 }
 
 func new_emitter(module hir.HirModule, fallback bool) EmitState {
@@ -158,7 +164,10 @@ func new_emitter(module hir.HirModule, fallback bool) EmitState {
         bound_adapter_count: 0, held_subjects: [], printer: printer(),
         symbols: [], temporary_ids: [], owned_bindings: [], value_types: [],
         specs: system.operations(),
-        proven_widths: vec.make[u8](vec.len(module.nodes), 0));
+        proven_widths: vec.make[u8](vec.len(module.nodes), 0),
+        binding_widths: vec.make[u8](vec.len(module.resolved.symbols), 0),
+        binding_width_functions: vec.make[u64](
+            vec.len(module.resolved.symbols), 0));
 }
 
 func node_at(state EmitState, id usize) hir.HirNode throws Failure {

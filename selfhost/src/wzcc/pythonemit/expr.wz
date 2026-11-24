@@ -144,6 +144,35 @@ func proven_unsigned_width(state EmitState, id usize) u32 {
     return u32(state.proven_widths[id]);
 }
 
+func binding_unsigned_width(state EmitState, symbol usize) u32 {
+    if symbol >= vec.len(state.binding_widths) ||
+       state.binding_width_functions[symbol] != u64(state.current) + 1 ||
+       ordered_contains(state.capture_locals, u64(symbol)) ||
+       ordered_contains(state.cells, u64(symbol)) {
+        return 0;
+    }
+    return u32(state.binding_widths[symbol]);
+}
+
+func literal_shift_below(literal hir.IntegerLiteral, width u32) bool {
+    return literal.bits < u64(width) && literal.decimal == u64_text(literal.bits);
+}
+
+func constant_shift_below(state EmitState, id usize, width u32) bool throws Failure {
+    let node = node_at(state, id);
+    switch node.data {
+        case hir.NodeData.IntegerLiteral(payload):
+            return literal_shift_below(payload, width);
+        case hir.NodeData.ConstantLiteral(payload):
+            switch payload.value.data {
+                case hir.ConstantData.IntegerLiteral(literal):
+                    return literal_shift_below(literal, width);
+                default: return false;
+            }
+        default: return false;
+    }
+}
+
 func child_unsigned_width(state EmitState, id usize) u32 throws Failure {
     let node = node_at(state, id);
     switch node.data {
@@ -151,6 +180,9 @@ func child_unsigned_width(state EmitState, id usize) u32 throws Failure {
             // The child Binary was emitted first and recorded its width, or
             // left zero. Never recurse through the child tree here.
             return proven_unsigned_width(state, id);
+        case hir.NodeData.Read(payload):
+            // Only a current-function non-writable local proof is reusable.
+            return binding_unsigned_width(state, payload.symbol);
         default:
             return leaf_unsigned_width(state, node);
     }
@@ -1229,10 +1261,13 @@ func expression_inner(state inout EmitState, id usize,
             let right = expression(inout state, node.children[1], inout suite);
             let left_type = node_at(state, node.children[0]).type_id;
             var bitwise = false;
+            var shift = false;
             switch payload.op {
                 case hir.BinaryOp.BitAnd: bitwise = true;
                 case hir.BinaryOp.BitOr: bitwise = true;
                 case hir.BinaryOp.BitXor: bitwise = true;
+                case hir.BinaryOp.ShiftLeft: shift = true;
+                case hir.BinaryOp.ShiftRight: shift = true;
                 default: {}
             }
             var width u32 = 0;
@@ -1244,20 +1279,46 @@ func expression_inner(state inout EmitState, id usize,
                     child_unsigned_width(state, node.children[1]) != width) {
                     width = 0;
                 }
+            } else if shift {
+                width = exact_unsigned_width(
+                    type_of(state.module, node.type_id));
+                if width != 0 &&
+                   (child_unsigned_width(state, node.children[0]) != width ||
+                    !constant_shift_below(state, node.children[1], width)) {
+                    width = 0;
+                }
             }
             var operation = "";
+            if id < vec.len(state.proven_widths) {
+                state.proven_widths[id] = u8(width);
+            }
             if width != 0 {
-                if id < vec.len(state.proven_widths) {
-                    state.proven_widths[id] = u8(width);
-                }
-                switch payload.op {
-                    case hir.BinaryOp.BitAnd:
-                        operation = "(" + left + " & " + right + ")";
-                    case hir.BinaryOp.BitOr:
-                        operation = "(" + left + " | " + right + ")";
-                    case hir.BinaryOp.BitXor:
-                        operation = "(" + left + " ^ " + right + ")";
-                    default: {}
+                if bitwise {
+                    switch payload.op {
+                        case hir.BinaryOp.BitAnd:
+                            operation = "(" + left + " & " + right + ")";
+                        case hir.BinaryOp.BitOr:
+                            operation = "(" + left + " | " + right + ")";
+                        case hir.BinaryOp.BitXor:
+                            operation = "(" + left + " ^ " + right + ")";
+                        default: {}
+                    }
+                } else {
+                    var right_shift = false;
+                    switch payload.op {
+                        case hir.BinaryOp.ShiftRight: right_shift = true;
+                        default: {}
+                    }
+                    if right_shift {
+                        operation = "(" + left + " >> " + right + ")";
+                    } else {
+                        var mask u64 = 18446744073709551615;
+                        if width < 64 {
+                            mask = (u64(1) << u64(width)) - 1;
+                        }
+                        operation = "((" + left + " << " + right + ") & " +
+                            u64_text(mask) + ")";
+                    }
                 }
             }
             if operation == "" {
