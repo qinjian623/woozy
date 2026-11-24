@@ -1,0 +1,45 @@
+package app;
+
+import "std/box" as box;
+import "std/hash" as hash;
+import "std/set" as set;
+
+struct LastRetryKey {
+    id u64;
+    values box.Box[set.Set[LastRetryKey]];
+    remaining box.Box[usize];
+    during_equality bool;
+}
+
+impl hash.Hash for LastRetryKey {
+    func hash(value Self) u64 { return value.id; }
+
+    func equals(left Self, right Self) bool {
+        let same = left.id == right.id;
+        if same && right.during_equality {
+            let remaining = box.get(right.remaining);
+            if remaining > 0 {
+                box.set(right.remaining, remaining - 1);
+                let values = box.get(right.values);
+                let other = LastRetryKey(id: 1, values: right.values, remaining: right.remaining,
+                                during_equality: false);
+                if !set.remove(values, other) { set.add(values, other); }
+            }
+        }
+        return same;
+    }
+}
+
+// Changing another key 63 times forces the final retry. The home slot
+// still has to be checked before applying the limit to the probe loop.
+func test_remove_on_last_retry() i32 {
+    let values = set.new[LastRetryKey]();
+    let owner = box.new(values);
+    let remaining = box.new[usize](63);
+    let key = LastRetryKey(id: 0, values: owner, remaining: remaining, during_equality: false);
+    let probe = LastRetryKey(id: 0, values: owner, remaining: remaining, during_equality: true);
+    if !set.add(values, key) { return 126; }
+    if !set.remove(values, probe) { return 127; }
+    if box.get(remaining) != 0 || set.contains(values, key) { return 128; }
+    return 0;
+}

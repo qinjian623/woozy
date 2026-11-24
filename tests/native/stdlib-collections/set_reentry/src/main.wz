@@ -1107,5 +1107,7 @@ func main() i32 {
     if status != 0 {
         return status;
     }
-    return test_owning_release();
+    status = test_owning_release();
+    if status != 0 { return status; }
+    return test_remove_on_last_retry();
 }
