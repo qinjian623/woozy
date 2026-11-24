@@ -197,12 +197,113 @@ func count_words(value string, target u8) option.Option[usize] {
     }
     return option.Option[usize].Some(total);
 }
+func byte_zero_flags(x u64) u64 {
+    return ~(((x & 0x7f7f7f7f7f7f7f7f) + 0x7f7f7f7f7f7f7f7f) |
+        x | 0x7f7f7f7f7f7f7f7f);
+}
+func count_two(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
+    let first = u64(pattern[0]) * 0x0101010101010101;
+    let second = u64(pattern[1]) * 0x0101010101010101;
+    var total usize = 0;
+    var offset usize = 0;
+    for byte_count - offset >= 8 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,offset) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        let flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8);
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+        offset += 7;
+    }
+    if offset <= byte_count - 2 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,byte_count-8) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        var flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8);
+        flags = flags & (~u64(0) << ((offset-(byte_count-8))*8));
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+    }
+    return option.Option[usize].Some(total);
+}
+func count_three(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
+    let first = u64(pattern[0]) * 0x0101010101010101;
+    let second = u64(pattern[1]) * 0x0101010101010101;
+    let third = u64(pattern[2]) * 0x0101010101010101;
+    var total usize = 0;
+    var offset usize = 0;
+    for byte_count - offset >= 8 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,offset) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        let flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8) &
+            (byte_zero_flags(word ^ third) >> 16);
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+        offset += 6;
+    }
+    if offset <= byte_count - 3 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,byte_count-8) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        var flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8) &
+            (byte_zero_flags(word ^ third) >> 16);
+        flags = flags & (~u64(0) << ((offset-(byte_count-8))*8));
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+    }
+    return option.Option[usize].Some(total);
+}
+func count_four(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
+    let first = u64(pattern[0]) * 0x0101010101010101;
+    let second = u64(pattern[1]) * 0x0101010101010101;
+    let third = u64(pattern[2]) * 0x0101010101010101;
+    let fourth = u64(pattern[3]) * 0x0101010101010101;
+    var total usize = 0;
+    var offset usize = 0;
+    for byte_count - offset >= 8 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,offset) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        let flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8) &
+            (byte_zero_flags(word ^ third) >> 16) &
+            (byte_zero_flags(word ^ fourth) >> 24);
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+        offset += 5;
+    }
+    if offset <= byte_count - 4 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,byte_count-8) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        var flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8) &
+            (byte_zero_flags(word ^ third) >> 16) &
+            (byte_zero_flags(word ^ fourth) >> 24);
+        flags = flags & (~u64(0) << ((offset-(byte_count-8))*8));
+        total += usize((((flags >> 7) * 0x0101010101010101) >> 56));
+    }
+    return option.Option[usize].Some(total);
+}
 pub func count(value string, needle string) usize {
     if needle == "" { return len(value)+1; }
-    if byte_len(needle) > byte_len(value) { return 0; }
-    if byte_len(needle) == 1 {
+    let value_bytes = byte_len(value);
+    let needle_bytes = byte_len(needle);
+    if needle_bytes > value_bytes { return 0; }
+    if needle_bytes == 1 {
         let target = u8(needle[0]);
-        let value_bytes = byte_len(value);
         if value_bytes >= 8 {
             switch count_words(value,target) {
                 case option.Option.Some(total): return total;
@@ -237,8 +338,35 @@ pub func count(value string, needle string) usize {
         }
         return total;
     }
-    let haystack = bytes(value);
     let pattern = bytes(needle);
+    if needle_bytes >= 2 && needle_bytes <= 4 && value_bytes >= 8 {
+        // A border is a proper prefix that is also a suffix; only then can
+        // matches overlap, so those patterns use the nonoverlapping KMP path.
+        var has_border = pattern[0] == pattern[needle_bytes-1];
+        if needle_bytes == 4 &&
+            pattern[0] == pattern[2] && pattern[1] == pattern[3] {
+            has_border = true;
+        }
+        if !has_border {
+            if needle_bytes == 2 {
+                switch count_two(value,pattern,value_bytes) {
+                    case option.Option.Some(total): return total;
+                    case option.Option.None: {}
+                }
+            } else if needle_bytes == 3 {
+                switch count_three(value,pattern,value_bytes) {
+                    case option.Option.Some(total): return total;
+                    case option.Option.None: {}
+                }
+            } else {
+                switch count_four(value,pattern,value_bytes) {
+                    case option.Option.Some(total): return total;
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    let haystack = bytes(value);
     let pattern_bytes = vec.len(pattern);
     let haystack_bytes = vec.len(haystack);
     let fallback = match_table(pattern);

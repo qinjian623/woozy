@@ -148,6 +148,87 @@ func check_word_counts() i32 {
     return 0;
 }
 
+func scalar_count(value string, needle string) usize {
+    if text.len(needle) == 0 { return text.len(value)+1; }
+    let haystack = text.bytes(value);
+    let pattern = text.bytes(needle);
+    let haystack_bytes = vec.len(haystack);
+    let pattern_bytes = vec.len(pattern);
+    if pattern_bytes > haystack_bytes { return 0; }
+    var total usize = 0;
+    var offset usize = 0;
+    for haystack_bytes - offset >= pattern_bytes {
+        var matched = true;
+        for var index usize = 0; index < pattern_bytes; index += 1 {
+            if haystack[offset+index] != pattern[index] { matched = false; }
+        }
+        if matched {
+            total += 1;
+            offset += pattern_bytes;
+        } else {
+            offset += 1;
+        }
+    }
+    return total;
+}
+
+func check_multi_counts() i32 {
+    let focused = ["ab","a\0","\0a","\0\0","abc","ab\0","a\0c","\0bc",
+        "abcd","aabc","abc\0","ab\0d","a\0cd","\0bcd","é","éæ","中","😀"];
+    let tails = ["","x","xy","xyz","é","中","😀","\0"];
+    for pattern in focused {
+        for tail in tails {
+            for var start usize = 0; start < 18; start += 1 {
+                let value = text.repeat("x",start) + pattern + tail;
+                if text.count(value,pattern) != scalar_count(value,pattern) {
+                    return 1101;
+                }
+            }
+        }
+    }
+
+    let ab_run = text.repeat("ab",5000);
+    if text.count(ab_run,"ab") != 5000 { return 1102; }
+    let e_run = text.repeat("é",5000);
+    if text.count(e_run,"é") != 5000 { return 1103; }
+    let zh_run = text.repeat("中",5000);
+    if text.count(zh_run,"中") != 5000 { return 1104; }
+    let emoji_run = text.repeat("😀",5000);
+    if text.count(emoji_run,"😀") != 5000 { return 1105; }
+
+    if text.count("xxxxxxabxxxxxx","ab") != 1 { return 1106; }
+    if text.count("xxxxxxabcxxxxx","abc") != 1 { return 1107; }
+    if text.count("xxxxxabcdxxxx","abcd") != 1 { return 1108; }
+
+    if text.count("a\0b\0a\0b\0a\0b\0","\0b") != 3 { return 1109; }
+    if text.count("a\0b\0a\0b\0a\0b\0","b\0") != 3 { return 1110; }
+    if text.count("\0\0\0\0\0\0\0\0","\0\0") != 4 { return 1111; }
+    if text.count("a\0a\0a\0a\0a\0","a\0a") != 2 { return 1112; }
+
+    if text.count("aaaaaaaa","aa") != 4 { return 1113; }
+    if text.count("aaaaaaaaaa","aaa") != 3 { return 1114; }
+    if text.count("ababababab","abab") != 2 { return 1115; }
+    if text.count("abababa","aba") != 2 { return 1116; }
+
+    let patterns = ["ab","a\0","\0a","\0\0","abc","ab\0","a\0c","\0bc",
+        "abcd","abc\0","ab\0d","a\0cd","\0bcd","é","中","😀",
+        "aa","aaa","abab","a\0a","中中","😀😀"];
+    let units = ["ab","a\0b\0","\0ab","abc","abcd","a\0bc","中é😀","aaaa","abab","中中中"];
+    for pattern in patterns {
+        for unit in units {
+            let unit_length = text.len(unit);
+            for var length usize = 8; length <= 40; length += 1 {
+                let value = text.repeat(unit,length/unit_length+1);
+                let trimmed = value[0:length];
+                if text.count(trimmed,pattern) != scalar_count(trimmed,pattern) {
+                    return 1117;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 func check_split_n() i32 {
     if vec.len(text.split_n("a,b", ",", 0)) != 0 { return 401; }
     if vec.len(text.split_n("", "", 0)) != 0 { return 402; }
@@ -334,6 +415,8 @@ func main() i32 {
     code = check_count();
     if code != 0 { return code; }
     code = check_word_counts();
+    if code != 0 { return code; }
+    code = check_multi_counts();
     if code != 0 { return code; }
     code = check_split_n();
     if code != 0 { return code; }
