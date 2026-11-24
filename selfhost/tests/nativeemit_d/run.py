@@ -71,11 +71,10 @@ SELFHOST_ASYNC_FUNCTION = re.compile(r'^lang\.async\.[0-9]+$')
 SELFHOST_ASYNC_DEFINE = re.compile(
     r'@(?:"lang\.async\.[0-9]+"|lang\.async\.[0-9]+)\s*\('
 )
-REQUEST_SEQUENCE = re.compile(
-    r'(?m)^[ \t]*%[-\w.$]+ = load atomic volatile i32, ptr '
-    r'@"lang_gc_world_request_word_v1" acquire, align 4\n'
-    r'[ \t]*%[-\w.$]+ = and i32 [^\n]+, 1\n'
-    r'[ \t]*%[-\w.$]+ = icmp ne i32 [^\n]+, 0\n'
+SAFEPOINT_SEQUENCE = re.compile(
+    r'(?m)^[ \t]*%[-\w.$]+ = load atomic volatile i64, ptr '
+    r'@"lang_gc_safepoint_word_v1" acquire, align 8\n'
+    r'[ \t]*%[-\w.$]+ = icmp sle i64 [^\n]+, 0\n'
     r'[ \t]*br i1 [^\n]+, label %[^\n]+, label %[^\n]+, !prof [^\n]+\n'
 )
 
@@ -118,7 +117,7 @@ def selfhost_safepoint_contract(text):
 
 def selfhost_contract_negative_checks(text):
     """Minimal counterexamples: a missing poll and an extra misplaced poll."""
-    mutated, count = REQUEST_SEQUENCE.subn('', text, count=1)
+    mutated, count = SAFEPOINT_SEQUENCE.subn('', text, count=1)
     if count != 1:
         raise RuntimeError('safepoint counterexample setup: no request sequence')
     try:
@@ -130,7 +129,7 @@ def selfhost_contract_negative_checks(text):
     if not missing_rejected:
         raise RuntimeError('IR contract accepted a missing safepoint poll')
 
-    sequence = REQUEST_SEQUENCE.search(text)
+    sequence = SAFEPOINT_SEQUENCE.search(text)
     if sequence is None:
         raise RuntimeError('safepoint counterexample setup: no poll sequence')
     lines = text.splitlines(keepends=True)
@@ -145,7 +144,7 @@ def selfhost_contract_negative_checks(text):
             continue
         end = labels[position + 1][0] if position + 1 < len(labels) else len(lines)
         body = ''.join(lines[index + 1:end])
-        if 'lang_gc_world_request_word_v1' in body:
+        if 'lang_gc_safepoint_word_v1' in body:
             continue
         insert_at = index + 1
         break

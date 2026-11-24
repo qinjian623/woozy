@@ -73,6 +73,13 @@ void expect_live(uint64_t expected) {
   CHECK(gc_test_alloc_live() == expected);
 }
 
+// Bit 63 of lang_gc_safepoint_word_v1 mirrors the world request for the
+// one-load compiler fast path.
+bool safepoint_request() {
+  return (__atomic_load_n(&lang_gc_safepoint_word_v1, __ATOMIC_ACQUIRE) &
+          LANG_GC_SAFEPOINT_REQUEST) != 0;
+}
+
 // A mutator that keeps the graph counter moving and polls at every loop
 // iteration. It registers itself and leaves only after stop_workers is set and
 // the world is running again.
@@ -127,6 +134,9 @@ void test_basic_stop_and_resume() {
 
   // -1 exercises the infinite futex wait path.
   CHECK(lang_gc_world_stop_v1(-1) == 0);
+  // The advisory request mirror is set for the whole requested interval.
+  CHECK(lang_gc_world_poll_required_v1());
+  CHECK(safepoint_request());
   const uint64_t stopped_counter = g_counter.load(std::memory_order_relaxed);
   sleep_ms(60);
   CHECK(g_counter.load(std::memory_order_relaxed) == stopped_counter);
@@ -137,6 +147,8 @@ void test_basic_stop_and_resume() {
   lang_gc_world_poll_v1();
 
   lang_gc_world_resume_v1();
+  CHECK(!lang_gc_world_poll_required_v1());
+  CHECK(!safepoint_request());
   CHECK(wait_for([stopped_counter] {
           return g_counter.load(std::memory_order_relaxed) > stopped_counter;
         },
@@ -377,6 +389,91 @@ void test_hundreds_of_stop_resume_rounds() {
   group.finish();
   CHECK(lang_gc_world_unregister_v1());
   expect_live(0);
+}
+
+// The request mirror follows set/retract/resume exactly: a timed-out stop must
+// leave it clear so the fast path stops entering the world poll, and a
+// successful stop must keep it set until resume.
+void test_safepoint_request_mirror_follows_stop() {
+  CHECK(lang_gc_world_register_v1());
+  CHECK(!safepoint_request());
+
+  std::atomic<bool> in_critical{false};
+  std::atomic<bool> release_worker{false};
+  std::atomic<bool> left{false};
+  std::thread worker([&] {
+    CHECK(lang_gc_world_register_v1());
+    lang_gc_world_enter_critical_v1();
+    in_critical.store(true, std::memory_order_release);
+    while (!release_worker.load(std::memory_order_acquire)) {
+      lang_gc_world_poll_v1(); // deferred while the request exists
+      sleep_ms(1);
+    }
+    lang_gc_world_leave_critical_v1();
+    left.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(wait_for([&] { return in_critical.load(); }, 5000));
+  CHECK(lang_gc_world_stop_v1(50000000LL) == -110); // critical keeps it ACTIVE
+  CHECK(!lang_gc_world_poll_required_v1());
+  CHECK(!safepoint_request());
+
+  release_worker.store(true, std::memory_order_release);
+  CHECK(wait_for([&] { return left.load(); }, 5000));
+  worker.join();
+  CHECK(lang_gc_world_can_collect_v1());
+
+  CHECK(lang_gc_world_stop_v1(2000000000LL) == 0);
+  CHECK(lang_gc_world_poll_required_v1());
+  CHECK(safepoint_request());
+  lang_gc_world_resume_v1();
+  CHECK(!lang_gc_world_poll_required_v1());
+  CHECK(!safepoint_request());
+
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_WORLD_SAFEPOINT_MIRROR_OK\n");
+}
+
+// The advisory word alone must be a sufficient mutator fast path: a thread
+// that never reads the authoritative request word must still enter the poll and
+// park on a stop. This test proves that sufficiency and that a fully registered
+// mutator cannot be left waiting on a resume the collector is itself waiting
+// for; it cannot prove the store ORDER (two independent reads cannot observe a
+// one-store window) — the order is specified in gc_world.hpp and implemented in
+// the registry-locked stop/retract/resume/fork-child sites.
+void test_safepoint_mirror_alone_parks_on_stop() {
+  CHECK(lang_gc_world_register_v1());
+  std::atomic<bool> registered{false};
+  std::atomic<bool> finish{false};
+  std::atomic<bool> entered{false};
+  std::atomic<uint64_t> fast_polls{0};
+  std::thread mutator([&] {
+    CHECK(lang_gc_world_register_v1());
+    registered.store(true, std::memory_order_release); // before any stop
+    while (!finish.load(std::memory_order_acquire)) {
+      if (!safepoint_request())
+        continue;
+      entered.store(true, std::memory_order_release);
+      lang_gc_world_poll_v1(); // advisory-triggered; parks until resume
+      fast_polls.fetch_add(1, std::memory_order_relaxed);
+    }
+    CHECK(lang_gc_world_unregister_v1());
+  });
+  CHECK(wait_for([&] { return registered.load(); }, 5000));
+  sleep_ms(20); // the mutator is inside its advisory loop, not registering
+  CHECK(lang_gc_world_stop_v1(2000000000LL) == 0);
+  CHECK(wait_for([&] { return entered.load(); }, 5000));
+  lang_gc_world_resume_v1();
+  finish.store(true, std::memory_order_release);
+  mutator.join();
+  CHECK(fast_polls.load() >= 1);
+  CHECK(!safepoint_request());
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_WORLD_SAFEPOINT_ADVISORY_PARK_OK polls=%llu\n",
+              static_cast<unsigned long long>(fast_polls.load()));
 }
 
 void test_safe_thread_does_not_block_stop_and_leave_waits() {
@@ -882,6 +979,9 @@ void test_fork_prunes_inherited_registry() {
     // Allocator lock first: the GC child hook frees inherited registry nodes.
     lang_alloc_fork_child_v1();
     lang_gc_world_fork_child_v1();
+    // The child drops the inherited request mirror before running any code.
+    CHECK(!safepoint_request());
+    CHECK(!lang_gc_world_poll_required_v1());
 
     ChildReport report{};
     report.magic = kReportMagic;
@@ -1255,6 +1355,8 @@ int main() {
   test_critical_stop_busy_and_can_collect();
   test_can_collect_false_during_other_stop();
   test_critical_long_region_stop_timeout();
+  test_safepoint_request_mirror_follows_stop();
+  test_safepoint_mirror_alone_parks_on_stop();
   test_safe_thread_does_not_block_stop_and_leave_waits();
   test_nested_safe();
   test_registration_during_stop_waits();

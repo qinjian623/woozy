@@ -167,8 +167,10 @@ def inspect_llvm(llvm: str, case: str):
         "program_finish": "lang_gc_program_finish_v1" in llvm,
         "safepoint_poll": poll["sites"] > 0,
         "safepoint_positions": poll["positions_exact"],
-        "pressure_handler": poll["pressure_calls"] == poll["sites"],
-        "legacy_poll_absent": poll["legacy_calls"] == 0,
+        "controller_poll": poll["controller_calls"] == poll["sites"],
+        "direct_poll_absent": (poll["direct_world_calls"] == 0 and
+                               poll["direct_pressure_calls"] == 0 and
+                               poll["inline_word_loads"] == 0),
         "safepoint_functions": poll["functions"] > 0,
         "safepoint_sites": poll["sites"],
         "modification_window": "lang_gc_program_enter_critical_v1" in llvm,

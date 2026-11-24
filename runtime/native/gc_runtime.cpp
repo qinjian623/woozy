@@ -20,6 +20,10 @@ constexpr int kEintr = -4;
 constexpr int64_t kAutoStopNs = 10 * 1000 * 1000; // 10 ms
 constexpr uint64_t kInitialPressure = 128;
 constexpr uint64_t kMaxU64 = ~uint64_t{0};
+// Bits 0..62 of lang_gc_safepoint_word_v1; bit 63 is the world request mirror.
+constexpr uint64_t kSafepointBudgetMask = LANG_GC_SAFEPOINT_REQUEST - 1;
+static_assert(kInitialPressure == LANG_GC_SAFEPOINT_INITIAL_BUDGET,
+              "safepoint budget must initialize to the pressure limit");
 
 struct DeferredRelease {
   DeferredRelease *next;
@@ -129,12 +133,106 @@ bool pressure_pending() noexcept {
 }
 
 void saturating_increment(uint64_t *value) noexcept {
-  uint64_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
+  uint64_t current = __atomic_load_n(value, __ATOMIC_SEQ_CST);
   for (;;) {
     if (current == kMaxU64)
       return;
     if (__atomic_compare_exchange_n(value, &current, current + 1, false,
-                                    __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+      return;
+  }
+}
+
+// One-load safepoint fast path support.
+//
+// lang_gc_safepoint_word_v1 bit 63 mirrors the world request (gc_world.cpp);
+// bits 0..62 are the remaining registration budget of the current pressure
+// epoch, and 0 advises pending pressure. A generated safepoint loads the word
+// once and enters lang_gc_runtime_poll_v1 when the signed value is <= 0.
+//
+// The budget is a hint, never the authority. The controller poll re-reads
+// pressure_accum and pressure_limit and only collects under
+// pressure_accum >= pressure_limit, so a wrong hint can cost an idle call but
+// can never collect early or park a thread. Exactly two divergences are
+// possible, and both are bounded:
+//
+// (a) Early while a registration is in flight. register() decrements the
+//     budget *before* it increments the accumulator, so between those two CAS
+//     loops the hint reads one unit lower than limit - accum. The hint can
+//     therefore be 0 while accum == limit - 1; a safepoint in that window
+//     enters the poll, which re-reads the request word (none), then evaluates
+//     the authoritative pressure predicate itself: it collects only if that
+//     predicate says pending and the thread is collectible, otherwise it
+//     returns unchanged. With n threads concurrently inside register() the hint
+//     is at most n units early. This order is deliberate: the common transient is
+//     the benign direction, so a threshold is never skipped by an in-flight
+//     registration (increment-first would make the common transient late).
+//
+// (b) Late across a reset, only for a registration that overlaps the reset.
+//     If the decrement is overwritten by the publication and the accumulator
+//     increment landed after the reset read the accumulator, the registration
+//     is forgiven: it is in neither the subtracted accumulator nor the new
+//     budget, leaving the hint one unit above limit - accum for that epoch.
+//     It is recovered by that many further registrations (each decrements the
+//     budget) and republished exactly by the next successful collection, so
+//     the threshold is delayed, never lost.
+//
+// Which writers can overlap a reset? A successful stop requires every other
+// node to be SAFE or PARKED (all_stopped_locked):
+//   * parked threads are blocked inside the world runtime and cannot register;
+//   * SAFE forbids graph writes by contract ("all graph writes must be
+//     complete before enter");
+//   * a critical region, a fork-stable no-park interval and a foreign callback
+//     keep the node ACTIVE, so the stop cannot succeed (timeout or -16) and
+//     update_pressure never runs concurrently with them;
+//   * the fork child is single-threaded;
+//   * the collector's own kernel clear/release callbacks may register
+//     (register_on_clear), but they run before the accumulator subtraction, so
+//     they are in `pending` and their overwritten decrement is exactly right.
+// Under the world contracts therefore only (a) is observable; (b) remains a
+// bounded defence in depth for a SAFE thread that writes the graph anyway.
+//
+// The four mutations (budget decrement, accumulator increment, accumulator
+// subtract, budget publication) are seq_cst, so they are totally ordered
+// consistently with each thread's program order. For a registration D < I and
+// a reset C1 (accumulator CAS) < C2 (budget CAS):
+//   * C2 < D => C1 < C2 < D < I: C1 did not observe I, so I is not in
+//     `pending` and D applies to the new budget, counted exactly once;
+//   * D < C2 and I < C1: I is in `pending` and excluded from the new budget,
+//     so the overwritten decrement is exactly right;
+//   * D < C2 < I: forgiven, one unit late, case (b).
+// A double-counted registration would need C2 < D and C1 observing I, i.e.
+// C2 < D < I < C1 < C2, a cycle, so the accounting can never be early through
+// the reset path. The subtraction itself never loses a registration: it
+// subtracts only the snapshot, so everything registered after the snapshot
+// stays pending.
+void consume_pressure_budget() noexcept {
+  uint64_t current =
+      __atomic_load_n(&lang_gc_safepoint_word_v1, __ATOMIC_SEQ_CST);
+  for (;;) {
+    if ((current & kSafepointBudgetMask) == 0)
+      return; // Already advising pressure; saturation keeps it advised.
+    if (__atomic_compare_exchange_n(&lang_gc_safepoint_word_v1, &current,
+                                    current - 1, false, __ATOMIC_SEQ_CST,
+                                    __ATOMIC_SEQ_CST))
+      return;
+  }
+}
+
+// Republish the advisory budget for the epoch a successful collection just
+// established, from the exact accumulator value that collection subtracted.
+// The CAS preserves the world request mirror.
+void publish_pressure_budget(uint64_t limit, uint64_t pending) noexcept {
+  uint64_t budget = pending < limit ? limit - pending : 0;
+  if (budget > kSafepointBudgetMask)
+    budget = kSafepointBudgetMask;
+  uint64_t current =
+      __atomic_load_n(&lang_gc_safepoint_word_v1, __ATOMIC_SEQ_CST);
+  for (;;) {
+    if (__atomic_compare_exchange_n(
+            &lang_gc_safepoint_word_v1, &current,
+            (current & LANG_GC_SAFEPOINT_REQUEST) | budget, false,
+            __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
       return;
   }
 }
@@ -191,15 +289,17 @@ void update_pressure(uint64_t snapshot, uint64_t live_after) noexcept {
   // Subtract only the registrations captured before this collection. Anything
   // registered after the snapshot remains pending and is not lost.
   uint64_t current =
-      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_SEQ_CST);
+  uint64_t pending = 0;
   for (;;) {
-    const uint64_t next = current > snapshot ? current - snapshot : 0;
+    pending = current > snapshot ? current - snapshot : 0;
     if (__atomic_compare_exchange_n(&lang_gc_runtime_pressure_accum_v1,
-                                    &current, next, false,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                                    &current, pending, false,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
       break;
   }
   __atomic_store_n(&lang_gc_runtime_pressure_limit_v1, limit, __ATOMIC_RELEASE);
+  publish_pressure_budget(limit, pending);
   __atomic_store_n(&g_last_live_after, live_after, __ATOMIC_RELAXED);
 }
 
@@ -225,8 +325,12 @@ uint64_t lang_gc_runtime_pressure_limit_v1 = kInitialPressure;
 extern "C" LangGcStatus lang_gc_runtime_register_v1(
     void *object, const LangGcOps *ops) noexcept {
   const LangGcStatus status = lang_gc_register_v1(object, ops);
-  if (status == LANG_GC_OK)
+  if (status == LANG_GC_OK) {
+    // Advisory budget first: see consume_pressure_budget() for why the
+    // registration order relative to the accumulator increment matters.
+    consume_pressure_budget();
     saturating_increment(&lang_gc_runtime_pressure_accum_v1);
+  }
   return status;
 }
 
@@ -440,6 +544,14 @@ extern "C" void lang_gc_runtime_fork_child_v1(void) noexcept {
   __atomic_store_n(&g_collector_tid, 0, __ATOMIC_RELAXED);
   __atomic_store_n(&g_busy, 0u, __ATOMIC_RELEASE);
   __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_IDLE, __ATOMIC_RELEASE);
+  // Re-derive the advisory budget from the inherited authoritative state. A
+  // fork taken while another thread was between the accumulator subtraction and
+  // the budget publication would otherwise hand the child a hint that disagrees
+  // with the child's own accumulator/limit; the child is single-threaded here,
+  // so one exact republication is enough.
+  publish_pressure_budget(
+      __atomic_load_n(&lang_gc_runtime_pressure_limit_v1, __ATOMIC_ACQUIRE),
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE));
   __atomic_store_n(&g_fork_prepared, 0u, __ATOMIC_RELAXED);
   __atomic_store_n(&g_queue_lock_next, 0u, __ATOMIC_RELAXED);
   __atomic_store_n(&g_queue_lock_serving, 0u, __ATOMIC_RELAXED);

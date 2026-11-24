@@ -116,6 +116,29 @@ uint64_t expected_pressure_limit(uint64_t live_after) {
   return doubled < 128 ? 128 : doubled;
 }
 
+// One-load safepoint advice (lang_gc_safepoint_word_v1): bit 63 is the world
+// request mirror, bits 0..62 are the remaining registration budget.
+constexpr uint64_t kSafepointBudgetMask = LANG_GC_SAFEPOINT_REQUEST - 1;
+
+uint64_t safepoint_word() {
+  return __atomic_load_n(&lang_gc_safepoint_word_v1, __ATOMIC_ACQUIRE);
+}
+
+uint64_t safepoint_budget() { return safepoint_word() & kSafepointBudgetMask; }
+
+bool safepoint_request() {
+  return (safepoint_word() & LANG_GC_SAFEPOINT_REQUEST) != 0;
+}
+
+// The exact budget the advisory word must hold when it is republished from a
+// quiet owner state (no concurrent registration).
+uint64_t expected_safepoint_budget(const LangGcRuntimeStats &stats) {
+  if (stats.pressure_accum >= stats.pressure_limit)
+    return 0;
+  const uint64_t budget = stats.pressure_limit - stats.pressure_accum;
+  return budget > kSafepointBudgetMask ? kSafepointBudgetMask : budget;
+}
+
 External *external_new(uint64_t kind, uint64_t action = 0) {
   auto *external = static_cast<External *>(
       lang_alloc_v1(sizeof(External), alignof(External)));
@@ -564,6 +587,12 @@ void test_register_during_collect_preserves_pressure() {
   CHECK(after.pressure_accum == 1); // late registration was not lost
   CHECK(after.last_live_after == 1);
   CHECK(after.pressure_limit == expected_pressure_limit(1));
+  // A registration that lands inside the stopped collection runs before the
+  // accumulator subtraction: it is in `pending`, its budget decrement is
+  // overwritten by the publication, and the published hint is exactly
+  // limit - pending (the deterministic "late/exact" interleaving).
+  CHECK(safepoint_budget() == after.pressure_limit - 1);
+  CHECK(safepoint_budget() == expected_safepoint_budget(after));
 
   CHECK(lang_gc_runtime_collect_v1(2000000000LL, &stats) == 0);
   CHECK(lang_gc_registry_live_v1() == 0);
@@ -572,6 +601,257 @@ void test_register_during_collect_preserves_pressure() {
   CHECK(lang_gc_world_unregister_v1());
   expect_live(0);
   std::printf("GC_RUNTIME_LATE_REGISTER_OK\n");
+}
+
+// The advisory budget is a derived view of the authoritative pressure state:
+// one unit per successful registration, republished as limit - pending after a
+// successful collection, saturating at zero.
+void test_safepoint_budget_tracks_pressure() {
+  CHECK(lang_gc_world_register_v1());
+
+  LangGcStats collected{};
+  CHECK(lang_gc_runtime_collect_v1(2000000000LL, &collected) == 0);
+  const LangGcRuntimeStats base = runtime_stats();
+  CHECK(base.pressure_accum == 0);
+  CHECK(base.pressure_limit == 128);
+  CHECK(safepoint_budget() == expected_safepoint_budget(base));
+  CHECK(safepoint_budget() == 128);
+  CHECK(!safepoint_request());
+
+  // Every registration consumes exactly one unit, and the advice reaches zero
+  // on the same registration that makes accum >= limit.
+  for (uint64_t index = 1; index <= base.pressure_limit; ++index) {
+    make_garbage_self();
+    const LangGcRuntimeStats current = runtime_stats();
+    if (index < base.pressure_limit) {
+      CHECK(safepoint_budget() == base.pressure_limit - index);
+      CHECK(current.pressure_accum < current.pressure_limit);
+    } else {
+      CHECK(safepoint_budget() == 0);
+      CHECK(current.pressure_accum >= current.pressure_limit);
+    }
+  }
+
+  // The one-load hint enters the proven poll, which collects and republishes.
+  lang_gc_runtime_poll_v1();
+  const LangGcRuntimeStats after = runtime_stats();
+  CHECK(after.collect_ok > base.collect_ok);
+  CHECK(lang_gc_registry_live_v1() == 0);
+  CHECK(after.pressure_accum == 0);
+  CHECK(safepoint_budget() == expected_safepoint_budget(after));
+  CHECK(!safepoint_request());
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_RUNTIME_SAFEPOINT_BUDGET_OK limit=%llu\n",
+              static_cast<unsigned long long>(base.pressure_limit));
+}
+
+// register() decrements the advisory budget before it increments the
+// authoritative accumulator, so the hint may read one unit EARLY while a
+// registration is in flight: hint == 0 with pressure_accum == limit - 1 is
+// admissible and stays harmless because the controller poll re-reads the
+// authority. The shortfall must never exceed the number of threads inside
+// register() (one here), collections must still happen, and a quiescent
+// successful collection must republish the hint exactly.
+void test_safepoint_budget_transient_early_is_bounded() {
+  CHECK(lang_gc_world_register_v1());
+  const LangGcRuntimeStats base = runtime_stats();
+  std::atomic<bool> start{false};
+  std::atomic<bool> done{false};
+  std::atomic<uint64_t> registered{0};
+  std::atomic<uint64_t> samples{0};
+  std::atomic<uint64_t> early_samples{0};
+  std::atomic<int64_t> max_shortfall{0};
+  constexpr int kRegistrations = 20000;
+  std::thread registrar([&] {
+    CHECK(lang_gc_world_register_v1());
+    while (!start.load(std::memory_order_acquire)) {
+    }
+    for (int index = 0; index < kRegistrations; ++index) {
+      make_garbage_self();
+      registered.fetch_add(1, std::memory_order_relaxed);
+      lang_gc_world_poll_v1(); // participate in stop/resume like a mutator
+    }
+    done.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+  });
+  start.store(true, std::memory_order_release);
+
+  uint64_t collections = 0;
+  for (;;) {
+    const uint64_t word = safepoint_word();
+    if ((word & kSafepointBudgetMask) == 0 &&
+        (word & LANG_GC_SAFEPOINT_REQUEST) == 0) {
+      samples.fetch_add(1, std::memory_order_relaxed);
+      // `limit` only changes here, and `accum` only grows between resets, so a
+      // producer that finishes between these two reads can only make the
+      // sampled shortfall smaller.
+      const LangGcRuntimeStats sampled = runtime_stats();
+      const int64_t shortfall =
+          static_cast<int64_t>(sampled.pressure_limit) -
+          static_cast<int64_t>(sampled.pressure_accum);
+      CHECK(shortfall <= 1); // one registrar => one in-flight registration
+      if (shortfall > 0) {
+        early_samples.fetch_add(1, std::memory_order_relaxed);
+        int64_t previous = max_shortfall.load(std::memory_order_relaxed);
+        while (shortfall > previous &&
+               !max_shortfall.compare_exchange_weak(previous, shortfall)) {
+        }
+      }
+      LangGcStats collected{};
+      if (lang_gc_runtime_collect_v1(2000000000LL, &collected) == 0)
+        ++collections;
+    }
+    // Break only once the producer is gone AND at least one collection has been
+    // attempted; never fail a run because the producer finished early.
+    if (done.load(std::memory_order_acquire) && samples.load() > 0)
+      break;
+  }
+  registrar.join();
+  CHECK(registered.load() == static_cast<uint64_t>(kRegistrations));
+  CHECK(samples.load() > 0); // the budget saturates, so at least one sample
+
+  // Deterministic collected-pressure validation, independent of timing: the
+  // producer is gone, so drive the authoritative accumulator to the threshold
+  // and collect exactly once.
+  LangGcRuntimeStats before = runtime_stats();
+  while (before.pressure_accum < before.pressure_limit) {
+    make_garbage_self();
+    before = runtime_stats();
+  }
+  const uint64_t collect_before = before.collect_ok;
+  lang_gc_runtime_poll_v1();
+  const LangGcRuntimeStats reclaimed = runtime_stats();
+  CHECK(reclaimed.collect_ok == collect_before + 1);
+  CHECK(lang_gc_registry_live_v1() == 0);
+  CHECK(reclaimed.pressure_accum == 0);
+  CHECK(safepoint_budget() == expected_safepoint_budget(reclaimed));
+  CHECK(!safepoint_request());
+  CHECK(reclaimed.collect_ok > base.collect_ok);
+
+  LangGcStats final_stats{};
+  CHECK(lang_gc_runtime_collect_v1(2000000000LL, &final_stats) == 0);
+  CHECK(lang_gc_registry_live_v1() == 0);
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_RUNTIME_SAFEPOINT_EARLY_BOUND_OK registrations=%llu "
+              "samples=%llu run_polls=%llu early_samples=%llu "
+              "max_shortfall=%lld\n",
+              static_cast<unsigned long long>(registered.load()),
+              static_cast<unsigned long long>(samples.load()),
+              static_cast<unsigned long long>(collections),
+              static_cast<unsigned long long>(early_samples.load()),
+              static_cast<long long>(max_shortfall.load()));
+}
+
+// Deterministic early-advisory interleaving: with the authority exactly one
+// registration below the limit (hint == 1 after a quiet epoch), a controller
+// poll taken as if the hint had been 0 must not collect, must not change the
+// authority or the graph, and must not lose the threshold. One more
+// registration makes hint == 0 and accum == limit, and that poll collects.
+void test_early_advisory_poll_preserves_behavior() {
+  CHECK(lang_gc_world_register_v1());
+  LangGcStats collected{};
+  CHECK(lang_gc_runtime_collect_v1(2000000000LL, &collected) == 0);
+  const LangGcRuntimeStats base = runtime_stats();
+  CHECK(base.pressure_accum == 0);
+  CHECK(base.pressure_limit == 128);
+
+  for (uint64_t index = 1; index < base.pressure_limit; ++index) {
+    make_garbage_self();
+    CHECK(safepoint_budget() == base.pressure_limit - index);
+  }
+  const LangGcRuntimeStats before = runtime_stats();
+  CHECK(before.pressure_accum == before.pressure_limit - 1);
+  CHECK(safepoint_budget() == 1);
+  const uint64_t live_before = lang_gc_registry_live_v1();
+  CHECK(live_before == before.pressure_limit - 1);
+
+  // Exactly what an early hint does: enter the proven controller poll.
+  lang_gc_runtime_poll_v1();
+  const LangGcRuntimeStats after = runtime_stats();
+  CHECK(after.collect_ok == before.collect_ok);       // no collection
+  CHECK(after.pressure_accum == before.pressure_accum); // authority unchanged
+  CHECK(after.pressure_limit == before.pressure_limit);
+  CHECK(lang_gc_registry_live_v1() == live_before);   // graph unchanged
+  CHECK(safepoint_budget() == 1);                     // hint unchanged
+
+  // The threshold is delayed by nothing: the next registration is counted by
+  // both words and the following poll collects.
+  make_garbage_self();
+  const LangGcRuntimeStats threshold = runtime_stats();
+  CHECK(threshold.pressure_accum == threshold.pressure_limit);
+  CHECK(safepoint_budget() == 0);
+  lang_gc_runtime_poll_v1();
+  const LangGcRuntimeStats reclaimed = runtime_stats();
+  CHECK(reclaimed.collect_ok > after.collect_ok);
+  CHECK(lang_gc_registry_live_v1() == 0);
+  CHECK(reclaimed.pressure_accum == 0);
+  CHECK(safepoint_budget() == expected_safepoint_budget(reclaimed));
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_RUNTIME_SAFEPOINT_EARLY_NOOP_OK\n");
+}
+
+// Defence in depth for a SAFE thread that breaks its own contract and writes
+// the graph while another thread collects: SAFE does not block the stop, so a
+// registration can overlap the reset. It may be forgiven (hint one unit above
+// the authority per overlapping registration), but it must never be counted
+// twice (hint below the authority) and a final successful collection must
+// republish the hint exactly.
+void test_safe_registration_during_collect_is_accounted() {
+  CHECK(lang_gc_world_register_v1());
+  std::atomic<bool> safe_ready{false};
+  std::atomic<bool> stop_done{false};
+  std::atomic<uint64_t> registered{0};
+  constexpr int kRegistrations = 4000;
+  std::thread writer([&] {
+    CHECK(lang_gc_world_register_v1());
+    lang_gc_world_enter_safe_v1();
+    // One registration happens before the stop starts (deterministic), then
+    // keep writing the graph while the other thread's stop, kernel collection
+    // and update_pressure run; SAFE does not park this thread.
+    make_garbage_self();
+    registered.store(1, std::memory_order_release);
+    safe_ready.store(true, std::memory_order_release);
+    for (int index = 1; index < kRegistrations; ++index) {
+      if (stop_done.load(std::memory_order_acquire))
+        break;
+      make_garbage_self();
+      registered.fetch_add(1, std::memory_order_release);
+    }
+    while (!stop_done.load(std::memory_order_acquire))
+      sleep_ms(1);
+    lang_gc_world_leave_safe_v1();
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(wait_for([&] { return safe_ready.load(); }, 5000));
+  LangGcStats collected{};
+  CHECK(lang_gc_runtime_collect_v1(2000000000LL, &collected) == 0);
+  stop_done.store(true, std::memory_order_release);
+  writer.join();
+  const uint64_t during = registered.load();
+  CHECK(during >= 1); // the SAFE writer really wrote the graph in this window
+
+  const LangGcRuntimeStats after = runtime_stats();
+  const uint64_t budget = safepoint_budget();
+  const uint64_t exact = expected_safepoint_budget(after);
+  // Never below the authority (a double count could fire early), and never
+  // above it by more than the registrations that overlapped the reset.
+  CHECK(budget >= exact);
+  CHECK(budget <= exact + during);
+
+  LangGcStats final_stats{};
+  CHECK(lang_gc_runtime_collect_v1(2000000000LL, &final_stats) == 0);
+  const LangGcRuntimeStats final_state = runtime_stats();
+  CHECK(final_state.pressure_accum == 0);
+  CHECK(safepoint_budget() == expected_safepoint_budget(final_state));
+  CHECK(lang_gc_registry_live_v1() == 0);
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_RUNTIME_SAFEPOINT_SAFE_WRITER_OK registered=%llu\n",
+              static_cast<unsigned long long>(during));
 }
 
 void test_non_gc_defer_releases_directly() {
@@ -820,6 +1100,13 @@ int child_controller_smoke(uint64_t ext_kind, ForkReport *report,
   report->ext_kind = ext_kind;
   report->ok = stats.busy == 0 && stats.phase == LANG_GC_RUNTIME_PHASE_IDLE &&
                stats.queue_depth == 0 && report->world_request == 0;
+  // The child dropped the inherited request mirror and republished the
+  // advisory budget from its own inherited accumulator and limit, so the
+  // one-load hint agrees exactly with the child's authoritative predicate.
+  if (safepoint_request())
+    report->ok = 0;
+  if (safepoint_budget() != expected_safepoint_budget(stats))
+    report->ok = 0;
 
   // The child retains only the forking thread's world registration. It must not
   // fake drops of inherited queue/registry entries.
@@ -1087,6 +1374,10 @@ int main() {
   test_critical_safe_timeout_then_collect();
   test_queue_reentry_nested_collect();
   test_register_during_collect_preserves_pressure();
+  test_safepoint_budget_tracks_pressure();
+  test_safepoint_budget_transient_early_is_bounded();
+  test_early_advisory_poll_preserves_behavior();
+  test_safe_registration_during_collect_is_accounted();
   test_non_gc_defer_releases_directly();
   test_non_collector_cannot_enqueue_during_kernel();
   test_invalid_timeout_and_controller_busy_no_graph_change();

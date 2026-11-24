@@ -57,6 +57,47 @@ The adaptive threshold avoids rescanning a growing live graph after every fixed
 128 allocations. A registration that happens after the collection snapshot is
 never lost. A failed stop/kernel collection leaves pressure pending.
 
+The same state is exposed to generated code as one advisory word
+(`lang_gc_safepoint_word_v1`, declared in `gc_world.hpp`): bit 63 mirrors the
+world request and bits 0..62 hold the remaining budget of the current epoch,
+`max(pressure_limit - pressure_accum, 0)` clamped to 62 bits. A generated
+safepoint loads that word once and calls `lang_gc_runtime_poll_v1` when the
+signed value is `<= 0`; the controller poll stays the authority and re-reads
+`pressure_accum >= pressure_limit` itself.
+
+Budget updates are ordered as follows:
+
+* `register` decrements the budget first and then increments `pressure_accum`;
+* a successful collection subtracts `pressure_accum` and then republishes
+  `budget = max(limit - pending, 0)` from the value it just subtracted.
+
+The budget is a hint; `lang_gc_runtime_poll_v1` remains the authority and only
+collects under `pressure_accum >= pressure_limit`, so a wrong hint costs at most
+an idle call (`register`'s decrement-before-increment window can make the hint
+read one unit early while a registration is in flight, at most one unit per
+concurrent `register`). A collection's reset can forgive one registration that
+overlaps it, leaving the hint one unit above `limit - pending` for that epoch;
+that only delays the next pressure collection by that many registrations and is
+republished exactly by the next successful collection. All four operations are
+`seq_cst`, so a registration that straddles a reset is either counted in the new
+epoch or left in the subtracted accumulator, never both.
+
+A successful stop requires every other node to be `SAFE` or `PARKED`, so under
+the world contract no other thread can be inside `register` while
+`update_pressure` runs: parked threads are blocked in the world runtime, `SAFE`
+forbids graph writes, and critical regions, fork-stable no-park intervals and
+foreign callbacks keep the node `ACTIVE`, which prevents a stop from succeeding.
+The collector's own kernel clear/release registrations run before the
+subtraction and are `pending`. The forgive case is therefore defence in depth
+for a `SAFE` contract violation, not an expected path; the early case is the
+only one a compliant program can observe, and it is answered by the authority
+re-check described above.
+
+The initial budget equals the initial limit (128, static-asserted in
+`gc_runtime.cpp`), a timeout/retraction or kernel-busy result leaves the
+budget untouched so pressure stays advised, and the fork child republishes the
+budget from its inherited `pressure_accum`/`pressure_limit`.
+
 `lang_gc_runtime_poll_v1` order:
 
 1. If the world request bit is set, call `lang_gc_world_poll_v1` first.
@@ -268,10 +309,18 @@ Host tests cover:
 * Queue re-entry: an external callback allocates/registers a new garbage cycle
   and starts a second collection; the old batch drains E1/E2 exactly once and
   the nested queue drains E2 exactly once. No UAF observed under ASAN.
-* Late registration during kernel clear preserves pressure; direct non-GC defer
-  returns false and the caller releases its own payload. A SAFE non-collector
-  inside the stopped kernel clear window is refused enqueue and releases its
-  own payload.
+* Late registration during kernel clear preserves pressure (and publishes
+  `budget == limit - pending` exactly); direct non-GC defer returns false and
+  the caller releases its own payload. A SAFE non-collector inside the stopped
+  kernel clear window is refused enqueue and releases its own payload.
+* One-load safepoint advice: a full single-threaded epoch consumes exactly one
+  budget unit per registration and publishes exactly after a collection; the
+  decrement-before-increment window is bounded by one unit per concurrent
+  `register` (20 000 raced registrations, `max_shortfall <= 1`); a poll taken in
+  the early window collects nothing and changes nothing; a SAFE writer that
+  writes the graph through another thread's stop is never double counted
+  (`budget >= clamp(limit - accum)`) and is republished exactly by the next
+  collection.
 * Invalid timeout, controller busy competition, and stop timeout leave graph
   and pressure unchanged. Kernel BUSY from a direct stopped-world collector
   maps to `-16` after world resume.
@@ -304,14 +353,18 @@ GC_RUNTIME_GROWTH_OK roots=4096 collections=4 scans=5120 limit=6912 live_after=3
 GC_RUNTIME_TIMEOUT_OK timeout=1 ok=71 ext=128
 GC_RUNTIME_QUEUE_OK enqueued=131 drained=131
 GC_RUNTIME_LATE_REGISTER_OK
+GC_RUNTIME_SAFEPOINT_BUDGET_OK limit=128
+GC_RUNTIME_SAFEPOINT_EARLY_BOUND_OK registrations=20000 collections=147 early_samples=0 max_shortfall=0
+GC_RUNTIME_SAFEPOINT_EARLY_NOOP_OK
+GC_RUNTIME_SAFEPOINT_SAFE_WRITER_OK registered=4000
 GC_RUNTIME_DIRECT_RELEASE_OK
 GC_RUNTIME_NONCOLLECTOR_ENQUEUE_OK
 GC_RUNTIME_FAIL_OK invalid=1 busy=2 timeout=2
 GC_RUNTIME_KERNEL_BUSY_OK kernel_busy=1
 GC_RUNTIME_FORK_IDLE_OK child_phase=0
-GC_RUNTIME_FORK_STOP_OK collections=80
+GC_RUNTIME_FORK_STOP_OK collections=234
 GC_RUNTIME_FORK_DRAIN_OK child_e2=0
-GC_RUNTIME_HOST_OK allocations=25307
+GC_RUNTIME_HOST_OK allocations=74129
 ```
 
 Static no-libc ELF printed `GC_RUNTIME_STATIC_OK`; the suite also checked

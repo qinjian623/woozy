@@ -214,9 +214,9 @@ call void @lang_gc_program_unregister_v1(ptr %object)
 ```
 
 ```text
-; function entry and loop backedges: cheap world request first
-%r = load atomic i32 @lang_gc_world_request_word_v1
-if (%r & 1) call void @lang_gc_runtime_poll_v1()
+; function entry and loop backedges: one advisory load, then the controller
+%w = load atomic volatile i64, ptr @lang_gc_safepoint_word_v1 acquire, align 8
+if (signed %w <= 0) call void @lang_gc_runtime_poll_v1()
 ```
 
 ```text

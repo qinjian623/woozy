@@ -26,8 +26,24 @@
 // Access must use an atomic load. Do not read a copied, ordinary bool. The
 // helper below uses the GCC/Clang __atomic builtins; on x86_64 the acquire
 // load is an ordinary load plus compiler ordering.
+//
+// The combined safepoint word below is the one-load fast path used by
+// generated code: it carries the world request as bit 63 and the automatic-GC
+// controller's remaining registration budget in bits 0..62. A generated
+// safepoint loads that word once and enters the controller poll when the
+// signed value is <= 0, i.e. when a stop is requested or the budget is spent.
 
 #define LANG_GC_WORLD_REQUEST_BIT 1u
+
+// Bit 63 of lang_gc_safepoint_word_v1. It mirrors LANG_GC_WORLD_REQUEST_BIT and
+// is written only by this layer: under the registry lock for set/retract/
+// resume, and by the single surviving thread in the fork child. The mirror is
+// set before and cleared after the authoritative request word. Bits 0..62 are
+// owned by the automatic-GC controller (gc_runtime.cpp) and are opaque here.
+#define LANG_GC_SAFEPOINT_REQUEST (UINT64_C(1) << 63)
+// Initial remaining budget, equal to the controller's initial pressure limit
+// (128). gc_runtime.cpp static-asserts the two constants agree.
+#define LANG_GC_SAFEPOINT_INITIAL_BUDGET 128u
 
 #ifdef __cplusplus
 #define LANG_GC_WORLD_NOEXCEPT noexcept
@@ -39,6 +55,30 @@ extern "C" {
 // The low bit is set while a collector owns a stop request. Other bits are
 // reserved and must be ignored by readers.
 extern uint32_t lang_gc_world_request_word_v1;
+
+// Private advisory safepoint word (hidden). Bit 63 mirrors a pending stop
+// request; bits 0..62 hold the controller's remaining registration budget (0
+// advises pending pressure). The whole word is advisory: the controller poll
+// below/`lang_gc_runtime_poll_v1` remains the authority for both conditions and
+// re-reads the request word and the pressure counter itself.
+//
+// The request mirror is the OUTER word of the pair: it is set under the
+// registry lock BEFORE the authoritative request word is published, and cleared
+// under the same lock AFTER the request word is cleared (the fork child clears
+// it as the only surviving thread). Consequently `request word set` implies
+// `mirror set` for every observer, so the extra advisory store can never make a
+// poll skip a request that the authoritative load would catch; the reverse
+// window (mirror set, request not yet published) only enters the controller
+// poll early, which re-reads the request word (none) and then still evaluates
+// the authoritative pressure predicate, collecting only if it says pending and
+// the thread is collectible. A stop may only start when no stop is owned, so
+// one owner owns the
+// bit for the whole requested interval and no clear can erase a later request.
+// A stale set bit is harmless for the same re-check.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
+extern uint64_t lang_gc_safepoint_word_v1;
 
 // Atomic, no syscall, no registration lookup. Safe to call from any thread.
 int lang_gc_world_request_pending_v1(void) LANG_GC_WORLD_NOEXCEPT;

@@ -34,6 +34,7 @@ Declared in `runtime/native/gc_world.hpp`, implemented in
 | `lang_gc_world_fork_parent_v1` | `void(void)` | Release the inherited/held registry lock in the parent. |
 | `lang_gc_world_fork_child_v1` | `void(void)` | Prune the child registry to the surviving thread, remap its tid, clear stop state, reset the inherited lock, free removed nodes. |
 | `lang_gc_world_request_word_v1` | `uint32_t` global | Atomic request word. Bit 0 is `LANG_GC_WORLD_REQUEST_BIT`. |
+| `lang_gc_safepoint_word_v1` | `uint64_t` global (hidden) | Combined advisory safepoint word. Bit 63 mirrors the request; bits 0..62 are the automatic-GC controller's remaining registration budget (0 = pressure advice). Kept in sync by this layer (bit 63 only) and `gc_runtime.cpp`. |
 | `lang_gc_world_request_pending_v1` | `int(void)` | Out-of-line atomic check, no syscall. |
 | `lang_gc_world_poll_required_v1` | `static inline int(void)` | Header inline atomic acquire load for compiler loop branches. |
 
@@ -43,21 +44,37 @@ C++.
 ## 2. Compiler fast path
 
 The backend must not call a function on every loop iteration if it can avoid
-it. Inline this check:
+it. Inline this one-load advisory check:
 
 ```llvm
-%word = load atomic i32, ptr @lang_gc_world_request_word_v1 acquire, align 4
-%pending = and i32 %word, 1
-%need = icmp ne i32 %pending, 0
-br i1 %need, label %slow, label %continue
+%word = load atomic volatile i64, ptr @lang_gc_safepoint_word_v1 acquire, align 8
+%slow = icmp sle i64 %word, 0
+br i1 %slow, label %slow, label %continue
 slow:
-call void @lang_gc_world_poll_v1()
+call void @lang_gc_runtime_poll_v1()
 ```
 
-or use `lang_gc_world_poll_required_v1()`. The load is an atomic builtin; the
-compiler must not replace it with a non-atomic cached bool. `poll` checks the
-same atomic word again before entering its slow path, so an inlined branch and
-the out-of-line call are both sound.
+Bit 63 of the word mirrors the request and bits 0..62 hold the controller's
+remaining registration budget, so the signed test covers both conditions with
+one load, one test, and one not-taken branch. The load is an atomic builtin;
+the compiler must not replace it with a non-atomic cached bool. The controller
+poll remains the authority: it re-reads the request word and the pressure
+counter, serves the world request before pressure, and returns when neither is
+pending. The request bit is the outer word: it is set under the registry lock
+immediately before the request word and cleared under the same lock
+immediately after the request is retracted, so a
+stale set is harmless and a clear can never erase a later request (a new stop
+cannot start before the previous owner cleared both words). The mirror is the
+**outer** store of the pair: it is set *before* the request word is published
+and cleared *after* it is cleared, so `request word set` implies `mirror set`
+and the extra store can never hide a request from a poll; the reverse window
+(mirror set, request not yet published) only enters the controller poll, which
+re-reads the request word (none) and then evaluates the authoritative pressure
+predicate, collecting only if it says pending and the thread is collectible.
+
+`lang_gc_world_request_word_v1`, `lang_gc_world_poll_required_v1()`, and
+`lang_gc_world_poll_v1()` remain available and unchanged for callers that want
+the request-only check.
 
 Unregistered threads are not detected on the idle fast path (detecting them
 would require gettid, which defeats the purpose). If the request bit is set and

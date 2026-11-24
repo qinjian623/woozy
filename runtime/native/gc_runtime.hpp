@@ -102,12 +102,24 @@ LangGcStatus lang_gc_runtime_register_v1(
 LangGcStatus lang_gc_runtime_unregister_v1(
     void *object) LANG_GC_RUNTIME_NOEXCEPT;
 
-// Private compiler/runtime ABI for generated safepoints. The generated poll
-// loads the world request first (and services it if set), then loads the limit
-// and accum in that order, all with acquire ordering. It calls
-// lang_gc_runtime_poll_pressure_v1 only when accum >= limit. The two words are
-// written only by this controller; they are exposed so the fast path can avoid
-// a function call when neither a stop nor pressure is pending.
+// Private compiler/runtime ABI for generated safepoints. A generated safepoint
+// performs one acquire load of lang_gc_safepoint_word_v1 (declared in
+// gc_world.hpp) and calls lang_gc_runtime_poll_v1 when the signed word is <= 0:
+// bit 63 mirrors the pending world request and bits 0..62 are the remaining
+// registration budget (0 = pressure advice). That is the whole fast path: one
+// load, one sign test, one not-taken branch, no call, no gettid, no lock.
+//
+// The two pressure words below remain the authoritative pressure state and the
+// source used by lang_gc_runtime_poll_v1; the budget is only advice derived
+// from them (see consume_pressure_budget in the implementation). The hint may
+// read one unit early while a registration is between its budget decrement and
+// its accumulator increment (and, only if a SAFE thread breaks its contract,
+// one unit late per registration that overlaps a reset); a safepoint that
+// follows a wrong hint is answered by the unchanged controller poll, which
+// re-reads the authoritative words and changes nothing when they disagree. They
+// are exposed
+// so a backend, a test, or older generated code can still inline the
+// accum >= limit comparison instead of using the combined word.
 __attribute__((visibility("hidden"))) extern uint64_t
     lang_gc_runtime_pressure_limit_v1;
 __attribute__((visibility("hidden"))) extern uint64_t

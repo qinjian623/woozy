@@ -323,52 +323,36 @@
     gc_register_object(object, gc_ops("e" + id_list(fields),
                                       gc_trace_for_fields(fields)));
   }
+  // One-load safepoint. The combined advisory word carries the world request
+  // in bit 63 and the controller's remaining registration budget in bits 0..62
+  // (0 = pressure advice), so a single acquire load plus a signed <= 0 test
+  // covers both conditions. Any hit enters the proven controller poll, which
+  // services the world request before pressure and re-reads both authoritative
+  // words itself; this branch is only a hint and never decides anything.
   void gc_poll() {
-    const auto load_word = [&](const char *name, llvm::IntegerType *type,
-                               bool hidden) {
-      auto *word = module.getNamedGlobal(name);
-      if (!word) {
-        word = new llvm::GlobalVariable(module, type, false,
-                                       llvm::GlobalValue::ExternalLinkage,
-                                       nullptr, name);
-        if (hidden)
-          word->setVisibility(llvm::GlobalValue::HiddenVisibility);
-      }
-      auto *load = builder.CreateLoad(type, word, /*isVolatile=*/true);
-      load->setAtomic(llvm::AtomicOrdering::Acquire);
-      load->setAlignment(llvm::Align(type->getBitWidth() / 8));
-      return load;
-    };
-    const auto call_poll = [&](const char *name) {
-      auto callee = module.getOrInsertFunction(
-          name, llvm::FunctionType::get(builder.getVoidTy(), {}, false));
-      builder.CreateCall(callee, {});
-    };
+    auto *word = module.getNamedGlobal("lang_gc_safepoint_word_v1");
+    if (!word) {
+      word = new llvm::GlobalVariable(
+          module, builder.getInt64Ty(), false,
+          llvm::GlobalValue::ExternalLinkage, nullptr,
+          "lang_gc_safepoint_word_v1");
+      word->setVisibility(llvm::GlobalValue::HiddenVisibility);
+    }
+    auto *load = builder.CreateLoad(builder.getInt64Ty(), word,
+                                    /*isVolatile=*/true);
+    load->setAtomic(llvm::AtomicOrdering::Acquire);
+    load->setAlignment(llvm::Align(8));
+    auto *slow = builder.CreateICmpSLE(load, builder.getInt64(0));
     auto *function = builder.GetInsertBlock()->getParent();
-    auto *world = llvm::BasicBlock::Create(context, "gc.poll.world", function);
-    auto *pressure =
-        llvm::BasicBlock::Create(context, "gc.poll.pressure", function);
-    auto *collect =
-        llvm::BasicBlock::Create(context, "gc.poll.collect", function);
+    auto *poll = llvm::BasicBlock::Create(context, "gc.poll.slow", function);
     auto *done = llvm::BasicBlock::Create(context, "gc.poll.done", function);
-    auto *request = load_word("lang_gc_world_request_word_v1",
-                              builder.getInt32Ty(), false);
-    auto *requested = builder.CreateAnd(request, builder.getInt32(1));
     auto *unlikely = llvm::MDBuilder(context).createBranchWeights(1, 1024);
-    builder.CreateCondBr(builder.CreateIsNotNull(requested), world, pressure,
-                         unlikely);
-    builder.SetInsertPoint(world);
-    call_poll("lang_gc_world_poll_v1");
-    builder.CreateBr(pressure);
-    builder.SetInsertPoint(pressure);
-    auto *limit = load_word("lang_gc_runtime_pressure_limit_v1",
-                            builder.getInt64Ty(), true);
-    auto *accum = load_word("lang_gc_runtime_pressure_accum_v1",
-                            builder.getInt64Ty(), true);
-    builder.CreateCondBr(builder.CreateICmpUGE(accum, limit), collect, done,
-                         unlikely);
-    builder.SetInsertPoint(collect);
-    call_poll("lang_gc_runtime_poll_pressure_v1");
+    builder.CreateCondBr(slow, poll, done, unlikely);
+    builder.SetInsertPoint(poll);
+    auto callee = module.getOrInsertFunction(
+        "lang_gc_runtime_poll_v1",
+        llvm::FunctionType::get(builder.getVoidTy(), {}, false));
+    builder.CreateCall(callee, {});
     builder.CreateBr(done);
     builder.SetInsertPoint(done);
   }

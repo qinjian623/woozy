@@ -109,6 +109,9 @@ ThreadId g_fork_tid = 0;
 
 extern "C" {
 uint32_t lang_gc_world_request_word_v1 = 0;
+// Bit 63 is the request mirror; the low bits start at the controller's initial
+// pressure budget (128). gc_runtime.cpp static-asserts that agreement.
+uint64_t lang_gc_safepoint_word_v1 = LANG_GC_SAFEPOINT_INITIAL_BUDGET;
 }
 
 namespace {
@@ -197,6 +200,38 @@ bool request_active_locked() noexcept {
   return (__atomic_load_n(&lang_gc_world_request_word_v1,
                           __ATOMIC_ACQUIRE) &
           kRequestBit) != 0;
+}
+
+// Publish or retract the request mirror of the advisory safepoint word. For the
+// stop paths the caller holds the registry lock in the same stop-ownership
+// interval in which it writes the request word, and the two writes are ordered
+// so that the mirror is the OUTER one:
+//
+//   stop     : set mirror, then publish the request word
+//   retract  : clear the request word, then clear mirror
+//   resume   : clear the request word, then clear mirror
+//   fork child (single surviving thread): clear request, then clear mirror
+//
+// Because the mirror is set first, `request word set` always implies
+// `mirror set` for every observer: a mutator that the authoritative load would
+// catch also enters the slow path. The extra window (mirror set, request not
+// yet published) can only make a poll enter the slow path early; the controller
+// poll re-reads the request word (none), then still evaluates the authoritative
+// pressure predicate and may collect if it says pending and the thread is
+// collectible. The
+// clear order means a poll can only stop entering the slow path after this
+// owner already retracted/resumed. Only the current stop owner (or the fork
+// child, which is the only surviving thread) reaches here, so the bit is never
+// cleared while a request it does not own is pending, and no clear can erase a
+// later request because a new stop cannot start before this owner released the
+// registry lock. Both preserve the budget bits.
+void publish_safepoint_request(bool requested) noexcept {
+  if (requested)
+    __atomic_fetch_or(&lang_gc_safepoint_word_v1, LANG_GC_SAFEPOINT_REQUEST,
+                      __ATOMIC_RELEASE);
+  else
+    __atomic_fetch_and(&lang_gc_safepoint_word_v1, ~LANG_GC_SAFEPOINT_REQUEST,
+                       __ATOMIC_RELEASE);
 }
 
 bool stop_active_locked() noexcept { return g_stop_active != 0; }
@@ -395,6 +430,7 @@ void retract_stop(ThreadId owner_tid) noexcept {
     g_stop_active = 0;
     g_collector_tid = 0;
     __atomic_store_n(&lang_gc_world_request_word_v1, 0u, __ATOMIC_RELEASE);
+    publish_safepoint_request(false);
     changed = true;
   }
   registry_unlock();
@@ -1238,6 +1274,10 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
   }
   g_stop_active = 1;
   g_collector_tid = tid;
+  // Advisory bit first: the authoritative request word is the inner store, so
+  // any poll that sees the request also sees the mirror. The reverse window
+  // only enters the slow path, where the request word is re-checked.
+  publish_safepoint_request(true);
   __atomic_store_n(&lang_gc_world_request_word_v1, kRequestBit,
                    __ATOMIC_RELEASE);
   notify = true;
@@ -1289,6 +1329,7 @@ extern "C" void lang_gc_world_resume_v1(void) noexcept {
   g_stop_active = 0;
   g_collector_tid = 0;
   __atomic_store_n(&lang_gc_world_request_word_v1, 0u, __ATOMIC_RELEASE);
+  publish_safepoint_request(false);
   if (node->state == kStateParked)
     node->state = kStateActive;
   registry_unlock();
@@ -1399,6 +1440,10 @@ extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
   g_fork_prepared = 0;
   g_fork_tid = 0;
   __atomic_store_n(&lang_gc_world_request_word_v1, 0u, __ATOMIC_RELEASE);
+  // The child has no other threads, so it drops the inherited request mirror
+  // before any mutator code runs. The budget bits are inherited unchanged; the
+  // controller keeps them consistent with its inherited accumulator.
+  publish_safepoint_request(false);
   __atomic_store_n(&g_epoch, 0u, __ATOMIC_RELEASE);
 
   // The lock was held by prepare and inherited. There are no other threads in
