@@ -1219,6 +1219,7 @@ struct ReentrantMapKey {
     target box.Box[map.Map[ReentrantMapKey,Vec[i32]]];
     calls Vec[i32];
     hash_calls Vec[i32];
+    remove_on_match bool;
 }
 impl hash.Hash for ReentrantMapKey {
     func hash(value Self) u64 {
@@ -1232,7 +1233,14 @@ impl hash.Hash for ReentrantMapKey {
         if left.id != right.id { return false; }
         if vec.len(right.calls) != 0 {
             right.calls[0] += 1;
-            map.clear(box.get(right.target));
+            let values = box.get(right.target);
+            if right.remove_on_match {
+                let plain = ReentrantMapKey(id: right.id, target: right.target,
+                    calls: [], hash_calls: [], remove_on_match: false);
+                map.remove(values, plain);
+            } else {
+                map.clear(values);
+            }
         }
         return true;
     }
@@ -1240,11 +1248,13 @@ impl hash.Hash for ReentrantMapKey {
 func test_map_contains_reentry() i32 {
     let values = map.new[ReentrantMapKey,Vec[i32]]();
     let target = box.new(values);
-    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: []);
+    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: [],
+        remove_on_match: false);
     let data Vec[i32] = [19];
     map.insert(values, entry, data);
     let calls Vec[i32] = [0];
-    let query = ReentrantMapKey(id: 10, target: target, calls: calls, hash_calls: []);
+    let query = ReentrantMapKey(id: 10, target: target, calls: calls, hash_calls: [],
+        remove_on_match: false);
     if !map.contains(values, query) { return 428; }
     if !map.is_empty(values) || data[0] != 19 || calls[0] != 1 { return 429; }
     return 0;
@@ -1260,10 +1270,12 @@ func insert_map_weak_value(values map.Map[ReentrantMapKey,Vec[i32]], key Reentra
 func test_map_hash_snapshot() i32 {
     let values = map.new[ReentrantMapKey,Vec[i32]]();
     let target = box.new(values);
-    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: []);
+    let entry = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: [],
+        remove_on_match: false);
     let before Vec[i32] = [19];
     let calls Vec[i32] = [0];
-    let query = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: calls);
+    let query = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: calls,
+        remove_on_match: false);
 
     map.insert(values, entry, before);
     switch map.get(values, query) {
@@ -1280,6 +1292,30 @@ func test_map_hash_snapshot() i32 {
         case option.Option.Some(found): return 166;
         case option.Option.None: return 0;
     }
+}
+
+func test_map_match_position_after_removal() i32 {
+    let values = map.new[ReentrantMapKey,Vec[i32]]();
+    let target = box.new(values);
+    // These three keys occupy one bucket in insertion order.
+    for var id i32 = 2; id <= 18; id += 8 {
+        let key = ReentrantMapKey(id: id, target: target, calls: [], hash_calls: [],
+            remove_on_match: false);
+        map.insert(values, key, [id]);
+    }
+    let calls Vec[i32] = [0];
+    let query = ReentrantMapKey(id: 10, target: target, calls: calls, hash_calls: [],
+        remove_on_match: true);
+    // The nested removal swaps key 18 into the matched position.
+    switch map.get(values, query) {
+        case option.Option.Some(found): { if found[0] != 18 { return 431; } }
+        case option.Option.None: return 432;
+    }
+    if calls[0] != 1 || map.len(values) != 2 { return 433; }
+    let plain = ReentrantMapKey(id: 10, target: target, calls: [], hash_calls: [],
+        remove_on_match: false);
+    if map.contains(values, plain) { return 434; }
+    return 0;
 }
 
 func main() i32 {
@@ -1343,5 +1379,7 @@ func main() i32 {
     if failure != 0 { return failure; }
     failure = test_map_contains_reentry();
     if failure != 0 { return failure; }
-    return test_map_hash_snapshot();
+    failure = test_map_hash_snapshot();
+    if failure != 0 { return failure; }
+    return test_map_match_position_after_removal();
 }
