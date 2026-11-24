@@ -36,7 +36,8 @@ pub func insert[T](values Vec[T], index usize, value T) {
         return;
     }
     push(values, value);
-    if index < length && !__woozy_vec_try_move_trivial[T](values, index + 1, index, length - index) {
+    if index == length { return; }
+    if !__woozy_vec_try_move_trivial[T](values, index + 1, index, length - index) {
         for var position usize = length; position > index; position -= 1 {
             values[position] = values[position - 1];
         }

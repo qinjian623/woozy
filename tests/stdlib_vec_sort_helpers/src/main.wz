@@ -254,6 +254,12 @@ func test_box_identity() i32 {
     if box.get[i32](cells[0]) != 55 || box.get[i32](other) != 55 {
         return 103;
     }
+    vec.insert[box.Box[i32]](cells, vec.len[box.Box[i32]](cells), cell);
+    box.set[i32](cells[2], 64);
+    if vec.len[box.Box[i32]](cells) != 3 || box.get[i32](cell) != 64 ||
+       box.get[i32](cells[0]) != 55 || box.get[i32](cells[1]) != 55 {
+        return 104;
+    }
     return 0;
 }
 
