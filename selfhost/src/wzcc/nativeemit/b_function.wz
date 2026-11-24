@@ -561,8 +561,22 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
             gc_collect_loop_exit(inout state);
         }
         if state.options.debug_info { debug_block(block_index, inout state); }
-        for instruction in function.blocks[block_index].instructions {
-            emit_instruction(instruction, inout state);
+        let instructions = function.blocks[block_index].instructions;
+        var ordinal usize = 0;
+        for instruction in instructions {
+            var checked_address = false;
+            switch instruction.op {
+                case nativeir.Op.VecElementAddress: {
+                    if ordinal != 0 {
+                        checked_address = b_preceding_vec_check(instruction,instructions[ordinal-1]);
+                    }
+                }
+                default: {}
+            }
+            if checked_address { state.reuse_vec_address_check = true; }
+            emit_instruction(instruction,inout state);
+            if checked_address { state.reuse_vec_address_check = false; }
+            ordinal += 1;
         }
         let terminator = function.blocks[block_index].terminator;
         emit_terminator(terminator, block_index, inout state);
@@ -570,6 +584,26 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     if is_async {
         if state.options.debug_info { debug_location(model.Span(snapshot: 0, begin_byte: 0, end_byte: 0), inout state); }
         async_finish(native_index, inout state);
+    }
+}
+
+func b_preceding_vec_check(current nativeir.Instruction, previous nativeir.Instruction) bool {
+    switch previous.op {
+        case nativeir.Op.VecCheck: {}
+        default: return false;
+    }
+    switch current.origin {
+        case option.Option.Some(origin): {
+            switch previous.origin {
+                case option.Option.Some(checked): {
+                    return origin == checked &&
+                        current.inputs[0] == previous.inputs[0] &&
+                        current.inputs[1] == previous.inputs[1];
+                }
+                case option.Option.None: return false;
+            }
+        }
+        case option.Option.None: return false;
     }
 }
 

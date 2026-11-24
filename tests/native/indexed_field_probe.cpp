@@ -1,3 +1,4 @@
+#include "lang/backend/native.hpp"
 #include "lang/ir/native.hpp"
 #include "lang/sema/check.hpp"
 #include "../../src/hir/ownership.hpp"
@@ -294,6 +295,16 @@ int main(int argc, char **argv) {
     require_field_receiver_plan(
         assign_hir, "pure scalar RHS",
         {hir::UseKind::borrow, hir::UseKind::borrow});
+    auto assign_ir = ir::lower(assign_source);
+    need(assign_ir.success(), diagnostics(assign_ir));
+    auto assign_llvm = backend::native::emit(
+        *assign_ir.value, symbol_named(assign_hir, "main"), {});
+    need(assign_llvm.success(), diagnostics(assign_llvm));
+    const auto &before = assign_llvm.value->llvm_before_optimization;
+    need(before.find("@lang_vec_at_v1") == std::string::npos,
+         "a same-block checked trivial field address still calls the accessor");
+    need(before.find("@lang_native_panic_v1(i32 4,") != std::string::npos,
+         "the field address lost its index Panic check");
     std::vector<HirNodeId> assignments;
     for (size_t i = 0; i < assign_hir.nodes.size(); ++i)
       if (assign_hir.nodes[i].kind() == hir::NodeKind::assign)

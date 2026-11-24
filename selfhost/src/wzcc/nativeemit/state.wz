@@ -279,6 +279,8 @@ pub struct Emitter {
     pub metadata Vec[MetadataText];
     pub debug option.Option[DebugState];
     pub functions Vec[FunctionText];
+    // Set only while emitting an address with an identical adjacent VecCheck.
+    pub reuse_vec_address_check bool;
     pub cursor Cursor;
     pub frame FunctionFrame;
     pub b BState;
@@ -316,6 +318,7 @@ pub func new_emitter(input nativeir.Module, options Options) Emitter throws Erro
     for var index usize = 0; index < vec.len(input.functions); index += 1 { vec.push(source_order, index); }
     return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: data_layout,
         type_definitions: [], declarations: [], globals: [], metadata: [], debug: option.Option[DebugState].None, functions: [],
+        reuse_vec_address_check: false,
         cursor: Cursor(function_index: option.Option[usize].None, block_index: option.Option[usize].None),
         frame: empty_frame(),
         b: BState(layouts: [], source_functions: [], vec_header_tag: option.Option[string].None,

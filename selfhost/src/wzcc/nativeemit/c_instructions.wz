@@ -600,6 +600,18 @@ func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
                     return option.Option[Value].Some(element);
                 }
                 default: {
+                    // The preceding check fixed the bounds and Panic point.
+                    // An empty element uses a stride of one, not a typed GEP.
+                    if state.reuse_vec_address_check &&
+                        !owning(instruction.type_id, inout state) &&
+                        !b_empty_size_id(instruction.type_id, inout state) {
+                        let data = vec_field(c_argument(args, 0), 5, "ptr", inout state);
+                        let layout = lower_type(instruction.type_id, inout state);
+                        let address = result("ptr", "getelementptr " + layout +
+                            ", ptr " + data.reference + ", i64 " + index.reference,
+                            inout state);
+                        return option.Option[Value].Some(address);
+                    }
                     let element = runtime("lang_vec_at_v1", "ptr",
                         [c_argument(args, 0), index], inout state);
                     return option.Option[Value].Some(element);

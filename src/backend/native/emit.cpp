@@ -120,6 +120,9 @@ class Emitter {
   std::unique_ptr<llvm::TargetMachine> machine;
   std::map<ValueId, llvm::Value *> values;
   std::map<ValueId, TypeId> value_types;
+  // NativeIR instruction emitted immediately before the current one in the
+  // same block; null at block entry. Only used for same-block check reuse.
+  const ir::Instruction *previous_instruction = nullptr;
   std::vector<llvm::Value *> slots;
   std::optional<SymbolId> gc_entry_symbol;
   llvm::StructType *vec_type = llvm::StructType::get(
@@ -1221,6 +1224,28 @@ class Emitter {
                                  builder.CreateICmpUGE(index, init));
     guard(bad, 4, source);
   }
+  // A vec_check emitted immediately before an element address proves the same
+  // receiver/index bounds at the same source location. No instruction can
+  // intervene, so a trivial element with a nonzero layout whose allocation
+  // stride equals the runtime stride can address the data field directly
+  // instead of repeating the runtime bounds check. Slice, owning and
+  // unknown-size elements keep the general accessor.
+  bool reusable_vec_check(const ir::Instruction &i) {
+    const auto *check = previous_instruction;
+    if (!check || check->op != ir::Op::vec_check) return false;
+    if (!i.origin || check->origin != i.origin || check->inputs != i.inputs)
+      return false;
+    const auto &receiver = type(value_types.at(i.inputs[0]));
+    if (receiver.kind != hir::TypeKind::Vec || receiver.type_args.empty())
+      return false;
+    auto element = receiver.type_args[0];
+    if (owning(element)) return false;
+    auto *layout = lower_type(element);
+    if (!layout->isSized()) return false;
+    const auto size = module.getDataLayout().getTypeAllocSize(layout);
+    return !size.isScalable() && size.getFixedValue() != 0 &&
+           stride(element) == size.getFixedValue();
+  }
   llvm::Value *system_call(const ir::Instruction &i,
                            llvm::ArrayRef<llvm::Value *> args) {
     using hir::SystemOperation;
@@ -2022,13 +2047,19 @@ class Emitter {
       break;
     }
     case ir::Op::vec_element_address: {
-      // The preceding verified vec_check fixed the panic location. Reuse the
-      // current Vec/Slice bounds-checking accessor for the address.
+      // The preceding verified vec_check fixed the panic location. When it is
+      // the immediately preceding instruction with the same receiver, index
+      // and origin, a trivial stride-equal element can use the data field;
+      // every other case keeps the bounds-checking accessor.
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
       auto receiver = value_types.at(i.inputs[0]);
       if (type(receiver).kind == hir::TypeKind::Slice) {
         auto *slice_address = value_address(receiver, args[0]);
         v = runtime("lang_slice_at_v1", builder.getPtrTy(), {slice_address, index});
+      } else if (reusable_vec_check(i)) {
+        auto element = type(receiver).type_args[0];
+        auto *data = vec_field(args[0], 5, builder.getPtrTy());
+        v = builder.CreateGEP(lower_type(element), data, index);
       } else v = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
       break;
     }
@@ -2753,11 +2784,13 @@ class Emitter {
       // with neither pending it performs only atomic loads/branches.
       if (b == 0 || poll_headers.contains(b)) gc_poll();
       if (gc_entry && loop_exits.contains(b)) gc_collect_loop_exit();
+      previous_instruction = nullptr;
       for (const auto &i : f.blocks[b].instructions) {
         if (debug) builder.SetCurrentDebugLocation(debug->location(i.source));
         if (debug && (i.op == ir::Op::load || i.op == ir::Op::address))
           debug->read(i.slot.value, slots[i.slot.value], builder.GetInsertBlock(), i.source);
         instruction(i);
+        previous_instruction = &i;
         if (debug && i.op == ir::Op::store)
           debug->declare(i.slot.value, slots[i.slot.value], builder.GetInsertBlock(), i.source);
         if (debug && (i.op == ir::Op::move || i.op == ir::Op::take || i.op == ir::Op::destroy))
