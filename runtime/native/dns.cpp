@@ -173,8 +173,11 @@ void write_u16_be(uint8_t *bytes, uint16_t value) noexcept {
 
 LangVec *make_bytes_vec(const uint8_t *bytes, uint64_t length) noexcept {
   LangVec *vector = lang_vec_new_v1(length, 1, nullptr, nullptr);
+  auto *data = static_cast<uint8_t *>(vector->data);
   for (uint64_t index = 0; index < length; ++index)
-    lang_vec_init_v1(vector, bytes + index);
+    data[index] = bytes[index];
+  // Payload bytes are complete before the initialized prefix is published.
+  vector->initialized = length;
   return vector;
 }
 
@@ -238,9 +241,9 @@ int64_t build_result(const CandidateList &list, uint16_t port,
     element.scope = candidate.scope;
     element.reserved = 0;
     element.data = make_bytes_vec(candidate.bytes, data_length);
+    // Initialization takes ownership of the fresh byte Vec; no extra retain or
+    // release is needed because the element held the only reference.
     lang_vec_init_v1(result, &element);
-    address_copy(lang_vec_at_v1(result, result->initialized - 1));
-    lang_vec_release_v1(element.data);
   }
   *out = result;
   return 0;
@@ -1076,32 +1079,91 @@ int64_t host_view(const LangText *hostname, const char **data,
   return 0;
 }
 
+// Strict dotted-decimal fast path for the common numeric-address case.
+//
+// For lengths 7..15 this accepts exactly the language of network's strict IPv4
+// parser and produces the same bytes. Shorter or longer no-colon text cannot
+// be an IPv4 literal, and IPv6 text still goes through
+// lang_net_inet_pton_v1, which remains the authoritative validator.
+LANG_NATIVE_NO_STACK_PROTECTOR
+bool parse_ipv4_fast(const char *text, uint64_t length,
+                     uint8_t bytes[4]) noexcept {
+  if (length < 7 || length > 15) return false;
+  uint64_t position = 0;
+  for (uint64_t part = 0; part < 4; ++part) {
+    if (part != 0) {
+      if (position >= length || text[position] != '.') return false;
+      ++position;
+    }
+    if (position >= length) return false;
+    uint32_t value = 0;
+    uint64_t digits = 0;
+    while (position < length && text[position] >= '0' &&
+           text[position] <= '9') {
+      if (digits == 3) return false;
+      // Same leading-zero rule as the network parser: only a single "0"
+      // component may start with zero.
+      if (digits == 0 && text[position] == '0' && position + 1 < length &&
+          text[position + 1] >= '0' && text[position + 1] <= '9')
+        return false;
+      value = value * 10 + static_cast<uint32_t>(text[position] - '0');
+      if (value > 255) return false;
+      ++digits;
+      ++position;
+    }
+    if (digits == 0) return false;
+    bytes[part] = static_cast<uint8_t>(value);
+  }
+  return position == length;
+}
+
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t try_numeric(const char *text, uint64_t length, int32_t family,
                     uint16_t port, LangVec **out) noexcept {
-  const int32_t families[] = {kAfInet, kAfInet6};
-  LangNetAddress addresses[2];
-  uint64_t count = 0;
-  bool found = false;
-  for (int32_t candidate : families) {
-    LangNetAddress address;
-    if (lang_net_inet_pton_v1(candidate, text, length, &address) != 0)
-      continue;
-    found = true;
-    if (family == 0 || family == candidate) {
-      address.port = port;
-      addresses[count++] = address;
-    } else {
-      release_address(&address);
-    }
+  uint8_t ipv4[4];
+  if (parse_ipv4_fast(text, length, ipv4)) {
+    if (family != 0 && family != kAfInet) return kErrNoEnt;
+    LangVec *result = lang_vec_new_v1(1, sizeof(LangNetAddress),
+                                      address_copy, address_drop);
+    LangNetAddress element;
+    element.family = kAfInet;
+    element.port = port;
+    element.flags = 0;
+    element.scope = 0;
+    element.reserved = 0;
+    element.data = make_bytes_vec(ipv4, 4);
+    // Initialization takes ownership of the fresh byte Vec.
+    lang_vec_init_v1(result, &element);
+    *out = result;
+    return 1;
   }
-  if (count == 0) return found ? kErrNoEnt : 0;
 
-  LangVec *result = lang_vec_new_v1(
-      count, sizeof(LangNetAddress), address_copy, address_drop);
-  // Initialization takes ownership of each parser-produced byte Vec.
-  for (uint64_t index = 0; index < count; ++index)
-    lang_vec_init_v1(result, &addresses[index]);
+  // No valid IPv4 literal can be outside 7..15 bytes, and for that range the
+  // fast parser above accepts exactly the language of the authoritative strict
+  // parser, so a rejection there means the text is not an IPv4 literal.
+  // Skip the resolver work for a NUL byte here; host_view reports that error.
+  bool ipv6_text = false;
+  for (uint64_t index = 0; index < length; ++index) {
+    const char byte = text[index];
+    if (byte == 0) return 0;
+    if (byte == ':') ipv6_text = true;
+  }
+  if (!ipv6_text) return 0;
+
+  LangNetAddress parsed;
+  parsed.data = nullptr;
+  if (lang_net_inet_pton_v1(kAfInet6, text, length, &parsed) != 0)
+    return 0;
+  if (family != 0 && family != kAfInet6) {
+    release_address(&parsed);
+    return kErrNoEnt;
+  }
+
+  parsed.port = port;
+  LangVec *result =
+      lang_vec_new_v1(1, sizeof(LangNetAddress), address_copy, address_drop);
+  // Initialization takes ownership of the parser-produced byte Vec.
+  lang_vec_init_v1(result, &parsed);
   *out = result;
   return 1;
 }
@@ -1440,15 +1502,27 @@ int64_t lang_net_lookup_v1(const LangText *hostname, uint16_t port,
   if (family != 0 && family != kAfInet && family != kAfInet6)
     return kErrAfNoSupport;
 
+  // Numeric literals do not need the NUL/structure validation that hostname
+  // handling requires: the parsers reject NUL bytes, and a trailing dot is
+  // stripped exactly as host_view would. Invalid numeric text still goes
+  // through host_view before any hostname or DNS work.
+  int64_t result = 0;
+  if (hostname != nullptr && hostname->data != nullptr &&
+      hostname->bytes != 0) {
+    const char *numeric = reinterpret_cast<const char *>(hostname->data);
+    uint64_t numeric_length = hostname->bytes;
+    if (numeric[numeric_length - 1] == '.') --numeric_length;
+    if (numeric_length != 0) {
+      result = try_numeric(numeric, numeric_length, family, port, out);
+      if (result != 0) return result < 0 ? result : 0;
+    }
+  }
+
   const char *raw_name = nullptr;
   uint64_t raw_length = 0;
   bool raw_absolute = false;
-  int64_t result =
-      host_view(hostname, &raw_name, &raw_length, &raw_absolute);
+  result = host_view(hostname, &raw_name, &raw_length, &raw_absolute);
   if (result < 0) return result;
-
-  result = try_numeric(raw_name, raw_length, family, port, out);
-  if (result != 0) return result < 0 ? result : 0;
 
   CandidateList candidates;
   candidates.count = 0;

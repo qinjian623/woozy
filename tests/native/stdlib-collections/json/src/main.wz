@@ -205,5 +205,34 @@ func main() i32 throws json.Error {
     let duplicates_out = vec.make[json.Member](2, json.Member(name: "a", value: json.Value.Number("1")));
     duplicates_out[1] = json.Member(name: "a", value: json.Value.Number("2"));
     if json.serialize(json.Value.Object(duplicates_out)) != "{\"a\":1,\"a\":2}" { return 63; }
+
+    // The byte scanner still reports public code-point offsets. Each offset
+    // below is after a multibyte scalar, so a raw byte count would differ.
+    if parse_error("\"😀\n\"") != "syntax:2" { return 64; }
+    if parse_error("\"😀\\uD800\"") != "syntax:8" { return 65; }
+    if parse_error("\"é\\uD800\"") != "syntax:8" { return 66; }
+    if parse_error("[\"😀\", 1.]") != "syntax:8" { return 67; }
+
+    // Both hex letter cases decode, and raw and escaped spellings of the same
+    // key are one duplicate for the last-value-wins rule.
+    if json.serialize(json.parse("\"\\u00E9\\u00e9\"")) != "\"éé\"" { return 68; }
+    if json.serialize(json.parse("\"é\\uD83D\\uDE00\"")) != "\"é😀\"" { return 69; }
+    if json.serialize(json.parse("{\"é\":1,\"\\u00e9\":2}")) != "{\"é\":2}" { return 70; }
+    if json.serialize(json.parse("{\"\\u0061\":1,\"a\":2}")) != "{\"a\":2}" { return 71; }
+
+    // The writer validates Number tokens with the same byte grammar as the
+    // parser, not a second hand-written copy.
+    for token in ["", "+1", "01", "1.", "1e", "1e+", "-", "--1", "0x1", " 1", "1 "] {
+        var rejected = false;
+        try { let never = json.serialize(json.Value.Number(token)); }
+        catch error json.Error { switch error { case json.Error.InvalidNumber: rejected = true; default: {} } }
+        if !rejected { return 72; }
+    }
+    for token in ["0","-0","1","-1","1.5","1e+10","1E+10","1e-10",
+                  "1234567890123456789012345678901234567890",
+                  "0.000000000000000000000000000000000001"] {
+        if json.serialize(json.Value.Number(token)) != token { return 73; }
+    }
+    if json.serialize_pretty(json.Value.Number("1e+10")) != "1e+10" { return 74; }
     return 0;
 }

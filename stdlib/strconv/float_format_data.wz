@@ -1,0 +1,2034 @@
+// Copyright 2018 Ulf Adams
+//
+// This table is a direct Woozy transcription of the vendored Ryu table
+// runtime/native/vendor/ryu/d2s_full_table.h, distributed under the
+// Boost Software License 1.0 (SPDX-License-Identifier: BSL-1.0).
+// Upstream: https://github.com/ulfjack/ryu, pinned commit
+// 4c0618b0e44f7ef027ebae05d2cc7812048f7c8f. The vendored source, exact
+// hashes and both license texts are in runtime/native/vendor/ryu/.
+//
+// Values are DOUBLE_POW5_INV_SPLIT then DOUBLE_POW5_SPLIT, in the same
+// order as the C header. A one-off reader copied each {lo, hi} pair verbatim;
+// no table value was recomputed. Do not regenerate with a different Ryu
+// revision: runtime/native/numbers.cpp and this file must share one digit
+// sequence.
+package strconv;
+
+struct FloatFormatSpan {
+    lo u64;
+    hi u64;
+}
+
+// Ryu DOUBLE_POW5_INV_SPLIT.
+func ff_pow5_inv(index u32) FloatFormatSpan {
+    if index == 0 {
+        return FloatFormatSpan(lo: 0x0000000000000001, hi: 0x2000000000000000);
+    }
+    if index == 1 {
+        return FloatFormatSpan(lo: 0x999999999999999a, hi: 0x1999999999999999);
+    }
+    if index == 2 {
+        return FloatFormatSpan(lo: 0x47ae147ae147ae15, hi: 0x147ae147ae147ae1);
+    }
+    if index == 3 {
+        return FloatFormatSpan(lo: 0x6c8b4395810624de, hi: 0x10624dd2f1a9fbe7);
+    }
+    if index == 4 {
+        return FloatFormatSpan(lo: 0x7a786c226809d496, hi: 0x1a36e2eb1c432ca5);
+    }
+    if index == 5 {
+        return FloatFormatSpan(lo: 0x61f9f01b866e43ab, hi: 0x14f8b588e368f084);
+    }
+    if index == 6 {
+        return FloatFormatSpan(lo: 0xb4c7f34938583622, hi: 0x10c6f7a0b5ed8d36);
+    }
+    if index == 7 {
+        return FloatFormatSpan(lo: 0x87a6520ec08d236a, hi: 0x1ad7f29abcaf4857);
+    }
+    if index == 8 {
+        return FloatFormatSpan(lo: 0x9fb841a566d74f88, hi: 0x15798ee2308c39df);
+    }
+    if index == 9 {
+        return FloatFormatSpan(lo: 0xe62d01511f12a607, hi: 0x112e0be826d694b2);
+    }
+    if index == 10 {
+        return FloatFormatSpan(lo: 0xd6ae6881cb5109a4, hi: 0x1b7cdfd9d7bdbab7);
+    }
+    if index == 11 {
+        return FloatFormatSpan(lo: 0xdef1ed34a2a73aea, hi: 0x15fd7fe17964955f);
+    }
+    if index == 12 {
+        return FloatFormatSpan(lo: 0x7f27f0f6e885c8bb, hi: 0x119799812dea1119);
+    }
+    if index == 13 {
+        return FloatFormatSpan(lo: 0x650cb4be40d60df8, hi: 0x1c25c268497681c2);
+    }
+    if index == 14 {
+        return FloatFormatSpan(lo: 0xea70909833de7193, hi: 0x16849b86a12b9b01);
+    }
+    if index == 15 {
+        return FloatFormatSpan(lo: 0x21f3a6e0297ec143, hi: 0x1203af9ee756159b);
+    }
+    if index == 16 {
+        return FloatFormatSpan(lo: 0x6985d7cd0f313537, hi: 0x1cd2b297d889bc2b);
+    }
+    if index == 17 {
+        return FloatFormatSpan(lo: 0x2137dfd73f5a90f9, hi: 0x170ef54646d49689);
+    }
+    if index == 18 {
+        return FloatFormatSpan(lo: 0xe75fe645cc4873fa, hi: 0x12725dd1d243aba0);
+    }
+    if index == 19 {
+        return FloatFormatSpan(lo: 0xa5663d3c7a0d865d, hi: 0x1d83c94fb6d2ac34);
+    }
+    if index == 20 {
+        return FloatFormatSpan(lo: 0x511e976394d79eb1, hi: 0x179ca10c9242235d);
+    }
+    if index == 21 {
+        return FloatFormatSpan(lo: 0xda7edf82dd794bc1, hi: 0x12e3b40a0e9b4f7d);
+    }
+    if index == 22 {
+        return FloatFormatSpan(lo: 0x2a6498d1625bac68, hi: 0x1e392010175ee596);
+    }
+    if index == 23 {
+        return FloatFormatSpan(lo: 0xeeb6e0a781e2f053, hi: 0x182db34012b25144);
+    }
+    if index == 24 {
+        return FloatFormatSpan(lo: 0x58924d52ce4f26a9, hi: 0x1357c299a88ea76a);
+    }
+    if index == 25 {
+        return FloatFormatSpan(lo: 0x27507bb7b07ea441, hi: 0x1ef2d0f5da7dd8aa);
+    }
+    if index == 26 {
+        return FloatFormatSpan(lo: 0x52a6c95fc0655034, hi: 0x18c240c4aecb13bb);
+    }
+    if index == 27 {
+        return FloatFormatSpan(lo: 0x0eebd44c99eaa690, hi: 0x13ce9a36f23c0fc9);
+    }
+    if index == 28 {
+        return FloatFormatSpan(lo: 0xb17953adc3110a80, hi: 0x1fb0f6be50601941);
+    }
+    if index == 29 {
+        return FloatFormatSpan(lo: 0xc12ddc8b02740867, hi: 0x195a5efea6b34767);
+    }
+    if index == 30 {
+        return FloatFormatSpan(lo: 0x3424b06f3529a052, hi: 0x14484bfeebc29f86);
+    }
+    if index == 31 {
+        return FloatFormatSpan(lo: 0x901d59f290ee19db, hi: 0x1039d66589687f9e);
+    }
+    if index == 32 {
+        return FloatFormatSpan(lo: 0x4cfbc31db4b0295f, hi: 0x19f623d5a8a73297);
+    }
+    if index == 33 {
+        return FloatFormatSpan(lo: 0x3d9635b15d59bab2, hi: 0x14c4e977ba1f5bac);
+    }
+    if index == 34 {
+        return FloatFormatSpan(lo: 0x97ab5e277de16228, hi: 0x109d8792fb4c4956);
+    }
+    if index == 35 {
+        return FloatFormatSpan(lo: 0xf2abc9d8c9689d0d, hi: 0x1a95a5b7f87a0ef0);
+    }
+    if index == 36 {
+        return FloatFormatSpan(lo: 0x5bbca17a3aba173e, hi: 0x154484932d2e725a);
+    }
+    if index == 37 {
+        return FloatFormatSpan(lo: 0xafca1ac82efb45cb, hi: 0x11039d428a8b8eae);
+    }
+    if index == 38 {
+        return FloatFormatSpan(lo: 0xb2dcf7a6b1920945, hi: 0x1b38fb9daa78e44a);
+    }
+    if index == 39 {
+        return FloatFormatSpan(lo: 0xf57d92ebc141a104, hi: 0x15c72fb1552d836e);
+    }
+    if index == 40 {
+        return FloatFormatSpan(lo: 0xc46475896767b403, hi: 0x116c262777579c58);
+    }
+    if index == 41 {
+        return FloatFormatSpan(lo: 0x6d6d88dbd8a5ecd2, hi: 0x1be03d0bf225c6f4);
+    }
+    if index == 42 {
+        return FloatFormatSpan(lo: 0x8abe071646eb23db, hi: 0x164cfda3281e38c3);
+    }
+    if index == 43 {
+        return FloatFormatSpan(lo: 0x6efe6c11d255b649, hi: 0x11d7314f534b609c);
+    }
+    if index == 44 {
+        return FloatFormatSpan(lo: 0xb197134fb6ef8a0e, hi: 0x1c8b821885456760);
+    }
+    if index == 45 {
+        return FloatFormatSpan(lo: 0x27ac0f72f8bfa1a5, hi: 0x16d601ad376ab91a);
+    }
+    if index == 46 {
+        return FloatFormatSpan(lo: 0xb95672c260994e1e, hi: 0x1244ce242c5560e1);
+    }
+    if index == 47 {
+        return FloatFormatSpan(lo: 0xf5571e03cdc21695, hi: 0x1d3ae36d13bbce35);
+    }
+    if index == 48 {
+        return FloatFormatSpan(lo: 0x2aac18030b01abab, hi: 0x17624f8a762fd82b);
+    }
+    if index == 49 {
+        return FloatFormatSpan(lo: 0xbbbce0026f348956, hi: 0x12b50c6ec4f31355);
+    }
+    if index == 50 {
+        return FloatFormatSpan(lo: 0x92c7ccd0b1eda889, hi: 0x1dee7a4ad4b81eef);
+    }
+    if index == 51 {
+        return FloatFormatSpan(lo: 0xdbd30a408e57ba07, hi: 0x17f1fb6f10934bf2);
+    }
+    if index == 52 {
+        return FloatFormatSpan(lo: 0x7ca8d50071dfc806, hi: 0x1327fc58da0f6ff5);
+    }
+    if index == 53 {
+        return FloatFormatSpan(lo: 0xfaa7bb33e9660cd6, hi: 0x1ea6608e29b24cbb);
+    }
+    if index == 54 {
+        return FloatFormatSpan(lo: 0x9552fc298784d711, hi: 0x18851a0b548ea3c9);
+    }
+    if index == 55 {
+        return FloatFormatSpan(lo: 0xaaa8c9bad2d0ac0e, hi: 0x139dae6f76d88307);
+    }
+    if index == 56 {
+        return FloatFormatSpan(lo: 0xdddadc5e1e1aace3, hi: 0x1f62b0b257c0d1a5);
+    }
+    if index == 57 {
+        return FloatFormatSpan(lo: 0x7e48b04b4b488a4f, hi: 0x191bc08eac9a4151);
+    }
+    if index == 58 {
+        return FloatFormatSpan(lo: 0xcb6d59d5d5d3a1d9, hi: 0x141633a556e1cdda);
+    }
+    if index == 59 {
+        return FloatFormatSpan(lo: 0x3c577b1177dc817b, hi: 0x1011c2eaabe7d7e2);
+    }
+    if index == 60 {
+        return FloatFormatSpan(lo: 0xc6f25e825960cf2a, hi: 0x19b604aaaca62636);
+    }
+    if index == 61 {
+        return FloatFormatSpan(lo: 0x6bf518684780a5bb, hi: 0x14919d5556eb51c5);
+    }
+    if index == 62 {
+        return FloatFormatSpan(lo: 0x232a79ed06008496, hi: 0x10747ddddf22a7d1);
+    }
+    if index == 63 {
+        return FloatFormatSpan(lo: 0xd1dd8fe1a3340756, hi: 0x1a53fc9631d10c81);
+    }
+    if index == 64 {
+        return FloatFormatSpan(lo: 0xa7e4731ae8f66c45, hi: 0x150ffd44f4a73d34);
+    }
+    if index == 65 {
+        return FloatFormatSpan(lo: 0x531d28e253f8569e, hi: 0x10d9976a5d52975d);
+    }
+    if index == 66 {
+        return FloatFormatSpan(lo: 0xeb61db03b98d5762, hi: 0x1af5bf109550f22e);
+    }
+    if index == 67 {
+        return FloatFormatSpan(lo: 0xbc4e48cfc7a445e8, hi: 0x159165a6ddda5b58);
+    }
+    if index == 68 {
+        return FloatFormatSpan(lo: 0x6371d3d96c836b20, hi: 0x11411e1f17e1e2ad);
+    }
+    if index == 69 {
+        return FloatFormatSpan(lo: 0x9f1c8628ad9f11cd, hi: 0x1b9b6364f3030448);
+    }
+    if index == 70 {
+        return FloatFormatSpan(lo: 0xe5b06b53be18db0b, hi: 0x1615e91d8f359d06);
+    }
+    if index == 71 {
+        return FloatFormatSpan(lo: 0xeaf3890fcb4715a2, hi: 0x11ab20e472914a6b);
+    }
+    if index == 72 {
+        return FloatFormatSpan(lo: 0x44b8db4c7871bc37, hi: 0x1c45016d841baa46);
+    }
+    if index == 73 {
+        return FloatFormatSpan(lo: 0x03c715d6c6c1635f, hi: 0x169d9abe03495505);
+    }
+    if index == 74 {
+        return FloatFormatSpan(lo: 0x3638de456bcde919, hi: 0x1217aefe69077737);
+    }
+    if index == 75 {
+        return FloatFormatSpan(lo: 0x56c163a2461641c1, hi: 0x1cf2b1970e725858);
+    }
+    if index == 76 {
+        return FloatFormatSpan(lo: 0xdf011c81d1ab67ce, hi: 0x17288e1271f51379);
+    }
+    if index == 77 {
+        return FloatFormatSpan(lo: 0x7f3416ce4155eca5, hi: 0x1286d80ec190dc61);
+    }
+    if index == 78 {
+        return FloatFormatSpan(lo: 0x6520247d3556476e, hi: 0x1da48ce468e7c702);
+    }
+    if index == 79 {
+        return FloatFormatSpan(lo: 0xea801d30f7783925, hi: 0x17b6d71d20b96c01);
+    }
+    if index == 80 {
+        return FloatFormatSpan(lo: 0xbb99b0f3f92cfa84, hi: 0x12f8ac174d612334);
+    }
+    if index == 81 {
+        return FloatFormatSpan(lo: 0x5f5c4e532847f739, hi: 0x1e5aacf215683854);
+    }
+    if index == 82 {
+        return FloatFormatSpan(lo: 0x7f7d0b75b9d32c2e, hi: 0x18488a5b44536043);
+    }
+    if index == 83 {
+        return FloatFormatSpan(lo: 0x9930d5f7c7dc2358, hi: 0x136d3b7c36a919cf);
+    }
+    if index == 84 {
+        return FloatFormatSpan(lo: 0x8eb4898c72f9d226, hi: 0x1f152bf9f10e8fb2);
+    }
+    if index == 85 {
+        return FloatFormatSpan(lo: 0x722a07a38f2e41b8, hi: 0x18ddbcc7f40ba628);
+    }
+    if index == 86 {
+        return FloatFormatSpan(lo: 0xc1bb394fa5be9afa, hi: 0x13e497065cd61e86);
+    }
+    if index == 87 {
+        return FloatFormatSpan(lo: 0x9c5ec2190930f7f6, hi: 0x1fd424d6faf030d7);
+    }
+    if index == 88 {
+        return FloatFormatSpan(lo: 0x49e56814075a5ff8, hi: 0x197683df2f268d79);
+    }
+    if index == 89 {
+        return FloatFormatSpan(lo: 0x6e51201005e1e660, hi: 0x145ecfe5bf520ac7);
+    }
+    if index == 90 {
+        return FloatFormatSpan(lo: 0xf1da800cd181851a, hi: 0x104bd984990e6f05);
+    }
+    if index == 91 {
+        return FloatFormatSpan(lo: 0x4fc400148268d4f5, hi: 0x1a12f5a0f4e3e4d6);
+    }
+    if index == 92 {
+        return FloatFormatSpan(lo: 0xd96999aa01ed772b, hi: 0x14dbf7b3f71cb711);
+    }
+    if index == 93 {
+        return FloatFormatSpan(lo: 0xadee1488018ac5bc, hi: 0x10aff95cc5b09274);
+    }
+    if index == 94 {
+        return FloatFormatSpan(lo: 0x497ceda668de092c, hi: 0x1ab328946f80ea54);
+    }
+    if index == 95 {
+        return FloatFormatSpan(lo: 0x3aca57b853e4d424, hi: 0x155c2076bf9a5510);
+    }
+    if index == 96 {
+        return FloatFormatSpan(lo: 0x623b7960431d7683, hi: 0x1116805effaeaa73);
+    }
+    if index == 97 {
+        return FloatFormatSpan(lo: 0x9d2bf566d1c8bd9e, hi: 0x1b5733cb32b110b8);
+    }
+    if index == 98 {
+        return FloatFormatSpan(lo: 0x7dbcc452416d647f, hi: 0x15df5ca28ef40d60);
+    }
+    if index == 99 {
+        return FloatFormatSpan(lo: 0xcafd69db678ab6cc, hi: 0x117f7d4ed8c33de6);
+    }
+    if index == 100 {
+        return FloatFormatSpan(lo: 0xab2f0fc572778adf, hi: 0x1bff2ee48e052fd7);
+    }
+    if index == 101 {
+        return FloatFormatSpan(lo: 0x88f273045b92d580, hi: 0x1665bf1d3e6a8cac);
+    }
+    if index == 102 {
+        return FloatFormatSpan(lo: 0xd3f528d049424466, hi: 0x11eaff4a98553d56);
+    }
+    if index == 103 {
+        return FloatFormatSpan(lo: 0xb988414d4203a0a3, hi: 0x1cab3210f3bb9557);
+    }
+    if index == 104 {
+        return FloatFormatSpan(lo: 0x6139cdd76802e6e9, hi: 0x16ef5b40c2fc7779);
+    }
+    if index == 105 {
+        return FloatFormatSpan(lo: 0xe761717920025254, hi: 0x125915cd68c9f92d);
+    }
+    if index == 106 {
+        return FloatFormatSpan(lo: 0xa568b58e999d5086, hi: 0x1d5b561574765b7c);
+    }
+    if index == 107 {
+        return FloatFormatSpan(lo: 0x5120913ee14aa6d2, hi: 0x177c44ddf6c515fd);
+    }
+    if index == 108 {
+        return FloatFormatSpan(lo: 0xa74d40ff1aa21f0e, hi: 0x12c9d0b1923744ca);
+    }
+    if index == 109 {
+        return FloatFormatSpan(lo: 0x0baece64f769cb4a, hi: 0x1e0fb44f50586e11);
+    }
+    if index == 110 {
+        return FloatFormatSpan(lo: 0x3c8bd850c5ee3c3b, hi: 0x180c903f7379f1a7);
+    }
+    if index == 111 {
+        return FloatFormatSpan(lo: 0xca0979da37f1c9c9, hi: 0x133d4032c2c7f485);
+    }
+    if index == 112 {
+        return FloatFormatSpan(lo: 0xa9a8c2f6bfe942db, hi: 0x1ec866b79e0cba6f);
+    }
+    if index == 113 {
+        return FloatFormatSpan(lo: 0x2153cf2bccba9be3, hi: 0x18a0522c7e709526);
+    }
+    if index == 114 {
+        return FloatFormatSpan(lo: 0x1aa9728970954982, hi: 0x13b374f06526ddb8);
+    }
+    if index == 115 {
+        return FloatFormatSpan(lo: 0xf775840f1a88759d, hi: 0x1f8587e7083e2f8c);
+    }
+    if index == 116 {
+        return FloatFormatSpan(lo: 0x5f9136727ba05e17, hi: 0x19379fec0698260a);
+    }
+    if index == 117 {
+        return FloatFormatSpan(lo: 0x1940f85b9619e4df, hi: 0x142c7ff0054684d5);
+    }
+    if index == 118 {
+        return FloatFormatSpan(lo: 0xe100c6afab47ea4c, hi: 0x1023998cd1053710);
+    }
+    if index == 119 {
+        return FloatFormatSpan(lo: 0xce67a44c453fdd47, hi: 0x19d28f47b4d524e7);
+    }
+    if index == 120 {
+        return FloatFormatSpan(lo: 0xd852e9d69dccb106, hi: 0x14a8729fc3ddb71f);
+    }
+    if index == 121 {
+        return FloatFormatSpan(lo: 0x79dbee454b0a2738, hi: 0x1086c219697e2c19);
+    }
+    if index == 122 {
+        return FloatFormatSpan(lo: 0x295fe3a211a9d859, hi: 0x1a71368f0f30468f);
+    }
+    if index == 123 {
+        return FloatFormatSpan(lo: 0xbab31c81a7bb137a, hi: 0x15275ed8d8f36ba5);
+    }
+    if index == 124 {
+        return FloatFormatSpan(lo: 0x6228e39aec95a92f, hi: 0x10ec4be0ad8f8951);
+    }
+    if index == 125 {
+        return FloatFormatSpan(lo: 0x9d0e38f7e0ef7517, hi: 0x1b13ac9aaf4c0ee8);
+    }
+    if index == 126 {
+        return FloatFormatSpan(lo: 0xb0d82d931a592a79, hi: 0x15a956e225d67253);
+    }
+    if index == 127 {
+        return FloatFormatSpan(lo: 0x8d79be0f4847552e, hi: 0x11544581b7dec1dc);
+    }
+    if index == 128 {
+        return FloatFormatSpan(lo: 0x158f967eda0bbb7c, hi: 0x1bba08cf8c979c94);
+    }
+    if index == 129 {
+        return FloatFormatSpan(lo: 0x77a611ff14d62f97, hi: 0x162e6d72d6dfb076);
+    }
+    if index == 130 {
+        return FloatFormatSpan(lo: 0xf951a7ff43de8c79, hi: 0x11bebdf578b2f391);
+    }
+    if index == 131 {
+        return FloatFormatSpan(lo: 0xc21c3ffed2fdad8e, hi: 0x1c6463225ab7ec1c);
+    }
+    if index == 132 {
+        return FloatFormatSpan(lo: 0x01b0333242648ad8, hi: 0x16b6b5b5155ff017);
+    }
+    if index == 133 {
+        return FloatFormatSpan(lo: 0x0159c28e9b83a246, hi: 0x122bc490dde659ac);
+    }
+    if index == 134 {
+        return FloatFormatSpan(lo: 0xcef604175f3903a3, hi: 0x1d12d41afca3c2ac);
+    }
+    if index == 135 {
+        return FloatFormatSpan(lo: 0x725e69ac4c2d9c83, hi: 0x17424348ca1c9bbd);
+    }
+    if index == 136 {
+        return FloatFormatSpan(lo: 0xf5185489d68ae39c, hi: 0x129b69070816e2fd);
+    }
+    if index == 137 {
+        return FloatFormatSpan(lo: 0xee8d540fbdab05c6, hi: 0x1dc574d80cf16b2f);
+    }
+    if index == 138 {
+        return FloatFormatSpan(lo: 0xbed77672fe226b05, hi: 0x17d12a4670c1228c);
+    }
+    if index == 139 {
+        return FloatFormatSpan(lo: 0xff12c528cb4ebc04, hi: 0x130dbb6b8d674ed6);
+    }
+    if index == 140 {
+        return FloatFormatSpan(lo: 0xcb513b74787df9a0, hi: 0x1e7c5f127bd87e24);
+    }
+    if index == 141 {
+        return FloatFormatSpan(lo: 0x090dc929f9fe614d, hi: 0x18637f41fcad31b7);
+    }
+    if index == 142 {
+        return FloatFormatSpan(lo: 0xa0d7d42194cb810a, hi: 0x1382cc34ca2427c5);
+    }
+    if index == 143 {
+        return FloatFormatSpan(lo: 0x67bfb9cf5478ce77, hi: 0x1f37ad21436d0c6f);
+    }
+    if index == 144 {
+        return FloatFormatSpan(lo: 0x1fcc94a5dd2d71f9, hi: 0x18f9574dcf8a7059);
+    }
+    if index == 145 {
+        return FloatFormatSpan(lo: 0x7fd6dd517dbdf4c7, hi: 0x13faac3e3fa1f37a);
+    }
+    if index == 146 {
+        return FloatFormatSpan(lo: 0xffbe2ee8c92fee0b, hi: 0x1ff779fd329cb8c3);
+    }
+    if index == 147 {
+        return FloatFormatSpan(lo: 0x6631bf20a0f324d6, hi: 0x1992c7fdc216fa36);
+    }
+    if index == 148 {
+        return FloatFormatSpan(lo: 0xb827cc1a1a5c1d78, hi: 0x14756ccb01abfb5e);
+    }
+    if index == 149 {
+        return FloatFormatSpan(lo: 0x935309ae7b7ce460, hi: 0x105df0a267bcc918);
+    }
+    if index == 150 {
+        return FloatFormatSpan(lo: 0x1eeb42b0c594a099, hi: 0x1a2fe76a3f9474f4);
+    }
+    if index == 151 {
+        return FloatFormatSpan(lo: 0xe58902270476e6e1, hi: 0x14f31f8832dd2a5c);
+    }
+    if index == 152 {
+        return FloatFormatSpan(lo: 0xb7a0ce859d2bebe7, hi: 0x10c27fa028b0eeb0);
+    }
+    if index == 153 {
+        return FloatFormatSpan(lo: 0x59014a6f61dfdfd8, hi: 0x1ad0cc33744e4ab4);
+    }
+    if index == 154 {
+        return FloatFormatSpan(lo: 0xe0cdd525e7e64cad, hi: 0x1573d68f903ea229);
+    }
+    if index == 155 {
+        return FloatFormatSpan(lo: 0x4d7177518651d6f1, hi: 0x11297872d9cbb4ee);
+    }
+    if index == 156 {
+        return FloatFormatSpan(lo: 0x7be8bee8d6e957e8, hi: 0x1b758d848fac54b0);
+    }
+    if index == 157 {
+        return FloatFormatSpan(lo: 0xfcba3253df211320, hi: 0x15f7a46a0c89dd59);
+    }
+    if index == 158 {
+        return FloatFormatSpan(lo: 0x63c8284318e74280, hi: 0x1192e9ee706e4aae);
+    }
+    if index == 159 {
+        return FloatFormatSpan(lo: 0x060d0d3827d86a66, hi: 0x1c1e43171a4a1117);
+    }
+    if index == 160 {
+        return FloatFormatSpan(lo: 0x6b3da42cecad21eb, hi: 0x167e9c127b6e7412);
+    }
+    if index == 161 {
+        return FloatFormatSpan(lo: 0x88fe1cf0bd574e56, hi: 0x11fee341fc585cdb);
+    }
+    if index == 162 {
+        return FloatFormatSpan(lo: 0x419694b462254a23, hi: 0x1ccb0536608d615f);
+    }
+    if index == 163 {
+        return FloatFormatSpan(lo: 0x67abaa29e81dd4e9, hi: 0x1708d0f84d3de77f);
+    }
+    if index == 164 {
+        return FloatFormatSpan(lo: 0xb95621bb2017dd87, hi: 0x126d73f9d764b932);
+    }
+    if index == 165 {
+        return FloatFormatSpan(lo: 0xc223692b668c95a5, hi: 0x1d7becc2f23ac1ea);
+    }
+    if index == 166 {
+        return FloatFormatSpan(lo: 0xce82ba891ed6de1d, hi: 0x179657025b6234bb);
+    }
+    if index == 167 {
+        return FloatFormatSpan(lo: 0xa53562074bdf1818, hi: 0x12deac01e2b4f6fc);
+    }
+    if index == 168 {
+        return FloatFormatSpan(lo: 0x3b889cd87964f359, hi: 0x1e3113363787f194);
+    }
+    if index == 169 {
+        return FloatFormatSpan(lo: 0xfc6d4a46c783f5e1, hi: 0x18274291c6065adc);
+    }
+    if index == 170 {
+        return FloatFormatSpan(lo: 0x30576e9f06032b1a, hi: 0x13529ba7d19eaf17);
+    }
+    if index == 171 {
+        return FloatFormatSpan(lo: 0x1a257dcb3cd1de90, hi: 0x1eea92a61c311825);
+    }
+    if index == 172 {
+        return FloatFormatSpan(lo: 0x481dfe3c30a7e540, hi: 0x18bba884e35a79b7);
+    }
+    if index == 173 {
+        return FloatFormatSpan(lo: 0xd34b31c9c0865100, hi: 0x13c9539d82aec7c5);
+    }
+    if index == 174 {
+        return FloatFormatSpan(lo: 0x5211e942cda3b4cd, hi: 0x1fa885c8d117a609);
+    }
+    if index == 175 {
+        return FloatFormatSpan(lo: 0x74db21023e1c90a4, hi: 0x19539e3a40dfb807);
+    }
+    if index == 176 {
+        return FloatFormatSpan(lo: 0xf715b401cb4a0d50, hi: 0x1442e4fb67196005);
+    }
+    if index == 177 {
+        return FloatFormatSpan(lo: 0xf8de299b09080aa7, hi: 0x103583fc527ab337);
+    }
+    if index == 178 {
+        return FloatFormatSpan(lo: 0x8e304291a80cddd7, hi: 0x19ef3993b72ab859);
+    }
+    if index == 179 {
+        return FloatFormatSpan(lo: 0x3e8d020e200a4b13, hi: 0x14bf6142f8eef9e1);
+    }
+    if index == 180 {
+        return FloatFormatSpan(lo: 0x653d9b3e80083c0f, hi: 0x10991a9bfa58c7e7);
+    }
+    if index == 181 {
+        return FloatFormatSpan(lo: 0x6ec8f864000d2ce4, hi: 0x1a8e90f9908e0ca5);
+    }
+    if index == 182 {
+        return FloatFormatSpan(lo: 0x8bd3f9e999a423ea, hi: 0x153eda614071a3b7);
+    }
+    if index == 183 {
+        return FloatFormatSpan(lo: 0x3ca994bae1501cbb, hi: 0x10ff151a99f482f9);
+    }
+    if index == 184 {
+        return FloatFormatSpan(lo: 0xc775bac49bb3612b, hi: 0x1b31bb5dc320d18e);
+    }
+    if index == 185 {
+        return FloatFormatSpan(lo: 0xd2c4956a16291a89, hi: 0x15c162b168e70e0b);
+    }
+    if index == 186 {
+        return FloatFormatSpan(lo: 0xdbd0778811ba7ba1, hi: 0x11678227871f3e6f);
+    }
+    if index == 187 {
+        return FloatFormatSpan(lo: 0x2c80bf401c5d929b, hi: 0x1bd8d03f3e9863e6);
+    }
+    if index == 188 {
+        return FloatFormatSpan(lo: 0xbd33cc3349e47549, hi: 0x16470cff6546b651);
+    }
+    if index == 189 {
+        return FloatFormatSpan(lo: 0xca8fd68f6e505dd4, hi: 0x11d270cc51055ea7);
+    }
+    if index == 190 {
+        return FloatFormatSpan(lo: 0x4419574be3b3c953, hi: 0x1c83e7ad4e6efdd9);
+    }
+    if index == 191 {
+        return FloatFormatSpan(lo: 0x0347790982f63aa9, hi: 0x16cfec8aa52597e1);
+    }
+    if index == 192 {
+        return FloatFormatSpan(lo: 0xcf6c60d468c4fbba, hi: 0x123ff06eea847980);
+    }
+    if index == 193 {
+        return FloatFormatSpan(lo: 0xe57a34870e07f92a, hi: 0x1d331a4b10d3f59a);
+    }
+    if index == 194 {
+        return FloatFormatSpan(lo: 0x512e906c0b399422, hi: 0x175c1508da432ae2);
+    }
+    if index == 195 {
+        return FloatFormatSpan(lo: 0xda8ba6bcd5c7a9b5, hi: 0x12b010d3e1cf5581);
+    }
+    if index == 196 {
+        return FloatFormatSpan(lo: 0x90df712e22d90f87, hi: 0x1de6815302e5559c);
+    }
+    if index == 197 {
+        return FloatFormatSpan(lo: 0xda4c5a8b4f140c6c, hi: 0x17eb9aa8cf1dde16);
+    }
+    if index == 198 {
+        return FloatFormatSpan(lo: 0xaea37ba2a5a9a38a, hi: 0x1322e220a5b17e78);
+    }
+    if index == 199 {
+        return FloatFormatSpan(lo: 0x7dd25f6aa2a905a9, hi: 0x1e9e369aa2b59727);
+    }
+    if index == 200 {
+        return FloatFormatSpan(lo: 0x97db7f888220d154, hi: 0x187e92154ef7ac1f);
+    }
+    if index == 201 {
+        return FloatFormatSpan(lo: 0x797c6606ce80a777, hi: 0x139874ddd8c6234c);
+    }
+    if index == 202 {
+        return FloatFormatSpan(lo: 0x8f2d700ae4010bf1, hi: 0x1f5a549627a36bad);
+    }
+    if index == 203 {
+        return FloatFormatSpan(lo: 0x0c2459a25000d65a, hi: 0x191510781fb5efbe);
+    }
+    if index == 204 {
+        return FloatFormatSpan(lo: 0x701d1481d99a4515, hi: 0x1410d9f9b2f7f2fe);
+    }
+    if index == 205 {
+        return FloatFormatSpan(lo: 0xc017439b147b6a77, hi: 0x100d7b2e28c65bfe);
+    }
+    if index == 206 {
+        return FloatFormatSpan(lo: 0xccf205c4ed9243f2, hi: 0x19af2b7d0e0a2cca);
+    }
+    if index == 207 {
+        return FloatFormatSpan(lo: 0x0a5b37d0be0e9cc2, hi: 0x148c22ca71a1bd6f);
+    }
+    if index == 208 {
+        return FloatFormatSpan(lo: 0x0848f973cb3ee3ce, hi: 0x10701bd527b4978c);
+    }
+    if index == 209 {
+        return FloatFormatSpan(lo: 0xda0e5bec78649fb0, hi: 0x1a4cf9550c5425ac);
+    }
+    if index == 210 {
+        return FloatFormatSpan(lo: 0x7b3eaff060507fc0, hi: 0x150a6110d6a9b7bd);
+    }
+    if index == 211 {
+        return FloatFormatSpan(lo: 0x95cbbff380406633, hi: 0x10d51a73deee2c97);
+    }
+    if index == 212 {
+        return FloatFormatSpan(lo: 0xefac665266cd7052, hi: 0x1aee90b964b04758);
+    }
+    if index == 213 {
+        return FloatFormatSpan(lo: 0x2623850eb8a459db, hi: 0x158ba6fab6f36c47);
+    }
+    if index == 214 {
+        return FloatFormatSpan(lo: 0x1e82d0d893b6ae49, hi: 0x113c85955f29236c);
+    }
+    if index == 215 {
+        return FloatFormatSpan(lo: 0xfd9e1af41f8ab075, hi: 0x1b9408eefea838ac);
+    }
+    if index == 216 {
+        return FloatFormatSpan(lo: 0x97b1af29b2d559f7, hi: 0x16100725988693bd);
+    }
+    if index == 217 {
+        return FloatFormatSpan(lo: 0xac8e25baf5777b2c, hi: 0x11a66c1e139edc97);
+    }
+    if index == 218 {
+        return FloatFormatSpan(lo: 0x7a7d092b2258c513, hi: 0x1c3d79c9b8fe2dbf);
+    }
+    if index == 219 {
+        return FloatFormatSpan(lo: 0x61fda0ef4ead6a76, hi: 0x169794a160cb57cc);
+    }
+    if index == 220 {
+        return FloatFormatSpan(lo: 0xe7fe1a590bbdeec5, hi: 0x1212dd4de7091309);
+    }
+    if index == 221 {
+        return FloatFormatSpan(lo: 0xa6635d5b45fcb13a, hi: 0x1ceafbafd80e84dc);
+    }
+    if index == 222 {
+        return FloatFormatSpan(lo: 0x851c4aaf6b308dc8, hi: 0x172262f3133ed0b0);
+    }
+    if index == 223 {
+        return FloatFormatSpan(lo: 0xd0e36ef2bc26d7d4, hi: 0x1281e8c275cbda26);
+    }
+    if index == 224 {
+        return FloatFormatSpan(lo: 0xb49f17eac6a48c86, hi: 0x1d9ca79d894629d7);
+    }
+    if index == 225 {
+        return FloatFormatSpan(lo: 0x2a18dfef0550706b, hi: 0x17b08617a104ee46);
+    }
+    if index == 226 {
+        return FloatFormatSpan(lo: 0x54e0b3259dd9f389, hi: 0x12f39e794d9d8b6b);
+    }
+    if index == 227 {
+        return FloatFormatSpan(lo: 0x87cdeb6f62f65274, hi: 0x1e5297287c2f4578);
+    }
+    if index == 228 {
+        return FloatFormatSpan(lo: 0xd30b22bf825ea85d, hi: 0x18421286c9bf6ac6);
+    }
+    if index == 229 {
+        return FloatFormatSpan(lo: 0x0f3c1bcc684bb9e4, hi: 0x13680ed23aff889f);
+    }
+    if index == 230 {
+        return FloatFormatSpan(lo: 0x18602c7a4079296d, hi: 0x1f0ce4839198da98);
+    }
+    if index == 231 {
+        return FloatFormatSpan(lo: 0x46b356c833942124, hi: 0x18d71d360e13e213);
+    }
+    if index == 232 {
+        return FloatFormatSpan(lo: 0x388f78a029434db6, hi: 0x13df4a91a4dcb4dc);
+    }
+    if index == 233 {
+        return FloatFormatSpan(lo: 0x5a7f2766a86baf8a, hi: 0x1fcbaa82a1612160);
+    }
+    if index == 234 {
+        return FloatFormatSpan(lo: 0x153285ebb9efbfa2, hi: 0x196fbb9bb44db44d);
+    }
+    if index == 235 {
+        return FloatFormatSpan(lo: 0xaa8ed189618c994e, hi: 0x145962e2f6a4903d);
+    }
+    if index == 236 {
+        return FloatFormatSpan(lo: 0xeed8a7a11ad6e10c, hi: 0x1047824f2bb6d9ca);
+    }
+    if index == 237 {
+        return FloatFormatSpan(lo: 0x7e27729b5e249b45, hi: 0x1a0c03b1df8af611);
+    }
+    if index == 238 {
+        return FloatFormatSpan(lo: 0xfe85f549181d4904, hi: 0x14d6695b193bf80d);
+    }
+    if index == 239 {
+        return FloatFormatSpan(lo: 0xcb9e5dd4134aa0d0, hi: 0x10ab877c142ff9a4);
+    }
+    if index == 240 {
+        return FloatFormatSpan(lo: 0xdf63c9535211014d, hi: 0x1aac0bf9b9e65c3a);
+    }
+    if index == 241 {
+        return FloatFormatSpan(lo: 0x191ca10f74da6771, hi: 0x15566ffafb1eb02f);
+    }
+    if index == 242 {
+        return FloatFormatSpan(lo: 0xadb080d92a4852c1, hi: 0x1111f32f2f4bc025);
+    }
+    if index == 243 {
+        return FloatFormatSpan(lo: 0x15e7348eaa0d5134, hi: 0x1b4feb7eb212cd09);
+    }
+    if index == 244 {
+        return FloatFormatSpan(lo: 0xab1f5d3eee710dc4, hi: 0x15d98932280f0a6d);
+    }
+    if index == 245 {
+        return FloatFormatSpan(lo: 0xbc1917658b8da49d, hi: 0x117ad428200c0857);
+    }
+    if index == 246 {
+        return FloatFormatSpan(lo: 0x2cf4f23c127c3a94, hi: 0x1bf7b9d9cce00d59);
+    }
+    if index == 247 {
+        return FloatFormatSpan(lo: 0xf0c3f4fcdb969543, hi: 0x165fc7e170b33de0);
+    }
+    if index == 248 {
+        return FloatFormatSpan(lo: 0x5a365d9716121103, hi: 0x11e6398126f5cb1a);
+    }
+    if index == 249 {
+        return FloatFormatSpan(lo: 0x9056fc24f01ce804, hi: 0x1ca38f350b22de90);
+    }
+    if index == 250 {
+        return FloatFormatSpan(lo: 0xd9df301d8ce3ecd0, hi: 0x16e93f5da2824ba6);
+    }
+    if index == 251 {
+        return FloatFormatSpan(lo: 0xe17f59b13d8323da, hi: 0x125432b14ecea2eb);
+    }
+    if index == 252 {
+        return FloatFormatSpan(lo: 0x68cbc2b52f38395c, hi: 0x1d53844ee47dd179);
+    }
+    if index == 253 {
+        return FloatFormatSpan(lo: 0x53d6355dbf602de3, hi: 0x177603725064a794);
+    }
+    if index == 254 {
+        return FloatFormatSpan(lo: 0xa9782ab165e68b1c, hi: 0x12c4cf8ea6b6ec76);
+    }
+    if index == 255 {
+        return FloatFormatSpan(lo: 0x0f26aab56fd744fa, hi: 0x1e07b27dd78b13f1);
+    }
+    if index == 256 {
+        return FloatFormatSpan(lo: 0x3f52222abfdf6a62, hi: 0x18062864ac6f4327);
+    }
+    if index == 257 {
+        return FloatFormatSpan(lo: 0x65db4e88997f884e, hi: 0x1338205089f29c1f);
+    }
+    if index == 258 {
+        return FloatFormatSpan(lo: 0x6fc54a7428cc0d4a, hi: 0x1ec033b40fea9365);
+    }
+    if index == 259 {
+        return FloatFormatSpan(lo: 0x596aa1f68709a43b, hi: 0x1899c2f673220f84);
+    }
+    if index == 260 {
+        return FloatFormatSpan(lo: 0xadeee7f86c07b696, hi: 0x13ae3591f5b4d936);
+    }
+    if index == 261 {
+        return FloatFormatSpan(lo: 0x497e3ff3e00c5756, hi: 0x1f7d228322baf524);
+    }
+    if index == 262 {
+        return FloatFormatSpan(lo: 0xd464fff64cd6ac45, hi: 0x1930e868e89590e9);
+    }
+    if index == 263 {
+        return FloatFormatSpan(lo: 0x4383fff83d7889d1, hi: 0x14272053ed4473ee);
+    }
+    if index == 264 {
+        return FloatFormatSpan(lo: 0xcf9cccc69793a174, hi: 0x101f4d0ff1038ff1);
+    }
+    if index == 265 {
+        return FloatFormatSpan(lo: 0x7f6147a425b90252, hi: 0x19cbae7fe805b31c);
+    }
+    if index == 266 {
+        return FloatFormatSpan(lo: 0xcc4dd2e9b7c7350f, hi: 0x14a2f1ffecd15c16);
+    }
+    if index == 267 {
+        return FloatFormatSpan(lo: 0x3d0b0f215fd290d9, hi: 0x10825b3323dab012);
+    }
+    if index == 268 {
+        return FloatFormatSpan(lo: 0x61ab4b689950e7c1, hi: 0x1a6a2b85062ab350);
+    }
+    if index == 269 {
+        return FloatFormatSpan(lo: 0x4e22a2ba1440b967, hi: 0x1521bc6a6b555c40);
+    }
+    if index == 270 {
+        return FloatFormatSpan(lo: 0x0b4ee894dd009453, hi: 0x10e7c9eebc4449cd);
+    }
+    if index == 271 {
+        return FloatFormatSpan(lo: 0x1217da87c800ed51, hi: 0x1b0c764ac6d3a948);
+    }
+    if index == 272 {
+        return FloatFormatSpan(lo: 0xdb46486ca000bdda, hi: 0x15a391d56bdc876c);
+    }
+    if index == 273 {
+        return FloatFormatSpan(lo: 0x490506bd4ccd64af, hi: 0x114fa7ddefe39f8a);
+    }
+    if index == 274 {
+        return FloatFormatSpan(lo: 0xa8080ac87ae23ab1, hi: 0x1bb2a62fe638ff43);
+    }
+    if index == 275 {
+        return FloatFormatSpan(lo: 0x5339a239fbe82ef4, hi: 0x162884f31e93ff69);
+    }
+    if index == 276 {
+        return FloatFormatSpan(lo: 0x75c7b4fb2fecf25d, hi: 0x11ba03f5b20fff87);
+    }
+    if index == 277 {
+        return FloatFormatSpan(lo: 0x22d92191e647ea2e, hi: 0x1c5cd322b67fff3f);
+    }
+    if index == 278 {
+        return FloatFormatSpan(lo: 0xb57a8141850654f2, hi: 0x16b0a8e891ffff65);
+    }
+    if index == 279 {
+        return FloatFormatSpan(lo: 0xc4620101373843f5, hi: 0x1226ed86db3332b7);
+    }
+    if index == 280 {
+        return FloatFormatSpan(lo: 0x3a366801f1f39fee, hi: 0x1d0b15a491eb8459);
+    }
+    if index == 281 {
+        return FloatFormatSpan(lo: 0xfb5eb99b27f6198b, hi: 0x173c115074bc69e0);
+    }
+    if index == 282 {
+        return FloatFormatSpan(lo: 0x2f7efae2865e7ad6, hi: 0x129674405d6387e7);
+    }
+    if index == 283 {
+        return FloatFormatSpan(lo: 0xe597f7d0d6fd9156, hi: 0x1dbd86cd6238d971);
+    }
+    if index == 284 {
+        return FloatFormatSpan(lo: 0x8479930d78cadaab, hi: 0x17cad23de82d7ac1);
+    }
+    if index == 285 {
+        return FloatFormatSpan(lo: 0xd06142712d6f1556, hi: 0x1308a831868ac89a);
+    }
+    if index == 286 {
+        return FloatFormatSpan(lo: 0x4d686a4eaf182222, hi: 0x1e74404f3daada91);
+    }
+    if index == 287 {
+        return FloatFormatSpan(lo: 0xa453883ef279b4e8, hi: 0x185d003f6488aeda);
+    }
+    if index == 288 {
+        return FloatFormatSpan(lo: 0xe9dc6cff28615d87, hi: 0x137d99cc506d58ae);
+    }
+    if index == 289 {
+        return FloatFormatSpan(lo: 0xa960ae650d6895a4, hi: 0x1f2f5c7a1a488de4);
+    }
+    if index == 290 {
+        return FloatFormatSpan(lo: 0xbab3beb73ded4483, hi: 0x18f2b061aea07183);
+    }
+    if index == 291 {
+        return FloatFormatSpan(lo: 0x2ef6322c318a9d36, hi: 0x13f559e7bee6c136);
+    }
+    if index == 292 {
+        return FloatFormatSpan(lo: 0xe4bd1d13827761f0, hi: 0x1feef63f97d79b89);
+    }
+    if index == 293 {
+        return FloatFormatSpan(lo: 0x83ca7da9352c4e5a, hi: 0x198bf832dfdfafa1);
+    }
+    if index == 294 {
+        return FloatFormatSpan(lo: 0x9ca1fe20f756a515, hi: 0x146ff9c24cb2f2e7);
+    }
+    if index == 295 {
+        return FloatFormatSpan(lo: 0x4a1b31b3f9121daa, hi: 0x1059949b708f28b9);
+    }
+    if index == 296 {
+        return FloatFormatSpan(lo: 0x435eb5ecc1b695dd, hi: 0x1a28edc580e50df5);
+    }
+    if index == 297 {
+        return FloatFormatSpan(lo: 0x35e55e57015ede4a, hi: 0x14ed8b04671da4c4);
+    }
+    if index == 298 {
+        return FloatFormatSpan(lo: 0xc4b77eac0118b1d5, hi: 0x10be08d0527e1d69);
+    }
+    if index == 299 {
+        return FloatFormatSpan(lo: 0xa12597799b5ab622, hi: 0x1ac9a7b3b7302f0f);
+    }
+    if index == 300 {
+        return FloatFormatSpan(lo: 0x4db7ac6149155e81, hi: 0x156e1fc2f8f358d9);
+    }
+    if index == 301 {
+        return FloatFormatSpan(lo: 0xd7c6238107444b9b, hi: 0x1124e63593f5e0ad);
+    }
+    if index == 302 {
+        return FloatFormatSpan(lo: 0x593d059b3ed3ac2b, hi: 0x1b6e3d2286563449);
+    }
+    if index == 303 {
+        return FloatFormatSpan(lo: 0xe0fd9e15cbdc89bc, hi: 0x15f1ca820511c36d);
+    }
+    if index == 304 {
+        return FloatFormatSpan(lo: 0xb3fe18116fe3a163, hi: 0x118e3b9b37416924);
+    }
+    if index == 305 {
+        return FloatFormatSpan(lo: 0x866359b57fd29bd1, hi: 0x1c16c5c525357507);
+    }
+    if index == 306 {
+        return FloatFormatSpan(lo: 0xd1e91491330ee30e, hi: 0x16789e3750f790d2);
+    }
+    if index == 307 {
+        return FloatFormatSpan(lo: 0x74ba76da8f3f1c0b, hi: 0x11fa182c40c60d75);
+    }
+    if index == 308 {
+        return FloatFormatSpan(lo: 0xedf72490e531c678, hi: 0x1cc359e067a348bb);
+    }
+    if index == 309 {
+        return FloatFormatSpan(lo: 0x8b2c1d40b75b052d, hi: 0x1702ae4d1fb5d3c9);
+    }
+    if index == 310 {
+        return FloatFormatSpan(lo: 0x6f567dcd5f7c0424, hi: 0x12688b70e62b0fd4);
+    }
+    if index == 311 {
+        return FloatFormatSpan(lo: 0x7ef0c94898c66d06, hi: 0x1d74124e3d11b2ed);
+    }
+    if index == 312 {
+        return FloatFormatSpan(lo: 0x98c0a106e09ebd9f, hi: 0x17900ea4fda7c257);
+    }
+    if index == 313 {
+        return FloatFormatSpan(lo: 0x470080d24d4bcae6, hi: 0x12d9a550caec9b79);
+    }
+    if index == 314 {
+        return FloatFormatSpan(lo: 0xd800ce1d487944a2, hi: 0x1e29088144adc58e);
+    }
+    if index == 315 {
+        return FloatFormatSpan(lo: 0x1333d8176d2dd082, hi: 0x1820d39a9d57d13f);
+    }
+    if index == 316 {
+        return FloatFormatSpan(lo: 0xa8f646792424a6ce, hi: 0x134d76154aaca765);
+    }
+    if index == 317 {
+        return FloatFormatSpan(lo: 0x74bd3d8ea03aa47d, hi: 0x1ee25688777aa56f);
+    }
+    if index == 318 {
+        return FloatFormatSpan(lo: 0x5d64313ee6955064, hi: 0x18b51206c5fbb78c);
+    }
+    if index == 319 {
+        return FloatFormatSpan(lo: 0x4ab68dcbebaaa6b7, hi: 0x13c40e6bd1962c70);
+    }
+    if index == 320 {
+        return FloatFormatSpan(lo: 0x1124161312aaa457, hi: 0x1fa01712e8f0471a);
+    }
+    if index == 321 {
+        return FloatFormatSpan(lo: 0xda8344dc0eeee9df, hi: 0x194cdf4253f36c14);
+    }
+    if index == 322 {
+        return FloatFormatSpan(lo: 0xe2029d7cd8bf2180, hi: 0x143d7f6843292343);
+    }
+    if index == 323 {
+        return FloatFormatSpan(lo: 0x4e687dfd7a328133, hi: 0x103132b9cf541c36);
+    }
+    if index == 324 {
+        return FloatFormatSpan(lo: 0x4a40c9959050ceb8, hi: 0x19e851294bb9c6bd);
+    }
+    if index == 325 {
+        return FloatFormatSpan(lo: 0x0833d477a6a70bc6, hi: 0x14b9da876fc7d231);
+    }
+    if index == 326 {
+        return FloatFormatSpan(lo: 0xa02976c61eec096b, hi: 0x1094aed2bfd30e8d);
+    }
+    if index == 327 {
+        return FloatFormatSpan(lo: 0x004257a364acdbdf, hi: 0x1a877e1dffb81749);
+    }
+    if index == 328 {
+        return FloatFormatSpan(lo: 0xcd01dfb5ea23e319, hi: 0x153931b1996012a0);
+    }
+    if index == 329 {
+        return FloatFormatSpan(lo: 0x70ce4c91881cb5ae, hi: 0x10fa8e27ade6754d);
+    }
+    if index == 330 {
+        return FloatFormatSpan(lo: 0x1ae3adb5a69455e2, hi: 0x1b2a7d0c4970bbaf);
+    }
+    if index == 331 {
+        return FloatFormatSpan(lo: 0x7be957c4854377e8, hi: 0x15bb973d078d62f2);
+    }
+    if index == 332 {
+        return FloatFormatSpan(lo: 0xc987796a0435f987, hi: 0x1162df64060ab58e);
+    }
+    if index == 333 {
+        return FloatFormatSpan(lo: 0x75a58f1006bcc271, hi: 0x1bd1656cd67788e4);
+    }
+    if index == 334 {
+        return FloatFormatSpan(lo: 0xf7b7a5a66bca3527, hi: 0x16411df0ab92d3e9);
+    }
+    if index == 335 {
+        return FloatFormatSpan(lo: 0x5fc61e1ebca1c41f, hi: 0x11cdb18d560f0fee);
+    }
+    if index == 336 {
+        return FloatFormatSpan(lo: 0xffa363646102d365, hi: 0x1c7c4f4889b1b316);
+    }
+    if index == 337 {
+        return FloatFormatSpan(lo: 0x32e91c504d9bdc51, hi: 0x16c9d906d48e28df);
+    }
+    if index == 338 {
+        return FloatFormatSpan(lo: 0x8f20e37371497d0e, hi: 0x123b140576d820b2);
+    }
+    if index == 339 {
+        return FloatFormatSpan(lo: 0x7e9b0585820f2e7c, hi: 0x1d2b533bf159cdea);
+    }
+    if index == 340 {
+        return FloatFormatSpan(lo: 0xcbaf379e01a5beca, hi: 0x1755dc2ff447d7ee);
+    }
+    if index == 341 {
+        return FloatFormatSpan(lo: 0x0958f94b348498a1, hi: 0x12ab168cc36cacbf);
+    }
+    return FloatFormatSpan(lo: 0, hi: 0);
+}
+
+// Ryu DOUBLE_POW5_SPLIT.
+func ff_pow5(index u32) FloatFormatSpan {
+    if index == 0 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1000000000000000);
+    }
+    if index == 1 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1400000000000000);
+    }
+    if index == 2 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1900000000000000);
+    }
+    if index == 3 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1f40000000000000);
+    }
+    if index == 4 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1388000000000000);
+    }
+    if index == 5 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x186a000000000000);
+    }
+    if index == 6 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1e84800000000000);
+    }
+    if index == 7 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1312d00000000000);
+    }
+    if index == 8 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x17d7840000000000);
+    }
+    if index == 9 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1dcd650000000000);
+    }
+    if index == 10 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x12a05f2000000000);
+    }
+    if index == 11 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x174876e800000000);
+    }
+    if index == 12 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1d1a94a200000000);
+    }
+    if index == 13 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x12309ce540000000);
+    }
+    if index == 14 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x16bcc41e90000000);
+    }
+    if index == 15 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1c6bf52634000000);
+    }
+    if index == 16 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x11c37937e0800000);
+    }
+    if index == 17 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x16345785d8a00000);
+    }
+    if index == 18 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1bc16d674ec80000);
+    }
+    if index == 19 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1158e460913d0000);
+    }
+    if index == 20 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x15af1d78b58c4000);
+    }
+    if index == 21 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1b1ae4d6e2ef5000);
+    }
+    if index == 22 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x10f0cf064dd59200);
+    }
+    if index == 23 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x152d02c7e14af680);
+    }
+    if index == 24 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x1a784379d99db420);
+    }
+    if index == 25 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x108b2a2c28029094);
+    }
+    if index == 26 {
+        return FloatFormatSpan(lo: 0x0000000000000000, hi: 0x14adf4b7320334b9);
+    }
+    if index == 27 {
+        return FloatFormatSpan(lo: 0x4000000000000000, hi: 0x19d971e4fe8401e7);
+    }
+    if index == 28 {
+        return FloatFormatSpan(lo: 0x8800000000000000, hi: 0x1027e72f1f128130);
+    }
+    if index == 29 {
+        return FloatFormatSpan(lo: 0xaa00000000000000, hi: 0x1431e0fae6d7217c);
+    }
+    if index == 30 {
+        return FloatFormatSpan(lo: 0xd480000000000000, hi: 0x193e5939a08ce9db);
+    }
+    if index == 31 {
+        return FloatFormatSpan(lo: 0xc9a0000000000000, hi: 0x1f8def8808b02452);
+    }
+    if index == 32 {
+        return FloatFormatSpan(lo: 0xbe04000000000000, hi: 0x13b8b5b5056e16b3);
+    }
+    if index == 33 {
+        return FloatFormatSpan(lo: 0xad85000000000000, hi: 0x18a6e32246c99c60);
+    }
+    if index == 34 {
+        return FloatFormatSpan(lo: 0xd8e6400000000000, hi: 0x1ed09bead87c0378);
+    }
+    if index == 35 {
+        return FloatFormatSpan(lo: 0x878fe80000000000, hi: 0x13426172c74d822b);
+    }
+    if index == 36 {
+        return FloatFormatSpan(lo: 0x6973e20000000000, hi: 0x1812f9cf7920e2b6);
+    }
+    if index == 37 {
+        return FloatFormatSpan(lo: 0x03d0da8000000000, hi: 0x1e17b84357691b64);
+    }
+    if index == 38 {
+        return FloatFormatSpan(lo: 0x8262889000000000, hi: 0x12ced32a16a1b11e);
+    }
+    if index == 39 {
+        return FloatFormatSpan(lo: 0x22fb2ab400000000, hi: 0x178287f49c4a1d66);
+    }
+    if index == 40 {
+        return FloatFormatSpan(lo: 0xabb9f56100000000, hi: 0x1d6329f1c35ca4bf);
+    }
+    if index == 41 {
+        return FloatFormatSpan(lo: 0xcb54395ca0000000, hi: 0x125dfa371a19e6f7);
+    }
+    if index == 42 {
+        return FloatFormatSpan(lo: 0xbe2947b3c8000000, hi: 0x16f578c4e0a060b5);
+    }
+    if index == 43 {
+        return FloatFormatSpan(lo: 0x2db399a0ba000000, hi: 0x1cb2d6f618c878e3);
+    }
+    if index == 44 {
+        return FloatFormatSpan(lo: 0xfc90400474400000, hi: 0x11efc659cf7d4b8d);
+    }
+    if index == 45 {
+        return FloatFormatSpan(lo: 0x7bb4500591500000, hi: 0x166bb7f0435c9e71);
+    }
+    if index == 46 {
+        return FloatFormatSpan(lo: 0xdaa16406f5a40000, hi: 0x1c06a5ec5433c60d);
+    }
+    if index == 47 {
+        return FloatFormatSpan(lo: 0xa8a4de8459868000, hi: 0x118427b3b4a05bc8);
+    }
+    if index == 48 {
+        return FloatFormatSpan(lo: 0xd2ce16256fe82000, hi: 0x15e531a0a1c872ba);
+    }
+    if index == 49 {
+        return FloatFormatSpan(lo: 0x87819baecbe22800, hi: 0x1b5e7e08ca3a8f69);
+    }
+    if index == 50 {
+        return FloatFormatSpan(lo: 0xf4b1014d3f6d5900, hi: 0x111b0ec57e6499a1);
+    }
+    if index == 51 {
+        return FloatFormatSpan(lo: 0x71dd41a08f48af40, hi: 0x1561d276ddfdc00a);
+    }
+    if index == 52 {
+        return FloatFormatSpan(lo: 0x0e549208b31adb10, hi: 0x1aba4714957d300d);
+    }
+    if index == 53 {
+        return FloatFormatSpan(lo: 0x28f4db456ff0c8ea, hi: 0x10b46c6cdd6e3e08);
+    }
+    if index == 54 {
+        return FloatFormatSpan(lo: 0x33321216cbecfb24, hi: 0x14e1878814c9cd8a);
+    }
+    if index == 55 {
+        return FloatFormatSpan(lo: 0xbffe969c7ee839ed, hi: 0x1a19e96a19fc40ec);
+    }
+    if index == 56 {
+        return FloatFormatSpan(lo: 0xf7ff1e21cf512434, hi: 0x105031e2503da893);
+    }
+    if index == 57 {
+        return FloatFormatSpan(lo: 0xf5fee5aa43256d41, hi: 0x14643e5ae44d12b8);
+    }
+    if index == 58 {
+        return FloatFormatSpan(lo: 0x337e9f14d3eec892, hi: 0x197d4df19d605767);
+    }
+    if index == 59 {
+        return FloatFormatSpan(lo: 0x005e46da08ea7ab6, hi: 0x1fdca16e04b86d41);
+    }
+    if index == 60 {
+        return FloatFormatSpan(lo: 0xa03aec4845928cb2, hi: 0x13e9e4e4c2f34448);
+    }
+    if index == 61 {
+        return FloatFormatSpan(lo: 0xc849a75a56f72fde, hi: 0x18e45e1df3b0155a);
+    }
+    if index == 62 {
+        return FloatFormatSpan(lo: 0x7a5c1130ecb4fbd6, hi: 0x1f1d75a5709c1ab1);
+    }
+    if index == 63 {
+        return FloatFormatSpan(lo: 0xec798abe93f11d65, hi: 0x13726987666190ae);
+    }
+    if index == 64 {
+        return FloatFormatSpan(lo: 0xa797ed6e38ed64bf, hi: 0x184f03e93ff9f4da);
+    }
+    if index == 65 {
+        return FloatFormatSpan(lo: 0x517de8c9c728bdef, hi: 0x1e62c4e38ff87211);
+    }
+    if index == 66 {
+        return FloatFormatSpan(lo: 0xd2eeb17e1c7976b5, hi: 0x12fdbb0e39fb474a);
+    }
+    if index == 67 {
+        return FloatFormatSpan(lo: 0x87aa5ddda397d462, hi: 0x17bd29d1c87a191d);
+    }
+    if index == 68 {
+        return FloatFormatSpan(lo: 0xe994f5550c7dc97b, hi: 0x1dac74463a989f64);
+    }
+    if index == 69 {
+        return FloatFormatSpan(lo: 0x11fd195527ce9ded, hi: 0x128bc8abe49f639f);
+    }
+    if index == 70 {
+        return FloatFormatSpan(lo: 0xd67c5faa71c24568, hi: 0x172ebad6ddc73c86);
+    }
+    if index == 71 {
+        return FloatFormatSpan(lo: 0x8c1b77950e32d6c2, hi: 0x1cfa698c95390ba8);
+    }
+    if index == 72 {
+        return FloatFormatSpan(lo: 0x57912abd28dfc639, hi: 0x121c81f7dd43a749);
+    }
+    if index == 73 {
+        return FloatFormatSpan(lo: 0xad75756c7317b7c8, hi: 0x16a3a275d494911b);
+    }
+    if index == 74 {
+        return FloatFormatSpan(lo: 0x98d2d2c78fdda5ba, hi: 0x1c4c8b1349b9b562);
+    }
+    if index == 75 {
+        return FloatFormatSpan(lo: 0x9f83c3bcb9ea8794, hi: 0x11afd6ec0e14115d);
+    }
+    if index == 76 {
+        return FloatFormatSpan(lo: 0x0764b4abe8652979, hi: 0x161bcca7119915b5);
+    }
+    if index == 77 {
+        return FloatFormatSpan(lo: 0x493de1d6e27e73d7, hi: 0x1ba2bfd0d5ff5b22);
+    }
+    if index == 78 {
+        return FloatFormatSpan(lo: 0x6dc6ad264d8f0866, hi: 0x1145b7e285bf98f5);
+    }
+    if index == 79 {
+        return FloatFormatSpan(lo: 0xc938586fe0f2ca80, hi: 0x159725db272f7f32);
+    }
+    if index == 80 {
+        return FloatFormatSpan(lo: 0x7b866e8bd92f7d20, hi: 0x1afcef51f0fb5eff);
+    }
+    if index == 81 {
+        return FloatFormatSpan(lo: 0xad34051767bdae34, hi: 0x10de1593369d1b5f);
+    }
+    if index == 82 {
+        return FloatFormatSpan(lo: 0x9881065d41ad19c1, hi: 0x15159af804446237);
+    }
+    if index == 83 {
+        return FloatFormatSpan(lo: 0x7ea147f492186032, hi: 0x1a5b01b605557ac5);
+    }
+    if index == 84 {
+        return FloatFormatSpan(lo: 0x6f24ccf8db4f3c1f, hi: 0x1078e111c3556cbb);
+    }
+    if index == 85 {
+        return FloatFormatSpan(lo: 0x4aee003712230b27, hi: 0x14971956342ac7ea);
+    }
+    if index == 86 {
+        return FloatFormatSpan(lo: 0xdda98044d6abcdf0, hi: 0x19bcdfabc13579e4);
+    }
+    if index == 87 {
+        return FloatFormatSpan(lo: 0x0a89f02b062b60b6, hi: 0x10160bcb58c16c2f);
+    }
+    if index == 88 {
+        return FloatFormatSpan(lo: 0xcd2c6c35c7b638e4, hi: 0x141b8ebe2ef1c73a);
+    }
+    if index == 89 {
+        return FloatFormatSpan(lo: 0x8077874339a3c71d, hi: 0x1922726dbaae3909);
+    }
+    if index == 90 {
+        return FloatFormatSpan(lo: 0xe0956914080cb8e4, hi: 0x1f6b0f092959c74b);
+    }
+    if index == 91 {
+        return FloatFormatSpan(lo: 0x6c5d61ac8507f38e, hi: 0x13a2e965b9d81c8f);
+    }
+    if index == 92 {
+        return FloatFormatSpan(lo: 0x4774ba17a649f072, hi: 0x188ba3bf284e23b3);
+    }
+    if index == 93 {
+        return FloatFormatSpan(lo: 0x1951e89d8fdc6c8f, hi: 0x1eae8caef261aca0);
+    }
+    if index == 94 {
+        return FloatFormatSpan(lo: 0x0fd3316279e9c3d9, hi: 0x132d17ed577d0be4);
+    }
+    if index == 95 {
+        return FloatFormatSpan(lo: 0x13c7fdbb186434cf, hi: 0x17f85de8ad5c4edd);
+    }
+    if index == 96 {
+        return FloatFormatSpan(lo: 0x58b9fd29de7d4203, hi: 0x1df67562d8b36294);
+    }
+    if index == 97 {
+        return FloatFormatSpan(lo: 0xb7743e3a2b0e4942, hi: 0x12ba095dc7701d9c);
+    }
+    if index == 98 {
+        return FloatFormatSpan(lo: 0xe5514dc8b5d1db92, hi: 0x17688bb5394c2503);
+    }
+    if index == 99 {
+        return FloatFormatSpan(lo: 0xdea5a13ae3465277, hi: 0x1d42aea2879f2e44);
+    }
+    if index == 100 {
+        return FloatFormatSpan(lo: 0x0b2784c4ce0bf38a, hi: 0x1249ad2594c37ceb);
+    }
+    if index == 101 {
+        return FloatFormatSpan(lo: 0xcdf165f6018ef06d, hi: 0x16dc186ef9f45c25);
+    }
+    if index == 102 {
+        return FloatFormatSpan(lo: 0x416dbf7381f2ac88, hi: 0x1c931e8ab871732f);
+    }
+    if index == 103 {
+        return FloatFormatSpan(lo: 0x88e497a83137abd5, hi: 0x11dbf316b346e7fd);
+    }
+    if index == 104 {
+        return FloatFormatSpan(lo: 0xeb1dbd923d8596ca, hi: 0x1652efdc6018a1fc);
+    }
+    if index == 105 {
+        return FloatFormatSpan(lo: 0x25e52cf6cce6fc7d, hi: 0x1be7abd3781eca7c);
+    }
+    if index == 106 {
+        return FloatFormatSpan(lo: 0x97af3c1a40105dce, hi: 0x1170cb642b133e8d);
+    }
+    if index == 107 {
+        return FloatFormatSpan(lo: 0xfd9b0b20d0147542, hi: 0x15ccfe3d35d80e30);
+    }
+    if index == 108 {
+        return FloatFormatSpan(lo: 0x3d01cde904199292, hi: 0x1b403dcc834e11bd);
+    }
+    if index == 109 {
+        return FloatFormatSpan(lo: 0x462120b1a28ffb9b, hi: 0x1108269fd210cb16);
+    }
+    if index == 110 {
+        return FloatFormatSpan(lo: 0xd7a968de0b33fa82, hi: 0x154a3047c694fddb);
+    }
+    if index == 111 {
+        return FloatFormatSpan(lo: 0xcd93c3158e00f923, hi: 0x1a9cbc59b83a3d52);
+    }
+    if index == 112 {
+        return FloatFormatSpan(lo: 0xc07c59ed78c09bb6, hi: 0x10a1f5b813246653);
+    }
+    if index == 113 {
+        return FloatFormatSpan(lo: 0xb09b7068d6f0c2a3, hi: 0x14ca732617ed7fe8);
+    }
+    if index == 114 {
+        return FloatFormatSpan(lo: 0xdcc24c830cacf34c, hi: 0x19fd0fef9de8dfe2);
+    }
+    if index == 115 {
+        return FloatFormatSpan(lo: 0xc9f96fd1e7ec180f, hi: 0x103e29f5c2b18bed);
+    }
+    if index == 116 {
+        return FloatFormatSpan(lo: 0x3c77cbc661e71e13, hi: 0x144db473335deee9);
+    }
+    if index == 117 {
+        return FloatFormatSpan(lo: 0x8b95beb7fa60e598, hi: 0x1961219000356aa3);
+    }
+    if index == 118 {
+        return FloatFormatSpan(lo: 0x6e7b2e65f8f91efe, hi: 0x1fb969f40042c54c);
+    }
+    if index == 119 {
+        return FloatFormatSpan(lo: 0xc50cfcffbb9bb35f, hi: 0x13d3e2388029bb4f);
+    }
+    if index == 120 {
+        return FloatFormatSpan(lo: 0xb6503c3faa82a037, hi: 0x18c8dac6a0342a23);
+    }
+    if index == 121 {
+        return FloatFormatSpan(lo: 0xa3e44b4f95234844, hi: 0x1efb1178484134ac);
+    }
+    if index == 122 {
+        return FloatFormatSpan(lo: 0xe66eaf11bd360d2b, hi: 0x135ceaeb2d28c0eb);
+    }
+    if index == 123 {
+        return FloatFormatSpan(lo: 0xe00a5ad62c839075, hi: 0x183425a5f872f126);
+    }
+    if index == 124 {
+        return FloatFormatSpan(lo: 0x980cf18bb7a47493, hi: 0x1e412f0f768fad70);
+    }
+    if index == 125 {
+        return FloatFormatSpan(lo: 0x5f0816f752c6c8dc, hi: 0x12e8bd69aa19cc66);
+    }
+    if index == 126 {
+        return FloatFormatSpan(lo: 0xf6ca1cb527787b13, hi: 0x17a2ecc414a03f7f);
+    }
+    if index == 127 {
+        return FloatFormatSpan(lo: 0xf47ca3e2715699d7, hi: 0x1d8ba7f519c84f5f);
+    }
+    if index == 128 {
+        return FloatFormatSpan(lo: 0xf8cde66d86d62026, hi: 0x127748f9301d319b);
+    }
+    if index == 129 {
+        return FloatFormatSpan(lo: 0xf7016008e88ba830, hi: 0x17151b377c247e02);
+    }
+    if index == 130 {
+        return FloatFormatSpan(lo: 0xb4c1b80b22ae923c, hi: 0x1cda62055b2d9d83);
+    }
+    if index == 131 {
+        return FloatFormatSpan(lo: 0x50f91306f5ad1b65, hi: 0x12087d4358fc8272);
+    }
+    if index == 132 {
+        return FloatFormatSpan(lo: 0xe53757c8b318623f, hi: 0x168a9c942f3ba30e);
+    }
+    if index == 133 {
+        return FloatFormatSpan(lo: 0x9e852dbadfde7acf, hi: 0x1c2d43b93b0a8bd2);
+    }
+    if index == 134 {
+        return FloatFormatSpan(lo: 0xa3133c94cbeb0cc1, hi: 0x119c4a53c4e69763);
+    }
+    if index == 135 {
+        return FloatFormatSpan(lo: 0x8bd80bb9fee5cff1, hi: 0x16035ce8b6203d3c);
+    }
+    if index == 136 {
+        return FloatFormatSpan(lo: 0xaece0ea87e9f43ee, hi: 0x1b843422e3a84c8b);
+    }
+    if index == 137 {
+        return FloatFormatSpan(lo: 0x4d40c9294f238a75, hi: 0x1132a095ce492fd7);
+    }
+    if index == 138 {
+        return FloatFormatSpan(lo: 0x2090fb73a2ec6d12, hi: 0x157f48bb41db7bcd);
+    }
+    if index == 139 {
+        return FloatFormatSpan(lo: 0x68b53a508ba78856, hi: 0x1adf1aea12525ac0);
+    }
+    if index == 140 {
+        return FloatFormatSpan(lo: 0x417144725748b536, hi: 0x10cb70d24b7378b8);
+    }
+    if index == 141 {
+        return FloatFormatSpan(lo: 0x51cd958eed1ae283, hi: 0x14fe4d06de5056e6);
+    }
+    if index == 142 {
+        return FloatFormatSpan(lo: 0xe640faf2a8619b24, hi: 0x1a3de04895e46c9f);
+    }
+    if index == 143 {
+        return FloatFormatSpan(lo: 0xefe89cd7a93d00f7, hi: 0x1066ac2d5daec3e3);
+    }
+    if index == 144 {
+        return FloatFormatSpan(lo: 0xebe2c40d938c4134, hi: 0x14805738b51a74dc);
+    }
+    if index == 145 {
+        return FloatFormatSpan(lo: 0x26db7510f86f5181, hi: 0x19a06d06e2611214);
+    }
+    if index == 146 {
+        return FloatFormatSpan(lo: 0x9849292a9b4592f1, hi: 0x100444244d7cab4c);
+    }
+    if index == 147 {
+        return FloatFormatSpan(lo: 0xbe5b73754216f7ad, hi: 0x1405552d60dbd61f);
+    }
+    if index == 148 {
+        return FloatFormatSpan(lo: 0xadf25052929cb598, hi: 0x1906aa78b912cba7);
+    }
+    if index == 149 {
+        return FloatFormatSpan(lo: 0x996ee4673743e2ff, hi: 0x1f485516e7577e91);
+    }
+    if index == 150 {
+        return FloatFormatSpan(lo: 0xffe54ec0828a6ddf, hi: 0x138d352e5096af1a);
+    }
+    if index == 151 {
+        return FloatFormatSpan(lo: 0xbfdea270a32d0957, hi: 0x18708279e4bc5ae1);
+    }
+    if index == 152 {
+        return FloatFormatSpan(lo: 0x2fd64b0ccbf84bad, hi: 0x1e8ca3185deb719a);
+    }
+    if index == 153 {
+        return FloatFormatSpan(lo: 0x5de5eee7ff7b2f4c, hi: 0x1317e5ef3ab32700);
+    }
+    if index == 154 {
+        return FloatFormatSpan(lo: 0x755f6aa1ff59fb1f, hi: 0x17dddf6b095ff0c0);
+    }
+    if index == 155 {
+        return FloatFormatSpan(lo: 0x92b7454a7f3079e7, hi: 0x1dd55745cbb7ecf0);
+    }
+    if index == 156 {
+        return FloatFormatSpan(lo: 0x5bb28b4e8f7e4c30, hi: 0x12a5568b9f52f416);
+    }
+    if index == 157 {
+        return FloatFormatSpan(lo: 0xf29f2e22335ddf3c, hi: 0x174eac2e8727b11b);
+    }
+    if index == 158 {
+        return FloatFormatSpan(lo: 0xef46f9aac035570b, hi: 0x1d22573a28f19d62);
+    }
+    if index == 159 {
+        return FloatFormatSpan(lo: 0xd58c5c0ab8215667, hi: 0x123576845997025d);
+    }
+    if index == 160 {
+        return FloatFormatSpan(lo: 0x4aef730d6629ac01, hi: 0x16c2d4256ffcc2f5);
+    }
+    if index == 161 {
+        return FloatFormatSpan(lo: 0x9dab4fd0bfb41701, hi: 0x1c73892ecbfbf3b2);
+    }
+    if index == 162 {
+        return FloatFormatSpan(lo: 0xa28b11e277d08e60, hi: 0x11c835bd3f7d784f);
+    }
+    if index == 163 {
+        return FloatFormatSpan(lo: 0x8b2dd65b15c4b1f9, hi: 0x163a432c8f5cd663);
+    }
+    if index == 164 {
+        return FloatFormatSpan(lo: 0x6df94bf1db35de77, hi: 0x1bc8d3f7b3340bfc);
+    }
+    if index == 165 {
+        return FloatFormatSpan(lo: 0xc4bbcf772901ab0a, hi: 0x115d847ad000877d);
+    }
+    if index == 166 {
+        return FloatFormatSpan(lo: 0x35eac354f34215cd, hi: 0x15b4e5998400a95d);
+    }
+    if index == 167 {
+        return FloatFormatSpan(lo: 0x8365742a30129b40, hi: 0x1b221effe500d3b4);
+    }
+    if index == 168 {
+        return FloatFormatSpan(lo: 0xd21f689a5e0ba108, hi: 0x10f5535fef208450);
+    }
+    if index == 169 {
+        return FloatFormatSpan(lo: 0x06a742c0f58e894a, hi: 0x1532a837eae8a565);
+    }
+    if index == 170 {
+        return FloatFormatSpan(lo: 0x4851137132f22b9d, hi: 0x1a7f5245e5a2cebe);
+    }
+    if index == 171 {
+        return FloatFormatSpan(lo: 0xed32ac26bfd75b42, hi: 0x108f936baf85c136);
+    }
+    if index == 172 {
+        return FloatFormatSpan(lo: 0xa87f57306fcd3212, hi: 0x14b378469b673184);
+    }
+    if index == 173 {
+        return FloatFormatSpan(lo: 0xd29f2cfc8bc07e97, hi: 0x19e056584240fde5);
+    }
+    if index == 174 {
+        return FloatFormatSpan(lo: 0xa3a37c1dd7584f1e, hi: 0x102c35f729689eaf);
+    }
+    if index == 175 {
+        return FloatFormatSpan(lo: 0x8c8c5b254d2e62e6, hi: 0x14374374f3c2c65b);
+    }
+    if index == 176 {
+        return FloatFormatSpan(lo: 0x6faf71eea079fb9f, hi: 0x1945145230b377f2);
+    }
+    if index == 177 {
+        return FloatFormatSpan(lo: 0x0b9b4e6a48987a87, hi: 0x1f965966bce055ef);
+    }
+    if index == 178 {
+        return FloatFormatSpan(lo: 0x674111026d5f4c94, hi: 0x13bdf7e0360c35b5);
+    }
+    if index == 179 {
+        return FloatFormatSpan(lo: 0xc111554308b71fba, hi: 0x18ad75d8438f4322);
+    }
+    if index == 180 {
+        return FloatFormatSpan(lo: 0x7155aa93cae4e7a8, hi: 0x1ed8d34e547313eb);
+    }
+    if index == 181 {
+        return FloatFormatSpan(lo: 0x26d58a9c5ecf10c9, hi: 0x13478410f4c7ec73);
+    }
+    if index == 182 {
+        return FloatFormatSpan(lo: 0xf08aed437682d4fb, hi: 0x1819651531f9e78f);
+    }
+    if index == 183 {
+        return FloatFormatSpan(lo: 0xecada89454238a3a, hi: 0x1e1fbe5a7e786173);
+    }
+    if index == 184 {
+        return FloatFormatSpan(lo: 0x73ec895cb4963664, hi: 0x12d3d6f88f0b3ce8);
+    }
+    if index == 185 {
+        return FloatFormatSpan(lo: 0x90e7abb3e1bbc3fd, hi: 0x1788ccb6b2ce0c22);
+    }
+    if index == 186 {
+        return FloatFormatSpan(lo: 0x352196a0da2ab4fd, hi: 0x1d6affe45f818f2b);
+    }
+    if index == 187 {
+        return FloatFormatSpan(lo: 0x0134fe24885ab11e, hi: 0x1262dfeebbb0f97b);
+    }
+    if index == 188 {
+        return FloatFormatSpan(lo: 0xc1823dadaa715d65, hi: 0x16fb97ea6a9d37d9);
+    }
+    if index == 189 {
+        return FloatFormatSpan(lo: 0x31e2cd19150db4bf, hi: 0x1cba7de5054485d0);
+    }
+    if index == 190 {
+        return FloatFormatSpan(lo: 0x1f2dc02fad2890f7, hi: 0x11f48eaf234ad3a2);
+    }
+    if index == 191 {
+        return FloatFormatSpan(lo: 0xa6f9303b9872b535, hi: 0x1671b25aec1d888a);
+    }
+    if index == 192 {
+        return FloatFormatSpan(lo: 0x50b77c4a7e8f6282, hi: 0x1c0e1ef1a724eaad);
+    }
+    if index == 193 {
+        return FloatFormatSpan(lo: 0x5272adae8f199d91, hi: 0x1188d357087712ac);
+    }
+    if index == 194 {
+        return FloatFormatSpan(lo: 0x670f591a32e004f6, hi: 0x15eb082cca94d757);
+    }
+    if index == 195 {
+        return FloatFormatSpan(lo: 0x40d32f60bf980633, hi: 0x1b65ca37fd3a0d2d);
+    }
+    if index == 196 {
+        return FloatFormatSpan(lo: 0x4883fd9c77bf03e0, hi: 0x111f9e62fe44483c);
+    }
+    if index == 197 {
+        return FloatFormatSpan(lo: 0x5aa4fd0395aec4d8, hi: 0x156785fbbdd55a4b);
+    }
+    if index == 198 {
+        return FloatFormatSpan(lo: 0x314e3c447b1a760e, hi: 0x1ac1677aad4ab0de);
+    }
+    if index == 199 {
+        return FloatFormatSpan(lo: 0xded0e5aaccf089c9, hi: 0x10b8e0acac4eae8a);
+    }
+    if index == 200 {
+        return FloatFormatSpan(lo: 0x96851f15802cac3b, hi: 0x14e718d7d7625a2d);
+    }
+    if index == 201 {
+        return FloatFormatSpan(lo: 0xfc2666dae037d74a, hi: 0x1a20df0dcd3af0b8);
+    }
+    if index == 202 {
+        return FloatFormatSpan(lo: 0x9d980048cc22e68e, hi: 0x10548b68a044d673);
+    }
+    if index == 203 {
+        return FloatFormatSpan(lo: 0x84fe005aff2ba032, hi: 0x1469ae42c8560c10);
+    }
+    if index == 204 {
+        return FloatFormatSpan(lo: 0xa63d8071bef6883e, hi: 0x198419d37a6b8f14);
+    }
+    if index == 205 {
+        return FloatFormatSpan(lo: 0xcfcce08e2eb42a4e, hi: 0x1fe52048590672d9);
+    }
+    if index == 206 {
+        return FloatFormatSpan(lo: 0x21e00c58dd309a70, hi: 0x13ef342d37a407c8);
+    }
+    if index == 207 {
+        return FloatFormatSpan(lo: 0x2a580f6f147cc10d, hi: 0x18eb0138858d09ba);
+    }
+    if index == 208 {
+        return FloatFormatSpan(lo: 0xb4ee134ad99bf150, hi: 0x1f25c186a6f04c28);
+    }
+    if index == 209 {
+        return FloatFormatSpan(lo: 0x7114cc0ec80176d2, hi: 0x137798f428562f99);
+    }
+    if index == 210 {
+        return FloatFormatSpan(lo: 0xcd59ff127a01d486, hi: 0x18557f31326bbb7f);
+    }
+    if index == 211 {
+        return FloatFormatSpan(lo: 0xc0b07ed7188249a8, hi: 0x1e6adefd7f06aa5f);
+    }
+    if index == 212 {
+        return FloatFormatSpan(lo: 0xd86e4f466f516e09, hi: 0x1302cb5e6f642a7b);
+    }
+    if index == 213 {
+        return FloatFormatSpan(lo: 0xce89e3180b25c98b, hi: 0x17c37e360b3d351a);
+    }
+    if index == 214 {
+        return FloatFormatSpan(lo: 0x822c5bde0def3bee, hi: 0x1db45dc38e0c8261);
+    }
+    if index == 215 {
+        return FloatFormatSpan(lo: 0xf15bb96ac8b58575, hi: 0x1290ba9a38c7d17c);
+    }
+    if index == 216 {
+        return FloatFormatSpan(lo: 0x2db2a7c57ae2e6d2, hi: 0x1734e940c6f9c5dc);
+    }
+    if index == 217 {
+        return FloatFormatSpan(lo: 0x391f51b6d99ba086, hi: 0x1d022390f8b83753);
+    }
+    if index == 218 {
+        return FloatFormatSpan(lo: 0x03b3931248014454, hi: 0x1221563a9b732294);
+    }
+    if index == 219 {
+        return FloatFormatSpan(lo: 0x04a077d6da019569, hi: 0x16a9abc9424feb39);
+    }
+    if index == 220 {
+        return FloatFormatSpan(lo: 0x45c895cc9081fac3, hi: 0x1c5416bb92e3e607);
+    }
+    if index == 221 {
+        return FloatFormatSpan(lo: 0x8b9d5d9fda513cba, hi: 0x11b48e353bce6fc4);
+    }
+    if index == 222 {
+        return FloatFormatSpan(lo: 0xae84b507d0e58be8, hi: 0x1621b1c28ac20bb5);
+    }
+    if index == 223 {
+        return FloatFormatSpan(lo: 0x1a25e249c51eeee3, hi: 0x1baa1e332d728ea3);
+    }
+    if index == 224 {
+        return FloatFormatSpan(lo: 0xf057ad6e1b33554d, hi: 0x114a52dffc679925);
+    }
+    if index == 225 {
+        return FloatFormatSpan(lo: 0x6c6d98c9a2002aa1, hi: 0x159ce797fb817f6f);
+    }
+    if index == 226 {
+        return FloatFormatSpan(lo: 0x4788fefc0a803549, hi: 0x1b04217dfa61df4b);
+    }
+    if index == 227 {
+        return FloatFormatSpan(lo: 0x0cb59f5d8690214e, hi: 0x10e294eebc7d2b8f);
+    }
+    if index == 228 {
+        return FloatFormatSpan(lo: 0xcfe30734e83429a1, hi: 0x151b3a2a6b9c7672);
+    }
+    if index == 229 {
+        return FloatFormatSpan(lo: 0x83dbc9022241340a, hi: 0x1a6208b50683940f);
+    }
+    if index == 230 {
+        return FloatFormatSpan(lo: 0xb2695da15568c086, hi: 0x107d457124123c89);
+    }
+    if index == 231 {
+        return FloatFormatSpan(lo: 0x1f03b509aac2f0a7, hi: 0x149c96cd6d16cbac);
+    }
+    if index == 232 {
+        return FloatFormatSpan(lo: 0x26c4a24c1573acd1, hi: 0x19c3bc80c85c7e97);
+    }
+    if index == 233 {
+        return FloatFormatSpan(lo: 0x783ae56f8d684c03, hi: 0x101a55d07d39cf1e);
+    }
+    if index == 234 {
+        return FloatFormatSpan(lo: 0x16499ecb70c25f03, hi: 0x1420eb449c8842e6);
+    }
+    if index == 235 {
+        return FloatFormatSpan(lo: 0x9bdc067e4cf2f6c4, hi: 0x19292615c3aa539f);
+    }
+    if index == 236 {
+        return FloatFormatSpan(lo: 0x82d3081de02fb476, hi: 0x1f736f9b3494e887);
+    }
+    if index == 237 {
+        return FloatFormatSpan(lo: 0xb1c3e512ac1dd0c9, hi: 0x13a825c100dd1154);
+    }
+    if index == 238 {
+        return FloatFormatSpan(lo: 0xde34de57572544fc, hi: 0x18922f31411455a9);
+    }
+    if index == 239 {
+        return FloatFormatSpan(lo: 0x55c215ed2cee963b, hi: 0x1eb6bafd91596b14);
+    }
+    if index == 240 {
+        return FloatFormatSpan(lo: 0xb5994db43c151de5, hi: 0x133234de7ad7e2ec);
+    }
+    if index == 241 {
+        return FloatFormatSpan(lo: 0xe2ffa1214b1a655e, hi: 0x17fec216198ddba7);
+    }
+    if index == 242 {
+        return FloatFormatSpan(lo: 0xdbbf89699de0feb6, hi: 0x1dfe729b9ff15291);
+    }
+    if index == 243 {
+        return FloatFormatSpan(lo: 0x2957b5e202ac9f31, hi: 0x12bf07a143f6d39b);
+    }
+    if index == 244 {
+        return FloatFormatSpan(lo: 0xf3ada35a8357c6fe, hi: 0x176ec98994f48881);
+    }
+    if index == 245 {
+        return FloatFormatSpan(lo: 0x70990c31242db8bd, hi: 0x1d4a7bebfa31aaa2);
+    }
+    if index == 246 {
+        return FloatFormatSpan(lo: 0x865fa79eb69c9376, hi: 0x124e8d737c5f0aa5);
+    }
+    if index == 247 {
+        return FloatFormatSpan(lo: 0xe7f791866443b854, hi: 0x16e230d05b76cd4e);
+    }
+    if index == 248 {
+        return FloatFormatSpan(lo: 0xa1f575e7fd54a669, hi: 0x1c9abd04725480a2);
+    }
+    if index == 249 {
+        return FloatFormatSpan(lo: 0xa53969b0fe54e801, hi: 0x11e0b622c774d065);
+    }
+    if index == 250 {
+        return FloatFormatSpan(lo: 0x0e87c41d3dea2202, hi: 0x1658e3ab7952047f);
+    }
+    if index == 251 {
+        return FloatFormatSpan(lo: 0xd229b5248d64aa82, hi: 0x1bef1c9657a6859e);
+    }
+    if index == 252 {
+        return FloatFormatSpan(lo: 0x435a1136d85eea91, hi: 0x117571ddf6c81383);
+    }
+    if index == 253 {
+        return FloatFormatSpan(lo: 0x143095848e76a536, hi: 0x15d2ce55747a1864);
+    }
+    if index == 254 {
+        return FloatFormatSpan(lo: 0x193cbae5b2144e83, hi: 0x1b4781ead1989e7d);
+    }
+    if index == 255 {
+        return FloatFormatSpan(lo: 0x2fc5f4cf8f4cb112, hi: 0x110cb132c2ff630e);
+    }
+    if index == 256 {
+        return FloatFormatSpan(lo: 0xbbb77203731fdd56, hi: 0x154fdd7f73bf3bd1);
+    }
+    if index == 257 {
+        return FloatFormatSpan(lo: 0x2aa54e844fe7d4ac, hi: 0x1aa3d4df50af0ac6);
+    }
+    if index == 258 {
+        return FloatFormatSpan(lo: 0xdaa75112b1f0e4eb, hi: 0x10a6650b926d66bb);
+    }
+    if index == 259 {
+        return FloatFormatSpan(lo: 0xd15125575e6d1e26, hi: 0x14cffe4e7708c06a);
+    }
+    if index == 260 {
+        return FloatFormatSpan(lo: 0x85a56ead360865b0, hi: 0x1a03fde214caf085);
+    }
+    if index == 261 {
+        return FloatFormatSpan(lo: 0x7387652c41c53f8e, hi: 0x10427ead4cfed653);
+    }
+    if index == 262 {
+        return FloatFormatSpan(lo: 0x50693e7752368f71, hi: 0x14531e58a03e8be8);
+    }
+    if index == 263 {
+        return FloatFormatSpan(lo: 0x64838e1526c4334e, hi: 0x1967e5eec84e2ee2);
+    }
+    if index == 264 {
+        return FloatFormatSpan(lo: 0xfda4719a70754022, hi: 0x1fc1df6a7a61ba9a);
+    }
+    if index == 265 {
+        return FloatFormatSpan(lo: 0xde86c70086494815, hi: 0x13d92ba28c7d14a0);
+    }
+    if index == 266 {
+        return FloatFormatSpan(lo: 0x162878c0a7db9a1a, hi: 0x18cf768b2f9c59c9);
+    }
+    if index == 267 {
+        return FloatFormatSpan(lo: 0x5bb296f0d1d280a1, hi: 0x1f03542dfb83703b);
+    }
+    if index == 268 {
+        return FloatFormatSpan(lo: 0x194f9e5683239064, hi: 0x1362149cbd322625);
+    }
+    if index == 269 {
+        return FloatFormatSpan(lo: 0x5fa385ec23ec747e, hi: 0x183a99c3ec7eafae);
+    }
+    if index == 270 {
+        return FloatFormatSpan(lo: 0xf78c67672ce7919d, hi: 0x1e494034e79e5b99);
+    }
+    if index == 271 {
+        return FloatFormatSpan(lo: 0x3ab7c0a07c10bb02, hi: 0x12edc82110c2f940);
+    }
+    if index == 272 {
+        return FloatFormatSpan(lo: 0x4965b0c89b14e9c3, hi: 0x17a93a2954f3b790);
+    }
+    if index == 273 {
+        return FloatFormatSpan(lo: 0x5bbf1cfac1da2433, hi: 0x1d9388b3aa30a574);
+    }
+    if index == 274 {
+        return FloatFormatSpan(lo: 0xb957721cb92856a0, hi: 0x127c35704a5e6768);
+    }
+    if index == 275 {
+        return FloatFormatSpan(lo: 0xe7ad4ea3e7726c48, hi: 0x171b42cc5cf60142);
+    }
+    if index == 276 {
+        return FloatFormatSpan(lo: 0xa198a24ce14f075a, hi: 0x1ce2137f74338193);
+    }
+    if index == 277 {
+        return FloatFormatSpan(lo: 0x44ff65700cd16498, hi: 0x120d4c2fa8a030fc);
+    }
+    if index == 278 {
+        return FloatFormatSpan(lo: 0x563f3ecc1005bdbe, hi: 0x16909f3b92c83d3b);
+    }
+    if index == 279 {
+        return FloatFormatSpan(lo: 0x2bcf0e7f14072d2e, hi: 0x1c34c70a777a4c8a);
+    }
+    if index == 280 {
+        return FloatFormatSpan(lo: 0x5b61690f6c847c3d, hi: 0x11a0fc668aac6fd6);
+    }
+    if index == 281 {
+        return FloatFormatSpan(lo: 0xf239c35347a59b4c, hi: 0x16093b802d578bcb);
+    }
+    if index == 282 {
+        return FloatFormatSpan(lo: 0xeec83428198f021f, hi: 0x1b8b8a6038ad6ebe);
+    }
+    if index == 283 {
+        return FloatFormatSpan(lo: 0x553d20990ff96153, hi: 0x1137367c236c6537);
+    }
+    if index == 284 {
+        return FloatFormatSpan(lo: 0x2a8c68bf53f7b9a8, hi: 0x1585041b2c477e85);
+    }
+    if index == 285 {
+        return FloatFormatSpan(lo: 0x752f82ef28f5a812, hi: 0x1ae64521f7595e26);
+    }
+    if index == 286 {
+        return FloatFormatSpan(lo: 0x093db1d57999890b, hi: 0x10cfeb353a97dad8);
+    }
+    if index == 287 {
+        return FloatFormatSpan(lo: 0x0b8d1e4ad7ffeb4e, hi: 0x1503e602893dd18e);
+    }
+    if index == 288 {
+        return FloatFormatSpan(lo: 0x8e7065dd8dffe622, hi: 0x1a44df832b8d45f1);
+    }
+    if index == 289 {
+        return FloatFormatSpan(lo: 0xf9063faa78bfefd5, hi: 0x106b0bb1fb384bb6);
+    }
+    if index == 290 {
+        return FloatFormatSpan(lo: 0xb747cf9516efebca, hi: 0x1485ce9e7a065ea4);
+    }
+    if index == 291 {
+        return FloatFormatSpan(lo: 0xe519c37a5cabe6bd, hi: 0x19a742461887f64d);
+    }
+    if index == 292 {
+        return FloatFormatSpan(lo: 0xaf301a2c79eb7036, hi: 0x1008896bcf54f9f0);
+    }
+    if index == 293 {
+        return FloatFormatSpan(lo: 0xdafc20b798664c43, hi: 0x140aabc6c32a386c);
+    }
+    if index == 294 {
+        return FloatFormatSpan(lo: 0x11bb28e57e7fdf54, hi: 0x190d56b873f4c688);
+    }
+    if index == 295 {
+        return FloatFormatSpan(lo: 0x1629f31ede1fd72a, hi: 0x1f50ac6690f1f82a);
+    }
+    if index == 296 {
+        return FloatFormatSpan(lo: 0x4dda37f34ad3e67a, hi: 0x13926bc01a973b1a);
+    }
+    if index == 297 {
+        return FloatFormatSpan(lo: 0xe150c5f01d88e019, hi: 0x187706b0213d09e0);
+    }
+    if index == 298 {
+        return FloatFormatSpan(lo: 0x19a4f76c24eb181f, hi: 0x1e94c85c298c4c59);
+    }
+    if index == 299 {
+        return FloatFormatSpan(lo: 0xb0071aa39712ef13, hi: 0x131cfd3999f7afb7);
+    }
+    if index == 300 {
+        return FloatFormatSpan(lo: 0x9c08e14c7cd7aad8, hi: 0x17e43c8800759ba5);
+    }
+    if index == 301 {
+        return FloatFormatSpan(lo: 0x030b199f9c0d958e, hi: 0x1ddd4baa0093028f);
+    }
+    if index == 302 {
+        return FloatFormatSpan(lo: 0x61e6f003c1887d79, hi: 0x12aa4f4a405be199);
+    }
+    if index == 303 {
+        return FloatFormatSpan(lo: 0xba60ac04b1ea9cd7, hi: 0x1754e31cd072d9ff);
+    }
+    if index == 304 {
+        return FloatFormatSpan(lo: 0xa8f8d705de65440d, hi: 0x1d2a1be4048f907f);
+    }
+    if index == 305 {
+        return FloatFormatSpan(lo: 0xc99b8663aaff4a88, hi: 0x123a516e82d9ba4f);
+    }
+    if index == 306 {
+        return FloatFormatSpan(lo: 0xbc0267fc95bf1d2a, hi: 0x16c8e5ca239028e3);
+    }
+    if index == 307 {
+        return FloatFormatSpan(lo: 0xab0301fbbb2ee474, hi: 0x1c7b1f3cac74331c);
+    }
+    if index == 308 {
+        return FloatFormatSpan(lo: 0xeae1e13d54fd4ec9, hi: 0x11ccf385ebc89ff1);
+    }
+    if index == 309 {
+        return FloatFormatSpan(lo: 0x659a598caa3ca27b, hi: 0x1640306766bac7ee);
+    }
+    if index == 310 {
+        return FloatFormatSpan(lo: 0xff00efefd4cbcb1a, hi: 0x1bd03c81406979e9);
+    }
+    if index == 311 {
+        return FloatFormatSpan(lo: 0x3f6095f5e4ff5ef0, hi: 0x116225d0c841ec32);
+    }
+    if index == 312 {
+        return FloatFormatSpan(lo: 0xcf38bb735e3f36ac, hi: 0x15baaf44fa52673e);
+    }
+    if index == 313 {
+        return FloatFormatSpan(lo: 0x8306ea5035cf0457, hi: 0x1b295b1638e7010e);
+    }
+    if index == 314 {
+        return FloatFormatSpan(lo: 0x11e4527221a162b6, hi: 0x10f9d8ede39060a9);
+    }
+    if index == 315 {
+        return FloatFormatSpan(lo: 0x565d670eaa09bb64, hi: 0x15384f295c7478d3);
+    }
+    if index == 316 {
+        return FloatFormatSpan(lo: 0x2bf4c0d2548c2a3d, hi: 0x1a8662f3b3919708);
+    }
+    if index == 317 {
+        return FloatFormatSpan(lo: 0x1b78f88374d79a66, hi: 0x1093fdd8503afe65);
+    }
+    if index == 318 {
+        return FloatFormatSpan(lo: 0x625736a4520d8100, hi: 0x14b8fd4e6449bdfe);
+    }
+    if index == 319 {
+        return FloatFormatSpan(lo: 0xfaed044d6690e140, hi: 0x19e73ca1fd5c2d7d);
+    }
+    if index == 320 {
+        return FloatFormatSpan(lo: 0xbcd422b0601a8cc8, hi: 0x103085e53e599c6e);
+    }
+    if index == 321 {
+        return FloatFormatSpan(lo: 0x6c092b5c78212ffa, hi: 0x143ca75e8df0038a);
+    }
+    if index == 322 {
+        return FloatFormatSpan(lo: 0x070b763396297bf8, hi: 0x194bd136316c046d);
+    }
+    if index == 323 {
+        return FloatFormatSpan(lo: 0x48ce53c07bb3daf6, hi: 0x1f9ec583bdc70588);
+    }
+    if index == 324 {
+        return FloatFormatSpan(lo: 0x2d80f4584d5068da, hi: 0x13c33b72569c6375);
+    }
+    if index == 325 {
+        return FloatFormatSpan(lo: 0x78e1316e60a48310, hi: 0x18b40a4eec437c52);
+    }
+    return FloatFormatSpan(lo: 0, hi: 0);
+}

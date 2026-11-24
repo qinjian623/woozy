@@ -14,6 +14,6 @@ pub func format_i64(value i64) string { return __woozy_num_format_i64(value); }
 pub func parse_u64(value string) u64 throws Error { return checked(__woozy_num_parse_u64(value)); }
 pub func format_u64(value u64) string { return __woozy_num_format_u64(value); }
 pub func parse_f32(value string) f32 throws Error { return checked(__woozy_num_parse_f32(value)); }
-pub func format_f32(value f32) string { return __woozy_num_format_f32(value); }
+pub func format_f32(value f32) string { return wz_format_f32(value); }
 pub func parse_f64(value string) f64 throws Error { return checked(__woozy_num_parse_f64(value)); }
-pub func format_f64(value f64) string { return __woozy_num_format_f64(value); }
+pub func format_f64(value f64) string { return wz_format_f64(value); }

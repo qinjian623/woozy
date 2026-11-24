@@ -1,0 +1,1104 @@
+package strconv;
+import "std/vec" as vec;
+import "std/text" as text;
+
+// Ryu shortest-decimal formatting, ported to Woozy from the vendored Ryu
+// Original Ryu code copyright (c) 2018 Ulf Adams.
+// sources under runtime/native/vendor/ryu (upstream commit
+// 4c0618b0e44f7ef027ebae05d2cc7812048f7c8f, dual Apache-2.0 / Boost-1.0).
+// The lookup tables are transcribed in float_format_data.wz from
+// d2s_full_table.h. This file is distributed under the Boost Software License
+// 1.0; see runtime/native/vendor/ryu/LICENSE-Boost and PROVENANCE.md.
+//
+// The public behavior is exactly runtime/native/numbers.cpp's canonical
+// spelling: Ryu's shortest round-tripping digits followed by
+// normalize_scientific (lowercase exponent, fixed form for -6 <= e < 21).
+// No operation calls a C/C++ formatting or parsing routine.
+
+const FF_POW5_INV_BITCOUNT i32 = 125;
+const FF_POW5_BITCOUNT i32 = 125;
+const FF_FLOAT_POW5_INV_BITCOUNT i32 = 61;
+const FF_FLOAT_POW5_BITCOUNT i32 = 61;
+
+const FF_F64_EXPONENT_MASK u64 = 0x7ff;
+const FF_F64_FRACTION_MASK u64 = 0x000fffffffffffff;
+const FF_F64_SIGN_MASK u64 = 0x8000000000000000;
+
+const FF_F32_EXPONENT_MASK u32 = 0xff;
+const FF_F32_FRACTION_MASK u32 = 0x007fffff;
+const FF_F32_SIGN_MASK u32 = 0x80000000;
+
+const FF_INF64 f64 = 1e9999;
+const FF_NEG_INF64 f64 = -1e9999;
+const FF_INF32 f32 = 1e9999;
+const FF_NEG_INF32 f32 = -1e9999;
+
+// Exact binary powers used by the value entry points. The negative table
+// covers subnormal exponents; the duplicated 512/64/64 steps let the scaling
+// reach the full f64/f32 subnormal range without a loop over every exponent.
+const FF_F64_P2_512 f64 = 1.3407807929942597e+154;
+const FF_F64_P2_256 f64 = 1.157920892373162e+77;
+const FF_F64_P2_128 f64 = 3.402823669209385e+38;
+const FF_F64_P2_64 f64 = 1.8446744073709552e+19;
+const FF_F64_P2_32 f64 = 4294967296.0;
+const FF_F64_P2_16 f64 = 65536.0;
+const FF_F64_P2_8 f64 = 256.0;
+const FF_F64_P2_4 f64 = 16.0;
+const FF_F64_P2_2 f64 = 4.0;
+const FF_F64_P2_1 f64 = 2.0;
+const FF_F64_P2_NEG_1024 f64 = 5.562684646268003e-309;
+const FF_F64_P2_NEG_512 f64 = 7.458340731200207e-155;
+const FF_F64_P2_NEG_256 f64 = 8.636168555094445e-78;
+const FF_F64_P2_NEG_128 f64 = 2.938735877055719e-39;
+const FF_F64_P2_NEG_64 f64 = 5.421010862427522e-20;
+const FF_F64_P2_NEG_32 f64 = 2.3283064365386963e-10;
+const FF_F64_P2_NEG_16 f64 = 1.52587890625e-05;
+const FF_F64_P2_NEG_8 f64 = 0.00390625;
+const FF_F64_P2_NEG_4 f64 = 0.0625;
+const FF_F64_P2_NEG_2 f64 = 0.25;
+const FF_F64_P2_NEG_1 f64 = 0.5;
+const FF_F32_P2_64 f32 = 1.8446744073709552e+19;
+const FF_F32_P2_32 f32 = 4294967296.0;
+const FF_F32_P2_16 f32 = 65536.0;
+const FF_F32_P2_8 f32 = 256.0;
+const FF_F32_P2_4 f32 = 16.0;
+const FF_F32_P2_2 f32 = 4.0;
+const FF_F32_P2_1 f32 = 2.0;
+const FF_F32_P2_NEG_64 f32 = 5.421010862427522e-20;
+const FF_F32_P2_NEG_32 f32 = 2.3283064365386963e-10;
+const FF_F32_P2_NEG_16 f32 = 1.52587890625e-05;
+const FF_F32_P2_NEG_8 f32 = 0.00390625;
+const FF_F32_P2_NEG_4 f32 = 0.0625;
+const FF_F32_P2_NEG_2 f32 = 0.25;
+const FF_F32_P2_NEG_1 f32 = 0.5;
+
+struct FloatFormatDecimal {
+    mantissa u64;
+    exponent i32;
+}
+
+struct FloatFormatU128 {
+    lo u64;
+    hi u64;
+}
+
+func ff_umul128(a u64, b u64) FloatFormatU128 {
+    let a_lo = a & 0xffffffff;
+    let a_hi = a >> 32;
+    let b_lo = b & 0xffffffff;
+    let b_hi = b >> 32;
+    let b00 = a_lo * b_lo;
+    let b01 = a_lo * b_hi;
+    let b10 = a_hi * b_lo;
+    let b11 = a_hi * b_hi;
+    let b00_lo = b00 & 0xffffffff;
+    let b00_hi = b00 >> 32;
+    let mid1 = b10 + b00_hi;
+    let mid1_lo = mid1 & 0xffffffff;
+    let mid1_hi = mid1 >> 32;
+    let mid2 = b01 + mid1_lo;
+    let mid2_lo = mid2 & 0xffffffff;
+    let mid2_hi = mid2 >> 32;
+    let p_hi = b11 + mid1_hi + mid2_hi;
+    let p_lo = (mid2_lo << 32) | b00_lo;
+    return FloatFormatU128(lo: p_lo, hi: p_hi);
+}
+
+// Lower 64 bits of (hi*2^64 + lo) >> dist, 0 < dist < 64.
+func ff_shiftright128(lo u64, hi u64, dist u32) u64 {
+    return (hi << (64 - dist)) | (lo >> dist);
+}
+
+func ff_mul_shift64(m u64, mul FloatFormatSpan, j i32) u64 {
+    let b0 = ff_umul128(m, mul.lo);
+    let b2 = ff_umul128(m, mul.hi);
+    let sum = b0.hi + b2.lo;
+    var high = b2.hi;
+    if sum < b0.hi {
+        high += 1;
+    }
+    return ff_shiftright128(sum, high, u32(j - 64));
+}
+
+func ff_mul_shift32(m u64, factor u64, shift i32) u32 {
+    let factor_lo = factor & 0xffffffff;
+    let factor_hi = factor >> 32;
+    let bits0 = m * factor_lo;
+    let bits1 = m * factor_hi;
+    let sum = (bits0 >> 32) + bits1;
+    return u32(sum >> u32(shift - 32));
+}
+
+func ff_u32_bool(value bool) u32 {
+    if value {
+        return 1;
+    }
+    return 0;
+}
+
+func ff_log10_pow2(e i32) u32 {
+    return u32((u64(u32(e)) * 78913) >> 18);
+}
+
+func ff_log10_pow5(e i32) u32 {
+    return u32((u64(u32(e)) * 732923) >> 20);
+}
+
+func ff_pow5bits(e i32) i32 {
+    return i32(((u64(u32(e)) * 1217359) >> 19) + 1);
+}
+
+func ff_pow5_factor(value_in u64) u32 {
+    let m_inv_5 u64 = 14757395258967641293;
+    let n_div_5 u64 = 3689348814741910323;
+    var value = value_in;
+    var count u32 = 0;
+    for {
+        value = value * m_inv_5;
+        if value > n_div_5 {
+            break;
+        }
+        count += 1;
+    }
+    return count;
+}
+
+func ff_multiple_of_power_of_5(value u64, p u32) bool {
+    return ff_pow5_factor(value) >= p;
+}
+
+func ff_multiple_of_power_of_2(value u64, p u32) bool {
+    return (value & ((u64(1) << u64(p)) - 1)) == 0;
+}
+
+func ff_multiple_of_power_of_2_32(value u32, p u32) bool {
+    return (value & ((u32(1) << p) - 1)) == 0;
+}
+
+func ff_d2d(mantissa u64, exponent u32) FloatFormatDecimal {
+    var e2 i32 = 0;
+    var m2 u64 = 0;
+    if exponent == 0 {
+        e2 = 1 - 1023 - 52 - 2;
+        m2 = mantissa;
+    } else {
+        e2 = i32(exponent) - 1023 - 52 - 2;
+        m2 = (u64(1) << 52) | mantissa;
+    }
+    let even = (m2 & 1) == 0;
+    let accept_bounds = even;
+    let mv = 4 * m2;
+    var mm_shift u32 = 0;
+    if mantissa != 0 || exponent <= 1 {
+        mm_shift = 1;
+    }
+    var vr u64 = 0;
+    var vp u64 = 0;
+    var vm u64 = 0;
+    var e10 i32 = 0;
+    var vm_trailing = false;
+    var vr_trailing = false;
+    if e2 >= 0 {
+        let q = ff_log10_pow2(e2) - ff_u32_bool(e2 > 3);
+        e10 = i32(q);
+        let k = FF_POW5_INV_BITCOUNT + ff_pow5bits(i32(q)) - 1;
+        let i = -e2 + i32(q) + k;
+        let mul = ff_pow5_inv(q);
+        vr = ff_mul_shift64(mv, mul, i);
+        vp = ff_mul_shift64(mv + 2, mul, i);
+        vm = ff_mul_shift64(mv - 1 - u64(mm_shift), mul, i);
+        if q <= 21 {
+            if mv % 5 == 0 {
+                vr_trailing = ff_multiple_of_power_of_5(mv, q);
+            } else if accept_bounds {
+                vm_trailing = ff_multiple_of_power_of_5(
+                    mv - 1 - u64(mm_shift), q);
+            } else if ff_multiple_of_power_of_5(mv + 2, q) {
+                vp -= 1;
+            }
+        }
+    } else {
+        let neg_e2 = -e2;
+        let q = ff_log10_pow5(neg_e2) - ff_u32_bool(neg_e2 > 1);
+        e10 = i32(q) + e2;
+        let i = neg_e2 - i32(q);
+        let k = ff_pow5bits(i) - FF_POW5_BITCOUNT;
+        let j = i32(q) - k;
+        let mul = ff_pow5(u32(i));
+        vr = ff_mul_shift64(mv, mul, j);
+        vp = ff_mul_shift64(mv + 2, mul, j);
+        vm = ff_mul_shift64(mv - 1 - u64(mm_shift), mul, j);
+        if q <= 1 {
+            vr_trailing = true;
+            if accept_bounds {
+                vm_trailing = mm_shift == 1;
+            } else {
+                vp -= 1;
+            }
+        } else if q < 63 {
+            vr_trailing = ff_multiple_of_power_of_2(mv, q);
+        }
+    }
+    var removed i32 = 0;
+    var last_removed u8 = 0;
+    if vm_trailing || vr_trailing {
+        for {
+            let vp_div10 = vp / 10;
+            let vm_div10 = vm / 10;
+            if vp_div10 <= vm_div10 {
+                break;
+            }
+            let vm_mod10 = vm % 10;
+            let vr_div10 = vr / 10;
+            let vr_mod10 = vr % 10;
+            vm_trailing = vm_trailing && vm_mod10 == 0;
+            vr_trailing = vr_trailing && last_removed == 0;
+            last_removed = u8(vr_mod10);
+            vr = vr_div10;
+            vp = vp_div10;
+            vm = vm_div10;
+            removed += 1;
+        }
+        if vm_trailing {
+            for {
+                let vm_div10 = vm / 10;
+                let vm_mod10 = vm % 10;
+                if vm_mod10 != 0 {
+                    break;
+                }
+                let vp_div10 = vp / 10;
+                let vr_div10 = vr / 10;
+                let vr_mod10 = vr % 10;
+                vr_trailing = vr_trailing && last_removed == 0;
+                last_removed = u8(vr_mod10);
+                vr = vr_div10;
+                vp = vp_div10;
+                vm = vm_div10;
+                removed += 1;
+            }
+        }
+        if vr_trailing && last_removed == 5 && vr % 2 == 0 {
+            last_removed = 4;
+        }
+        var output = vr;
+        if (vr == vm && (!accept_bounds || !vm_trailing)) ||
+        last_removed >= 5 {
+            output += 1;
+        }
+        return FloatFormatDecimal(mantissa: output, exponent: e10 + removed);
+    }
+    var round_up = false;
+    let vp_div100 = vp / 100;
+    let vm_div100 = vm / 100;
+    if vp_div100 > vm_div100 {
+        let vr_div100 = vr / 100;
+        let vr_mod100 = vr % 100;
+        round_up = vr_mod100 >= 50;
+        vr = vr_div100;
+        vp = vp_div100;
+        vm = vm_div100;
+        removed += 2;
+    }
+    for {
+        let vp_div10 = vp / 10;
+        let vm_div10 = vm / 10;
+        if vp_div10 <= vm_div10 {
+            break;
+        }
+        let vr_div10 = vr / 10;
+        let vr_mod10 = vr % 10;
+        round_up = vr_mod10 >= 5;
+        vr = vr_div10;
+        vp = vp_div10;
+        vm = vm_div10;
+        removed += 1;
+    }
+    var output = vr;
+    if vr == vm || round_up {
+        output += 1;
+    }
+    return FloatFormatDecimal(mantissa: output, exponent: e10 + removed);
+}
+
+func ff_f2d(mantissa u32, exponent u32) FloatFormatDecimal {
+    var e2 i32 = 0;
+    var m2 u32 = 0;
+    if exponent == 0 {
+        e2 = 1 - 127 - 23 - 2;
+        m2 = mantissa;
+    } else {
+        e2 = i32(exponent) - 127 - 23 - 2;
+        m2 = (u32(1) << 23) | mantissa;
+    }
+    let even = (m2 & 1) == 0;
+    let accept_bounds = even;
+    let mv = 4 * m2;
+    let mp = 4 * m2 + 2;
+    var mm_shift u32 = 0;
+    if mantissa != 0 || exponent <= 1 {
+        mm_shift = 1;
+    }
+    let mm = 4 * m2 - 1 - mm_shift;
+    var vr u64 = 0;
+    var vp u64 = 0;
+    var vm u64 = 0;
+    var e10 i32 = 0;
+    var vm_trailing = false;
+    var vr_trailing = false;
+    var last_removed u8 = 0;
+    if e2 >= 0 {
+        let q = ff_log10_pow2(e2);
+        e10 = i32(q);
+        let k = FF_FLOAT_POW5_INV_BITCOUNT + ff_pow5bits(i32(q)) - 1;
+        let i = -e2 + i32(q) + k;
+        let factor = ff_pow5_inv(q).hi + 1;
+        vr = u64(ff_mul_shift32(u64(mv), factor, i));
+        vp = u64(ff_mul_shift32(u64(mp), factor, i));
+        vm = u64(ff_mul_shift32(u64(mm), factor, i));
+        if q != 0 && (vp - 1) / 10 <= vm / 10 {
+            let l = FF_FLOAT_POW5_INV_BITCOUNT + ff_pow5bits(i32(q - 1)) - 1;
+            let previous_factor = ff_pow5_inv(q - 1).hi + 1;
+            last_removed = u8(ff_mul_shift32(u64(mv), previous_factor,
+                    -e2 + i32(q) - 1 + l) % 10);
+        }
+        if q <= 9 {
+            if mv % 5 == 0 {
+                vr_trailing = ff_multiple_of_power_of_5(u64(mv), q);
+            } else if accept_bounds {
+                vm_trailing = ff_multiple_of_power_of_5(u64(mm), q);
+            } else if ff_multiple_of_power_of_5(u64(mp), q) {
+                vp -= 1;
+            }
+        }
+    } else {
+        let neg_e2 = -e2;
+        let q = ff_log10_pow5(neg_e2);
+        e10 = i32(q) + e2;
+        let i = neg_e2 - i32(q);
+        let k = ff_pow5bits(i) - FF_FLOAT_POW5_BITCOUNT;
+        var j = i32(q) - k;
+        let factor = ff_pow5(u32(i)).hi;
+        vr = u64(ff_mul_shift32(u64(mv), factor, j));
+        vp = u64(ff_mul_shift32(u64(mp), factor, j));
+        vm = u64(ff_mul_shift32(u64(mm), factor, j));
+        if q != 0 && (vp - 1) / 10 <= vm / 10 {
+            j = i32(q) - 1 - (ff_pow5bits(i + 1) - FF_FLOAT_POW5_BITCOUNT);
+            last_removed = u8(ff_mul_shift32(u64(mv),
+                    ff_pow5(u32(i + 1)).hi, j) % 10);
+        }
+        if q <= 1 {
+            vr_trailing = true;
+            if accept_bounds {
+                vm_trailing = mm_shift == 1;
+            } else {
+                vp -= 1;
+            }
+        } else if q < 31 {
+            vr_trailing = ff_multiple_of_power_of_2_32(mv, q - 1);
+        }
+    }
+    var removed i32 = 0;
+    if vm_trailing || vr_trailing {
+        for {
+            let vp_div10 = vp / 10;
+            let vm_div10 = vm / 10;
+            if vp_div10 <= vm_div10 {
+                break;
+            }
+            vm_trailing = vm_trailing && vm % 10 == 0;
+            vr_trailing = vr_trailing && last_removed == 0;
+            last_removed = u8(vr % 10);
+            vr = vr / 10;
+            vp = vp_div10;
+            vm = vm_div10;
+            removed += 1;
+        }
+        if vm_trailing {
+            for {
+                if vm % 10 != 0 {
+                    break;
+                }
+                vr_trailing = vr_trailing && last_removed == 0;
+                last_removed = u8(vr % 10);
+                vr = vr / 10;
+                vp = vp / 10;
+                vm = vm / 10;
+                removed += 1;
+            }
+        }
+        if vr_trailing && last_removed == 5 && vr % 2 == 0 {
+            last_removed = 4;
+        }
+        var output = vr;
+        if (vr == vm && (!accept_bounds || !vm_trailing)) ||
+        last_removed >= 5 {
+            output += 1;
+        }
+        return FloatFormatDecimal(mantissa: output, exponent: e10 + removed);
+    }
+    for {
+        let vp_div10 = vp / 10;
+        let vm_div10 = vm / 10;
+        if vp_div10 <= vm_div10 {
+            break;
+        }
+        last_removed = u8(vr % 10);
+        vr = vr / 10;
+        vp = vp_div10;
+        vm = vm_div10;
+        removed += 1;
+    }
+    var output = vr;
+    if vr == vm || last_removed >= 5 {
+        output += 1;
+    }
+    return FloatFormatDecimal(mantissa: output, exponent: e10 + removed);
+}
+
+func ff_decimal_length(value u64) u32 {
+    if value >= 10000000000000000 {
+        return 17;
+    }
+    if value >= 1000000000000000 {
+        return 16;
+    }
+    if value >= 100000000000000 {
+        return 15;
+    }
+    if value >= 10000000000000 {
+        return 14;
+    }
+    if value >= 1000000000000 {
+        return 13;
+    }
+    if value >= 100000000000 {
+        return 12;
+    }
+    if value >= 10000000000 {
+        return 11;
+    }
+    if value >= 1000000000 {
+        return 10;
+    }
+    if value >= 100000000 {
+        return 9;
+    }
+    if value >= 10000000 {
+        return 8;
+    }
+    if value >= 1000000 {
+        return 7;
+    }
+    if value >= 100000 {
+        return 6;
+    }
+    if value >= 10000 {
+        return 5;
+    }
+    if value >= 1000 {
+        return 4;
+    }
+    if value >= 100 {
+        return 3;
+    }
+    if value >= 10 {
+        return 2;
+    }
+    return 1;
+}
+
+func ff_write_digits(out Vec[u8], start usize, count u32, value u64) {
+    var remaining = value;
+    var index = start + usize(count);
+    var i u32 = 0;
+    for i < count {
+        index -= 1;
+        out[index] = u8(48 + (remaining % 10));
+        remaining = remaining / 10;
+        i += 1;
+    }
+}
+
+func ff_text(out Vec[u8]) string {
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func ff_normalize(decimal FloatFormatDecimal, negative bool) string {
+    var mantissa = decimal.mantissa;
+    var count = ff_decimal_length(mantissa);
+    let exponent = decimal.exponent + i32(count) - 1;
+    for count > 1 && mantissa % 10 == 0 {
+        mantissa = mantissa / 10;
+        count -= 1;
+    }
+    var sign_len usize = 0;
+    if negative {
+        sign_len = 1;
+    }
+    var magnitude u32 = 0;
+    if exponent < 0 {
+        magnitude = u32(-exponent);
+    } else {
+        magnitude = u32(exponent);
+    }
+    let exponent_count = ff_decimal_length(u64(magnitude));
+    var length usize = 0;
+    if exponent >= -6 && exponent < 21 {
+        if exponent >= 0 {
+            let point = u32(exponent + 1);
+            if count <= point {
+                length = sign_len + usize(point);
+            } else {
+                length = sign_len + usize(count) + 1;
+            }
+        } else {
+            length = sign_len + 2 + usize(-exponent - 1) + usize(count);
+        }
+    } else {
+        if count > 1 {
+            length = sign_len + usize(count) + 3 + usize(exponent_count);
+        } else {
+            length = sign_len + 3 + usize(exponent_count);
+        }
+    }
+    let out = vec.make[u8](length, 0);
+    var pos usize = 0;
+    if negative {
+        out[0] = 45;
+        pos = 1;
+    }
+    if exponent >= -6 && exponent < 21 {
+        if exponent >= 0 {
+            let point = u32(exponent + 1);
+            if count <= point {
+                ff_write_digits(out, pos, count, mantissa);
+                var i u32 = count;
+                for i < point {
+                    out[pos + usize(i)] = 48;
+                    i += 1;
+                }
+            } else {
+                let after = count - point;
+                var remaining = mantissa;
+                var index = pos + usize(count);
+                var i u32 = 0;
+                for i < after {
+                    out[index] = u8(48 + (remaining % 10));
+                    remaining = remaining / 10;
+                    index -= 1;
+                    i += 1;
+                }
+                index -= 1;
+                i = 0;
+                for i < point {
+                    out[index] = u8(48 + (remaining % 10));
+                    remaining = remaining / 10;
+                    if index > pos {
+                        index -= 1;
+                    }
+                    i += 1;
+                }
+                out[pos + usize(point)] = 46;
+            }
+        } else {
+            out[pos] = 48;
+            out[pos + 1] = 46;
+            let zeros = u32(-exponent - 1);
+            var i u32 = 0;
+            for i < zeros {
+                out[pos + 2 + usize(i)] = 48;
+                i += 1;
+            }
+            ff_write_digits(out, pos + 2 + usize(zeros), count, mantissa);
+        }
+    } else {
+        var epos usize = 0;
+        if count > 1 {
+            var remaining = mantissa;
+            var index = pos + usize(count);
+            var i u32 = 1;
+            for i < count {
+                out[index] = u8(48 + (remaining % 10));
+                remaining = remaining / 10;
+                index -= 1;
+                i += 1;
+            }
+            out[pos] = u8(48 + (remaining % 10));
+            out[pos + 1] = 46;
+            epos = pos + usize(count) + 1;
+        } else {
+            out[pos] = u8(48 + (mantissa % 10));
+            epos = pos + 1;
+        }
+        out[epos] = 101;
+        if exponent < 0 {
+            out[epos + 1] = 45;
+        } else {
+            out[epos + 1] = 43;
+        }
+        ff_write_digits(out, epos + 2, exponent_count, u64(magnitude));
+    }
+    return ff_text(out);
+}
+
+// Public entry points. The *_bits variants format raw IEEE-754 interchange
+// bits; the value variants recover those bits with exact power-of-two scaling
+// (no libm/C bit-cast helper). Both spell finite values through Ryu and the
+// same canonical normalizer as runtime/native/numbers.cpp.
+func wz_format_f64_bits(bits u64) string {
+    let negative = (bits & FF_F64_SIGN_MASK) != 0;
+    let exponent = (bits >> 52) & FF_F64_EXPONENT_MASK;
+    let mantissa = bits & FF_F64_FRACTION_MASK;
+    if exponent == FF_F64_EXPONENT_MASK {
+        if mantissa != 0 {
+            return "nan";
+        }
+        if negative {
+            return "-inf";
+        }
+        return "inf";
+    }
+    if exponent == 0 && mantissa == 0 {
+        if negative {
+            return "-0";
+        }
+        return "0";
+    }
+    return ff_normalize(ff_d2d(mantissa, u32(exponent)), negative);
+}
+
+func wz_format_f32_bits(bits u32) string {
+    let negative = (bits & FF_F32_SIGN_MASK) != 0;
+    let exponent = (bits >> 23) & FF_F32_EXPONENT_MASK;
+    let mantissa = bits & FF_F32_FRACTION_MASK;
+    if exponent == FF_F32_EXPONENT_MASK {
+        if mantissa != 0 {
+            return "nan";
+        }
+        if negative {
+            return "-inf";
+        }
+        return "inf";
+    }
+    if exponent == 0 && mantissa == 0 {
+        if negative {
+            return "-0";
+        }
+        return "0";
+    }
+    return ff_normalize(ff_f2d(mantissa, exponent), negative);
+}
+
+func ff_floor_log2_f64(x f64) i32 {
+    var e i32 = 0;
+    var scale f64 = 1.0;
+    if x >= 1.0 {
+        if scale * FF_F64_P2_512 <= x {
+            scale = scale * FF_F64_P2_512;
+            e += 512;
+        }
+        if scale * FF_F64_P2_256 <= x {
+            scale = scale * FF_F64_P2_256;
+            e += 256;
+        }
+        if scale * FF_F64_P2_128 <= x {
+            scale = scale * FF_F64_P2_128;
+            e += 128;
+        }
+        if scale * FF_F64_P2_64 <= x {
+            scale = scale * FF_F64_P2_64;
+            e += 64;
+        }
+        if scale * FF_F64_P2_32 <= x {
+            scale = scale * FF_F64_P2_32;
+            e += 32;
+        }
+        if scale * FF_F64_P2_16 <= x {
+            scale = scale * FF_F64_P2_16;
+            e += 16;
+        }
+        if scale * FF_F64_P2_8 <= x {
+            scale = scale * FF_F64_P2_8;
+            e += 8;
+        }
+        if scale * FF_F64_P2_4 <= x {
+            scale = scale * FF_F64_P2_4;
+            e += 4;
+        }
+        if scale * FF_F64_P2_2 <= x {
+            scale = scale * FF_F64_P2_2;
+            e += 2;
+        }
+        if scale * FF_F64_P2_1 <= x {
+            scale = scale * FF_F64_P2_1;
+            e += 1;
+        }
+    } else {
+        if scale * FF_F64_P2_NEG_1024 > x {
+            scale = scale * FF_F64_P2_NEG_1024;
+            e -= 1024;
+        }
+        if scale * FF_F64_P2_NEG_512 > x {
+            scale = scale * FF_F64_P2_NEG_512;
+            e -= 512;
+        }
+        if scale * FF_F64_P2_NEG_256 > x {
+            scale = scale * FF_F64_P2_NEG_256;
+            e -= 256;
+        }
+        if scale * FF_F64_P2_NEG_128 > x {
+            scale = scale * FF_F64_P2_NEG_128;
+            e -= 128;
+        }
+        if scale * FF_F64_P2_NEG_64 > x {
+            scale = scale * FF_F64_P2_NEG_64;
+            e -= 64;
+        }
+        if scale * FF_F64_P2_NEG_32 > x {
+            scale = scale * FF_F64_P2_NEG_32;
+            e -= 32;
+        }
+        if scale * FF_F64_P2_NEG_16 > x {
+            scale = scale * FF_F64_P2_NEG_16;
+            e -= 16;
+        }
+        if scale * FF_F64_P2_NEG_8 > x {
+            scale = scale * FF_F64_P2_NEG_8;
+            e -= 8;
+        }
+        if scale * FF_F64_P2_NEG_4 > x {
+            scale = scale * FF_F64_P2_NEG_4;
+            e -= 4;
+        }
+        if scale * FF_F64_P2_NEG_2 > x {
+            scale = scale * FF_F64_P2_NEG_2;
+            e -= 2;
+        }
+        if scale * FF_F64_P2_NEG_1 > x {
+            scale = scale * FF_F64_P2_NEG_1;
+            e -= 1;
+        }
+        e -= 1;
+    }
+    return e;
+}
+
+func ff_floor_log2_f32(x f32) i32 {
+    var e i32 = 0;
+    var scale f32 = 1.0;
+    if x >= 1.0 {
+        if scale * FF_F32_P2_64 <= x {
+            scale = scale * FF_F32_P2_64;
+            e += 64;
+        }
+        if scale * FF_F32_P2_32 <= x {
+            scale = scale * FF_F32_P2_32;
+            e += 32;
+        }
+        if scale * FF_F32_P2_16 <= x {
+            scale = scale * FF_F32_P2_16;
+            e += 16;
+        }
+        if scale * FF_F32_P2_8 <= x {
+            scale = scale * FF_F32_P2_8;
+            e += 8;
+        }
+        if scale * FF_F32_P2_4 <= x {
+            scale = scale * FF_F32_P2_4;
+            e += 4;
+        }
+        if scale * FF_F32_P2_2 <= x {
+            scale = scale * FF_F32_P2_2;
+            e += 2;
+        }
+        if scale * FF_F32_P2_1 <= x {
+            scale = scale * FF_F32_P2_1;
+            e += 1;
+        }
+    } else {
+        if scale * FF_F32_P2_NEG_64 > x {
+            scale = scale * FF_F32_P2_NEG_64;
+            e -= 64;
+        }
+        if scale * FF_F32_P2_NEG_64 > x {
+            scale = scale * FF_F32_P2_NEG_64;
+            e -= 64;
+        }
+        if scale * FF_F32_P2_NEG_32 > x {
+            scale = scale * FF_F32_P2_NEG_32;
+            e -= 32;
+        }
+        if scale * FF_F32_P2_NEG_16 > x {
+            scale = scale * FF_F32_P2_NEG_16;
+            e -= 16;
+        }
+        if scale * FF_F32_P2_NEG_8 > x {
+            scale = scale * FF_F32_P2_NEG_8;
+            e -= 8;
+        }
+        if scale * FF_F32_P2_NEG_4 > x {
+            scale = scale * FF_F32_P2_NEG_4;
+            e -= 4;
+        }
+        if scale * FF_F32_P2_NEG_2 > x {
+            scale = scale * FF_F32_P2_NEG_2;
+            e -= 2;
+        }
+        if scale * FF_F32_P2_NEG_1 > x {
+            scale = scale * FF_F32_P2_NEG_1;
+            e -= 1;
+        }
+        e -= 1;
+    }
+    return e;
+}
+
+func ff_bits_of_f64(value f64) u64 {
+    if value != value {
+        return 0x7ff8000000000000;
+    }
+    if value == FF_INF64 {
+        return 0x7ff0000000000000;
+    }
+    if value == FF_NEG_INF64 {
+        return 0xfff0000000000000;
+    }
+    if value == 0.0 {
+        if (1.0 / value) < 0.0 {
+            return 0x8000000000000000;
+        }
+        return 0;
+    }
+    var negative = false;
+    var x = value;
+    if x < 0.0 {
+        negative = true;
+        x = -x;
+    }
+    let e = ff_floor_log2_f64(x);
+    var scaled = x;
+    var shift = 52 - e;
+    if shift > 0 {
+        if shift >= 512 {
+            scaled = scaled * FF_F64_P2_512;
+            shift -= 512;
+        }
+        if shift >= 512 {
+            scaled = scaled * FF_F64_P2_512;
+            shift -= 512;
+        }
+        if shift >= 256 {
+            scaled = scaled * FF_F64_P2_256;
+            shift -= 256;
+        }
+        if shift >= 128 {
+            scaled = scaled * FF_F64_P2_128;
+            shift -= 128;
+        }
+        if shift >= 64 {
+            scaled = scaled * FF_F64_P2_64;
+            shift -= 64;
+        }
+        if shift >= 32 {
+            scaled = scaled * FF_F64_P2_32;
+            shift -= 32;
+        }
+        if shift >= 16 {
+            scaled = scaled * FF_F64_P2_16;
+            shift -= 16;
+        }
+        if shift >= 8 {
+            scaled = scaled * FF_F64_P2_8;
+            shift -= 8;
+        }
+        if shift >= 4 {
+            scaled = scaled * FF_F64_P2_4;
+            shift -= 4;
+        }
+        if shift >= 2 {
+            scaled = scaled * FF_F64_P2_2;
+            shift -= 2;
+        }
+        if shift >= 1 {
+            scaled = scaled * FF_F64_P2_1;
+            shift -= 1;
+        }
+    } else {
+        var down = -shift;
+        if down >= 1024 {
+            scaled = scaled * FF_F64_P2_NEG_1024;
+            down -= 1024;
+        }
+        if down >= 512 {
+            scaled = scaled * FF_F64_P2_NEG_512;
+            down -= 512;
+        }
+        if down >= 256 {
+            scaled = scaled * FF_F64_P2_NEG_256;
+            down -= 256;
+        }
+        if down >= 128 {
+            scaled = scaled * FF_F64_P2_NEG_128;
+            down -= 128;
+        }
+        if down >= 64 {
+            scaled = scaled * FF_F64_P2_NEG_64;
+            down -= 64;
+        }
+        if down >= 32 {
+            scaled = scaled * FF_F64_P2_NEG_32;
+            down -= 32;
+        }
+        if down >= 16 {
+            scaled = scaled * FF_F64_P2_NEG_16;
+            down -= 16;
+        }
+        if down >= 8 {
+            scaled = scaled * FF_F64_P2_NEG_8;
+            down -= 8;
+        }
+        if down >= 4 {
+            scaled = scaled * FF_F64_P2_NEG_4;
+            down -= 4;
+        }
+        if down >= 2 {
+            scaled = scaled * FF_F64_P2_NEG_2;
+            down -= 2;
+        }
+        if down >= 1 {
+            scaled = scaled * FF_F64_P2_NEG_1;
+            down -= 1;
+        }
+    }
+    let m = u64(scaled);
+    var exponent_field u64 = 0;
+    var mantissa u64 = 0;
+    if e >= -1022 {
+        exponent_field = u64(e + 1023);
+        mantissa = m - 4503599627370496;
+    } else {
+        mantissa = m >> u64(-e - 1022);
+    }
+    var bits = (exponent_field << 52) | mantissa;
+    if negative {
+        bits = bits | FF_F64_SIGN_MASK;
+    }
+    return bits;
+}
+
+func ff_bits_of_f32(value f32) u32 {
+    if value != value {
+        return 0x7fc00000;
+    }
+    if value == FF_INF32 {
+        return 0x7f800000;
+    }
+    if value == FF_NEG_INF32 {
+        return 0xff800000;
+    }
+    if value == 0.0 {
+        if (1.0 / value) < 0.0 {
+            return 0x80000000;
+        }
+        return 0;
+    }
+    var negative = false;
+    var x = value;
+    if x < 0.0 {
+        negative = true;
+        x = -x;
+    }
+    let e = ff_floor_log2_f32(x);
+    var scaled = x;
+    var shift = 23 - e;
+    if shift > 0 {
+        if shift >= 64 {
+            scaled = scaled * FF_F32_P2_64;
+            shift -= 64;
+        }
+        if shift >= 64 {
+            scaled = scaled * FF_F32_P2_64;
+            shift -= 64;
+        }
+        if shift >= 32 {
+            scaled = scaled * FF_F32_P2_32;
+            shift -= 32;
+        }
+        if shift >= 16 {
+            scaled = scaled * FF_F32_P2_16;
+            shift -= 16;
+        }
+        if shift >= 8 {
+            scaled = scaled * FF_F32_P2_8;
+            shift -= 8;
+        }
+        if shift >= 4 {
+            scaled = scaled * FF_F32_P2_4;
+            shift -= 4;
+        }
+        if shift >= 2 {
+            scaled = scaled * FF_F32_P2_2;
+            shift -= 2;
+        }
+        if shift >= 1 {
+            scaled = scaled * FF_F32_P2_1;
+            shift -= 1;
+        }
+    } else {
+        var down = -shift;
+        if down >= 64 {
+            scaled = scaled * FF_F32_P2_NEG_64;
+            down -= 64;
+        }
+        if down >= 32 {
+            scaled = scaled * FF_F32_P2_NEG_32;
+            down -= 32;
+        }
+        if down >= 16 {
+            scaled = scaled * FF_F32_P2_NEG_16;
+            down -= 16;
+        }
+        if down >= 8 {
+            scaled = scaled * FF_F32_P2_NEG_8;
+            down -= 8;
+        }
+        if down >= 4 {
+            scaled = scaled * FF_F32_P2_NEG_4;
+            down -= 4;
+        }
+        if down >= 2 {
+            scaled = scaled * FF_F32_P2_NEG_2;
+            down -= 2;
+        }
+        if down >= 1 {
+            scaled = scaled * FF_F32_P2_NEG_1;
+            down -= 1;
+        }
+    }
+    let m = u32(scaled);
+    var exponent_field u32 = 0;
+    var mantissa u32 = 0;
+    if e >= -126 {
+        exponent_field = u32(e + 127);
+        mantissa = m - 8388608;
+    } else {
+        mantissa = m >> u32(-e - 126);
+    }
+    var bits = (exponent_field << 23) | mantissa;
+    if negative {
+        bits = bits | FF_F32_SIGN_MASK;
+    }
+    return bits;
+}
+
+func wz_format_f64(value f64) string {
+    return wz_format_f64_bits(ff_bits_of_f64(value));
+}
+
+func wz_format_f32(value f32) string {
+    return wz_format_f32_bits(ff_bits_of_f32(value));
+}
