@@ -174,6 +174,10 @@ constexpr uint32_t kCancelled = 3;
 constexpr uint32_t kKindTask = 0;
 constexpr uint32_t kKindTimer = 1;
 constexpr uint32_t kKindFd = 2;
+// Internal completion-notification leaf for a scoped group. It owns no frame,
+// is never registered with the collector and carries no source handle except
+// the Task[Unit,Unit] returned to gather_body.
+constexpr uint32_t kKindNotify = 3;
 
 constexpr uint32_t kQueued = 1u << 0;
 constexpr uint32_t kStarted = 1u << 1;
@@ -184,6 +188,12 @@ constexpr uint32_t kSuspended = 1u << 5;
 constexpr uint32_t kFdRegistered = 1u << 6;
 constexpr uint32_t kParentRef = 1u << 7;        // owns a ref on waiting_on
 constexpr uint32_t kLegacyPromiseRelease = 1u << 8; // gc_state is a release fn
+constexpr uint32_t kScopedGroup = 1u << 9;          // opt-in structured gather
+constexpr uint32_t kScopeFrameDone = 1u << 10;      // group frame cannot resume
+constexpr uint32_t kScopeCancelRequested = 1u << 11;
+constexpr uint32_t kScopeFinalizing = 1u << 12;
+
+struct ScopeLink;
 
 struct Future {
   uint64_t refs; // first field: lang-gc/1 reads the strong count here
@@ -208,6 +218,34 @@ struct Future {
   Future *waiters;
   Future *next_all;
   Future *waiting_on;
+  // Scoped-group edges. A group owns one ScopeLink per enrollment and retains
+  // the member through it. The member keeps a borrowed back-link list so its
+  // completion can decrement every observing group; those back-links do not
+  // own the group.
+  ScopeLink *scope_members;
+  ScopeLink *scope_observers;
+  uint32_t scope_pending;
+  uint32_t scope_final_status;
+  // Group completion generation. Every enrolled link that completes bumps the
+  // generation under the executor lock; a waiter that consumes the generation
+  // before the bump would otherwise miss the wake. `scope_wait_seen` is the
+  // generation already consumed by the group body. A linked notification leaf
+  // is referenced by the group (one strong reference per waiter) so its
+  // borrowed `scope_wait_group` back-link can never outlive the group.
+  uint64_t scope_generation;
+  uint64_t scope_wait_seen;
+  Future *scope_waiters;
+  Future *next_scope_waiter;
+  Future *scope_wait_group;
+};
+
+struct ScopeLink {
+  Future *group;
+  Future *member;
+  ScopeLink *next_member; // group->scope_members
+  ScopeLink *next_group;  // member->scope_observers
+  uint32_t cancelled;
+  uint32_t completed;
 };
 
 // Executor tables. Mutated by the executor thread and by a final release on any
@@ -421,6 +459,12 @@ void store_status(Future *future, uint32_t status) noexcept {
 
 void retain(Future *future) noexcept;
 void release(Future *future) noexcept;
+void complete(Future *future, uint32_t status) noexcept;
+void cancel_future(Future *future) noexcept;
+void scope_member_finished(Future *member) noexcept;
+void scope_detach_members(Future *group) noexcept;
+void scope_detach_waiters(Future *group, uint32_t status) noexcept;
+Future *new_future(uint32_t kind) noexcept;
 
 // ---------------------------------------------------------------------------
 // Registry. Only pending futures are registered: a task joins it in publish_v2
@@ -729,6 +773,283 @@ void register_fd(Future *future) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Scoped gather membership.
+//
+// Enrollment is synchronous: scope_begin marks the Task, and each scope_add
+// retains one member and links one edge before any cancellation can observe
+// the group handle. A group owns its member references until its frame is done,
+// every member is finished and any cancellation cleanup has run. The member's
+// borrowed back-link lets its completion decrement the group counter without
+// giving the member an owning reference to the group.
+// ---------------------------------------------------------------------------
+
+void scope_unlink_locked(ScopeLink *link) noexcept {
+  Future *group = link->group;
+  ScopeLink **group_link = &group->scope_members;
+  while (*group_link && *group_link != link)
+    group_link = &(*group_link)->next_member;
+  if (*group_link == link)
+    *group_link = link->next_member;
+
+  Future *member = link->member;
+  ScopeLink **member_link = &member->scope_observers;
+  while (*member_link && *member_link != link)
+    member_link = &(*member_link)->next_group;
+  if (*member_link == link)
+    *member_link = link->next_group;
+
+  link->next_member = nullptr;
+  link->next_group = nullptr;
+}
+
+void scope_detach_members(Future *group) noexcept {
+  if (!group)
+    return;
+  for (;;) {
+    ScopeLink *link = nullptr;
+    {
+      ExecutorLockGuard guard;
+      link = group->scope_members;
+      if (!link)
+        break;
+      scope_unlink_locked(link);
+    }
+    Future *member = link->member;
+    lang_free_v1(link);
+    release(member);
+  }
+  group->scope_pending = 0;
+}
+
+void scope_cancel_members(Future *group) noexcept {
+  // Callers keep the group alive through the surrounding completion, but a
+  // member can complete synchronously and finalise the group inside
+  // cancel_future. Hold a local reference so the link list can be re-read.
+  retain(group);
+  for (;;) {
+    Future *member = nullptr;
+    {
+      ExecutorLockGuard guard;
+      for (ScopeLink *link = group->scope_members; link;
+           link = link->next_member) {
+        if (link->cancelled)
+          continue;
+        if (load_status(link->member) != kPending)
+          continue;
+        link->cancelled = 1;
+        member = link->member;
+        retain(member);
+        break;
+      }
+    }
+    if (!member)
+      break;
+    cancel_future(member);
+    release(member);
+  }
+  release(group);
+}
+
+// Remove a notification leaf from its group while the executor lock is held.
+// The group always owns a reference while the link exists, so the borrowed
+// `scope_wait_group` pointer is valid here.
+bool scope_unlink_waiter_locked(Future *notify) noexcept {
+  Future *group = notify->scope_wait_group;
+  if (!group)
+    return false;
+  Future **link = &group->scope_waiters;
+  while (*link && *link != notify)
+    link = &(*link)->next_scope_waiter;
+  if (*link == notify)
+    *link = notify->next_scope_waiter;
+  notify->next_scope_waiter = nullptr;
+  notify->scope_wait_group = nullptr;
+  return true;
+}
+
+// Detach every notification leaf of one group and complete it. The caller
+// holds no executor lock. Each leaf is referenced once by the group; completing
+// it wakes the group frame (if it is suspended at that await) and the extra
+// reference is dropped afterwards. This is the only place that turns a
+// completion generation bump into a wake, so a wake cannot be lost between the
+// body's status scan and its wait registration: both the bump and the link
+// insertion are serialized by the executor lock.
+void scope_detach_waiters(Future *group, uint32_t status) noexcept {
+  if (!group)
+    return;
+  Future *list = nullptr;
+  {
+    ExecutorLockGuard guard;
+    list = group->scope_waiters;
+    group->scope_waiters = nullptr;
+    for (Future *notify = list; notify; notify = notify->next_scope_waiter)
+      notify->scope_wait_group = nullptr;
+  }
+  while (list) {
+    Future *next = list->next_scope_waiter;
+    list->next_scope_waiter = nullptr;
+    if (load_status(list) == kPending)
+      complete(list, status);
+    release(list); // reference owned by the group's waiter list
+    list = next;
+  }
+}
+
+// One completion notification for the group body. A pending leaf is linked to
+// the current group and carries the group's reference; an already-observed
+// generation returns a completed leaf immediately. The caller awaits the leaf
+// and then rescans the member statuses. Cancellation either completes a linked
+// leaf with kCancelled or resumes the group directly, so neither path can
+// strand the body on a lost notification.
+Future *scope_wait_current() noexcept {
+  Future *group = g_current;
+  if (!group || !(group->flags & kScopedGroup))
+    fail("scope wait outside scoped group");
+  Future *notify = new_future(kKindNotify);
+  registry_add(notify);
+  bool ready = false;
+  {
+    ExecutorLockGuard guard;
+    if (load_status(group) != kPending) {
+      ready = true;
+    } else if (group->scope_generation != group->scope_wait_seen) {
+      // Consume every completion that happened before this call. A task that
+      // completed before the first scan is observed here, never lost.
+      group->scope_wait_seen = group->scope_generation;
+      ready = true;
+    } else {
+      notify->scope_wait_group = group;
+      notify->next_scope_waiter = group->scope_waiters;
+      group->scope_waiters = notify;
+      retain(notify);
+    }
+  }
+  if (ready)
+    complete(notify, kDone);
+  return notify;
+}
+
+// Start one pending member according to its actual future kind. Timers are
+// already registered by async.sleep; a coroutine Task uses the ordinary spawn
+// path, and a descriptor wait gets exactly one epoll/kqueue registration even
+// when the identical Task handle is enrolled more than once. A precompleted
+// member is a no-op.
+void activate_member(Future *future) noexcept {
+  if (!future || load_status(future) != kPending)
+    return;
+  if (future->kind == kKindTask) {
+    if (future->flags & (kActive | kQueued | kStarted))
+      return;
+    // A cancelled group whose frame already finished must not be started
+    // again; its completion is owned by the member-cleanup path.
+    if ((future->flags & kScopedGroup) &&
+        (future->flags & kScopeFrameDone))
+      return;
+    retain(future);
+    future->flags |= kActive;
+    enqueue(future);
+    return;
+  }
+  if (future->kind == kKindFd)
+    register_fd(future);
+  // kKindTimer is scheduled by lang_async_sleep_v1; kKindNotify is internal.
+}
+
+void scope_member_finished(Future *member) noexcept {
+  if (!member)
+    return;
+  for (;;) {
+    Future *observer = nullptr;
+    Future *ready = nullptr;
+    {
+      ExecutorLockGuard guard;
+      for (ScopeLink *link = member->scope_observers; link;
+           link = link->next_group) {
+        // A member may observe several live groups. This member completes
+        // once, so each link contributes exactly one decrement even when a
+        // ready group is finalised and the scan restarts.
+        if (link->completed)
+          continue;
+        link->completed = 1;
+        Future *group = link->group;
+        if (load_status(group) != kPending)
+          continue;
+        // Publish the generation before dropping the lock. A group body that
+        // scanned just before this point observes the changed generation in
+        // scope_wait_current instead of blocking forever.
+        ++group->scope_generation;
+        if (group->scope_pending != 0)
+          --group->scope_pending;
+        observer = group;
+        retain(observer);
+        if (group->scope_pending == 0 &&
+            (group->flags & kScopeFrameDone) &&
+            !(group->flags & kScopeFinalizing)) {
+          group->flags |= kScopeFinalizing;
+          ready = group;
+          retain(ready);
+        }
+        break;
+      }
+    }
+    if (!observer)
+      return;
+    // A member may be enrolled in several groups; wake only the group whose
+    // link was just completed. Completion leaves are regular futures, so the
+    // typed GC callbacks and waiter queues stay outside the executor lock.
+    scope_detach_waiters(observer, kDone);
+    if (ready) {
+      const uint32_t status = ready->scope_final_status;
+      scope_detach_members(ready);
+      complete(ready, status);
+      release(ready);
+    }
+    release(observer);
+  }
+}
+
+void scope_begin(Future *group) noexcept {
+  if (!group || load_status(group) != kPending)
+    return;
+  ExecutorLockGuard guard;
+  group->flags |= kScopedGroup;
+}
+
+void scope_add(Future *group, Future *member) noexcept {
+  if (!group || !member || load_status(group) != kPending)
+    return;
+  if (member == group)
+    fail("async scope cannot enroll its own group");
+  // Allocate before taking the executor lock: the lock never spans allocator
+  // or GC work. The status check and link insertion still share the lock with
+  // member completion notification. A member that is already final is not
+  // linked and does not contribute to scope_pending; the group body still sees
+  // its final status through the ordinary Task handle.
+  auto *link = static_cast<ScopeLink *>(lang_alloc_v1(sizeof(ScopeLink), 16));
+  if (!link)
+    fail("async scope link allocation");
+  bool linked = false;
+  {
+    ExecutorLockGuard guard;
+    if (load_status(member) == kPending) {
+      link->group = group;
+      link->member = member;
+      link->next_member = group->scope_members;
+      link->next_group = member->scope_observers;
+      link->cancelled = 0;
+      link->completed = 0;
+      group->scope_members = link;
+      member->scope_observers = link;
+      ++group->scope_pending;
+      retain(member);
+      linked = true;
+    }
+  }
+  if (!linked)
+    lang_free_v1(link);
+}
+
+// ---------------------------------------------------------------------------
 // Reference counting and final release.
 // ---------------------------------------------------------------------------
 
@@ -746,6 +1067,17 @@ void destroy_future(Future *future) noexcept {
   // reference: each link owns a reference. Clear stale links defensively
   // without touching reference counts.
   deregister_fd(future);
+  scope_detach_members(future);
+  // A group owns one reference per linked completion-notification leaf. Drop
+  // those before the group storage disappears so the borrowed back-link can
+  // never be observed after free. A notification detached concurrently by its
+  // own completion has already cleared `scope_wait_group`.
+  if (future->kind == kKindNotify) {
+    ExecutorLockGuard guard;
+    (void)scope_unlink_waiter_locked(future);
+  } else {
+    scope_detach_waiters(future, kCancelled);
+  }
   future->waiting_on = nullptr;
   future->next_waiter = nullptr;
   future->waiters = nullptr;
@@ -878,6 +1210,57 @@ void complete(Future *future, uint32_t status) noexcept {
   // candidate before clearing, so a clear callback never frees under the
   // collector's snapshot.
   retain(future);
+  Future *notify_group = nullptr;
+  bool notify_unlinked = false;
+  if (future->kind == kKindNotify) {
+    ExecutorLockGuard guard;
+    notify_group = future->scope_wait_group;
+    if (notify_group) {
+      // Keep the group alive across notify_waiters(), which drops the link
+      // reference this leaf held on its waiter.
+      retain(notify_group);
+      notify_unlinked = scope_unlink_waiter_locked(future);
+    }
+  }
+  if ((future->flags & kScopedGroup) && status != kPending) {
+    if (!(future->flags & kScopeFrameDone)) {
+      future->flags |= kScopeFrameDone;
+      future->scope_final_status = status;
+      future->flags &= ~kSuspended;
+      // The frame will never run again. Break its own await link before it can
+      // be queued as a completed waiter; member completion is now tracked by
+      // the scope counter, not by the coroutine frame.
+      detach_from_parent(future);
+    }
+    ready_remove(future);
+    deregister_fd(future);
+    // A group that reaches a terminal status can no longer be observed by a
+    // waiting body. Drain linked notification leaves with the group status so
+    // no external watcher is left pending and no group-owned reference leaks.
+    scope_detach_waiters(future, status);
+    if (future->scope_pending != 0) {
+      if (status != kDone && !(future->flags & kScopeCancelRequested)) {
+        future->flags |= kScopeCancelRequested;
+        scope_cancel_members(future);
+      }
+      // scope_cancel_members can synchronously finish the last member and
+      // finalise this group. Do not touch the table links again in that case.
+      if (load_status(future) != kPending) {
+        release(future);
+        return;
+      }
+      // Keep the executor root while waiting for child cleanup, even if the
+      // last source handle is dropped. This is the opted-in scoped behavior.
+      if (!(future->flags & kActive)) {
+        future->flags |= kActive;
+        retain(future);
+      }
+      release(future);
+      return;
+    }
+    status = future->scope_final_status;
+    scope_detach_members(future);
+  }
   // Publish the new status first: waiters observe it when they resume, and
   // enqueue() only accepts pending futures.
   store_status(future, status);
@@ -889,35 +1272,95 @@ void complete(Future *future, uint32_t status) noexcept {
   // points at a completed frame, then wake our own waiters.
   detach_from_parent(future);
   notify_waiters(future);
+  // A member's completion decrements every scoped group that enrolled it.
+  // A group that is itself a member notifies its outer group only here, after
+  // its own status and cleanup are complete.
+  scope_member_finished(future);
   if (future->flags & kActive) {
     future->flags &= ~kActive;
     release(future);
   }
+  // A notification leaf unlinked above still owns the reference the group held
+  // while it was listed. Drop that list reference exactly once, outside the
+  // executor lock; the local retain keeps the leaf readable until both the
+  // list and the completion reference are gone.
+  release(notify_group);
+  if (notify_unlinked)
+    release(future); // reference owned by the removed group waiter list
   release(future);
 }
 
 void cancel_future(Future *future) noexcept {
   if (!future || load_status(future) != kPending)
     return;
-  if (future->kind != kKindTask) {
-    complete(future, kCancelled);
+  Future *target = future->waiting_on;
+  if (target && (target->flags & kScopedGroup)) {
+    // Opt-in await edge: cancellation of the waiter first requests cancellation
+    // of the scoped group and its members, then leaves the waiter linked. The
+    // group completes only after child cleanup, and notify_waiters wakes this
+    // waiter so it can run its own cancel exit plan afterwards.
+    future->flags |= kCancelledFlag;
+    if (future->flags & kScopedGroup) {
+      if (!(future->flags & kScopeCancelRequested)) {
+        future->flags |= kScopeCancelRequested;
+        ++future->scope_generation;
+        scope_detach_waiters(future, kCancelled);
+        scope_cancel_members(future);
+      }
+    }
+    cancel_future(target);
     return;
   }
+  if (!(future->flags & kScopedGroup)) {
+    if (future->kind != kKindTask) {
+      complete(future, kCancelled);
+      return;
+    }
+    future->flags |= kCancelledFlag;
+    if (!(future->flags & kStarted)) {
+      // Never resumed: no source cleanup was registered, so the frame can be
+      // released without executing the body. This also removes a queued task
+      // from the ready queue.
+      complete(future, kCancelled);
+      return;
+    }
+    if (future == g_current) {
+      // A running frame observes the flag at its next await; it must not queue
+      // itself while it is still on the stack.
+      return;
+    }
+    if (future->flags & kSuspended) {
+      // Resume once so the coroutine runs its cancel exit plan.
+      enqueue(future);
+    }
+    return;
+  }
+
+  // Scoped group cancellation. Request every enrolled member first; the group
+  // remains pending until its frame and all member exit plans are complete.
   future->flags |= kCancelledFlag;
+  if (!(future->flags & kScopeCancelRequested)) {
+    future->flags |= kScopeCancelRequested;
+    // Publish the cancellation generation and wake a body suspended on a
+    // notification before member cancellation can synchronously finalise the
+    // group. The waiter then observes the group cancellation through its own
+    // await path instead of sleeping until the next member event.
+    ++future->scope_generation;
+    scope_detach_waiters(future, kCancelled);
+    scope_cancel_members(future);
+  }
+  if (load_status(future) != kPending)
+    return;
   if (!(future->flags & kStarted)) {
-    // Never resumed: no source cleanup was registered, so the frame can be
-    // released without executing the body. This also removes a queued task
-    // from the ready queue.
+    // No coroutine frame ever started. Mark the group terminal and let the
+    // member-completion path publish it when scope_pending reaches zero.
     complete(future, kCancelled);
     return;
   }
   if (future == g_current) {
-    // A running frame observes the flag at its next await; it must not queue
-    // itself while it is still on the stack.
     return;
   }
   if (future->flags & kSuspended) {
-    // Resume once so the coroutine runs its cancel exit plan.
     enqueue(future);
   }
 }
@@ -1126,6 +1569,15 @@ Future *new_future(uint32_t kind) noexcept {
   future->waiters = nullptr;
   future->next_all = nullptr;
   future->waiting_on = nullptr;
+  future->scope_members = nullptr;
+  future->scope_observers = nullptr;
+  future->scope_pending = 0;
+  future->scope_final_status = kPending;
+  future->scope_generation = 0;
+  future->scope_wait_seen = 0;
+  future->scope_waiters = nullptr;
+  future->next_scope_waiter = nullptr;
+  future->scope_wait_group = nullptr;
   // A timer or descriptor future has no frame metadata and no completion
   // handshake, so it is complete when constructed. The caller registers it once
   // its own fields are initialized. A task joins the registry in publish_v2,
@@ -1147,6 +1599,13 @@ void task_gc_trace(void *object, LangGcVisitor visitor, void *context) noexcept 
     visitor(future->waiting_on, context);
   for (Future *waiter = future->waiters; waiter; waiter = waiter->next_waiter)
     visitor(waiter, context);
+  // A scoped group owns one strong reference per enrollment. Report every
+  // link separately; duplicate enrollment of the same member is a separate
+  // edge. The member's borrowed observer links are not edges and are not
+  // traced.
+  for (ScopeLink *link = future->scope_members; link;
+       link = link->next_member)
+    visitor(link->member, context);
 }
 
 void task_gc_clear(void *object) noexcept {
@@ -1161,6 +1620,15 @@ void task_gc_clear(void *object) noexcept {
   // resume the coroutine or run a cancel exit plan or source defer.
   if (future->frame_ops && future->frame_ops->clear_owners)
     future->frame_ops->clear_owners(future->gc_state);
+  // A collected group must drop its member edges. Unlink first so releasing a
+  // member cannot notify a group that is being cleared. This does not resume
+  // any member frame; ordinary final release/GC rules decide its fate.
+  if (future->flags & kScopedGroup) {
+    scope_detach_members(future);
+    // A collected group cannot service notification leaves anymore. Complete
+    // any that are still linked so their source handles do not stay pending.
+    scope_detach_waiters(future, kCancelled);
+  }
   if (load_status(future) == kPending) {
     // Never started: no user cleanup can run, so the common completion path
     // unlinks the registry, run-queue, waiter and epoll state. The collector
@@ -1221,8 +1689,11 @@ void force_complete_pending() noexcept {
   Future *future = registry_first_retained();
   while (future) {
     Future *next = registry_next_retained(future);
-    if (load_status(future) == kPending)
+    if (load_status(future) == kPending) {
+      if (future->flags & kScopedGroup)
+        scope_detach_members(future);
       complete(future, kCancelled);
+    }
     release(future);
     future = next;
   }
@@ -1433,6 +1904,27 @@ uint32_t lang_async_status_v1(void *raw) noexcept {
   return future ? load_status(future) : kCancelled;
 }
 
+void lang_async_scope_begin_v1(void *raw) noexcept {
+  auto *group = static_cast<Future *>(raw);
+  if (group && group->kind != kKindTask)
+    fail("scope_begin on non-task future");
+  scope_begin(group);
+}
+
+void lang_async_scope_add_v1(void *raw_group, void *raw_member) noexcept {
+  scope_add(static_cast<Future *>(raw_group), static_cast<Future *>(raw_member));
+}
+
+void lang_async_scope_activate_v1(void *raw_member) noexcept {
+  require_executor_thread("scope_activate");
+  activate_member(static_cast<Future *>(raw_member));
+}
+
+void *lang_async_scope_wait_v1() noexcept {
+  require_executor_thread("scope_wait");
+  return scope_wait_current();
+}
+
 void *lang_async_promise_v1(void *raw) noexcept {
   auto *future = static_cast<Future *>(raw);
   return future ? future->promise : nullptr;
@@ -1467,7 +1959,8 @@ uint32_t lang_async_await_v1(void *raw) noexcept {
   // Awaiting a task that was created but never spawned starts it implicitly;
   // this keeps nested `await f()` useful without an explicit spawn.
   if (target->kind == kKindTask &&
-      !(target->flags & (kStarted | kQueued))) {
+      !(target->flags & (kStarted | kQueued)) &&
+      !((target->flags & kScopedGroup) && (target->flags & kScopeFrameDone))) {
     retain(target);
     target->flags |= kActive;
     enqueue(target);

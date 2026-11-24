@@ -76,6 +76,47 @@
 // collector's `clear` callback asserts both:
 // `!kActive && (!kStarted || status != Pending)`.
 //
+// ## Scoped gather groups (opt-in)
+//
+// `lang_async_scope_begin_v1` marks one ordinary Task as a scoped group and
+// `lang_async_scope_add_v1` enrolls each member synchronously before the Task
+// handle is returned to source. A group owns one strong reference per
+// enrollment, including duplicate enrollments of the same Task. The member only
+// keeps a borrowed observer back-link; it never owns the group.
+//
+// `lang_async_scope_activate_v1` starts one pending member according to its
+// actual kind: a coroutine Task follows the ordinary spawn rules, a timer is
+// already scheduled by `lang_async_sleep_v1`, and a descriptor wait gets
+// exactly one registration per identical Task handle. A completed member is a
+// no-op. The source-level gather body uses this instead of the public spawn
+// entry point, whose Task-only contract is unchanged.
+//
+// `lang_async_scope_wait_v1` returns a Task[Unit,Unit]-shaped notification
+// leaf for the currently executing group. Each completed member link increments
+// the group generation under the executor lock; the leaf is returned already
+// complete when the generation moved since the previous wait, otherwise it is
+// linked and completed by the next member completion or group cancellation.
+// Registration and the generation check share the executor lock, so a wake
+// between the body's status scan and its wait call cannot be lost. A linked
+// leaf has no coroutine frame, is not a Wz graph node, and is detached and
+// completed during group finalisation so no watcher or reference survives.
+//
+// Cancelling a scoped group requests cancellation of every pending member and
+// keeps the group pending until its own frame and all enrolled member frames
+// have completed their cancellation exit plans. The executor keeps the group's
+// kActive root while waiting. A never-started group is marked terminal without
+// resuming its frame but follows the same member-cleanup wait.
+//
+// Cancelling a waiter suspended on a scoped group does not complete the waiter
+// immediately: the group is cancelled, the waiter keeps its await link, and it
+// is woken only after the group (including member cleanup) completes. Ordinary
+// Tasks keep the original upward-only cancellation behaviour.
+//
+// The GC trace callback reports every group->member edge. Member->group
+// back-links are borrowed and are not traced. Finalisation unlinks and releases
+// every member edge before the group status is published; notification leaves
+// are executor-internal references and are drained at the same time.
+//
 // ## clear callback contract
 //
 // `task_gc_clear` (runtime side) calls `frame_ops->clear_owners` and, for a
@@ -220,6 +261,27 @@ uint32_t lang_async_status_v1(void *future) LANG_ASYNC_NOEXCEPT;
 void *lang_async_promise_v1(void *future) LANG_ASYNC_NOEXCEPT;
 uint32_t lang_async_finished_v1(void *future) LANG_ASYNC_NOEXCEPT;
 void lang_async_cancel_v1(void *future) LANG_ASYNC_NOEXCEPT;
+
+// Opt-in scoped group membership for a gather Task. The caller creates the
+// group Task first, marks it scoped, then enrolls every member before the Task
+// handle escapes. `begin` is idempotent. `add` retains the member and records
+// one edge per enrollment (duplicates are separate edges). A group owns those
+// references until its frame, all members and all cancellation cleanup are
+// finished. Ordinary Task await and cancellation are unchanged; only a group
+// marked by begin gets the delayed/structured cancellation behaviour.
+void lang_async_scope_begin_v1(void *group) LANG_ASYNC_NOEXCEPT;
+void lang_async_scope_add_v1(void *group, void *member) LANG_ASYNC_NOEXCEPT;
+// Start one enrolled member according to its actual kind: a coroutine Task is
+// spawned, a timer is already scheduled, and a descriptor wait gets exactly
+// one registration per Task handle. A completed member is left alone.
+void lang_async_scope_activate_v1(void *member) LANG_ASYNC_NOEXCEPT;
+// Return a Task[Unit,Unit]-shaped completion leaf for the currently running
+// scoped group. It is already complete when a member completion happened since
+// the previous call; otherwise the next member completion or group
+// cancellation completes it. The runtime owns the generation bookkeeping, so a
+// completion between a body's status scan and this call cannot be lost.
+void *lang_async_scope_wait_v1() LANG_ASYNC_NOEXCEPT;
+
 uint32_t lang_async_current_cancelled_v1(void) LANG_ASYNC_NOEXCEPT;
 uint32_t lang_async_await_v1(void *target) LANG_ASYNC_NOEXCEPT;
 void *lang_async_sleep_v1(int64_t milliseconds) LANG_ASYNC_NOEXCEPT;

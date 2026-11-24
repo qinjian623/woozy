@@ -1,0 +1,37 @@
+// Same fail-fast contract with the failing task first and the slow task
+// second. The slow member must still be cancelled and cleaned up.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+enum Failure { Bad; }
+
+async func slow(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "slow.cleanup"); }
+    await a.sleep(200);
+    vec.push(log, "slow.after");
+    return 1;
+}
+
+async func fail(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "fail.cleanup"); }
+    await a.sleep(5);
+    vec.push(log, "fail.throw");
+    throw Failure.Bad;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    try {
+        let values = a.or_throw(await a.gather[i32,Failure]([
+            fail(log),
+            slow(log)]));
+        io.println("unexpected.ok");
+    } catch error Failure {
+        io.println("caught");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

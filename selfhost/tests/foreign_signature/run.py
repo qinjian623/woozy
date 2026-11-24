@@ -29,11 +29,21 @@ DEFAULT_TIMEOUT = 1800.0
 MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
-# signature checks in the C++ and Wz registries. 216-227 are reserved for
-# independent pending operations.
-EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229, 230, 231, 232)
+# signature checks in the C++ and Wz registries. Local operations fill
+# 216-227 and remote operations continue at 228-232.
+EXPECTED_OPERATION_IDS = tuple(range(233))
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
-NEW_OPERATIONS = (213, 214, 215, 228, 229, 230, 231, 232)
+NEW_OPERATIONS = tuple(range(213, 227)) + (228, 229, 230, 231, 232)
+# Signatures made only of compiler builtins need no standard type module.
+NO_MODULE_OPERATIONS = frozenset({215, 220, 222, 223, 224, 225, 226,
+                                  228, 229, 231, 232})
+EXPECTED_OWNER_ARITY = {
+    213: ("std/os", 0), 214: ("std/os", 0), 215: ("std/os", 0),
+    216: ("std/os", 0), 217: ("std/os", 0), 218: ("std/os", 0),
+    219: ("std/os", 0), 220: ("std/os", 0), 221: ("std/os", 0),
+    222: ("std/async", 2), 223: ("std/async", 4), 224: ("std/async", 2),
+    225: ("std/async", 0), 226: ("std/async", 2),
+}
 
 
 def fail(message: str) -> None:
@@ -183,6 +193,33 @@ def validate_registry_entries() -> None:
               '"Result[Unit,i32]", {"i32", "i32"}, 2},'),
         215: ('{SystemOperation::fs_executable_path, "__woozy_os_executable_path", '
               '"i64", {"Vec[u8]", "usize"}, 2},'),
+        216: ('{SystemOperation::fs_openat, "__woozy_os_openat", '
+              '"Result[i32,i32]", {"i32", "Vec[u8]", "i32", "u32"}, 4},'),
+        217: ('{SystemOperation::fs_mkdirat, "__woozy_os_mkdirat", '
+              '"Result[Unit,i32]", {"i32", "Vec[u8]", "u32"}, 3},'),
+        218: ('{SystemOperation::fs_unlinkat, "__woozy_os_unlinkat", '
+              '"Result[Unit,i32]", {"i32", "Vec[u8]", "i32"}, 3},'),
+        219: ('{SystemOperation::fs_fstatat, "__woozy_os_fstatat", '
+              '"Result[std/os.FileInfo,i32]", {"i32", "Vec[u8]", "i32"}, 3},'),
+        220: ('{SystemOperation::fs_readlinkat, "__woozy_os_readlinkat_bytes", '
+              '"i64", {"i32", "Vec[u8]", "Vec[u8]"}, 3},'),
+        221: ('{SystemOperation::fs_symlinkat, "__woozy_os_symlinkat_bytes", '
+              '"Result[Unit,i32]", {"i32", "Vec[u8]", "Vec[u8]"}, 3},'),
+        222: ('{SystemOperation::async_scope_begin, '
+              '"__woozy_async_scope_begin", "Unit",\n'
+              '   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},'),
+        223: ('{SystemOperation::async_scope_add, "__woozy_async_scope_add", '
+              '"Unit",\n'
+              '   {"Task[A,B]", "Task[C,D]", "", ""}, 2, "std/async", 4},'),
+        224: ('{SystemOperation::async_scope_activate, '
+              '"__woozy_async_scope_activate",\n'
+              '   "Unit", {"Task[A,B]", "", "", ""}, 1, "std/async", 2},'),
+        225: ('{SystemOperation::async_scope_wait, '
+              '"__woozy_async_scope_wait",\n'
+              '   "Task[Unit,Unit]", {"", "", "", ""}, 0, "std/async"},'),
+        226: ('{SystemOperation::async_task_status, '
+              '"__woozy_async_task_status", "i32",\n'
+              '   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},'),
         228: ('{SystemOperation::unicode_text_take, "__woozy_unicode_text_take", '
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
         229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
@@ -204,6 +241,39 @@ def validate_registry_entries() -> None:
         215: ('OperationSpec(operation: 215, name: "__woozy_os_executable_path", '
               'result: "i64", parameters: ["Vec[u8]", "usize"], '
               'owner: "std/os", type_arity: 0)'),
+        216: ('OperationSpec(operation: 216, name: "__woozy_os_openat", '
+              'result: "Result[i32,i32]", parameters: ["i32", "Vec[u8]", '
+              '"i32", "u32"], owner: "std/os", type_arity: 0)'),
+        217: ('OperationSpec(operation: 217, name: "__woozy_os_mkdirat", '
+              'result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", '
+              '"u32"], owner: "std/os", type_arity: 0)'),
+        218: ('OperationSpec(operation: 218, name: "__woozy_os_unlinkat", '
+              'result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", '
+              '"i32"], owner: "std/os", type_arity: 0)'),
+        219: ('OperationSpec(operation: 219, name: "__woozy_os_fstatat", '
+              'result: "Result[std/os.FileInfo,i32]", parameters: ["i32", '
+              '"Vec[u8]", "i32"], owner: "std/os", type_arity: 0)'),
+        220: ('OperationSpec(operation: 220, name: "__woozy_os_readlinkat_bytes", '
+              'result: "i64", parameters: ["i32", "Vec[u8]", "Vec[u8]"], '
+              'owner: "std/os", type_arity: 0)'),
+        221: ('OperationSpec(operation: 221, name: "__woozy_os_symlinkat_bytes", '
+              'result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", "Vec[u8]"], '
+              'owner: "std/os", type_arity: 0)'),
+        222: ('OperationSpec(operation: 222, name: "__woozy_async_scope_begin", '
+              'result: "Unit", parameters: ["Task[A,B]"], owner: "std/async", '
+              'type_arity: 2)'),
+        223: ('OperationSpec(operation: 223, name: "__woozy_async_scope_add", '
+              'result: "Unit", parameters: ["Task[A,B]", "Task[C,D]"], '
+              'owner: "std/async", type_arity: 4)'),
+        224: ('OperationSpec(operation: 224, name: "__woozy_async_scope_activate", '
+              'result: "Unit", parameters: ["Task[A,B]"], owner: "std/async", '
+              'type_arity: 2)'),
+        225: ('OperationSpec(operation: 225, name: "__woozy_async_scope_wait", '
+              'result: "Task[Unit,Unit]", parameters: [], owner: "std/async", '
+              'type_arity: 0)'),
+        226: ('OperationSpec(operation: 226, name: "__woozy_async_task_status", '
+              'result: "i32", parameters: ["Task[A,B]"], owner: "std/async", '
+              'type_arity: 2)'),
         228: ('OperationSpec(operation: 228, name: "__woozy_unicode_text_take", '
               'result: "string", parameters: ["string", "Vec[u64]", "usize"], '
               'owner: "std/unicode", type_arity: 0)'),
@@ -255,9 +325,8 @@ def validate_oracle(output: str) -> None:
                           if line.split()[1] == f"op.{operation}.none"), "")
         if not module_line.startswith(f"case op.{operation}.module ok "):
             fail(f"oracle: missing successful module case for op.{operation}")
-        if operation in (215, 228, 229, 231, 232):
-            # These signatures contain only builtin types, so no module is
-            # required for either spelling.
+        if operation in NO_MODULE_OPERATIONS:
+            # Built-in-only signatures must not require a standard type module.
             if none_line != module_line.replace(".module ", ".none ", 1):
                 fail(f"oracle: signature changed without a module for op.{operation}")
             continue
@@ -265,6 +334,37 @@ def validate_oracle(output: str) -> None:
             fail(f"oracle: missing module-boundary rejection for op.{operation}")
         if "invalid system operation requires its standard type module" not in none_line:
             fail(f"oracle: wrong module-boundary rejection for op.{operation}")
+    registry: dict[int, tuple[str, int]] = {}
+    for line in lines:
+        if not line.startswith("registry op."):
+            continue
+        pieces = line.split()
+        if (len(pieces) != 4 or not pieces[2].startswith("owner=")
+                or not pieces[3].startswith("arity=")):
+            fail(f"oracle: malformed registry line: {line}")
+        operation = int(pieces[1].split(".")[1])
+        registry[operation] = (pieces[2][len("owner="):],
+                               int(pieces[3][len("arity="):]))
+    if registry != EXPECTED_OWNER_ARITY:
+        missing = sorted(set(EXPECTED_OWNER_ARITY) - set(registry))
+        extra = sorted(set(registry) - set(EXPECTED_OWNER_ARITY))
+        changed = [f"op.{operation}: want {EXPECTED_OWNER_ARITY[operation]}, "
+                   f"got {registry[operation]}"
+                   for operation in sorted(set(registry) & set(EXPECTED_OWNER_ARITY))
+                   if registry[operation] != EXPECTED_OWNER_ARITY[operation]]
+        fail("oracle: registry owner/type-arity mismatch"
+             f" missing={missing} extra={extra} changed={changed}")
+    for label in ("op.scope-add-none",):
+        if not any(line.startswith(f"case {label} ok ") for line in lines):
+            fail(f"oracle: missing successful no-module case {label}")
+    for label in ("op.scope-add-missing", "op.scope-add-wrong-arity",
+                  "op.scope-add-extra-type-args", "op.scope-begin-missing",
+                  "op.scope-activate-missing",
+                  "op.scope-wait-extra-type-arg", "op.task-status-missing"):
+        prefix = (f"case {label} invalid "
+                  "unknown system operation or type argument count")
+        if not any(line.startswith(prefix) for line in lines):
+            fail(f"oracle: missing type-arity rejection {label}")
     validate_registry_entries()
     for label in ("python", "c", "private", "system"):
         if not any(line.startswith(f"table {label} ") for line in lines):

@@ -1,0 +1,26 @@
+// The comparator reaches the merge phase before pushing through an alias of
+// the Vec being sorted. The full-range pin in sort_by must still be active,
+// so the structural push Panics instead of changing the sorted Vec.
+package app;
+
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+func main() i32 {
+    let count usize = 1024;
+    let values = vec.make[i32](count, 0);
+    for var index usize = 0; index < count; index += 1 {
+        values[index] = i32(count - index);
+    }
+    let alias = values;
+    let calls = [0];
+    let less = func(left i32, right i32) bool {
+        calls[0] += 1;
+        if calls[0] == 700 {
+            vec.push(alias, 0);
+        }
+        return left < right;
+    };
+    sort.sort_by(values, less);
+    return 88;
+}

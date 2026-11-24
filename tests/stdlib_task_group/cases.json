@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "description": "O0/O2 Source cases for the opt-in scoped std/async gather Task. Positive cases run on the native backend; the reject case records the current compiler limitation for async generic throws.",
+  "positive": [
+    {
+      "name": "success-order",
+      "stdout": "3\n1\n2\n",
+      "checks": "values in input order despite reverse completion order"
+    },
+    {
+      "name": "empty-group",
+      "stdout": "0\n",
+      "checks": "empty batch returns an empty value vector"
+    },
+    {
+      "name": "unit-values",
+      "stdout": "2\nb\na\n",
+      "checks": "Unit-valued members produce one slot each and all run"
+    },
+    {
+      "name": "slow-first-fast-fail",
+      "stdout": "caught\nfail.throw\nfail.cleanup\nslow.cleanup\n",
+      "checks": "typed failure survives group-initiated sibling cancellation and is caught after sibling defer"
+    },
+    {
+      "name": "fast-fail-first",
+      "stdout": "caught\nfail.throw\nfail.cleanup\nslow.cleanup\n",
+      "checks": "same fail-fast typed error when the failing member is first"
+    },
+    {
+      "name": "mixed-success-fail",
+      "stdout": "caught\nok.value\nfail.throw\nfail.cleanup\nslow.cleanup\n",
+      "checks": "mixed success/failure; successful member joined and slow sibling cleaned before typed error"
+    },
+    {
+      "name": "multiple-failures-delay",
+      "stdout": "early\nearly.throw\nearly.cleanup\nlate.cleanup\nslow.cleanup\n",
+      "checks": "completion-order policy selects the first failure"
+    },
+    {
+      "name": "multiple-failures-tie",
+      "stdout": "zero\nzero.throw\nzero.cleanup\none.throw\none.cleanup\n",
+      "checks": "lowest input index wins a completion tie"
+    },
+    {
+      "name": "snapshot-mutation-success",
+      "stdout": "1\n3\n1\n2\n",
+      "checks": "gather snapshots handles before the caller clears and replaces its Vec"
+    },
+    {
+      "name": "unstarted-group-cancel",
+      "stdout_contains": [
+        "0",
+        "true",
+        "a.cleanup",
+        "b.cleanup"
+      ],
+      "stdout_absent": [
+        "a.after",
+        "b.after"
+      ],
+      "checks": "unstarted group cancellation uses the snapshot and waits for both started members"
+    },
+    {
+      "name": "external-member-cancel",
+      "stdout_contains": [
+        "true",
+        "a.cleanup",
+        "b.cleanup",
+        "c.cleanup"
+      ],
+      "stdout_absent": [
+        "a.after",
+        "b.after",
+        "c.after"
+      ],
+      "checks": "external member cancellation cancels and drains the other members"
+    },
+    {
+      "name": "overlapping-groups-success",
+      "stdout": "2\n7\n7\n1\n7\n",
+      "checks": "two live groups and duplicate enrollment preserve values"
+    },
+    {
+      "name": "overlapping-groups-cancel",
+      "stdout_contains": [
+        "true",
+        "shared.cleanup",
+        "slow.cleanup"
+      ],
+      "stdout_absent": [
+        "shared.after",
+        "slow.after"
+      ],
+      "checks": "each ScopeLink contributes one completion decrement across overlapping groups"
+    },
+    {
+      "name": "coordinator-cancel",
+      "stdout_contains": [
+        "true",
+        "a.cleanup",
+        "b.cleanup",
+        "parent.cleanup"
+      ],
+      "stdout_absent": [
+        "a.after",
+        "b.after",
+        "after.join"
+      ],
+      "checks": "run_until(parent) alone sees member cleanup before the parent completes"
+    },
+    {
+      "name": "ordinary-await-cancel",
+      "stdout": "true\nafter.parent\ncoordinator.cleanup\nafter.run\nchild.after\nchild.cleanup\n",
+      "checks": "ordinary Task await cancellation remains early and does not cancel the child"
+    },
+    {
+      "name": "await-cancelled-proof",
+      "stdout": "true\nbefore.await\nchild.cleanup\ncoordinator.cleanup\n",
+      "checks": "awaiting a cancelled task still cancels the waiter; gather drains without that ordinary await"
+    },
+    {
+      "name": "timer-gather",
+      "stdout": "3\nb\n",
+      "checks": "raw timer Task members are already scheduled, mixed with a coroutine member, and need no periodic poll"
+    },
+    {
+      "name": "fd-pipe-gather",
+      "stdout": "3\n",
+      "checks": "descriptor members register once for an identical duplicate handle and complete from epoll/kqueue"
+    },
+    {
+      "name": "duplicate-task-gather",
+      "stdout": "3\n5\n5\n5\ncleanup\n",
+      "checks": "duplicate Task enrollment produces one start, one cleanup and one value per input slot"
+    },
+    {
+      "name": "precompleted-gather",
+      "stdout": "2\n1\n2\n",
+      "checks": "a member completed before gather keeps its value while a still-pending member is activated and awaited"
+    },
+    {
+      "name": "prefailed-skips-unstarted",
+      "stdout": "typed-error\nfail\n",
+      "checks": "a terminal typed error cancels an unstarted sibling instead of starting it"
+    },
+    {
+      "name": "prefailed-first-then-cancelled",
+      "stdout": "typed-error\n",
+      "checks": "an already-failed lower-index member wins over a higher-index member cancellation"
+    },
+    {
+      "name": "preexisting-cancel-then-failed",
+      "stdout": "typed-error\n",
+      "checks": "an already-cancelled lower-index member does not erase a higher-index real typed error"
+    },
+    {
+      "name": "member-cancel-only",
+      "stdout": "true\n",
+      "checks": "member cancellation propagates when no real typed error exists"
+    },
+    {
+      "name": "external-cancel-before-error",
+      "stdout_contains": [
+        "true",
+        "fail.cleanup",
+        "parent.cleanup"
+      ],
+      "stdout_absent": [
+        "fail.throw",
+        "after.join"
+      ],
+      "checks": "external parent cancellation drains member cleanup and propagates cancellation before a later typed error"
+    },
+    {
+      "name": "running-cancel-then-error",
+      "stdout": "typed-error\nfail.throw\nhold.cleanup\n",
+      "checks": "a running member cancellation and a real typed error observed in the same drain scan keep the typed error"
+    },
+    {
+      "name": "pre-cancel-skips-unstarted",
+      "exit": 1,
+      "stdout_absent": [
+        "SIBLING-STARTED"
+      ],
+      "checks": "a first-scan member cancellation cancels pending members instead of starting an unstarted sibling"
+    }
+  ],
+  "reject": [
+    {
+      "name": "reject-async-generic-throws",
+      "code": "E_EFFECT_UNHANDLED",
+      "checks": "an async function may not declare throws E for a type parameter"
+    }
+  ]
+}

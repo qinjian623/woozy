@@ -1,0 +1,97 @@
+package app;
+
+import "std/csv_io" as csv_io;
+import "std/io" as io;
+import "std/os" as os;
+import "std/text" as text;
+
+func close_quietly(file os.File) {
+    try { os.close(file); } catch error os.Error {}
+}
+
+func open_dev_full() os.File throws csv_io.Error {
+    try {
+        return os.open("/dev/full", os.O_WRONLY | os.O_CLOEXEC, 0);
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func is_no_space(problem os.Error) bool {
+    switch problem {
+        case os.Error.System(code, completed): return code == 28;
+        case os.Error.Interrupted(code, completed): return false;
+        case os.Error.WouldBlock(code, completed): return false;
+        case os.Error.NoProgress(completed): return false;
+    }
+}
+
+func expect_dev_full_write_file(rows Vec[Vec[string]]) bool {
+    try {
+        csv_io.write_file("/dev/full", rows);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Io(problem): return is_no_space(problem);
+            case csv_io.Error.Csv(problem): return false;
+            case csv_io.Error.PendingOutput: return false;
+            case csv_io.Error.BatchIo(cause, accepted): return false;
+        }
+    }
+    return false;
+}
+
+func check_dev_full_file_writer() i32 throws csv_io.Error {
+    // Small output stays in the 4096-byte writer buffer, so it fails in the
+    // final flush. Large output flushes during write_all; the file helper has
+    // already closed its Writer and must map that BatchIo to Io either way.
+    if !expect_dev_full_write_file([["small"]]) { return 233; }
+    let large = text.repeat("x", 5000);
+    if !expect_dev_full_write_file([[large]]) { return 234; }
+    return 0;
+}
+
+func check_dev_full_writer_contract() i32 throws csv_io.Error {
+    // The public Writer, unlike write_file, retains the accepted row. On the
+    // same /dev/full large-row case it reports BatchIo and then PendingOutput.
+    let file = open_dev_full();
+    defer { close_quietly(file); }
+    let large = text.repeat("x", 5000);
+    let output = csv_io.writer(io.writer(file));
+    var batch = false;
+    var accepted usize = 0;
+    try {
+        csv_io.write_all(output, [[large]]);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.BatchIo(cause, count):
+                batch = is_no_space(cause);
+                accepted = count;
+            default: {}
+        }
+    }
+    if !batch || accepted != 1 { return 235; }
+    var pending = false;
+    try {
+        csv_io.write_all(output, [["x"]]);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.PendingOutput: pending = true;
+            default: {}
+        }
+    }
+    if !pending { return 236; }
+    return 0;
+}
+
+func main() i32 throws csv_io.Error {
+    try {
+        let info = os.lstat("/dev/full");
+        // Only use the existing Linux character device for this fixture.
+        if (info.mode & os.S_IFMT) != 0o20000 { return 237; }
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+    let result = check_dev_full_file_writer();
+    if result != 0 { return result; }
+    return check_dev_full_writer_contract();
+}

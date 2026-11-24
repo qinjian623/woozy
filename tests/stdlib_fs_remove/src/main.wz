@@ -1,0 +1,295 @@
+// Native-only acceptance fixture for fs.remove_dir_all.
+//
+// The fixture creates its own scratch root in the current directory, which the
+// shared stdlib runner has already made private and temporary. Every check uses
+// the real filesystem through std/os; nothing is mocked. main returns 0 on
+// success or a unique non-zero code for the first failed check.
+package app;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/random" as random;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code, completed): return code;
+        case os.Error.WouldBlock(code, completed): return code;
+        case os.Error.System(code, completed): return code;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+
+func make_file(path string) throws os.Error {
+    let file = os.open(path,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all_text(file,"x");
+    closed = true;
+    os.close(file);
+}
+
+func exists(path string) bool throws os.Error {
+    try { let info = os.lstat(path); return true; }
+    catch error os.Error {
+        if error_code(error) == 2 { return false; }
+        throw error;
+    }
+}
+
+func expect_error(path string, expected i32) bool throws os.Error {
+    try {
+        fs.remove_dir_all(path);
+        io.eprintln("remove_dir_all("+path+") unexpectedly succeeded");
+        return false;
+    } catch error os.Error {
+        let actual = error_code(error);
+        if actual != expected {
+            io.eprintln("remove_dir_all("+path+") returned "+
+                strconv.format_i64(i64(actual))+", expected "+
+                strconv.format_i64(i64(expected)));
+            return false;
+        }
+    }
+    return true;
+}
+
+func open_directory(path string) os.File throws os.Error {
+    return os.open(path,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+}
+
+func test_normal(root string) i32 throws os.Error {
+    let normal = root+"/normal";
+    let outside = root+"/outside";
+    os.mkdir(normal,0o700);
+    os.mkdir(normal+"/one",0o700);
+    os.mkdir(normal+"/one/two",0o700);
+    make_file(normal+"/top");
+    make_file(normal+"/one/mid");
+    make_file(normal+"/one/two/deep");
+    os.mkfifo(normal+"/pipe",0o600);
+    os.mkdir(outside,0o700);
+    make_file(outside+"/keep");
+    os.symlink(outside,normal+"/dir-link");
+    os.symlink(outside+"/keep",normal+"/file-link");
+    os.symlink("one",normal+"/relative-link");
+
+    // A trailing separator names the same root entry.
+    fs.remove_dir_all(normal+"/");
+    if exists(normal) { return 10; }
+    // Symlinks were removed as entries. Their outside targets stay intact.
+    if !exists(outside) || !exists(outside+"/keep") { return 11; }
+    os.unlink(outside+"/keep");
+    fs.remove_dir_all(outside);
+    if exists(outside) { return 12; }
+    return 0;
+}
+
+func test_root_kinds(root string) i32 throws os.Error {
+    let file = root+"/file";
+    make_file(file);
+    if !expect_error(file,20) { return 20; }
+    if !exists(file) { return 21; }
+    os.unlink(file);
+
+    let target = root+"/target";
+    os.mkdir(target,0o700);
+    make_file(target+"/keep");
+    let link = root+"/target-link";
+    os.symlink(target,link);
+    if !expect_error(link,40) { return 22; }
+    if !exists(link) || !exists(target+"/keep") { return 23; }
+    os.unlink(link);
+    fs.remove_dir_all(target);
+    if exists(target) { return 24; }
+    return 0;
+}
+
+func test_rejected_spellings(root string) i32 throws os.Error {
+    let dot = root+"/dot";
+    os.mkdir(dot,0o700);
+    make_file(dot+"/keep");
+    if !expect_error("/",22) { return 30; }
+    if !expect_error("///",22) { return 31; }
+    if !expect_error("",22) { return 32; }
+    if !expect_error(".",22) { return 33; }
+    if !expect_error("..",22) { return 34; }
+    if !expect_error("./",22) { return 35; }
+    if !expect_error("../",22) { return 36; }
+    if !expect_error(dot+"/.",22) { return 37; }
+    if !expect_error(dot+"/..",22) { return 38; }
+    if !exists(dot) || !exists(dot+"/keep") { return 39; }
+    fs.remove_dir_all(dot+"/");
+    if exists(dot) { return 40; }
+    return 0;
+}
+
+func test_missing(root string) i32 throws os.Error {
+    let missing_path = root+"/missing";
+    if !expect_error(missing_path,2) { return 45; }
+    if exists(missing_path) { return 46; }
+    return 0;
+}
+
+func test_raw_names(root string) i32 throws os.Error {
+    let raw_root = root+"/raw";
+    os.mkdir(raw_root,0o700);
+    let directory = open_directory(raw_root);
+    var directory_closed = false;
+    defer {
+        if !directory_closed {
+            try { os.close(directory); } catch error os.Error {}
+        }
+    }
+
+    let raw_file = text.bytes("file");
+    vec.push(raw_file,u8(255));
+    let file = os.openat_bytes(directory,raw_file,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    os.write_all_text(file,"x");
+    os.close(file);
+
+    let raw_dir = text.bytes("dir");
+    vec.push(raw_dir,u8(254));
+    os.mkdirat_bytes(directory,raw_dir,0o700);
+    let child = os.openat_bytes(directory,raw_dir,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    let raw_child = text.bytes("child");
+    vec.push(raw_child,u8(128));
+    let child_file = os.openat_bytes(child,raw_child,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    os.write_all_text(child_file,"y");
+    os.close(child_file);
+    os.close(child);
+
+    directory_closed = true;
+    os.close(directory);
+    fs.remove_dir_all(raw_root);
+    if exists(raw_root) { return 50; }
+    return 0;
+}
+
+func test_deep(root string) i32 throws os.Error {
+    let deep = root+"/deep";
+    os.mkdir(deep,0o700);
+    let start = open_directory(deep);
+    var current = start;
+    for var depth usize = 0; depth < 2048; depth += 1 {
+        os.mkdirat(current,"d",0o700);
+        let child = os.openat(current,"d",
+            os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+        os.close(current);
+        current = child;
+    }
+    let leaf = os.openat(current,"leaf",
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    os.write_all_text(leaf,"z");
+    os.close(leaf);
+    os.close(current);
+
+    // The full path is longer than PATH_MAX; traversal must use descriptors.
+    fs.remove_dir_all(deep);
+    if exists(deep) { return 55; }
+    return 0;
+}
+
+func test_indirect_parent(root string) i32 throws os.Error {
+    let real = root+"/real";
+    os.mkdir(real,0o700);
+    let branch = real+"/a";
+    os.mkdir(branch,0o700);
+    let target = branch+"/base";
+    os.mkdir(target,0o700);
+    make_file(target+"/drop");
+    make_file(branch+"/keep");
+    let link = root+"/link";
+    // The link is relative to root, and ".." after it returns to real. A
+    // lexical clean of link/../a/base would instead select root/a/base.
+    os.symlink("real/a",link);
+    fs.remove_dir_all(root+"/link/../a/base");
+    if exists(target) { return 60; }
+    if !exists(branch+"/keep") { return 61; }
+    if !exists(link) { return 62; }
+    os.unlink(link);
+    fs.remove_dir_all(real);
+    if exists(real) { return 63; }
+    return 0;
+}
+
+func test_wide(root string) i32 throws os.Error {
+    let wide = root+"/wide";
+    os.mkdir(wide,0o700);
+    // More than one 8192-byte getdents buffer, so earlier raw names must stay
+    // valid after later batches overwrite the decode scratch buffer.
+    for var index usize = 0; index < 600; index += 1 {
+        let path = wide+"/entry-"+strconv.format_u64(u64(index));
+        make_file(path);
+    }
+    fs.remove_dir_all(wide);
+    if exists(wide) { return 74; }
+    return 0;
+}
+
+func descriptor_count() i32 throws os.Error {
+    return i32(vec.len(fs.read_dir("/proc/self/fd")));
+}
+
+func test_lifecycle(root string) i32 throws os.Error {
+    let baseline = descriptor_count();
+    for var index usize = 0; index < 64; index += 1 {
+        let path = root+"/cycle-"+strconv.format_u64(u64(index));
+        os.mkdir(path,0o700);
+        os.mkdir(path+"/sub",0o700);
+        make_file(path+"/sub/file");
+        fs.remove_dir_all(path);
+    }
+    for var index usize = 0; index < 64; index += 1 {
+        let path = root+"/badfile-"+strconv.format_u64(u64(index));
+        make_file(path);
+        if !expect_error(path,20) { return 70; }
+        if !exists(path) { return 71; }
+        os.unlink(path);
+        let absent = root+"/absent-"+strconv.format_u64(u64(index));
+        if !expect_error(absent,2) { return 72; }
+    }
+    let after = descriptor_count();
+    if after != baseline {
+        io.eprintln("descriptor count changed from "+
+            strconv.format_i64(i64(baseline))+" to "+
+            strconv.format_i64(i64(after)));
+        return 73;
+    }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let root = "fs-remove-"+strconv.format_i64(i64(os.getpid()))+"-"+
+        strconv.format_u64(random.secure_u64());
+    os.mkdir(root,0o700);
+    var status = test_normal(root);
+    if status != 0 { return status; }
+    status = test_root_kinds(root);
+    if status != 0 { return status; }
+    status = test_rejected_spellings(root);
+    if status != 0 { return status; }
+    status = test_missing(root);
+    if status != 0 { return status; }
+    status = test_raw_names(root);
+    if status != 0 { return status; }
+    status = test_deep(root);
+    if status != 0 { return status; }
+    status = test_indirect_parent(root);
+    if status != 0 { return status; }
+    status = test_wide(root);
+    if status != 0 { return status; }
+    status = test_lifecycle(root);
+    if status != 0 { return status; }
+    fs.remove_dir_all(root);
+    if exists(root) { return 99; }
+    return 0;
+}

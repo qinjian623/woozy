@@ -1,0 +1,31 @@
+// gather snapshots the input Vec synchronously. Clearing and replacing the
+// caller's Vec before the returned Task runs must not change the group.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+enum Failure { Unexpected; }
+
+async func value(x i32, delay i64) i32 throws Failure {
+    await a.sleep(delay);
+    return x;
+}
+
+async func main() i32 throws os.Error {
+    let tasks = [value(3, 10), value(1, 1), value(2, 5)];
+    let group = a.gather[i32,Failure](tasks);
+    vec.clear(tasks);
+    vec.push(tasks, value(99, 1));
+    io.println(vec.len(tasks));
+    let outcome = await group;
+    switch outcome {
+        case result.Result.Ok(values): {
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    return 0;
+}

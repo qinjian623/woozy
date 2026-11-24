@@ -1,0 +1,38 @@
+// Both members are pending during the first scan, so both are activated. The
+// failing member cancels the running sibling and then throws. The type error
+// and the sibling cancellation land in the same drain scan; the real typed
+// error must win.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+enum Failure { Late; }
+
+async func hold(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "hold.cleanup"); }
+    await a.sleep(200);
+    vec.push(log, "hold.after");
+    return 0;
+}
+
+async func fail_after_cancel(other Task[i32,Failure], log Vec[string]) i32 throws Failure {
+    a.cancel(other);
+    vec.push(log, "fail.throw");
+    throw Failure.Late;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let holding = hold(log);
+    let failing = fail_after_cancel(holding, log);
+    let outcome = await a.gather[i32,Failure]([holding, failing]);
+    switch outcome {
+        case result.Result.Ok(values): io.println("unexpected.ok");
+        case result.Result.Err(error): io.println("typed-error");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

@@ -1,0 +1,17 @@
+// Minimal compiler limitation reproducer: an async function may not declare
+// `throws E` for a type parameter. The build must fail with
+// E_EFFECT_UNHANDLED at `throw value`. This is why gather returns Result and
+// or_throw performs the typed throw synchronously after cleanup.
+package app;
+import "std/os" as os;
+
+enum Failure { Bad; }
+
+async func rethrow[E](value E) Unit throws E {
+    throw value;
+}
+
+async func main() i32 throws os.Error {
+    await rethrow[Failure](Failure.Bad);
+    return 0;
+}

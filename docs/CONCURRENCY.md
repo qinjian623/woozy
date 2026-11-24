@@ -296,6 +296,8 @@ async func main() i32 throws os.Error {
 | `sleep(milliseconds)` | 返回按单调时间等待的任务 |
 | `readable(fd)`、`writable(fd)` | 等待描述符可读或可写，不执行读写，也不取得描述符所有权 |
 | `join(task)`、`join_all(tasks)` | 在异步函数中等待一个任务或依次等待一组任务，并传播声明的错误 |
+| `gather(tasks)` | 在 Linux Native 创建任务组，按输入顺序返回结果。失败时取消余下成员，等它们清理完再返回 |
+| `or_throw(result)` | 取出 `Ok` 的值，或抛出 `Err` 中的有类型错误 |
 
 `await` 只能写在 async 函数里，操作数必须是 `Task`；否则分别报 `E_AWAIT_CONTEXT` 和 `E_AWAIT_NOT_TASK`。async 只支持自由函数：方法不能声明 async，取 async 函数值也会报 `E_CAPABILITY_UNAVAILABLE`。同一个 Task 可以重复 await，每次都读到同一个结果，函数体只执行一次。
 
@@ -305,6 +307,33 @@ async func main() i32 throws os.Error {
 
 未启动或已完成 Task 中的纯 Woozy 强引用循环会自动回收。仍由执行器执行或等待事件的任务保持存活，清理句柄不会自动取消它；需要停止时调用 cancel 或 shutdown。异线程拥有执行器时 fork 抛出 os.Error，同线程 fork 的规则见[进程文档](PROCESSES.md)。
 
-`std/http_server` 使用同一执行器实现 HTTP/1.1 服务器：每个连接一个任务，非阻塞读写，`WouldBlock` 后等待描述符，支持 keep-alive、流水线、`Expect: 100-continue`、header/body/idle/write 超时、`max_connections`/`max_requests` 上限，以及 stop/drain/abort 生命周期。单个 watchdog 任务负责扫描连接表，只对描述符调用 `shutdown`，关闭连接仍由连接任务负责。handler 在单线程执行器中同步运行。示例见[标准库](STDLIB.md#stdhttp_server)。
+### 等待一组任务
+
+`gather` 在调用时复制任务句柄，后续对输入 Vec 的修改不影响分组。等待或启动这组任务后，执行器按成员就绪的时间推进。下面的程序按输入顺序输出 `1`、`2`。
+
+```wz
+package app;
+import "std/async" as tasks;
+import "std/io" as io;
+import "std/os" as os;
+
+async func answer(value i32, delay i64) i32 throws os.Error {
+    await tasks.sleep(delay);
+    return value;
+}
+
+async func main() i32 throws os.Error {
+    let group = tasks.gather([answer(1, 20), answer(2, 1)]);
+    let values = tasks.or_throw(await group);
+    for value in values { io.println(value); }
+    return 0;
+}
+```
+
+`gather` 的结果是 `Result[Vec[T],E]`，可以直接匹配 `Ok` 和 `Err`。定时器和描述符等待也能作为成员。组为空时返回 `Ok([])`，重复传入同一任务会为每一项保留一个结果位置。
+
+组观察到有类型错误或成员取消时，会取消尚未完成的其他成员并等待清理。组返回观察到的第一个有类型错误。同一轮看到多个错误时，按输入顺序取第一个。仅有成员取消时，组传播取消。外部取消任务组或取消等待该组的父任务会先等待所有成员清理，再传播取消。
+
+`std/http_server` 用同一执行器处理 HTTP/1.1。每个连接一个任务，非阻塞读写，`WouldBlock` 后等待描述符。单个 watchdog 任务扫描连接表，超时后对描述符调用 `shutdown`，关闭连接由连接任务负责。`listen` 的 handler 同步运行，处理期间占用执行器线程。`listen_async` 和 `listen_stream` 的 handler 返回任务，等待 I/O 时执行器可以运行其他任务。`listen_stream` 允许逐段读请求正文和发送响应。 [HTTP 服务器](STDLIB.md#stdhttp_server)
 
 async 支持 Linux x86_64 和 macOS arm64 的 Native 程序。`inout` 参数会在编译时拒绝。async 的参数、局部值、结果或错误不能包含外部 C 资源句柄。对函数值和 dyn 的资源检查目前按程序中出现的类型保守处理，因此含同类值、但实际没有保存 C 资源的 async 函数也可能被拒绝。Python 后端暂不支持 async。

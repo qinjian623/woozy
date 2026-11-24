@@ -49,6 +49,15 @@ enum class SystemOperation : uint16_t {
   fs_stat_bytes,
   fs_flock,
   fs_executable_path,
+  // Descriptor-relative operations over exactly one directory-entry name.
+  // They are appended so every existing operation number and ABI stays put.
+  fs_openat = 216, fs_mkdirat = 217, fs_unlinkat = 218, fs_fstatat = 219,
+  fs_readlinkat = 220, fs_symlinkat = 221,
+  async_scope_begin = 222, async_scope_add, async_scope_activate,
+  async_scope_wait, async_task_status,
+  // Private byte-range append owned by std/io. It stays outside the
+  // value_system_operations family, so the Python/64 profile rejects it.
+  io_vec_append_bytes = 227,
   // Package-private code-point cursor slicing for std/unicode.graphemes.
   // 216-227 are reserved for independent pending operations; the explicit
   // value keeps this operation stable when those entries are appended.
@@ -86,7 +95,7 @@ inline constexpr std::array<SystemOperationSpec, 13> system_operations{{
   {SystemOperation::vec_length, "__woozy_os_vec_length", "usize", {"Vec[u8]", "", "", ""}, 1},
   {SystemOperation::text_length, "__woozy_os_text_length", "usize", {"string", "", "", ""}, 1},
 }};
-inline constexpr std::array<SystemOperationSpec, 9> async_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 14> async_system_operations{{
   {SystemOperation::async_spawn, "__woozy_async_spawn", "Unit",
    {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
   {SystemOperation::async_cancel, "__woozy_async_cancel", "Unit",
@@ -105,6 +114,24 @@ inline constexpr std::array<SystemOperationSpec, 9> async_system_operations{{
    {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
   {SystemOperation::async_shutdown, "__woozy_async_shutdown", "Unit",
    {"", "", "", ""}, 0, "std/async"},
+  {SystemOperation::async_scope_begin, "__woozy_async_scope_begin", "Unit",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_scope_add, "__woozy_async_scope_add", "Unit",
+   {"Task[A,B]", "Task[C,D]", "", ""}, 2, "std/async", 4},
+  {SystemOperation::async_scope_activate, "__woozy_async_scope_activate",
+   "Unit", {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_scope_wait, "__woozy_async_scope_wait",
+   "Task[Unit,Unit]", {"", "", "", ""}, 0, "std/async"},
+  {SystemOperation::async_task_status, "__woozy_async_task_status", "i32",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+}};
+// One compiler-private byte-range append for std/io. The operand and result
+// types are fixed to Vec[u8]/Unit; no address, syscall number or stride is
+// exposed to source. Keeping it out of value_system_operations makes the
+// existing Native/64 capability gate apply without a new special case.
+inline constexpr std::array<SystemOperationSpec, 1> io_system_operations{{
+  {SystemOperation::io_vec_append_bytes, "__woozy_io_vec_append_bytes",
+   "Unit", {"Vec[u8]", "Vec[u8]", "usize", "usize"}, 4, "std/io"},
 }};
 // New owning runtime operations are kept in a separate table so the original
 // std/os operation inventory (and its source tests) remains exact. Both tables
@@ -212,7 +239,7 @@ inline constexpr std::array<SystemOperationSpec, 62> value_system_operations{{
   {SystemOperation::math_isfinite, "__woozy_math_isfinite", "bool", {"f64"}, 1, "std/math"},
   {SystemOperation::math_signbit, "__woozy_math_signbit", "bool", {"f64"}, 1, "std/math"},
 }};
-inline constexpr std::array<SystemOperationSpec, 37> os_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 43> os_system_operations{{
   {SystemOperation::fs_stat, "__woozy_os_stat", "Result[std/os.FileInfo,i32]", {"string"}, 1},
   {SystemOperation::fs_lstat, "__woozy_os_lstat", "Result[std/os.FileInfo,i32]", {"string"}, 1},
   {SystemOperation::fs_fstat, "__woozy_os_fstat", "Result[std/os.FileInfo,i32]", {"i32"}, 1},
@@ -252,6 +279,21 @@ inline constexpr std::array<SystemOperationSpec, 37> os_system_operations{{
   {SystemOperation::fs_stat_bytes, "__woozy_os_stat_bytes", "Result[std/os.FileInfo,i32]", {"Vec[u8]"}, 1},
   {SystemOperation::fs_flock, "__woozy_os_flock", "Result[Unit,i32]", {"i32", "i32"}, 2},
   {SystemOperation::fs_executable_path, "__woozy_os_executable_path", "i64", {"Vec[u8]", "usize"}, 2},
+  // The name parameter is raw bytes so a directory entry returned by
+  // getdents can be used without a UTF-8 decode. The runtime accepts exactly
+  // one component and rejects empty, '.', '..', NUL and '/' entries.
+  {SystemOperation::fs_openat, "__woozy_os_openat", "Result[i32,i32]", {"i32", "Vec[u8]", "i32", "u32"}, 4},
+  {SystemOperation::fs_mkdirat, "__woozy_os_mkdirat", "Result[Unit,i32]", {"i32", "Vec[u8]", "u32"}, 3},
+  // The i32 argument is a typed intent, not a platform flag: 0 removes a
+  // non-directory entry, 1 removes a directory entry.
+  {SystemOperation::fs_unlinkat, "__woozy_os_unlinkat", "Result[Unit,i32]", {"i32", "Vec[u8]", "i32"}, 3},
+  // 0 follows the final symlink; 1 reports the link itself.
+  {SystemOperation::fs_fstatat, "__woozy_os_fstatat", "Result[std/os.FileInfo,i32]", {"i32", "Vec[u8]", "i32"}, 3},
+  // Both names and symbolic-link targets stay raw bytes. readlinkat returns
+  // the byte count into the caller's borrowed buffer, exactly like the
+  // existing readlink operation; symlinkat never resolves its target.
+  {SystemOperation::fs_readlinkat, "__woozy_os_readlinkat_bytes", "i64", {"i32", "Vec[u8]", "Vec[u8]"}, 3},
+  {SystemOperation::fs_symlinkat, "__woozy_os_symlinkat_bytes", "Result[Unit,i32]", {"i32", "Vec[u8]", "Vec[u8]"}, 3},
 }};
 inline constexpr std::array<SystemOperationSpec, 21> network_system_operations{{
   {SystemOperation::net_socket, "__woozy_net_socket", "Result[i32,i32]", {"i32", "i32", "i32"}, 3, "std/net"},
@@ -364,7 +406,7 @@ inline constexpr std::array<SystemOperationSpec, 3> weak_system_operations{{
 }};
 inline constexpr auto all_system_operations = [] {
   std::array<SystemOperationSpec, system_operations.size() +
-      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size() + weak_system_operations.size() + async_system_operations.size()> all{};
+      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size() + weak_system_operations.size() + async_system_operations.size() + io_system_operations.size()> all{};
   std::size_t index = 0;
   for (const auto &spec : system_operations) all[index++] = spec;
   for (const auto &spec : concurrency_system_operations) all[index++] = spec;
@@ -376,6 +418,7 @@ inline constexpr auto all_system_operations = [] {
   for (const auto &spec : slice_system_operations) all[index++] = spec;
   for (const auto &spec : weak_system_operations) all[index++] = spec;
   for (const auto &spec : async_system_operations) all[index++] = spec;
+  for (const auto &spec : io_system_operations) all[index++] = spec;
   return all;
 }();
 inline const SystemOperationSpec *system_operation_spec(SystemOperation operation) {

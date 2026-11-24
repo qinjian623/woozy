@@ -1,0 +1,715 @@
+// Source fixture for std/http_server stream handlers.
+//
+// LISTENING is printed first. Request handlers also print lifecycle lines so
+// the Python runner can observe body pieces before the full request arrives,
+// response chunks before the handler finishes, stale-handle rejection, and
+// cancellation cleanup.
+package app;
+
+import "std/async" as tasks;
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const BACKPRESSURE_CHUNK usize = 262144;
+const BACKPRESSURE_COUNT usize = 64;
+const HOLD_WRITE_BYTES usize = 33554432;
+
+func bool_text(value bool) string {
+    if value {
+        return "true";
+    }
+    return "false";
+}
+
+func is_read_order(error http.Error) bool {
+    switch error {
+        case http.Error.ReadOrder: return true;
+        default: return false;
+    }
+}
+
+func log_event(line string) {
+    try {
+        io.println(line);
+    }
+    catch error os.Error {}
+}
+
+func chunked_response(status i32) http.Response {
+    return http.Response(
+        version: "HTTP/1.1",
+        status: status,
+        reason: vec.empty[u8](),
+        headers: [http.text_header("X-Stream", "yes")],
+        body: vec.empty[u8](),
+        trailers: vec.empty[http.Header]());
+}
+
+async func stale_attempt(stream server.Stream) Unit {
+    await tasks.sleep(200);
+    var rejected = false;
+    try {
+        await server.start(stream, server.text_response(200, "stale"));
+    } catch error http.Error {
+        rejected = true;
+    }
+    if rejected {
+        log_event("STALE-REJECTED");
+    } else {
+        log_event("STALE-USED");
+    }
+    return;
+}
+
+async func return_read_op(stream server.Stream, signal Vec[u64]) Unit {
+    log_event("RETURN-READ-OP-START");
+    signal[0] = 1;
+    var failed = false;
+    var ordered = false;
+    try {
+        let part = await server.read(stream, 65536);
+        let ignored = part;
+    } catch error http.Error {
+        failed = true;
+        ordered = is_read_order(error);
+    }
+    if ordered {
+        log_event("RETURN-READ-OP-REJECTED ReadOrder");
+    } else if failed {
+        log_event("RETURN-READ-OP-REJECTED Other");
+    } else {
+        log_event("RETURN-READ-OP-AFTER");
+    }
+    return;
+}
+
+async func return_write_op(stream server.Stream, signal Vec[u64]) Unit {
+    log_event("RETURN-WRITE-OP-START");
+    var failed = false;
+    var ordered = false;
+    try {
+        await server.start_chunked(stream, chunked_response(200));
+        let payload = vec.make[u8](HOLD_WRITE_BYTES, 122);
+        signal[0] = 1;
+        await server.write_chunk(stream, payload);
+        await server.finish(stream, vec.empty[http.Header]());
+        log_event("RETURN-WRITE-OP-AFTER");
+    } catch error http.Error {
+        failed = true;
+        ordered = is_read_order(error);
+    }
+    if ordered {
+        log_event("RETURN-WRITE-OP-REJECTED ReadOrder");
+    } else if failed {
+        log_event("RETURN-WRITE-OP-REJECTED Other");
+    }
+    return;
+}
+
+async func overlap_read_op(stream server.Stream, signal Vec[u64]) Unit {
+    log_event("OVERLAP-READ-OP-START");
+    var failed = false;
+    var total u64 = 0;
+    try {
+        let part = await server.read(stream, 65536);
+        total = u64(vec.len(part.data));
+    } catch error http.Error {
+        failed = true;
+    }
+    signal[0] = 1;
+    if failed {
+        log_event("OVERLAP-READ-OP-ERROR");
+    } else {
+        log_event("OVERLAP-READ-OP-DONE " +
+            strconv.format_u64(total));
+    }
+    return;
+}
+
+async func overlap_write_op(stream server.Stream, signal Vec[u64]) Unit {
+    log_event("OVERLAP-WRITE-OP-START");
+    var failed = false;
+    try {
+        await server.start_chunked(stream, chunked_response(200));
+        let payload = vec.make[u8](HOLD_WRITE_BYTES, 123);
+        signal[0] = 1;
+        await server.write_chunk(stream, payload);
+        await server.finish(stream, [http.text_header("X-Overlap", "done")]);
+        log_event("OVERLAP-WRITE-OP-DONE");
+    } catch error http.Error {
+        failed = true;
+    }
+    signal[1] = 1;
+    if failed {
+        log_event("OVERLAP-WRITE-OP-ERROR");
+    }
+    return;
+}
+
+async func timeout_alias_probe(stream server.Stream) Unit {
+    defer { log_event("ALIAS-READER-CLEANUP"); }
+    log_event("ALIAS-READER-START");
+    try { let part = await server.read(stream, 64); }
+    catch error http.Error {}
+    return;
+}
+
+async func timeout_alias_writer_probe(stream server.Stream) Unit {
+    defer { log_event("ALIAS-WRITER-CLEANUP"); }
+    log_event("ALIAS-WRITER-START");
+    var failed = false;
+    var ordered = false;
+    try {
+        await server.start_chunked(stream, chunked_response(200));
+        log_event("ALIAS-WRITER-HEAD");
+        let payload = vec.make[u8](HOLD_WRITE_BYTES, 126);
+        await server.write_chunk(stream, payload);
+        log_event("ALIAS-WRITER-AFTER");
+    } catch error http.Error {
+        failed = true;
+        ordered = is_read_order(error);
+    }
+    if ordered {
+        log_event("ALIAS-WRITER-EXIT ReadOrder");
+    } else if failed {
+        log_event("ALIAS-WRITER-EXIT Other");
+    }
+    return;
+}
+
+async func direct_cancel_writer(stream server.Stream, gate Vec[u64]) Unit {
+    defer { log_event("DCW-WRITER-CLEANUP"); }
+    log_event("DCW-WRITER-START");
+    var failed = false;
+    var ordered = false;
+    try {
+        await server.start_chunked(stream, chunked_response(200));
+        log_event("DCW-WRITER-HEAD");
+        let payload = vec.make[u8](HOLD_WRITE_BYTES, 127);
+        gate[0] = 1;
+        await server.write_chunk(stream, payload);
+        log_event("DCW-WRITER-AFTER");
+    } catch error http.Error {
+        failed = true;
+        ordered = is_read_order(error);
+    }
+    if ordered {
+        log_event("DCW-WRITER-EXIT ReadOrder");
+    } else if failed {
+        log_event("DCW-WRITER-EXIT Other");
+    }
+    return;
+}
+
+async func stale_fd_attempt(stream server.Stream) Unit {
+    await tasks.sleep(3000);
+    log_event("STALE-FD-ATTEMPT");
+    var failed = false;
+    var ordered = false;
+    try {
+        await server.start(stream, server.text_response(200, "stale-fd"));
+    } catch error http.Error {
+        failed = true;
+        ordered = is_read_order(error);
+    }
+    if ordered {
+        log_event("STALE-FD-REJECTED ReadOrder");
+    } else if failed {
+        log_event("STALE-FD-REJECTED Other");
+    } else {
+        log_event("STALE-FD-USED");
+    }
+    return;
+}
+
+async func route(
+    request http.Request,
+    stream server.Stream,
+    signal Vec[u64]) Unit throws http.Error {
+    if request.target == "/return-read" {
+        log_event("RETURN-READ-START /return-read");
+        let pending = vec.make[u64](1, 0);
+        tasks.spawn(return_read_op(stream, pending));
+        for pending[0] == 0 {
+            await tasks.sleep(1);
+        }
+        await tasks.sleep(20);
+        log_event("RETURN-READ-HANDLER-DONE /return-read");
+        return;
+    }
+    if request.target == "/return-write" {
+        log_event("RETURN-WRITE-START /return-write");
+        let pending = vec.make[u64](1, 0);
+        tasks.spawn(return_write_op(stream, pending));
+        for pending[0] == 0 {
+            await tasks.sleep(1);
+        }
+        await tasks.sleep(50);
+        log_event("RETURN-WRITE-HANDLER-DONE /return-write");
+        return;
+    }
+    if request.target == "/overlap-read-start" {
+        log_event("OVERLAP-READ-START /overlap-read-start");
+        let pending = vec.make[u64](1, 0);
+        tasks.spawn(overlap_read_op(stream, pending));
+        await tasks.sleep(100);
+        var rejected = false;
+        try {
+            await server.start(stream,
+                server.text_response(200, "poisoned"));
+        } catch error http.Error {
+            rejected = true;
+        }
+        log_event("OVERLAP-READ-COMMIT " + bool_text(rejected));
+        for pending[0] == 0 {
+            await tasks.sleep(10);
+        }
+        await server.start(stream,
+            server.text_response(200, "after-read"));
+        return;
+    }
+    if request.target == "/overlap-write-read" {
+        log_event("OVERLAP-WRITE-READ-START /overlap-write-read");
+        let pending = vec.make[u64](2, 0);
+        tasks.spawn(overlap_write_op(stream, pending));
+        for pending[0] == 0 {
+            await tasks.sleep(1);
+        }
+        await tasks.sleep(50);
+        var rejected = false;
+        try {
+            let part = await server.read(stream, 65536);
+            let ignored = part;
+        } catch error http.Error {
+            rejected = true;
+        }
+        log_event("OVERLAP-WRITE-READ " + bool_text(rejected));
+        for pending[1] == 0 {
+            await tasks.sleep(10);
+        }
+        return;
+    }
+    if request.target == "/timeout-aliased-read" {
+        let reader = timeout_alias_probe(stream);
+        tasks.spawn(reader);
+        defer { log_event("ALIAS-HANDLER-CLEANUP"); }
+        await tasks.sleep(60000);
+        return;
+    }
+    if request.target == "/timeout-aliased-write" {
+        let writer = timeout_alias_writer_probe(stream);
+        tasks.spawn(writer);
+        defer { log_event("ALIAS-WRITER-HANDLER-CLEANUP"); }
+        await tasks.sleep(60000);
+        return;
+    }
+    if request.target == "/direct-cancel-aliased-write" {
+        log_event("DCW-HANDLER-START");
+        let gate = vec.make[u64](1, 0);
+        let writer = direct_cancel_writer(stream, gate);
+        tasks.spawn(writer);
+        for gate[0] == 0 {
+            await tasks.sleep(1);
+        }
+        // The writer has entered write_chunk; leave time for the 32 MiB frame
+        // to be encoded and the nonblocking send to hit EAGAIN.
+        await tasks.sleep(1500);
+        tasks.cancel(writer);
+        for !tasks.finished(writer) {
+            await tasks.sleep(1);
+        }
+        log_event("DCW-HANDLER-DONE");
+        return;
+    }
+    if request.target == "/stale-fd-reuse" {
+        log_event("STALE-FD-HANDLER-START");
+        let retained = stream;
+        tasks.spawn(stale_fd_attempt(retained));
+        await server.start(stream, server.text_response(200, "stale-fd-base"));
+        log_event("STALE-FD-HANDLER-DONE");
+        return;
+    }
+    if request.target == "/fast" {
+        await server.start(stream, server.text_response(200, "fast"));
+        return;
+    }
+    if request.target == "/fixed" {
+        await server.start(stream, server.text_response(200, "fixed"));
+        return;
+    }
+    if request.target == "/head" {
+        await server.start(stream, server.text_response(200, "head-body"));
+        return;
+    }
+    if request.target == "/no-content" {
+        await server.start(stream, http.Response(
+                version: "HTTP/1.1",
+                status: 204,
+                reason: vec.empty[u8](),
+                headers: vec.empty[http.Header](),
+                body: text.bytes("must-not-appear"),
+                trailers: vec.empty[http.Header]()));
+        return;
+    }
+    if request.target == "/echo-chunked" {
+        await server.start_chunked(stream, chunked_response(200));
+        for true {
+            let part = await server.read(stream, 65536);
+            if vec.len(part.data) != 0 {
+                await server.write_chunk(stream, part.data);
+            }
+            if part.done {
+                var trailer_count = strconv.format_u64(u64(vec.len(part.trailers)));
+                await server.finish(stream, [
+                        http.text_header("X-Request-Trailers", trailer_count)]);
+                return;
+            }
+        }
+        return;
+    }
+    if request.target == "/buffered-echo" {
+        let body = vec.empty[u8]();
+        var trailer_count usize = 0;
+        for true {
+            let part = await server.read(stream, 65536);
+            for byte in part.data {
+                vec.push(body, byte);
+            }
+            if part.done {
+                trailer_count = vec.len(part.trailers);
+                break;
+            }
+        }
+        await server.start_chunked(stream, chunked_response(200));
+        if vec.len(body) != 0 {
+            await server.write_chunk(stream, body);
+        }
+        await server.finish(stream, [
+                http.text_header("X-Request-Trailers",
+                    strconv.format_u64(u64(trailer_count)))]);
+        return;
+    }
+    if request.target == "/read-early" {
+        var count u64 = 0;
+        var total u64 = 0;
+        for true {
+            let part = await server.read(stream, 64);
+            if vec.len(part.data) != 0 {
+                count += 1;
+                total += u64(vec.len(part.data));
+                log_event("BODY-PART " + request.target + " " +
+                    strconv.format_u64(u64(vec.len(part.data))) + " " +
+                    strconv.format_u64(total));
+            }
+            if part.done {
+                break;
+            }
+        }
+        await server.start(stream, server.text_response(200, "done"));
+        return;
+    }
+    if request.target == "/stream-early" {
+        await server.start_chunked(stream, chunked_response(200));
+        await server.write_chunk(stream, text.bytes("first"));
+        log_event("STREAM-FIRST /stream-early");
+        await tasks.sleep(400);
+        await server.write_chunk(stream, text.bytes("second"));
+        await server.finish(stream, [http.text_header("X-Trailer", "done")]);
+        return;
+    }
+    if request.target == "/backpressure" {
+        log_event("BP-START /backpressure");
+        await server.start_chunked(stream, chunked_response(200));
+        let payload = vec.make[u8](BACKPRESSURE_CHUNK, 120);
+        for var index usize = 0; index < BACKPRESSURE_COUNT; index += 1 {
+            await server.write_chunk(stream, payload);
+        }
+        await server.finish(stream, [http.text_header("X-Backpressure", "done")]);
+        log_event("BP-DONE /backpressure");
+        return;
+    }
+    if request.target == "/body-then-hold-proc" {
+        log_event("HOLD-PROC-START /body-then-hold-proc");
+        defer {
+            log_event("HOLD-PROC-CLEANUP /body-then-hold-proc");
+        }
+        for true {
+            let part = await server.read(stream, 65536);
+            if part.done {
+                break;
+            }
+        }
+        log_event("HOLD-PROC-BODY-DONE /body-then-hold-proc");
+        await tasks.sleep(5000);
+        log_event("HOLD-PROC-AFTER /body-then-hold-proc");
+        await server.start(stream, server.text_response(200, "unexpected"));
+        return;
+    }
+    if request.target == "/stream-pause" {
+        log_event("STREAM-PAUSE-START /stream-pause");
+        await server.start_chunked(stream, chunked_response(200));
+        await server.write_chunk(stream, text.bytes("one"));
+        await tasks.sleep(300);
+        await server.write_chunk(stream, text.bytes("two"));
+        await server.finish(stream, [http.text_header("X-Pause", "done")]);
+        log_event("STREAM-PAUSE-DONE /stream-pause");
+        return;
+    }
+    if request.target == "/hold" {
+        log_event("HOLD-START /hold");
+        defer {
+            log_event("HOLD-CLEANUP /hold");
+        }
+        await tasks.sleep(5000);
+        log_event("HOLD-AFTER /hold");
+        await server.start(stream, server.text_response(200, "held"));
+        return;
+    }
+    if request.target == "/hold-read" {
+        log_event("HOLD-READ-START /hold-read");
+        defer {
+            log_event("HOLD-READ-CLEANUP /hold-read");
+        }
+        for true {
+            let part = await server.read(stream, 65536);
+            if part.done {
+                break;
+            }
+        }
+        log_event("HOLD-READ-AFTER /hold-read");
+        await server.start(stream, server.text_response(200, "held"));
+        return;
+    }
+    if request.target == "/hold-write" {
+        log_event("HOLD-WRITE-START /hold-write");
+        defer {
+            log_event("HOLD-WRITE-CLEANUP /hold-write");
+        }
+        await server.start_chunked(stream, chunked_response(200));
+        let payload = vec.make[u8](HOLD_WRITE_BYTES, 121);
+        await server.write_chunk(stream, payload);
+        log_event("HOLD-WRITE-AFTER /hold-write");
+        await server.finish(stream, vec.empty[http.Header]());
+        return;
+    }
+    if request.target == "/fail" {
+        throw http.Error.InvalidTarget;
+    }
+    if request.target == "/commit-error" {
+        await server.start(stream, server.text_response(200, "partial"));
+        throw http.Error.InvalidTarget;
+    }
+    if request.target == "/too-large" {
+        for true {
+            let part = await server.read(stream, 65536);
+            if part.done {
+                break;
+            }
+        }
+        await server.start(stream, server.text_response(200, "unexpected"));
+        return;
+    }
+    if request.target == "/stale" {
+        let retained = stream;
+        tasks.spawn(stale_attempt(retained));
+        await server.start(stream, server.text_response(200, "stale-base"));
+        return;
+    }
+    if request.target == "/duplicate" {
+        await server.start_chunked(stream, chunked_response(200));
+        var rejected = 0;
+        try {
+            await server.start_chunked(stream, chunked_response(200));
+        } catch error http.Error {
+            rejected += 1;
+        }
+        await server.write_chunk(stream, text.bytes("a"));
+        await server.finish(stream, vec.empty[http.Header]());
+        try {
+            await server.finish(stream, vec.empty[http.Header]());
+        } catch error http.Error {
+            rejected += 1;
+        }
+        try {
+            await server.write_chunk(stream, text.bytes("b"));
+        } catch error http.Error {
+            rejected += 1;
+        }
+        log_event("DUP-REJECTED " + strconv.format_u64(u64(rejected)));
+        return;
+    }
+    if request.target == "/stop" {
+        signal[0] = 1;
+        await server.start(stream, server.text_response(200, "stopping"));
+        return;
+    }
+    if request.target == "/abort" {
+        signal[0] = 2;
+        await server.start(stream, server.text_response(200, "aborting"));
+        return;
+    }
+    await server.start(stream, server.text_response(404, "not found"));
+    return;
+}
+
+func make_handler(
+    signal Vec[u64]) (func(http.Request, server.Stream) Task[Unit, http.Error]) {
+    return func(request http.Request, stream server.Stream) Task[Unit, http.Error] {
+        return route(request, stream, signal);
+    };
+}
+
+async func controller(handle server.Server, signal Vec[u64]) i32 throws os.Error {
+    for signal[0] == 0 {
+        await tasks.sleep(10);
+    }
+    if signal[0] == 2 {
+        server.abort(handle);
+    } else {
+        server.stop(handle);
+    }
+    let drained = await server.drain(handle, 5000);
+    let value = server.stats(handle);
+    io.println("DRAINED " + bool_text(drained));
+    io.println(
+        "STATS active=" + strconv.format_u64(u64(value.active_connections)) +
+        " accepted=" + strconv.format_u64(value.accepted_connections) +
+        " requests=" + strconv.format_u64(value.requests) +
+        " bytes=" + strconv.format_u64(value.bytes_sent) +
+        " errors=" + strconv.format_u64(value.errors) +
+        " timeouts=" + strconv.format_u64(value.timeouts) +
+        " rejected=" + strconv.format_u64(value.rejected) +
+        " stopping=" + bool_text(value.stopping));
+    return 0;
+}
+
+func port_from(value string) u16 throws strconv.Error {
+    let parsed = strconv.parse_u64(value);
+    if parsed > 65535 {
+        throw strconv.Error.OutOfRange;
+    }
+    return u16(parsed);
+}
+
+func config_from(
+    body_timeout_ms i64,
+    drain_timeout_ms i64,
+    timer_tick_ms i64,
+    write_timeout_ms i64,
+    body_limit usize) server.Config {
+    var settings = server.default_config();
+    settings.header_timeout_ms = 5000;
+    settings.body_timeout_ms = body_timeout_ms;
+    settings.idle_timeout_ms = 5000;
+    settings.write_timeout_ms = write_timeout_ms;
+    settings.drain_timeout_ms = drain_timeout_ms;
+    settings.timer_tick_ms = timer_tick_ms;
+    settings.limits = http.limits(8192, body_limit, 100);
+    return settings;
+}
+
+async func main() i32 throws os.Error {
+    var arguments = vec.empty[string]();
+    try {
+        arguments = process.args();
+    }
+    catch error os.Error {
+        return 2;
+    }
+    var port u16 = 0;
+    var mode = "stream";
+    var body_timeout_ms i64 = 30000;
+    var drain_timeout_ms i64 = 1000;
+    var timer_tick_ms i64 = 20;
+    var write_timeout_ms i64 = 30000;
+    var processing_timeout_ms i64 = 30000;
+    var body_limit usize = 1048576;
+    if vec.len(arguments) > 1 {
+        try {
+            port = port_from(arguments[1]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 2 {
+        mode = arguments[2];
+    }
+    if vec.len(arguments) > 3 {
+        try {
+            body_timeout_ms = strconv.parse_i64(arguments[3]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 4 {
+        try {
+            drain_timeout_ms = strconv.parse_i64(arguments[4]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 5 {
+        try {
+            timer_tick_ms = strconv.parse_i64(arguments[5]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 6 {
+        try {
+            write_timeout_ms = strconv.parse_i64(arguments[6]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 7 {
+        try {
+            body_limit = usize(strconv.parse_u64(arguments[7]));
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 8 {
+        try {
+            processing_timeout_ms = strconv.parse_i64(arguments[8]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    let signal = vec.make[u64](1, 0);
+    let settings = config_from(
+        body_timeout_ms, drain_timeout_ms, timer_tick_ms,
+        write_timeout_ms, body_limit);
+    var listener = server.listen_stream_with_settings(
+        net.any4(port),
+        make_handler(signal),
+        settings,
+        server.stream_settings_with(
+            body_timeout_ms, processing_timeout_ms, write_timeout_ms));
+    if mode == "stream-default" {
+        server.close(listener);
+        listener = server.listen_stream(net.any4(port), make_handler(signal));
+    }
+    let address = server.local_address(listener);
+    io.println("LISTENING " + strconv.format_i64(i64(address.port)));
+    let serving = server.serve(listener);
+    tasks.spawn(serving);
+    let control = controller(listener, signal);
+    await control;
+    await serving;
+    return 0;
+}

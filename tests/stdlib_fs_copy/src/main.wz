@@ -1,0 +1,495 @@
+// Acceptance test for std/fs.copy_dir on Linux x86_64 Native.
+//
+// The program returns 0 only when every check passes; the first failing check
+// returns its number. It creates its fixture under the current directory and
+// leaves it there (the standard-library test runner uses a temporary working
+// directory). Covered checks:
+//   * ordinary files, empty directories, nested directories and file bytes;
+//   * permissions for regular files and directories, including restrictive
+//     source modes that are applied only after their children are copied and
+//     the explicit removal of setuid/setgid/sticky bits;
+//   * raw Linux names (invalid UTF-8) for files, directories and links;
+//   * dangling, directory and out-of-tree symbolic links copied as links with
+//     byte-identical targets and never followed;
+//   * source path aliases (trailing slash, ".", ".."), bare relative names
+//     without a separator, and a source-root link;
+//   * destinations equal to or inside the source, including a symlink alias;
+//   * existing file and dangling-link destinations;
+//   * ENOENT, ENOTDIR and EOPNOTSUPP failures, partial destination visibility,
+//     and descriptor cleanup on success and failure via /proc/self/fd;
+//   * more than 4096 entries and more than 64 directory levels copy
+//     successfully; the separate low-RLIMIT harness exercises EMFILE cleanup
+//     with a fresh, non-preexisting destination path;
+//   * the separate run_race.py harness controls a post-preflight stop, moves
+//     the destination parent into the source, resumes copy_dir, and checks the
+//     target-root guard, partial destination, and descriptor cleanup.
+//
+// The checks are split into small helpers so the Native O2 backend optimizes
+// focused functions instead of one oversized test main. Check numbering and
+// fixture order are unchanged.
+package app;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/io" as io;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/strconv" as strconv;
+
+func code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(value, completed): return value;
+        case os.Error.WouldBlock(value, completed): return value;
+        case os.Error.System(value, completed): return value;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+func kind(mode u32) u32 { return mode & os.S_IFMT; }
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+func has_name(entries Vec[fs.DirEntry], name Vec[u8]) bool {
+    for entry in entries {
+        if same_bytes(entry.name,name) { return true; }
+    }
+    return false;
+}
+func open_directory(path string) os.File throws os.Error {
+    return os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+}
+func make_directory(path string, mode u32) throws os.Error {
+    os.mkdir(path,mode);
+    os.chmod(path,mode);
+}
+func make_file(path string, data Vec[u8], mode u32) throws os.Error {
+    fs.write_file(path,data,mode);
+    os.chmod(path,mode);
+}
+func write_at(directory os.File, name Vec[u8], data Vec[u8], mode u32)
+              throws os.Error {
+    let file = os.openat_bytes(directory,name,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,mode);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all(file,data);
+    os.fchmod(file,mode);
+    closed = true;
+    os.close(file);
+}
+func read_at(directory os.File, name Vec[u8]) Vec[u8] throws os.Error {
+    let file = os.openat_bytes(directory,name,
+        os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    let data = io.read_all(file);
+    closed = true;
+    os.close(file);
+    return data;
+}
+func mode_at(directory os.File, name Vec[u8]) u32 throws os.Error {
+    return os.fstatat_bytes(directory,name,false).mode & 0o777;
+}
+func expect_copy_error(source string, destination string) i32 {
+    try { fs.copy_dir(source,destination); }
+    catch error os.Error { return code(error); }
+    return -1;
+}
+func fd_count() usize throws os.Error { return vec.len(fs.read_dir("/proc/self/fd")); }
+func raw_name(prefix string, suffix u8) Vec[u8] {
+    let out = text.bytes(prefix);
+    vec.push(out,suffix);
+    return out;
+}
+
+// Fixture setup for the main copy: ordinary files and directories, raw Linux
+// names, links, and the out-of-tree link target.
+func prepare_source(root string, source string) throws os.Error {
+    make_directory(source,0o751);
+    let source_dir = open_directory(source);
+
+    make_file(source + "/plain",text.bytes("hello"),0o640);
+    make_directory(source + "/empty",0o750);
+    make_directory(source + "/nested",0o751);
+    make_directory(source + "/nested/sub",0o705);
+    make_file(source + "/nested/sub/data",[u8(0),u8(1),u8(255)],0o600);
+    make_file(source + "/nested/other",text.bytes("other"),0o644);
+
+    let raw_file = raw_name("bad",255);
+    write_at(source_dir,raw_file,text.bytes("raw-file"),0o640);
+    let raw_dir = raw_name("dir",254);
+    os.mkdirat_bytes(source_dir,raw_dir,0o751);
+    let raw_dir_fd = os.openat_bytes(source_dir,raw_dir,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    os.fchmod(raw_dir_fd,0o751);
+    write_at(raw_dir_fd,text.bytes("inside"),text.bytes("inside-raw"),0o644);
+    os.close(raw_dir_fd);
+
+    os.symlink("missing-target",source + "/dangling");
+    os.symlink("nested",source + "/dirlink");
+    let raw_target = raw_name("raw-target-",253);
+    let raw_link = raw_name("rawlink-",252);
+    os.symlinkat_bytes(source_dir,raw_target,raw_link);
+    let outside = root + "/outside";
+    make_directory(outside,0o700);
+    make_file(outside + "/secret",text.bytes("secret"),0o600);
+    os.symlink("../outside",source + "/outside-link");
+    os.close(source_dir);
+}
+
+// First copy: descriptor cleanup, entry set, destination root mode.
+func check_copy_entries(source string, destination string) i32
+                          throws os.Error {
+    let descriptors_before = fd_count();
+    fs.copy_dir(source,destination);
+    let descriptors_after = fd_count();
+    if descriptors_before != descriptors_after { return 1; }
+
+    let source_entries = fs.read_dir(source);
+    let destination_entries = fs.read_dir(destination);
+    if vec.len(source_entries) != vec.len(destination_entries) { return 2; }
+    for entry in source_entries {
+        if !has_name(destination_entries,entry.name) { return 3; }
+    }
+
+    let destination_dir = open_directory(destination);
+    var closed = false;
+    defer { if !closed { try { os.close(destination_dir); } catch error os.Error {} } }
+    let root_info = os.fstat(destination_dir);
+    if !fs.is_dir(root_info) || (root_info.mode & 0o777) != 0o751 { return 4; }
+    if !same_bytes(read_at(destination_dir,text.bytes("plain")),
+                   text.bytes("hello")) { return 5; }
+    if mode_at(destination_dir,text.bytes("plain")) != 0o640 { return 6; }
+
+    let empty_info = os.fstatat_bytes(destination_dir,text.bytes("empty"),false);
+    if !fs.is_dir(empty_info) || (empty_info.mode & 0o777) != 0o750 { return 7; }
+    if vec.len(fs.read_dir(destination + "/empty")) != 0 { return 8; }
+    closed = true;
+    os.close(destination_dir);
+    return 0;
+}
+
+// Copied regular-file bytes, nested modes, and raw-name contents.
+func check_copy_contents(destination string) i32 throws os.Error {
+    let destination_dir = open_directory(destination);
+    var closed = false;
+    defer { if !closed { try { os.close(destination_dir); } catch error os.Error {} } }
+    if !same_bytes(fs.read_file(destination + "/nested/sub/data"),
+                   [u8(0),u8(1),u8(255)]) { return 9; }
+    if (os.stat(destination + "/nested/sub").mode & 0o777) != 0o705 { return 10; }
+    if !same_bytes(fs.read_file(destination + "/nested/other"),
+                   text.bytes("other")) { return 11; }
+
+    let raw_file = raw_name("bad",255);
+    let raw_info = os.fstatat_bytes(destination_dir,raw_file,false);
+    if !fs.is_file(raw_info) || (raw_info.mode & 0o777) != 0o640 { return 12; }
+    if !same_bytes(read_at(destination_dir,raw_file),text.bytes("raw-file")) {
+        return 13;
+    }
+    let raw_dir = raw_name("dir",254);
+    let raw_dir_info = os.fstatat_bytes(destination_dir,raw_dir,false);
+    if !fs.is_dir(raw_dir_info) || (raw_dir_info.mode & 0o777) != 0o751 {
+        return 14;
+    }
+    let copied_raw_dir = os.openat_bytes(destination_dir,raw_dir,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    let raw_inside = read_at(copied_raw_dir,text.bytes("inside"));
+    os.close(copied_raw_dir);
+    if !same_bytes(raw_inside,text.bytes("inside-raw")) { return 15; }
+    closed = true;
+    os.close(destination_dir);
+    return 0;
+}
+
+// Copied link identity/targets and that an out-of-tree target was not copied.
+func check_copy_links(destination string) i32 throws os.Error {
+    let destination_dir = open_directory(destination);
+    var closed = false;
+    defer { if !closed { try { os.close(destination_dir); } catch error os.Error {} } }
+    let dangling_info = os.fstatat_bytes(destination_dir,text.bytes("dangling"),false);
+    if !fs.is_symlink(dangling_info) { return 16; }
+    if !same_bytes(os.readlinkat_bytes(destination_dir,text.bytes("dangling")),
+                   text.bytes("missing-target")) { return 17; }
+    let dir_link_info = os.fstatat_bytes(destination_dir,text.bytes("dirlink"),false);
+    if !fs.is_symlink(dir_link_info) { return 18; }
+    if !same_bytes(os.readlinkat_bytes(destination_dir,text.bytes("dirlink")),
+                   text.bytes("nested")) { return 19; }
+    let raw_link = raw_name("rawlink-",252);
+    let raw_target = raw_name("raw-target-",253);
+    let raw_link_info = os.fstatat_bytes(destination_dir,raw_link,false);
+    if !fs.is_symlink(raw_link_info) { return 20; }
+    if !same_bytes(os.readlinkat_bytes(destination_dir,raw_link),raw_target) {
+        return 21;
+    }
+    let outside_link_info = os.fstatat_bytes(destination_dir,
+        text.bytes("outside-link"),false);
+    if !fs.is_symlink(outside_link_info) { return 22; }
+    if !same_bytes(os.readlinkat_bytes(destination_dir,text.bytes("outside-link")),
+                   text.bytes("../outside")) { return 23; }
+    if has_name(fs.read_dir(destination),text.bytes("secret")) { return 24; }
+    closed = true;
+    os.close(destination_dir);
+    return 0;
+}
+
+// Source aliases: trailing slash/dot, "..", a source-root link, and a
+// destination-parent name containing non-ASCII text.
+func check_alias_copies(root string, source string, root_alias string) i32
+                        throws os.Error {
+    let alias_destination = root + "/alias-destination";
+    fs.copy_dir(source + "/./",alias_destination + "/");
+    if !same_bytes(fs.read_file(alias_destination + "/plain"),
+                   text.bytes("hello")) { return 26; }
+    let dot_destination = root + "/./dot-destination";
+    fs.copy_dir(root + "/source/../source",dot_destination);
+    if !same_bytes(fs.read_file(root + "/dot-destination/plain"),
+                   text.bytes("hello")) { return 46; }
+    os.symlink("source",root_alias);
+    let alias_source_destination = root + "/alias-source-destination";
+    fs.copy_dir(root_alias,alias_source_destination);
+    if !same_bytes(fs.read_file(alias_source_destination + "/plain"),
+                   text.bytes("hello")) { return 27; }
+    let unicode_destination = root + "/destination-中";
+    fs.copy_dir(source,unicode_destination);
+    if !same_bytes(fs.read_file(unicode_destination + "/plain"),
+                   text.bytes("hello")) { return 54; }
+    return 0;
+}
+
+// Restrictive source modes are applied after children exist; the destination
+// must receive mode & 0777 and lose setuid/setgid/sticky bits. Source checks
+// use 07777 so the kernel is proven to have stored the special bits before the
+// copy, and destination checks use 07777 so those bits must be absent.
+func check_restrictive_copy(root string) i32 throws os.Error {
+    let restrictive_source = root + "/restrictive";
+    make_directory(restrictive_source,0o700);
+    make_file(restrictive_source + "/file",text.bytes("restricted"),0o400);
+    make_file(restrictive_source + "/special",text.bytes("special"),0o6755);
+    os.chmod(restrictive_source,0o1500);
+    if (os.stat(restrictive_source).mode & 0o7777) != 0o1500 { return 67; }
+    if (os.stat(restrictive_source + "/file").mode & 0o7777) != 0o400 {
+        return 68;
+    }
+    if (os.stat(restrictive_source + "/special").mode & 0o7777) != 0o6755 {
+        return 69;
+    }
+    let restrictive_destination = root + "/restrictive-destination";
+    fs.copy_dir(restrictive_source,restrictive_destination);
+    if (os.stat(restrictive_destination).mode & 0o7777) != 0o500 { return 47; }
+    if (os.stat(restrictive_destination + "/file").mode & 0o7777) != 0o400 {
+        return 48;
+    }
+    if !same_bytes(fs.read_file(restrictive_destination + "/file"),
+                   text.bytes("restricted")) { return 49; }
+    if (os.stat(restrictive_destination + "/special").mode & 0o7777) != 0o755 {
+        return 55;
+    }
+    return 0;
+}
+
+// Destinations equal to or inside the source, including symlink aliases.
+func check_inside_guards(root string, source string, root_alias string) i32
+                         throws os.Error {
+    if expect_copy_error(source,source) != 17 { return 28; }
+    if expect_copy_error(source,source + "/inside") != 22 { return 29; }
+    if fs.exists(source + "/inside") { return 30; }
+    if expect_copy_error(source,source + "/nested/inside") != 22 { return 31; }
+    if fs.exists(source + "/nested/inside") { return 32; }
+    let parent_alias = root + "/parent-alias";
+    os.symlink("source/nested",parent_alias);
+    if expect_copy_error(source,parent_alias + "/inside") != 22 { return 33; }
+    if fs.exists(source + "/nested/inside") { return 34; }
+    if expect_copy_error(source,root_alias + "/inside") != 22 { return 50; }
+    if fs.exists(source + "/inside") { return 51; }
+    if expect_copy_error(source,root + "/source/../source/inside") != 22 {
+        return 52;
+    }
+    if fs.exists(source + "/inside") { return 53; }
+    if expect_copy_error(source,source + "/.") != 22 { return 35; }
+    return 0;
+}
+
+// Existing regular-file and dangling-link destinations stay untouched.
+func check_existing_destinations(root string, source string) i32
+                                  throws os.Error {
+    let existing = root + "/existing";
+    make_file(existing,text.bytes("keep"),0o600);
+    if expect_copy_error(source,existing) != 17 { return 36; }
+    if !same_bytes(fs.read_file(existing),text.bytes("keep")) { return 37; }
+    let existing_link = root + "/existing-link";
+    os.symlink("nowhere",existing_link);
+    if expect_copy_error(source,existing_link) != 17 { return 38; }
+    let root_directory = open_directory(root);
+    let existing_target = os.readlinkat_bytes(root_directory,text.bytes("existing-link"));
+    os.close(root_directory);
+    if !same_bytes(existing_target,text.bytes("nowhere")) { return 39; }
+    return 0;
+}
+
+// Non-ASCII destination parent name.
+func check_unicode_parent(root string, source string) i32 throws os.Error {
+    let unicode_parent = root + "/中-parent";
+    make_directory(unicode_parent,0o700);
+    let unicode_parent_destination = unicode_parent + "/destination";
+    fs.copy_dir(source,unicode_parent_destination);
+    if !same_bytes(fs.read_file(unicode_parent_destination + "/plain"),
+                   text.bytes("hello")) { return 59; }
+    return 0;
+}
+
+// Bare relative names without a separator.
+func check_relative_copy(root string) i32 throws os.Error {
+    let relative_name = strconv.format_i64(i64(os.getpid()));
+    let relative_source = "fs-copy-relative-source-" + relative_name;
+    make_directory(relative_source,0o750);
+    make_file(relative_source + "/file",text.bytes("relative"),0o640);
+    let relative_destination = "fs-copy-relative-destination-" + relative_name;
+    fs.copy_dir(relative_source,relative_destination);
+    if !same_bytes(fs.read_file(relative_destination + "/file"),
+                   text.bytes("relative")) { return 60; }
+    if (os.stat(relative_destination).mode & 0o777) != 0o750 { return 61; }
+    return 0;
+}
+
+// Empty source tree.
+func check_empty_source(root string) i32 throws os.Error {
+    let empty_source = root + "/empty-source";
+    make_directory(empty_source,0o750);
+    let empty_destination = root + "/empty-destination";
+    fs.copy_dir(empty_source,empty_destination);
+    if !fs.is_dir(os.stat(empty_destination)) { return 56; }
+    if vec.len(fs.read_dir(empty_destination)) != 0 { return 57; }
+    if (os.stat(empty_destination).mode & 0o777) != 0o750 { return 58; }
+    return 0;
+}
+
+const WIDE_COUNT usize = 4200;
+
+func prepare_wide(root string) string throws os.Error {
+    let wide_source = root + "/wide-source";
+    make_directory(wide_source,0o700);
+    let wide_dir = open_directory(wide_source);
+    for var wide_index usize = 0; wide_index < WIDE_COUNT; wide_index += 1 {
+        let wide_name = "f" + strconv.format_u64(u64(wide_index));
+        let wide_file = os.openat_bytes(wide_dir,text.bytes(wide_name),
+            os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+        os.write_all(wide_file,text.bytes("w"));
+        os.close(wide_file);
+    }
+    os.close(wide_dir);
+    return wide_source;
+}
+
+// More than 4096 entries.
+func check_wide_copy(root string, wide_source string) i32 throws os.Error {
+    let wide_destination = root + "/wide-destination";
+    let wide_fds_before = fd_count();
+    fs.copy_dir(wide_source,wide_destination);
+    if fd_count() != wide_fds_before { return 62; }
+    if vec.len(fs.read_dir(wide_destination)) != WIDE_COUNT { return 63; }
+    if !same_bytes(fs.read_file(wide_destination + "/f4199"),text.bytes("w")) {
+        return 64;
+    }
+    return 0;
+}
+
+// More than 64 directory levels.
+func check_deep_copy(root string) i32 throws os.Error {
+    let deep_source = root + "/deep-source";
+    make_directory(deep_source,0o700);
+    var deep_path = deep_source;
+    var deep_suffix = "";
+    for var deep_index usize = 0; deep_index < 80; deep_index += 1 {
+        deep_path = deep_path + "/d";
+        deep_suffix = deep_suffix + "/d";
+        make_directory(deep_path,0o700);
+    }
+    make_file(deep_path + "/end",text.bytes("deep"),0o600);
+    let deep_destination = root + "/deep-destination";
+    fs.copy_dir(deep_source,deep_destination);
+    if !same_bytes(fs.read_file(deep_destination + deep_suffix + "/end"),
+                   text.bytes("deep")) { return 65; }
+    if (os.stat(deep_destination + deep_suffix).mode & 0o777) != 0o700 {
+        return 66;
+    }
+    return 0;
+}
+
+// EOPNOTSUPP partial destination and descriptor cleanup, ENOTDIR, ENOENT.
+func check_unsupported(root string, source string) i32 throws os.Error {
+    let error_source = root + "/error-source";
+    make_directory(error_source,0o700);
+    make_directory(error_source + "/nested",0o700);
+    make_directory(error_source + "/nested/deep",0o700);
+    make_file(error_source + "/nested/deep/before",text.bytes("before"),0o600);
+    os.mkfifo(error_source + "/nested/deep/fifo",0o600);
+    let error_destination = root + "/error-destination";
+    let descriptors_error_before = fd_count();
+    if expect_copy_error(error_source,error_destination) != 95 { return 40; }
+    let descriptors_error_after = fd_count();
+    if descriptors_error_before != descriptors_error_after { return 41; }
+    if !fs.exists(error_destination) { return 42; }
+    if !fs.is_dir(os.stat(error_destination)) { return 43; }
+    if expect_copy_error(source + "/plain",root + "/not-a-directory") != 20 {
+        return 44;
+    }
+    if expect_copy_error(source,root + "/missing/destination") != 2 { return 45; }
+    return 0;
+}
+
+// Restore write permission on the restrictive fixtures so the standard
+// library runner's temporary-directory cleanup can remove them.
+func restore_permissions(root string) throws os.Error {
+    let restrictive_source = root + "/restrictive";
+    let restrictive_destination = root + "/restrictive-destination";
+    os.chmod(restrictive_source,0o700);
+    os.chmod(restrictive_source + "/file",0o600);
+    os.chmod(restrictive_source + "/special",0o600);
+    os.chmod(restrictive_destination,0o700);
+    os.chmod(restrictive_destination + "/file",0o600);
+    os.chmod(restrictive_destination + "/special",0o600);
+}
+
+func main() i32 throws os.Error {
+    let root = "tree-copy-" + strconv.format_i64(i64(os.getpid()));
+    make_directory(root,0o700);
+    let source = root + "/source";
+    let destination = root + "/destination";
+    prepare_source(root,source);
+
+    var status = check_copy_entries(source,destination);
+    if status != 0 { return status; }
+    status = check_copy_contents(destination);
+    if status != 0 { return status; }
+    status = check_copy_links(destination);
+    if status != 0 { return status; }
+
+    let root_alias = root + "/source-alias";
+    status = check_alias_copies(root,source,root_alias);
+    if status != 0 { return status; }
+    status = check_restrictive_copy(root);
+    if status != 0 { return status; }
+    status = check_inside_guards(root,source,root_alias);
+    if status != 0 { return status; }
+    status = check_existing_destinations(root,source);
+    if status != 0 { return status; }
+    status = check_unicode_parent(root,source);
+    if status != 0 { return status; }
+    status = check_relative_copy(root);
+    if status != 0 { return status; }
+    status = check_empty_source(root);
+    if status != 0 { return status; }
+
+    let wide_source = prepare_wide(root);
+    status = check_wide_copy(root,wide_source);
+    if status != 0 { return status; }
+    status = check_deep_copy(root);
+    if status != 0 { return status; }
+    status = check_unsupported(root,source);
+    if status != 0 { return status; }
+
+    restore_permissions(root);
+    return 0;
+}

@@ -1,0 +1,22 @@
+// The comparator pushes through an alias of the Vec being sorted. sort_by
+// must hold its shape pin across every comparator call, so this Panics instead
+// of changing the input while the merge is reading it.
+package app;
+
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](4, 0);
+    values[0] = 3;
+    values[1] = 1;
+    values[2] = 2;
+    values[3] = 0;
+    let alias = values;
+    let less = func(left i32, right i32) bool {
+        vec.push(alias, 99);
+        return left < right;
+    };
+    sort.sort_by(values, less);
+    return 0;
+}

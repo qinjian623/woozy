@@ -1,0 +1,28 @@
+// A timer Task is a gather member, not a coroutine Task. Activation must leave
+// the already-scheduled timer alone, and a mixed timer/coroutine batch must
+// complete without the old spawn panic or periodic status polling.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func unit_job(name string, delay i64, log Vec[string]) Unit {
+    await a.sleep(delay);
+    vec.push(log, name);
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let outcome = await a.gather[Unit,Unit]([
+        a.sleep(35),
+        unit_job("b", 1, log),
+        a.sleep(10)]);
+    switch outcome {
+        case result.Result.Ok(values): io.println(vec.len(values));
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

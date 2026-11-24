@@ -1,0 +1,405 @@
+// Native stream and file adapters for the pure std/csv module.
+//
+// Parser state and row encoding are owned by std/csv. This module only adds
+// std/io/std/os transport, retained writer suffixes, and file helpers, so the
+// grammar and typed parser errors have one implementation. Python programs
+// that only need string parsing/serialization should import std/csv directly.
+//
+// A read_row Syntax or limit error comes from the shared csv.Parser and is
+// terminal for this Reader and every alias. I/O errors remain resumable. A
+// successful parser_finish also ends this Reader: every later read_row on any
+// alias returns None without reading the underlying input again.
+//
+// A Writer accepts a complete encoded row before attempting I/O. Error.Io means
+// that row is retained and must be finished with flush, never retried. A
+// write_row or write_all that starts while such a suffix is pending returns
+// Error.PendingOutput before accepting a new row. write_all reports
+// Error.BatchIo(cause, accepted_rows) for an I/O failure on an accepted row;
+// after flush, resume with rows[accepted_rows:].
+//
+// The file writer closes its internal Writer before returning, so it maps
+// Error.BatchIo(cause, _) to Error.Io(cause): there is no retained suffix to
+// flush and no batch position to resume. See write_file for the create/truncate
+// and partial-output contract.
+package csv_io;
+
+import "std/csv" as csv;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+pub enum Error {
+    Csv(value csv.Error);
+    Io(value os.Error);
+    PendingOutput;
+    BatchIo(cause os.Error, accepted_rows usize);
+}
+
+pub struct Reader {
+    input io.Reader;
+    parser csv.Parser;
+    // ended is shared with Reader aliases. It is set only after parser_finish
+    // succeeds, including when that call returns the final unterminated row,
+    // so later reads return None without touching the underlying input again.
+    ended Vec[usize];
+}
+
+pub struct Writer {
+    output io.Writer;
+    encoder csv.Encoder;
+    // pending holds the encoded row suffix not yet accepted by io.write_byte.
+    // cursor is shared with Writer aliases and marks the next byte to submit.
+    pending Vec[u8];
+    cursor Vec[usize];
+}
+
+func reader_state(input io.Reader, parser csv.Parser) Reader {
+    return Reader(input: input, parser: parser,
+        ended: vec.make[usize](1, 0));
+}
+
+pub func reader(input io.Reader) Reader {
+    return reader_state(input, csv.parser());
+}
+
+pub func reader_limited(input io.Reader, constraints csv.Limits) Reader {
+    return reader_state(input, csv.parser_limited(constraints));
+}
+
+func checked_parser(delimiter string) csv.Parser throws Error {
+    try {
+        return csv.parser_with(delimiter);
+    } catch error csv.Error {
+        throw Error.Csv(error);
+    }
+}
+
+func checked_parser_limited(delimiter string, constraints csv.Limits)
+    csv.Parser throws Error {
+    try {
+        return csv.parser_with_limited(delimiter, constraints);
+    } catch error csv.Error {
+        throw Error.Csv(error);
+    }
+}
+
+pub func reader_with(input io.Reader, delimiter string) Reader throws Error {
+    return reader_state(input, checked_parser(delimiter));
+}
+
+pub func reader_with_limited(input io.Reader, delimiter string,
+    constraints csv.Limits) Reader throws Error {
+    return reader_state(input, checked_parser_limited(delimiter, constraints));
+}
+
+// read_row consumes one record. It returns None only at end of input. Parser
+// state is retained, so a second read_row continues after a returned row. Once
+// parser_finish has succeeded, every later read_row on any alias returns None
+// without reading the underlying input again, so a closed or grown file is not
+// touched. A Syntax or limit error is terminal: the same csv.Error is reported
+// by this Reader and all of its aliases on every later call. I/O errors remain
+// resumable.
+pub func read_row(input Reader) option.Option[Vec[string]] throws Error {
+    switch csv.parser_error(input.parser) {
+        case option.Option.Some(problem): throw Error.Csv(problem);
+        case option.Option.None: {}
+    }
+    if input.ended[0] != 0 {
+        return option.Option[Vec[string]].None;
+    }
+    for true {
+        var next option.Option[u8] = option.Option[u8].None;
+        try {
+            next = io.read_byte(input.input);
+        } catch error os.Error {
+            throw Error.Io(error);
+        }
+        switch next {
+            case option.Option.Some(byte): {
+                var parsed = option.Option[Vec[string]].None;
+                try {
+                    parsed = csv.parser_feed(input.parser, byte);
+                } catch error csv.Error {
+                    throw Error.Csv(error);
+                }
+                switch parsed {
+                    case option.Option.Some(row):
+                        return option.Option[Vec[string]].Some(row);
+                    case option.Option.None: {}
+                }
+            }
+            case option.Option.None: {
+                var parsed = option.Option[Vec[string]].None;
+                try {
+                    parsed = csv.parser_finish(input.parser);
+                } catch error csv.Error {
+                    throw Error.Csv(error);
+                }
+                // parser_finish succeeded, so EOF is terminal even when the
+                // call returned the final unterminated row. Mark before return
+                // so aliases never read the underlying input again.
+                input.ended[0] = 1;
+                return parsed;
+            }
+        }
+    }
+}
+
+pub func read_all(input Reader) Vec[Vec[string]] throws Error {
+    let rows = vec.empty[Vec[string]]();
+    for true {
+        switch read_row(input) {
+            case option.Option.Some(row): vec.push(rows, row);
+            case option.Option.None: return rows;
+        }
+    }
+}
+
+func writer_state(output io.Writer, encoder csv.Encoder) Writer {
+    return Writer(output: output, encoder: encoder,
+        pending: vec.empty[u8](), cursor: vec.make[usize](1, 0));
+}
+
+pub func writer(output io.Writer) Writer {
+    return writer_state(output, csv.encoder());
+}
+
+func checked_encoder(delimiter string) csv.Encoder throws Error {
+    try {
+        return csv.encoder_with(delimiter);
+    } catch error csv.Error {
+        throw Error.Csv(error);
+    }
+}
+
+pub func writer_with(output io.Writer, delimiter string) Writer throws Error {
+    return writer_state(output, checked_encoder(delimiter));
+}
+
+func has_pending(output Writer) bool {
+    return output.cursor[0] < vec.len(output.pending);
+}
+
+// drain_pending submits the retained encoded row suffix one byte at a time.
+// io.write_byte either accepts the byte or leaves it at cursor, so an I/O
+// failure never loses the suffix.
+func drain_pending(output Writer) throws Error {
+    for output.cursor[0] < vec.len(output.pending) {
+        let index = output.cursor[0];
+        try {
+            io.write_byte(output.output, output.pending[index]);
+        } catch error os.Error {
+            throw Error.Io(error);
+        }
+        output.cursor[0] = index + 1;
+    }
+    vec.clear(output.pending);
+    output.cursor[0] = 0;
+}
+
+// write_row accepts the complete encoded row before attempting I/O. If this
+// call returns Error.Io, that row is retained and must be finished with flush;
+// it must never be retried. If a previous accepted row still has a pending
+// suffix, this call returns Error.PendingOutput before accepting the new row.
+pub func write_row(output Writer, row Vec[string]) throws Error {
+    if has_pending(output) {
+        throw Error.PendingOutput;
+    }
+    vec.clear(output.pending);
+    output.cursor[0] = 0;
+    csv.encode_row(output.encoder, output.pending, row);
+    drain_pending(output);
+}
+
+// write_all stops at Error.PendingOutput before accepting any row when it
+// starts with a pending suffix. If a new row is accepted and its write fails
+// with Error.Io, it returns Error.BatchIo(cause, accepted_rows), where
+// accepted_rows includes that retained row. After flush, resume with
+// rows[accepted_rows:].
+pub func write_all(output Writer, rows Vec[Vec[string]]) throws Error {
+    if has_pending(output) {
+        throw Error.PendingOutput;
+    }
+    for var index usize = 0; index < vec.len(rows); index += 1 {
+        try {
+            write_row(output, rows[index]);
+        } catch error Error {
+            switch error {
+                case Error.Io(problem):
+                    throw Error.BatchIo(problem, index + 1);
+                case Error.PendingOutput: throw error;
+                case Error.BatchIo(cause, accepted): throw error;
+                case Error.Csv(cause): throw error;
+            }
+        }
+    }
+}
+
+// flush first submits any encoded row suffix retained after an I/O error, then
+// flushes the underlying io.Writer. It can be called again after the failed
+// destination makes progress. After it succeeds, retry the row rejected with
+// PendingOutput, or resume a batch at rows[accepted_rows:]. Never retry a row
+// whose write_row returned Error.Io, because that row was already accepted.
+// The caller still owns and closes the underlying io.Writer.
+pub func flush(output Writer) throws Error {
+    drain_pending(output);
+    try {
+        io.flush(output.output);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+func open_read(path string) os.File throws Error {
+    try {
+        return os.open(path, os.O_RDONLY | os.O_CLOEXEC, 0);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+func open_write(path string) os.File throws Error {
+    try {
+        return os.open(path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o666);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+func close_quietly(file os.File) {
+    try { os.close(file); } catch error os.Error {}
+}
+
+func finish_read(file os.File, rows Vec[Vec[string]]) Vec[Vec[string]]
+    throws Error {
+    try {
+        os.close(file);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+    return rows;
+}
+
+func finish_write(file os.File) throws Error {
+    try {
+        os.close(file);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+// File helpers own the full input, so they can pass the unread buffer to
+// the parser. read_row still uses io.Reader's shared cursor byte by byte:
+// reading ahead there would change what other io.Reader aliases can see.
+func read_file_rows(file os.File, parser csv.Parser) Vec[Vec[string]] throws Error {
+    let rows = vec.empty[Vec[string]]();
+    let buffer = vec.make[u8](4096, 0);
+    for true {
+        var count usize = 0;
+        try {
+            count = os.read(file, buffer, vec.len(buffer));
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code, completed): continue;
+                default: throw Error.Io(error);
+            }
+        }
+        try {
+            if count == 0 {
+                switch csv.parser_finish(parser) {
+                    case option.Option.Some(row): vec.push(rows, row);
+                    case option.Option.None: {}
+                }
+                return rows;
+            }
+            var cursor usize = 0;
+            for cursor < count {
+                switch csv.parser_feed_chunk(parser, buffer, inout cursor, count) {
+                    case option.Option.Some(row): vec.push(rows, row);
+                    case option.Option.None: {}
+                }
+            }
+        } catch error csv.Error {
+            throw Error.Csv(error);
+        }
+    }
+}
+
+pub func read_file(path string) Vec[Vec[string]] throws Error {
+    let file = open_read(path);
+    var closed = false;
+    defer { if !closed { close_quietly(file); } }
+    let rows = read_file_rows(file, csv.parser());
+    closed = true;
+    return finish_read(file, rows);
+}
+
+pub func read_file_limited(path string, constraints csv.Limits)
+    Vec[Vec[string]] throws Error {
+    let file = open_read(path);
+    var closed = false;
+    defer { if !closed { close_quietly(file); } }
+    let rows = read_file_rows(file, csv.parser_limited(constraints));
+    closed = true;
+    return finish_read(file, rows);
+}
+
+pub func read_file_with(path string, delimiter string)
+    Vec[Vec[string]] throws Error {
+    let file = open_read(path);
+    var closed = false;
+    defer { if !closed { close_quietly(file); } }
+    let rows = read_file_rows(file, checked_parser(delimiter));
+    closed = true;
+    return finish_read(file, rows);
+}
+
+pub func read_file_with_limited(path string, delimiter string,
+    constraints csv.Limits) Vec[Vec[string]] throws Error {
+    let file = open_read(path);
+    var closed = false;
+    defer { if !closed { close_quietly(file); } }
+    let rows = read_file_rows(file, checked_parser_limited(delimiter, constraints));
+    closed = true;
+    return finish_read(file, rows);
+}
+
+// write_file_rows creates or truncates path with mode 0o666 (masked by umask)
+// and O_CLOEXEC, validates the delimiter before opening, encodes all rows, then
+// flushes and closes. The writer is internal and closed on every exit path, so
+// an I/O failure is always Error.Io and can never be resumed. A failure after
+// the open may leave an empty, truncated, or partially written file.
+func write_file_rows(path string, rows Vec[Vec[string]], delimiter string)
+    throws Error {
+    // Validate before opening with O_TRUNC so an invalid delimiter cannot
+    // destroy an existing file. Row encoding is infallible after this point.
+    let encoder = checked_encoder(delimiter);
+    let file = open_write(path);
+    var closed = false;
+    defer { if !closed { close_quietly(file); } }
+    let output = writer_state(io.writer(file), encoder);
+    try {
+        write_all(output, rows);
+    } catch error Error {
+        switch error {
+            case Error.BatchIo(cause, accepted): throw Error.Io(cause);
+            case Error.Csv(cause): throw error;
+            case Error.Io(cause): throw error;
+            case Error.PendingOutput: throw error;
+        }
+    }
+    flush(output);
+    closed = true;
+    finish_write(file);
+}
+
+pub func write_file(path string, rows Vec[Vec[string]]) throws Error {
+    write_file_rows(path, rows, csv.DELIMITER);
+}
+
+pub func write_file_with(path string, rows Vec[Vec[string]], delimiter string)
+    throws Error {
+    write_file_rows(path, rows, delimiter);
+}

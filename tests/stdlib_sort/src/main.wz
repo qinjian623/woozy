@@ -326,6 +326,129 @@ func test_large_stability() i32 {
     return 0;
 }
 
+func test_nearly_ordered_1024() i32 {
+    let count usize = 1024;
+    let items = vec.make[Item](count, Item(key: 0, tag: 0));
+    for var index usize = 0; index < count; index += 1 {
+        items[index] = Item(key: i32(index), tag: i32(index));
+    }
+    // Adjacent swaps on both sides of recursive split points and one short
+    // reversed block leave the input nearly ordered without making it sorted.
+    let swaps = [127, 511, 767];
+    for var index usize = 0; index < 3; index += 1 {
+        let at = usize(swaps[index]);
+        let saved = items[at];
+        items[at] = items[at + 1];
+        items[at + 1] = saved;
+    }
+    let block usize = 900;
+    for var offset usize = 0; offset < 8; offset += 1 {
+        let tag usize = block + 7 - offset;
+        items[block + offset] = Item(key: i32(tag), tag: i32(tag));
+    }
+    sort.sort_by(items, less_item);
+    for var index usize = 0; index < count; index += 1 {
+        if items[index].key != i32(index) ||
+            items[index].tag != i32(index) { return 200; }
+    }
+    if !sort.is_sorted_by(items, less_item) { return 201; }
+    if sort.lower_bound_by(items, Item(key: 512, tag: -1), less_item) != 512 {
+        return 202;
+    }
+    if !found_at(sort.binary_search_by(items, Item(key: 900, tag: -1),
+                                       less_item), 900) { return 203; }
+    return 0;
+}
+
+func test_short_equal_runs() i32 {
+    let count usize = 1024;
+    let run usize = 3;
+    let items = vec.make[Item](count, Item(key: 0, tag: 0));
+    // order records the tag sequence before sorting. The same perturbation is
+    // applied to items, so the expected equal-key order is not simply the
+    // original ascending tag order.
+    let order = vec.make[i32](count, 0);
+    for var index usize = 0; index < count; index += 1 {
+        items[index] = Item(key: i32(index / run), tag: i32(index));
+        order[index] = i32(index);
+    }
+    // Reverse each five-element window by exchanging only its first two pairs
+    // once. Swapping all five offsets would exchange every pair twice and
+    // restore the original order.
+    let starts = [5, 101, 509, 1001];
+    for var start usize = 0; start < 4; start += 1 {
+        let at = usize(starts[start]);
+        for var offset usize = 0; offset < 2; offset += 1 {
+            let left = at + offset;
+            let right = at + 4 - offset;
+            let saved_item = items[left];
+            items[left] = items[right];
+            items[right] = saved_item;
+            let saved_tag = order[left];
+            order[left] = order[right];
+            order[right] = saved_tag;
+        }
+    }
+    var changed = false;
+    for var index usize = 0; index < count; index += 1 {
+        if order[index] != i32(index) { changed = true; }
+    }
+    if !changed { return 210; }
+    sort.sort_by(items, less_item);
+    // A stable sort emits each key class in the tag order that exists after
+    // the perturbation. Scan order by key class to build that expected order.
+    let last_key i32 = i32((count - 1) / run);
+    var position usize = 0;
+    for var key i32 = 0; key <= last_key; key += 1 {
+        for var index usize = 0; index < count; index += 1 {
+            if order[index] / i32(run) == key {
+                if position >= count { return 211; }
+                if items[position].key != key { return 212; }
+                if items[position].tag != order[index] { return 213; }
+                position += 1;
+            }
+        }
+    }
+    if position != count { return 214; }
+    if !sort.is_sorted_by(items, less_item) { return 215; }
+    return 0;
+}
+
+func test_merge_alias_reads() i32 {
+    let count usize = 32;
+    let values = vec.make[i32](count, 0);
+    for var index usize = 0; index < count; index += 1 {
+        values[index] = i32(count - 1 - index);
+    }
+    let alias = values;
+    let present = vec.make[bool](count, false);
+    let bad = [false];
+    let calls = [0];
+    let less = func(left i32, right i32) bool {
+        calls[0] += 1;
+        if vec.len(alias) != count { bad[0] = true; }
+        for var index usize = 0; index < count; index += 1 {
+            present[index] = false;
+        }
+        for var index usize = 0; index < count; index += 1 {
+            let value = alias[index];
+            if value < 0 || usize(value) >= count || present[usize(value)] {
+                bad[0] = true;
+            } else {
+                present[usize(value)] = true;
+            }
+        }
+        return left < right;
+    };
+    sort.sort_by(values, less);
+    if calls[0] == 0 { return 220; }
+    if bad[0] { return 221; }
+    for var index usize = 0; index < count; index += 1 {
+        if values[index] != i32(index) { return 222; }
+    }
+    return 0;
+}
+
 func test_input_shapes() i32 {
     let count usize = 256;
     let ascending = vec.make[i32](count, 0);
@@ -546,6 +669,12 @@ func main() i32 {
     failure = test_managed_keys_values_and_stability();
     if failure != 0 { return failure; }
     failure = test_pin_release_prefix();
+    if failure != 0 { return failure; }
+    failure = test_nearly_ordered_1024();
+    if failure != 0 { return failure; }
+    failure = test_short_equal_runs();
+    if failure != 0 { return failure; }
+    failure = test_merge_alias_reads();
     if failure != 0 { return failure; }
     return 0;
 }

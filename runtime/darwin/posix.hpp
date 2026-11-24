@@ -99,6 +99,35 @@ struct Path {
   }
 };
 
+// One directory-entry name for descriptor-relative operations. The validation
+// matches the Linux runtime: non-empty, no NUL, no '/', and not "." or "..".
+struct Component {
+  char bytes[4096];
+  int64_t status = 0;
+
+  Component(const char *data, uint64_t length) noexcept {
+    if (length == 0) {
+      status = -22;
+    } else if (length >= sizeof(bytes)) {
+      status = -36;
+    } else if (data == nullptr) {
+      status = -14;
+    } else if ((length == 1 && data[0] == '.') ||
+               (length == 2 && data[0] == '.' && data[1] == '.')) {
+      status = -22;
+    } else {
+      for (uint64_t index = 0; index < length; ++index) {
+        if (data[index] == '\0' || data[index] == '/') {
+          status = -22;
+          return;
+        }
+        bytes[index] = data[index];
+      }
+      bytes[length] = '\0';
+    }
+  }
+};
+
 constexpr int32_t kNonblock = 2048;
 constexpr int32_t kCloexec = 524288;
 

@@ -16,6 +16,11 @@
 #if (defined(__x86_64__) && defined(__linux__)) || \
     (defined(__aarch64__) && defined(__APPLE__))
 
+#if defined(__linux__)
+extern "C" uintptr_t lang_native_cached_tid() noexcept
+    __attribute__((weak, visibility("hidden")));
+#endif
+
 // Actual runtime Panic entry from panic.cpp. It is terminal and reports the
 // cause plus a source span; synchronization misuse has no source span.
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
@@ -70,10 +75,15 @@ inline OwnerId current_tid() noexcept {
   const OwnerId result = darwin::thread_id();
 #else
   long result;
-  __asm__ volatile("syscall"
-                   : "=a"(result)
-                   : "a"(kSysGettid)
-                   : "rcx", "r11", "memory", "cc");
+  // Core startup owns the TLS cache. Hosted links still use the kernel ID.
+  if (lang_native_cached_tid) {
+    result = static_cast<long>(lang_native_cached_tid());
+  } else {
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(kSysGettid)
+                     : "rcx", "r11", "memory", "cc");
+  }
 #endif
   if (result <= 0) misuse_panic();
   return static_cast<OwnerId>(result);

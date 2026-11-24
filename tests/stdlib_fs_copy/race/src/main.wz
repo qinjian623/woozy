@@ -1,0 +1,39 @@
+package app;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/io" as io;
+import "std/strconv" as strconv;
+
+func code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(value, completed): return value;
+        case os.Error.WouldBlock(value, completed): return value;
+        case os.Error.System(value, completed): return value;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+func fd_count() usize throws os.Error { return vec.len(fs.read_dir("/proc/self/fd")); }
+// The harness stops this process after the destination root appears, moves
+// parent/ into source/aaa/zzz/moved, and resumes it. The target-root guard must
+// reject the encounter; the process then checks fd cleanup and the partial
+// destination left at the moved path.
+func main() i32 throws os.Error {
+    let before = fd_count();
+    var result i32 = 0;
+    try { fs.copy_dir("source","parent/destination"); }
+    catch error os.Error { result = code(error); }
+    let after = fd_count();
+    let partial_path = "source/aaa/zzz/moved/destination";
+    let partial = fs.exists(partial_path);
+    io.println("copy_race result=" + strconv.format_i64(i64(result)));
+    io.println("copy_race fds=" + strconv.format_u64(u64(before)) +
+               "->" + strconv.format_u64(u64(after)));
+    io.println("copy_race partial");
+    io.println(partial);
+    if result != 22 { return 1; }
+    if before != after { return 2; }
+    if !partial { return 3; }
+    if !fs.is_dir(os.stat(partial_path)) { return 4; }
+    return 0;
+}

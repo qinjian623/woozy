@@ -1,0 +1,32 @@
+// The typed failure has the lower input index and is already terminal while a
+// higher-index member is already cancelled. The real typed error wins over the
+// member cancellation.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+
+enum Failure { Expected; }
+
+async func fail() i32 throws Failure {
+    throw Failure.Expected;
+}
+
+async func unused() i32 throws Failure {
+    return 0;
+}
+
+async func main() i32 throws os.Error {
+    let failed = fail();
+    let cancelled = unused();
+    a.spawn(failed);
+    a.cancel(cancelled);
+    await a.sleep(5);
+    let outcome = await a.gather[i32,Failure]([failed, cancelled]);
+    switch outcome {
+        case result.Result.Ok(values): io.println("unexpected.ok");
+        case result.Result.Err(error): io.println("typed-error");
+    }
+    return 0;
+}

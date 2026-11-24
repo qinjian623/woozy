@@ -1,0 +1,41 @@
+// Ordinary shared Task await semantics are unchanged: cancelling a
+// coordinator that awaits an ordinary child completes the coordinator without
+// cancelling the child. The child keeps running until the explicit run().
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func child(log Vec[string]) Unit {
+    defer { vec.push(log, "child.cleanup"); }
+    await a.sleep(100);
+    vec.push(log, "child.after");
+}
+
+async func coordinator(log Vec[string]) Unit {
+    defer { vec.push(log, "coordinator.cleanup"); }
+    await child(log);
+    vec.push(log, "coordinator.after");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = coordinator(log);
+    a.spawn(task);
+    a.run_until(a.sleep(5));
+    a.cancel(task);
+    a.run_until(task);
+    let before = vec.len(log);
+
+    io.println(a.finished(task));
+    io.println("after.parent");
+    for line in log { io.println(line); }
+
+    a.run();
+    io.println("after.run");
+    for var index usize = before; index < vec.len(log); index += 1 {
+        io.println(log[index]);
+    }
+    return 0;
+}

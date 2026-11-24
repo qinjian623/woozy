@@ -1,0 +1,15 @@
+package app;
+
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values Vec[i32] = [3, 1, 2];
+    let alias = values;
+    let before = func(left i32, right i32) bool {
+        vec.push(alias, 99);
+        return left < right;
+    };
+    sort.sort_by_key(values, func(value i32) i32 { return value; }, before);
+    return 0;
+}

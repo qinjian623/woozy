@@ -1,0 +1,28 @@
+// An external member cancellation must cancel and drain the other members.
+// run_until(group) alone must not return before every member cleanup.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func child(name string, delay i64, log Vec[string]) Unit {
+    defer { vec.push(log, name + ".cleanup"); }
+    await a.sleep(delay);
+    vec.push(log, name + ".after");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let tasks = [child("a", 100, log), child("b", 100, log), child("c", 100, log)];
+    let group = a.gather[Unit,Unit](tasks);
+    a.spawn(group);
+    a.run_until(a.sleep(5));
+
+    a.cancel(tasks[1]);
+    a.run_until(group);
+
+    io.println(a.finished(group));
+    for line in log { io.println(line); }
+    return 0;
+}

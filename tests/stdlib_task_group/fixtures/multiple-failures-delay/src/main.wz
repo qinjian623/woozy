@@ -1,0 +1,49 @@
+// Several members fail. The first failure observed in completion order wins:
+// "early" fails at 5 ms and cancels "late" before its 30 ms deadline. The
+// late member's body never runs past its suspension point.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+enum Failure { Late; Early; }
+
+async func late(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "late.cleanup"); }
+    await a.sleep(30);
+    vec.push(log, "late.throw");
+    throw Failure.Late;
+}
+
+async func early(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "early.cleanup"); }
+    await a.sleep(5);
+    vec.push(log, "early.throw");
+    throw Failure.Early;
+}
+
+async func slow(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "slow.cleanup"); }
+    await a.sleep(200);
+    vec.push(log, "slow.after");
+    return 0;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    try {
+        let values = a.or_throw(await a.gather[i32,Failure]([
+            late(log),
+            early(log),
+            slow(log)]));
+        io.println("unexpected.ok");
+    } catch error Failure {
+        switch error {
+            case Failure.Early: io.println("early");
+            case Failure.Late: io.println("late");
+        }
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

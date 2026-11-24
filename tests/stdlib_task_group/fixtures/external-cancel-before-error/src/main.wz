@@ -1,0 +1,37 @@
+// The parent is cancelled while the only member would still fail later.
+// External cancellation must drain the member cleanup and propagate
+// cancellation instead of waiting for, or selecting, a later typed error.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+enum Failure { Late; }
+
+async func fail_later(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "fail.cleanup"); }
+    await a.sleep(100);
+    vec.push(log, "fail.throw");
+    throw Failure.Late;
+}
+
+async func parent(log Vec[string]) Unit {
+    defer { vec.push(log, "parent.cleanup"); }
+    let outcome = await a.gather[i32,Failure]([fail_later(log)]);
+    vec.push(log, "after.join");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = parent(log);
+    a.spawn(task);
+    a.run_until(a.sleep(5));
+    a.cancel(task);
+    a.run_until(task);
+
+    io.println(a.finished(task));
+    for line in log { io.println(line); }
+    return 0;
+}

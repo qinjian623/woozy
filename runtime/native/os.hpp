@@ -54,6 +54,19 @@ int64_t lang_os_close_v1(int32_t fd) noexcept;
 int64_t lang_os_open_v1(const char *data, uint64_t byte_length,
                         int32_t flags, uint32_t mode) noexcept;
 
+// Descriptor-relative operations. The name is one directory-entry component:
+// it must be non-empty, contain no NUL or '/', and must not be "." or "..".
+// The runtime copies at most `length` bytes into private stack storage. Errors
+// still use the raw negative-errno convention above.
+int64_t lang_os_openat_v1(int32_t fd, const char *name, uint64_t length,
+                          int32_t flags, uint32_t mode) noexcept;
+int64_t lang_os_mkdirat_v1(int32_t fd, const char *name, uint64_t length,
+                           uint32_t mode) noexcept;
+// `kind` is 0 for a non-directory entry or 1 for a directory entry. It is not
+// a platform flag; any other value returns -EINVAL.
+int64_t lang_os_unlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                            int32_t kind) noexcept;
+
 // lseek(2); `offset` is a signed 64-bit file offset.
 int64_t lang_os_seek_v1(int32_t fd, int64_t offset, int32_t whence) noexcept;
 

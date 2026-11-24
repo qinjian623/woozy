@@ -1,0 +1,252 @@
+// Source fixture for std/http_server async handler registration.
+//
+// The process prints LISTENING <port> first, then request lifecycle lines to
+// stdout. The Python runner uses raw HTTP/1.1 sockets and checks those lines,
+// response bytes, process exit, and stats. No stderr output is expected.
+package app;
+
+import "std/async" as tasks;
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func bool_text(value bool) string {
+    if value {
+        return "true";
+    }
+    return "false";
+}
+
+// Handler logging must not change the handler's declared http.Error effect.
+func log_event(line string) {
+    try {
+        io.println(line);
+    }
+    catch error os.Error {}
+}
+
+func parse_delay(target string) u64 throws strconv.Error {
+    return strconv.parse_u64(target[6:]);
+}
+
+async func async_route(
+    request http.Request,
+    signal Vec[u64]) http.Response throws http.Error {
+    if request.target == "/fast" || text.starts_with(request.target, "/fast?") {
+        log_event("FAST-START " + request.target);
+        return server.text_response(200, "fast");
+    }
+    if request.target == "/echo" {
+        return server.bytes_response(200, request.body);
+    }
+    if text.starts_with(request.target, "/slow/") {
+        var milliseconds u64 = 0;
+        try {
+            milliseconds = parse_delay(request.target);
+        }
+        catch error strconv.Error {
+            return server.text_response(400, "bad delay");
+        }
+        log_event("SLOW-START " + request.target);
+        await tasks.sleep(i64(milliseconds));
+        log_event("SLOW-DONE " + request.target);
+        return server.text_response(200, "slow");
+    }
+    if text.starts_with(request.target, "/hold/") {
+        log_event("HOLD-START " + request.target);
+        defer {
+            log_event("HOLD-CLEANUP " + request.target);
+        }
+        await tasks.sleep(5000);
+        log_event("HOLD-AFTER " + request.target);
+        return server.text_response(200, "held");
+    }
+    if request.target == "/fail" {
+        throw http.Error.InvalidTarget;
+    }
+    if request.target == "/stop" {
+        signal[0] = 1;
+        return server.text_response(200, "stopping");
+    }
+    if request.target == "/abort" {
+        signal[0] = 2;
+        return server.text_response(200, "aborting");
+    }
+    return server.text_response(404, "not found");
+}
+
+func make_async_handler(
+    signal Vec[u64]) (func(http.Request) Task[http.Response, http.Error]) {
+    return func(request http.Request) Task[http.Response, http.Error] {
+        return async_route(request, signal);
+    };
+}
+
+func sync_route(
+    request http.Request,
+    signal Vec[u64]) http.Response throws http.Error {
+    if request.target == "/fast" || text.starts_with(request.target, "/fast?") {
+        log_event("FAST-START " + request.target);
+        return server.text_response(200, "fast");
+    }
+    if request.target == "/echo" {
+        return server.bytes_response(200, request.body);
+    }
+    if request.target == "/fail" {
+        throw http.Error.InvalidTarget;
+    }
+    if request.target == "/stop" {
+        signal[0] = 1;
+        return server.text_response(200, "stopping");
+    }
+    if request.target == "/abort" {
+        signal[0] = 2;
+        return server.text_response(200, "aborting");
+    }
+    return server.text_response(404, "not found");
+}
+
+func make_sync_handler(
+    signal Vec[u64]) (func(http.Request) http.Response throws http.Error) {
+    return func(request http.Request) http.Response throws http.Error {
+        return sync_route(request, signal);
+    };
+}
+
+async func controller(handle server.Server, signal Vec[u64]) i32 throws os.Error {
+    for signal[0] == 0 {
+        await tasks.sleep(10);
+    }
+    if signal[0] == 2 {
+        server.abort(handle);
+    } else {
+        server.stop(handle);
+    }
+    let drained = await server.drain(handle, 3000);
+    let value = server.stats(handle);
+    io.println("DRAINED " + bool_text(drained));
+    io.println(
+        "STATS active=" + strconv.format_u64(u64(value.active_connections)) +
+        " accepted=" + strconv.format_u64(value.accepted_connections) +
+        " requests=" + strconv.format_u64(value.requests) +
+        " bytes=" + strconv.format_u64(value.bytes_sent) +
+        " errors=" + strconv.format_u64(value.errors) +
+        " timeouts=" + strconv.format_u64(value.timeouts) +
+        " rejected=" + strconv.format_u64(value.rejected) +
+        " stopping=" + bool_text(value.stopping));
+    return 0;
+}
+
+func port_from(value string) u16 throws strconv.Error {
+    let parsed = strconv.parse_u64(value);
+    if parsed > 65535 {
+        throw strconv.Error.OutOfRange;
+    }
+    return u16(parsed);
+}
+
+func config_from(
+    body_timeout_ms i64,
+    drain_timeout_ms i64,
+    timer_tick_ms i64) server.Config {
+    var settings = server.default_config();
+    settings.header_timeout_ms = 5000;
+    settings.body_timeout_ms = body_timeout_ms;
+    settings.idle_timeout_ms = 5000;
+    settings.write_timeout_ms = 5000;
+    settings.drain_timeout_ms = drain_timeout_ms;
+    settings.timer_tick_ms = timer_tick_ms;
+    return settings;
+}
+
+async func main() i32 throws os.Error {
+    var arguments = vec.empty[string]();
+    try {
+        arguments = process.args();
+    }
+    catch error os.Error {
+        return 2;
+    }
+    var port u16 = 0;
+    var mode = "async";
+    var body_timeout_ms i64 = 30000;
+    var drain_timeout_ms i64 = 1000;
+    var timer_tick_ms i64 = 20;
+    var handler_timeout_ms i64 = 30000;
+    if vec.len(arguments) > 1 {
+        try {
+            port = port_from(arguments[1]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 2 {
+        mode = arguments[2];
+    }
+    if vec.len(arguments) > 3 {
+        try {
+            body_timeout_ms = strconv.parse_i64(arguments[3]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 4 {
+        try {
+            drain_timeout_ms = strconv.parse_i64(arguments[4]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 5 {
+        try {
+            timer_tick_ms = strconv.parse_i64(arguments[5]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    if vec.len(arguments) > 6 {
+        try {
+            handler_timeout_ms = strconv.parse_i64(arguments[6]);
+        }
+        catch error strconv.Error {
+            return 2;
+        }
+    }
+    let signal = vec.make[u64](1, 0);
+    let settings = config_from(body_timeout_ms, drain_timeout_ms, timer_tick_ms);
+    var async_settings = server.default_async_settings();
+    async_settings.handler_timeout_ms = handler_timeout_ms;
+    var listener = server.listen_async_with_settings(
+        net.any4(port),
+        make_async_handler(signal),
+        settings,
+        async_settings);
+    if mode == "async-default" {
+        server.close(listener);
+        listener = server.listen_async(net.any4(port), make_async_handler(signal));
+    } else if mode == "sync-default" {
+        server.close(listener);
+        listener = server.listen(net.any4(port), make_sync_handler(signal));
+    } else if mode == "sync-with" {
+        server.close(listener);
+        listener = server.listen_with(net.any4(port), make_sync_handler(signal), settings);
+    }
+    let address = server.local_address(listener);
+    io.println("LISTENING " + strconv.format_i64(i64(address.port)));
+    let serving = server.serve(listener);
+    tasks.spawn(serving);
+    let control = controller(listener, signal);
+    await control;
+    await serving;
+    return 0;
+}

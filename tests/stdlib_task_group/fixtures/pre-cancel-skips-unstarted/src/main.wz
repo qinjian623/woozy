@@ -1,0 +1,17 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+enum Failure { Unexpected; }
+async func finished_member() i32 throws Failure { return 0; }
+async func sibling() i32 throws Failure {
+    try { io.println("SIBLING-STARTED"); } catch error os.Error {}
+    await a.sleep(50);
+    return 1;
+}
+async func main() i32 throws os.Error {
+    let cancelled = finished_member();
+    a.cancel(cancelled);
+    let outcome = await a.gather[i32,Failure]([cancelled,sibling()]);
+    return 2;
+}

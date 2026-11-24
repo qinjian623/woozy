@@ -1,0 +1,38 @@
+// Both members fail before the coordinator observes completion. The
+// deterministic tie policy selects the lowest input index: "zero".
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+enum Failure { Zero; One; }
+
+async func zero(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "zero.cleanup"); }
+    vec.push(log, "zero.throw");
+    throw Failure.Zero;
+}
+
+async func one(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "one.cleanup"); }
+    vec.push(log, "one.throw");
+    throw Failure.One;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    try {
+        let values = a.or_throw(await a.gather[i32,Failure]([
+            zero(log),
+            one(log)]));
+        io.println("unexpected.ok");
+    } catch error Failure {
+        switch error {
+            case Failure.Zero: io.println("zero");
+            case Failure.One: io.println("one");
+        }
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

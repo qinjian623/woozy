@@ -1,0 +1,116 @@
+// Runs with a deliberately low RLIMIT_NOFILE. The fixture keeps only a few
+// descriptors alive while constructing the tree, then verifies that a tree
+// deeper than the limit reports typed EMFILE and unwinds every held descriptor.
+// The partial tree is intentionally left for the temporary-directory harness
+// to remove after this process exits.
+package app;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/random" as random;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+const EMFILE i32 = 24;
+
+func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code, completed): return code;
+        case os.Error.WouldBlock(code, completed): return code;
+        case os.Error.System(code, completed): return code;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+
+func make_file(path string) throws os.Error {
+    let file = os.open(path,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all_text(file,"x");
+    closed = true;
+    os.close(file);
+}
+
+func exists(path string) bool throws os.Error {
+    try { let info = os.lstat(path); return true; }
+    catch error os.Error {
+        if error_code(error) == 2 { return false; }
+        throw error;
+    }
+}
+
+func open_directory(path string) os.File throws os.Error {
+    return os.open(path,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+}
+
+func descriptor_count() i32 throws os.Error {
+    return i32(vec.len(fs.read_dir("/proc/self/fd")));
+}
+
+func build_chain(path string, depth usize) throws os.Error {
+    os.mkdir(path,0o700);
+    let start = open_directory(path);
+    var current = start;
+    for var level usize = 0; level < depth; level += 1 {
+        os.mkdirat(current,"d",0o700);
+        let child = os.openat(current,"d",
+            os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+        os.close(current);
+        current = child;
+    }
+    let leaf = os.openat(current,"leaf",
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    os.write_all_text(leaf,"z");
+    os.close(leaf);
+    os.close(current);
+}
+
+func main() i32 throws os.Error {
+    let root = "fs-remove-low-"+strconv.format_i64(i64(os.getpid()))+"-"+
+        strconv.format_u64(random.secure_u64());
+    os.mkdir(root,0o700);
+
+    // Shallow removal still succeeds under the same descriptor limit.
+    let shallow = root+"/shallow";
+    os.mkdir(shallow,0o700);
+    os.mkdir(shallow+"/a",0o700);
+    make_file(shallow+"/a/file");
+    fs.remove_dir_all(shallow);
+    if exists(shallow) { return 1; }
+
+    let baseline = descriptor_count();
+    let deep = root+"/deep";
+    // The harness uses a limit below this depth. Building the chain keeps only
+    // one directory descriptor open at a time, so construction itself succeeds.
+    build_chain(deep,256);
+
+    var got_emfile = false;
+    try { fs.remove_dir_all(deep); }
+    catch error os.Error {
+        let actual = error_code(error);
+        if actual != EMFILE {
+            io.eprintln("deep removal returned "+
+                strconv.format_i64(i64(actual))+", expected EMFILE");
+            return 2;
+        }
+        got_emfile = true;
+    }
+    if !got_emfile {
+        io.eprintln("deep removal unexpectedly succeeded under low limit");
+        return 3;
+    }
+    // The root was not removed because traversal aborted, and unwinding must
+    // have released every held descriptor.
+    if !exists(deep) { return 4; }
+    let after = descriptor_count();
+    if after != baseline {
+        io.eprintln("descriptor count changed from "+
+            strconv.format_i64(i64(baseline))+" to "+
+            strconv.format_i64(i64(after)));
+        return 5;
+    }
+    return 0;
+}

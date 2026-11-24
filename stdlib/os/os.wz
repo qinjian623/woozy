@@ -14,6 +14,13 @@ pub enum Error {
     NoProgress(completed usize);
 }
 
+// Typed intent for unlinkat. The runtime maps these values to the platform's
+// AT_REMOVEDIR flag; callers never pass a raw flag.
+pub enum UnlinkKind {
+    File;
+    Directory;
+}
+
 pub const O_RDONLY i32 = 0;
 pub const O_WRONLY i32 = 1;
 pub const O_RDWR i32 = 2;
@@ -44,6 +51,18 @@ func checked(result i64, completed usize) usize throws Error {
 pub func open(path string, flags i32, mode u32) File throws Error {
     let descriptor = checked(__woozy_os_open(path, flags, mode), 0);
     return File(descriptor: i32(descriptor));
+}
+
+// openat resolves exactly one name component relative to `directory`. The
+// string form is convenient for names known to be UTF-8; use openat_bytes for
+// a directory entry whose bytes are not valid UTF-8.
+pub func openat(directory File, name string, flags i32, mode u32) File throws Error {
+    return openat_bytes(directory, text.bytes(name), flags, mode);
+}
+
+pub func openat_bytes(directory File, name Vec[u8], flags i32, mode u32) File throws Error {
+    let descriptor = check(__woozy_os_openat(directory.descriptor, name, flags, mode));
+    return File(descriptor: descriptor);
 }
 
 pub func close(file File) throws Error {
@@ -95,8 +114,33 @@ pub func unlink(path string) throws Error {
     let result = checked(__woozy_os_unlink(path), 0);
 }
 
+// unlinkat removes one entry relative to `directory`. Pass UnlinkKind.File for
+// files and symbolic links (the link itself is removed), or
+// UnlinkKind.Directory for an empty directory. The runtime rejects any other
+// spelling rather than accepting a raw flag.
+pub func unlinkat(directory File, name string, kind UnlinkKind) throws Error {
+    unlinkat_bytes(directory, text.bytes(name), kind);
+}
+
+pub func unlinkat_bytes(directory File, name Vec[u8], kind UnlinkKind) throws Error {
+    var intent i32 = 0;
+    switch kind {
+        case UnlinkKind.File: { intent = 0; }
+        case UnlinkKind.Directory: { intent = 1; }
+    }
+    check(__woozy_os_unlinkat(directory.descriptor, name, intent));
+}
+
 pub func mkdir(path string, mode u32) throws Error {
     let result = checked(__woozy_os_mkdir(path, mode), 0);
+}
+
+pub func mkdirat(directory File, name string, mode u32) throws Error {
+    mkdirat_bytes(directory, text.bytes(name), mode);
+}
+
+pub func mkdirat_bytes(directory File, name Vec[u8], mode u32) throws Error {
+    check(__woozy_os_mkdirat(directory.descriptor, name, mode));
 }
 
 pub func rmdir(path string) throws Error {
@@ -153,11 +197,28 @@ pub func stat(path string) FileInfo throws Error { return check(__woozy_os_stat(
 pub func stat_bytes(path Vec[u8]) FileInfo throws Error { return check(__woozy_os_stat_bytes(path)); }
 pub func lstat(path string) FileInfo throws Error { return check(__woozy_os_lstat(path)); }
 pub func fstat(file File) FileInfo throws Error { return check(__woozy_os_fstat(file.descriptor)); }
+// fstatat resolves exactly one component relative to `directory`. When
+// follow is false, a symbolic link is reported instead of its target.
+pub func fstatat(directory File, name string, follow bool) FileInfo throws Error {
+    return fstatat_bytes(directory, text.bytes(name), follow);
+}
+pub func fstatat_bytes(directory File, name Vec[u8], follow bool) FileInfo throws Error {
+    var no_follow i32 = 1;
+    if follow { no_follow = 0; }
+    return check(__woozy_os_fstatat(directory.descriptor, name, no_follow));
+}
 pub func rename(old_path string, new_path string) throws Error { check(__woozy_os_rename(old_path,new_path)); }
 pub func chmod(path string, mode u32) throws Error { check(__woozy_os_chmod(path,mode)); }
 pub func fchmod(file File, mode u32) throws Error { check(__woozy_os_fchmod(file.descriptor,mode)); }
 pub func chdir(path string) throws Error { check(__woozy_os_chdir(path)); }
 pub func symlink(target string, path string) throws Error { check(__woozy_os_symlink(target,path)); }
+// symlinkat_bytes creates one symbolic link relative to `directory`. Both the
+// target and the new entry name stay raw bytes, so a link target that is not
+// valid UTF-8 can be copied without a round trip. The target is stored
+// verbatim and is never resolved by this call.
+pub func symlinkat_bytes(directory File, target Vec[u8], name Vec[u8]) throws Error {
+    check(__woozy_os_symlinkat_bytes(directory.descriptor,target,name));
+}
 pub func link(old_path string, new_path string) throws Error { check(__woozy_os_link(old_path,new_path)); }
 pub func truncate(path string, length i64) throws Error { check(__woozy_os_truncate(path,length)); }
 pub func ftruncate(file File, length i64) throws Error { check(__woozy_os_ftruncate(file.descriptor,length)); }
@@ -223,3 +284,16 @@ pub func readlink_bytes(path string) Vec[u8] throws Error {
     }
 }
 pub func readlink(path string) string throws Error { return decode(readlink_bytes(path)); }
+// readlinkat_bytes reads the raw target of one entry relative to `directory`.
+// The entry itself is not followed, so a dangling link is reported as bytes
+// rather than as a missing target. The buffer starts small and grows whenever
+// the kernel fills it; the returned slice does not include a NUL terminator.
+pub func readlinkat_bytes(directory File, name Vec[u8]) Vec[u8] throws Error {
+    let buffer = vec.make[u8](256,0);
+    for true {
+        let count = checked(__woozy_os_readlinkat_bytes(directory.descriptor,
+                                                        name,buffer),0);
+        if count == vec.len(buffer) { vec.resize(buffer,vec.len(buffer)*2,0); continue; }
+        return buffer[0:count];
+    }
+}

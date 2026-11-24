@@ -242,6 +242,104 @@ func test_fold() i32 {
     return 0;
 }
 
+func test_fold_order_and_tail() i32 {
+    // Lengths 0 through 9 cover the four-at-a-time body and every tail length.
+    for var length usize = 0; length <= 9; length += 1 {
+        let values = vec.make[i32](length, 0);
+        for var index usize = 0; index < length; index += 1 {
+            values[index] = i32(index);
+        }
+        let seen = vec.empty[i32]();
+        let bad = vec.make[bool](1, false);
+        let combine = func(accumulator i32, value i32) i32 {
+            let expected = i32(vec.len(seen));
+            if value != expected { bad[0] = true; }
+            if accumulator != 100 + expected { bad[0] = true; }
+            vec.push(seen, value);
+            return accumulator + 1;
+        };
+        let folded = algo.fold[i32, i32](values, 100, combine);
+        if folded != 100 + i32(length) { return 800; }
+        if vec.len(seen) != length { return 801; }
+        if bad[0] { return 802; }
+        for var index usize = 0; index < length; index += 1 {
+            if seen[index] != i32(index) { return 803; }
+            if values[index] != i32(index) { return 804; }
+        }
+    }
+    return 0;
+}
+
+func test_filter_snapshot_and_later_elements() i32 {
+    let values = vec.make[i32](3, 0);
+    values[0] = 1;
+    values[1] = 2;
+    values[2] = 3;
+    let alias = values;
+    let seen = vec.empty[i32]();
+    let keep = func(value i32) bool {
+        vec.push(seen, value);
+        if value == 1 {
+            alias[0] = 100;
+            alias[2] = 300;
+        }
+        if value == 2 { alias[1] = 200; }
+        return true;
+    };
+    let filtered = algo.filter[i32](values, keep);
+    if !same_i32(filtered, [1, 2, 300]) { return 820; }
+    if !same_i32(seen, [1, 2, 300]) { return 821; }
+    if !same_i32(values, [100, 200, 300]) { return 822; }
+    return 0;
+}
+
+func test_filter_later_replacement_changes_decision() i32 {
+    let values = vec.make[i32](3, 0);
+    values[0] = 5;
+    values[1] = 6;
+    values[2] = 7;
+    let alias = values;
+    let seen = vec.empty[i32]();
+    let keep = func(value i32) bool {
+        vec.push(seen, value);
+        if value == 5 {
+            alias[1] = 0;
+            alias[2] = -1;
+        }
+        if value == 0 { alias[0] = 99; }
+        return value > 0;
+    };
+    let filtered = algo.filter[i32](values, keep);
+    if !same_i32(filtered, [5]) { return 840; }
+    if !same_i32(seen, [5, 0, -1]) { return 841; }
+    if !same_i32(values, [99, 0, -1]) { return 842; }
+    return 0;
+}
+
+func test_fold_reads_replaced_elements() i32 {
+    let values = vec.make[i32](9, 0);
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        values[index] = i32(index);
+    }
+    let alias = values;
+    let seen = vec.empty[i32]();
+    let combine = func(accumulator i32, value i32) i32 {
+        vec.push(seen, value);
+        if value == 0 {
+            alias[1] = 8;
+            alias[8] = 9;
+        }
+        if value == 5 { alias[6] = 7; }
+        return accumulator * 10 + value;
+    };
+    let folded = algo.fold[i32, i32](values, 0, combine);
+    if folded != 82345779 { return 860; }
+    if !same_i32(seen, [0, 8, 2, 3, 4, 5, 7, 7, 9]) { return 861; }
+    if values[6] != 7 { return 862; }
+    if values[8] != 9 { return 863; }
+    return 0;
+}
+
 func test_find() i32 {
     let empty = vec.empty[i32]();
     let empty_calls = vec.make[i32](1, 0);
@@ -631,6 +729,14 @@ func main() i32 {
     failure = test_filter();
     if failure != 0 { return failure; }
     failure = test_fold();
+    if failure != 0 { return failure; }
+    failure = test_fold_order_and_tail();
+    if failure != 0 { return failure; }
+    failure = test_filter_snapshot_and_later_elements();
+    if failure != 0 { return failure; }
+    failure = test_filter_later_replacement_changes_decision();
+    if failure != 0 { return failure; }
+    failure = test_fold_reads_replaced_elements();
     if failure != 0 { return failure; }
     failure = test_find();
     if failure != 0 { return failure; }

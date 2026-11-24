@@ -136,6 +136,21 @@ int64_t lang_sys_fstat_v1(int32_t fd, LangFileStat *out) noexcept {
   return 0;
 }
 
+int64_t lang_sys_fstatat_v1(int32_t fd, const char *path, uint64_t length,
+                            int32_t no_follow,
+                            LangFileStat *out) noexcept {
+  if (no_follow != 0 && no_follow != 1) return -22;
+  const darwin::Component name(path, length);
+  if (name.status != 0) return name.status;
+  if (!out) return -14;
+  struct stat value;
+  const int flags = no_follow == 1 ? AT_SYMLINK_NOFOLLOW : 0;
+  if (fstatat(fd, name.bytes, &value, flags) < 0)
+    return darwin::error(errno);
+  fill_stat(*out, value);
+  return 0;
+}
+
 int64_t lang_sys_rename_v1(const char *old_path, uint64_t old_length,
                            const char *new_path, uint64_t new_length) noexcept {
   const darwin::Path from(old_path, old_length);

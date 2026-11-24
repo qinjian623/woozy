@@ -90,6 +90,35 @@ inline int64_t copy_path(const char *source, uint64_t length,
   return 0;
 }
 
+// Copies and validates one borrowed directory-entry name. The name must be
+// exactly one component: non-empty, no embedded NUL, no '/', and neither "."
+// nor "..". Rejecting multi-component paths keeps descriptor-relative
+// operations from following a nested symlink and lets a recursive walker
+// revalidate every entry before it acts.
+//   * length == 0                      -> -EINVAL
+//   * length >= 4096                   -> -ENAMETOOLONG
+//   * source == nullptr                -> -EFAULT
+//   * ".", "..", NUL or '/'           -> -EINVAL
+//   * otherwise                        -> 0
+LANG_NATIVE_NO_STACK_PROTECTOR
+inline int64_t copy_component(const char *source, uint64_t length,
+                              char destination[kPathMax]) noexcept {
+  if (length == 0) return kErrorInval;
+  if (length >= kPathMax) return kErrorNameTooLong;
+  if (source == nullptr) return kErrorFault;
+  if (length == 1 && source[0] == '.') return kErrorInval;
+  if (length == 2 && source[0] == '.' && source[1] == '.')
+    return kErrorInval;
+
+  for (uint64_t index = 0; index < length; ++index) {
+    const char byte = source[index];
+    if (byte == '\0' || byte == '/') return kErrorInval;
+    destination[index] = byte;
+  }
+  destination[length] = '\0';
+  return 0;
+}
+
 } // namespace linux_x86_64
 } // namespace native
 } // namespace lang

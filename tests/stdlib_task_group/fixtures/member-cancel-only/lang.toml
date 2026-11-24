@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="stdlib_task_group_member_cancel_only"
+source_root="src"
+entry="app"
+[build]
+backend="native"
+word_bits=64

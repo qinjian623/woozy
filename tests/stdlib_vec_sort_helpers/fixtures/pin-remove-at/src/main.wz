@@ -1,0 +1,10 @@
+package app;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](3, 1);
+    let guard Slice[i32] = slice.view[i32](values, 0, 1);
+    let removed = vec.remove_at[i32](values, 1);
+    return removed + i32(slice.len[i32](guard));
+}

@@ -1,0 +1,21 @@
+// A growing reserve changes storage and must Panic while filter's Slice pins
+// the input. The elements themselves are not replaced here, so only the pin
+// check can stop the callback.
+package app;
+
+import "std/algo" as algo;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](2, 0);
+    values[0] = 2;
+    values[1] = 1;
+    let alias = values;
+    let keep = func(value i32) bool {
+        vec.reserve(alias, 128);
+        return value == 2;
+    };
+    let filtered = algo.filter[i32](values, keep);
+    if vec.len(filtered) != 1 { return 1; }
+    return 0;
+}

@@ -62,6 +62,12 @@ bool lang_vec_pop_v1(LangVec *, void *out) noexcept;
 // graph-critical publication window.
 void lang_vec_resize_v1(LangVec *, uint64_t length, const void *fill) noexcept;
 void lang_vec_clear_v1(LangVec *) noexcept;
+// Private std/io byte-range append. Both descriptors must be trivial Vec[u8]
+// values. The source range is [offset, offset + count); all range checks run
+// before growth, and source self-aliasing is staged when target growth may
+// release the old payload.
+void lang_io_vec_append_bytes_v1(LangVec *, const LangVec *, uint64_t offset,
+                                 uint64_t count) noexcept;
 // Private runtime operation, not a source-language length-changing API.
 void lang_vec_check_resize_v1(LangVec *) noexcept;
 void *lang_alloc_v1(uint64_t, uint64_t) noexcept;

@@ -1,0 +1,199 @@
+// Descriptor-relative std/os checks. The program returns 0 only if every
+// contract below holds; each non-zero value identifies the first failure.
+//
+// The run directory is temporary, but the root name includes the process id so
+// a manual re-run cannot reuse a previous tree accidentally.
+package app;
+
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(value, completed): return value;
+        case os.Error.WouldBlock(value, completed): return value;
+        case os.Error.System(value, completed): return value;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+
+func kind(mode u32) u32 { return mode & os.S_IFMT; }
+
+func open_directory(path string) os.File throws os.Error {
+    return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+        os.O_CLOEXEC, 0);
+}
+
+func openat_error(directory os.File, name string, flags i32) i32 {
+    try {
+        let file = os.openat(directory, name, flags, 0);
+        os.close(file);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func openat_bytes_error(directory os.File, name Vec[u8], flags i32) i32 {
+    try {
+        let file = os.openat_bytes(directory, name, flags, 0);
+        os.close(file);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func mkdirat_error(directory os.File, name string, mode u32) i32 {
+    try {
+        os.mkdirat(directory, name, mode);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func unlinkat_error(directory os.File, name string, intent os.UnlinkKind) i32 {
+    try {
+        os.unlinkat(directory, name, intent);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func unlinkat_bytes_error(directory os.File, name Vec[u8],
+                          intent os.UnlinkKind) i32 {
+    try {
+        os.unlinkat_bytes(directory, name, intent);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func fstatat_error(directory os.File, name string, follow bool) i32 {
+    try {
+        let info = os.fstatat(directory, name, follow);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func fstatat_bytes_error(directory os.File, name Vec[u8],
+                         follow bool) i32 {
+    try {
+        let info = os.fstatat_bytes(directory, name, follow);
+        return -1;
+    }
+    catch error os.Error { return code(error); }
+}
+
+func main() i32 throws os.Error {
+    let root = "fs-at-" + strconv.format_i64(i64(os.getpid()));
+    os.mkdir(root, 0o700);
+    let directory = open_directory(root);
+
+    // openat creates and fstatat resolves relative to the descriptor.
+    let file = os.openat(directory, "alpha",
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600);
+    os.close(file);
+    let alpha = os.fstatat(directory, "alpha", true);
+    if kind(alpha.mode) != os.S_IFREG || alpha.size != 0 { return 1; }
+    let invalid = os.from_fd(-1);
+    if openat_error(invalid, "alpha", os.O_RDONLY) != 9 { return 21; }
+    if mkdirat_error(invalid, "alpha", 0o700) != 9 { return 22; }
+    if unlinkat_error(invalid, "alpha", os.UnlinkKind.File) != 9 { return 23; }
+    if fstatat_error(invalid, "alpha", false) != 9 { return 24; }
+    let plain = os.openat(directory, "alpha", os.O_RDONLY | os.O_CLOEXEC, 0);
+    defer { try { os.close(plain); } catch error os.Error {} }
+    if openat_error(plain, "alpha", os.O_RDONLY) != 20 { return 25; }
+    if mkdirat_error(plain, "alpha", 0o700) != 20 { return 26; }
+    if unlinkat_error(plain, "alpha", os.UnlinkKind.File) != 20 { return 27; }
+    if fstatat_error(plain, "alpha", false) != 20 { return 28; }
+    if kind(os.fstat(plain).mode) != os.S_IFREG { return 29; }
+
+    // no-follow reports the link; follow reports the target directory.
+    os.mkdirat(directory, "real", 0o700);
+    os.symlink("real", root + "/link");
+    let link = os.fstatat(directory, "link", false);
+    if kind(link.mode) != os.S_IFLNK { return 2; }
+    let target = os.fstatat(directory, "link", true);
+    if kind(target.mode) != os.S_IFDIR { return 3; }
+    let rejected = openat_error(directory, "link",
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC);
+    if rejected != 40 { return 4; }
+
+    // unlinkat removes the symbolic link itself, never its target.
+    let target_file = os.openat(directory, "target",
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600);
+    os.close(target_file);
+    os.symlink("target", root + "/drop");
+    let drop = os.fstatat(directory, "drop", false);
+    if kind(drop.mode) != os.S_IFLNK { return 5; }
+    os.unlinkat(directory, "drop", os.UnlinkKind.File);
+    if fstatat_error(directory, "drop", false) != 2 { return 6; }
+    let kept = os.fstatat(directory, "target", true);
+    if kind(kept.mode) != os.S_IFREG { return 7; }
+
+    // UnlinkKind is a typed intent, not a raw platform flag.
+    os.mkdirat(directory, "sub", 0o700);
+    let file_on_dir = unlinkat_error(directory, "sub", os.UnlinkKind.File);
+    if file_on_dir != 21 && file_on_dir != 1 { return 8; }
+    os.unlinkat(directory, "sub", os.UnlinkKind.Directory);
+    if fstatat_error(directory, "sub", false) != 2 { return 9; }
+    let dir_on_file = unlinkat_error(directory, "alpha",
+        os.UnlinkKind.Directory);
+    if dir_on_file != 20 && dir_on_file != 1 { return 10; }
+
+    // Exactly one name component is accepted from the owner module.
+    if openat_error(directory, "../escape", os.O_RDONLY) != 22 { return 11; }
+    if mkdirat_error(directory, "a/b", 0o700) != 22 { return 12; }
+    if fstatat_error(directory, ".", true) != 22 { return 13; }
+    let empty = vec.empty[u8]();
+    if unlinkat_bytes_error(directory, empty, os.UnlinkKind.File) != 22 {
+        return 14;
+    }
+
+    // The descriptor opened before rename keeps naming the original directory
+    // even after a new directory is created with the old path spelling.
+    os.mkdirat(directory, "pin", 0o700);
+    let pinned = open_directory(root + "/pin");
+    os.rename(root + "/pin", root + "/moved");
+    os.mkdirat(directory, "pin", 0o700);
+    os.mkdirat(pinned, "inside", 0o700);
+    let inside = os.fstatat(pinned, "inside", true);
+    if kind(inside.mode) != os.S_IFDIR { return 15; }
+    let recreated = open_directory(root + "/pin");
+    if fstatat_error(recreated, "inside", true) != 2 { return 16; }
+    os.close(recreated);
+    let moved = os.fstatat(directory, "moved", true);
+    if kind(moved.mode) != os.S_IFDIR { return 17; }
+    os.close(pinned);
+
+    // Directory entries are bytes. The raw name survives openat, fstatat and
+    // read_dir without a UTF-8 round trip.
+    let raw = text.bytes("bad");
+    vec.push(raw, u8(255));
+    let raw_file = os.openat_bytes(directory, raw,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600);
+    os.write_all(raw_file, [u8(120)]);
+    os.close(raw_file);
+    let raw_info = os.fstatat_bytes(directory, raw, true);
+    if kind(raw_info.mode) != os.S_IFREG || raw_info.size != 1 { return 18; }
+    let entries = fs.read_dir(root);
+    var found = false;
+    for entry in entries {
+        if vec.len(entry.name) == vec.len(raw) {
+            var same = true;
+            for var index usize = 0; index < vec.len(raw); index += 1 {
+                if entry.name[index] != raw[index] { same = false; }
+            }
+            if same { found = true; }
+        }
+    }
+    if !found { return 19; }
+    os.unlinkat_bytes(directory, raw, os.UnlinkKind.File);
+    if fstatat_bytes_error(directory, raw, true) != 2 { return 20; }
+
+    os.close(directory);
+    return 0;
+}

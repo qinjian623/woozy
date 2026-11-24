@@ -1,0 +1,17 @@
+// No real typed error exists. The member cancellation propagates through the
+// final cancellation await after the drain has completed.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+
+async func main() i32 throws os.Error {
+    let member = a.sleep(50);
+    a.cancel(member);
+    let group = a.gather[Unit,Unit]([member]);
+    a.spawn(group);
+    a.run_until(group);
+    io.println(a.finished(group));
+    return 0;
+}

@@ -1,0 +1,44 @@
+// One member succeeds early, one fails later, and a third would finish last.
+// The early success is joined and the last member is cancelled.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+enum Failure { Bad; }
+
+async func ok(log Vec[string]) i32 throws Failure {
+    await a.sleep(5);
+    vec.push(log, "ok.value");
+    return 7;
+}
+
+async func fail(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "fail.cleanup"); }
+    await a.sleep(20);
+    vec.push(log, "fail.throw");
+    throw Failure.Bad;
+}
+
+async func slow(log Vec[string]) i32 throws Failure {
+    defer { vec.push(log, "slow.cleanup"); }
+    await a.sleep(200);
+    vec.push(log, "slow.after");
+    return 9;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    try {
+        let values = a.or_throw(await a.gather[i32,Failure]([
+            ok(log),
+            fail(log),
+            slow(log)]));
+        io.println("unexpected.ok");
+    } catch error Failure {
+        io.println("caught");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

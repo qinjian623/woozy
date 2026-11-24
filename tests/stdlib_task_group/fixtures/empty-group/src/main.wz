@@ -1,0 +1,16 @@
+// An empty batch completes without launching or waiting for anything.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func main() i32 throws os.Error {
+    let outcome = await a.gather[i32,Unit](vec.empty[Task[i32,Unit]]());
+    switch outcome {
+        case result.Result.Ok(values): io.println(vec.len(values));
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    return 0;
+}

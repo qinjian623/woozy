@@ -1,0 +1,1222 @@
+// Streaming HTTP/1.1 request-body and chunked response-frame tests.
+//
+// The codec runs at Native O0/O2. Custom receive callbacks inject partial
+// reads and one-shot WouldBlock at exact stream offsets; nonblocking socketpair
+// cases use the real std/net transport. main returns 0 on success and a unique
+// non-zero code for the first failing group.
+package app;
+
+import "std/http" as http;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func check(name string, condition bool) bool {
+    if !condition { say("FAIL "+name); }
+    return condition;
+}
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func bytes_text(data Vec[u8], value string) bool {
+    return bytes_equal(data,text.bytes(value));
+}
+
+func bytes_is_prefix(data Vec[u8], value string) bool {
+    let target = text.bytes(value);
+    if vec.len(data) > vec.len(target) { return false; }
+    for var index usize = 0; index < vec.len(data); index += 1 {
+        if data[index] != target[index] { return false; }
+    }
+    return true;
+}
+
+func concat(left Vec[u8], right Vec[u8]) Vec[u8] {
+    let out = vec.empty[u8]();
+    for byte in left { vec.push(out,byte); }
+    for byte in right { vec.push(out,byte); }
+    return out;
+}
+
+func header_bytes_is(headers Vec[http.Header], name string, value string) bool {
+    let values = http.header_values(headers,name);
+    if vec.len(values) != 1 { return false; }
+    return bytes_text(values[0],value);
+}
+
+func header_count(headers Vec[http.Header], name string) usize {
+    return vec.len(http.header_values(headers,name));
+}
+
+func error_name(value http.Error) string {
+    switch value {
+        case http.Error.Io(error): return "Io";
+        case http.Error.ReaderBusy: return "ReaderBusy";
+        case http.Error.ReadOrder: return "ReadOrder";
+        case http.Error.UnexpectedEof: return "UnexpectedEof";
+        case http.Error.TrailingBytes: return "TrailingBytes";
+        case http.Error.HeadTooLarge: return "HeadTooLarge";
+        case http.Error.BodyTooLarge: return "BodyTooLarge";
+        case http.Error.TooManyHeaders: return "TooManyHeaders";
+        case http.Error.LengthOverflow: return "LengthOverflow";
+        case http.Error.InvalidRequestLine: return "InvalidRequestLine";
+        case http.Error.InvalidMethod: return "InvalidMethod";
+        case http.Error.InvalidTarget: return "InvalidTarget";
+        case http.Error.InvalidStatusLine: return "InvalidStatusLine";
+        case http.Error.InvalidStatus: return "InvalidStatus";
+        case http.Error.InvalidReason: return "InvalidReason";
+        case http.Error.UnsupportedVersion: return "UnsupportedVersion";
+        case http.Error.InvalidHeaderLine: return "InvalidHeaderLine";
+        case http.Error.InvalidHeaderName: return "InvalidHeaderName";
+        case http.Error.InvalidHeaderValue: return "InvalidHeaderValue";
+        case http.Error.InvalidUtf8: return "InvalidUtf8";
+        case http.Error.ObsoleteLineFolding: return "ObsoleteLineFolding";
+        case http.Error.InvalidContentLength: return "InvalidContentLength";
+        case http.Error.ConflictingContentLength: return "ConflictingContentLength";
+        case http.Error.TransferEncodingWithContentLength: return "TransferEncodingWithContentLength";
+        case http.Error.UnsupportedTransferEncoding: return "UnsupportedTransferEncoding";
+        case http.Error.InvalidChunkSize: return "InvalidChunkSize";
+        case http.Error.ChunkLineTooLong: return "ChunkLineTooLong";
+        case http.Error.InvalidChunkExtension: return "InvalidChunkExtension";
+        case http.Error.InvalidChunkTerminator: return "InvalidChunkTerminator";
+        case http.Error.InvalidTrailer: return "InvalidTrailer";
+        case http.Error.ForbiddenTrailer: return "ForbiddenTrailer";
+        case http.Error.MissingHost: return "MissingHost";
+        case http.Error.DuplicateHost: return "DuplicateHost";
+        case http.Error.InvalidHost: return "InvalidHost";
+        case http.Error.UnexpectedBody: return "UnexpectedBody";
+        case http.Error.UnexpectedFraming: return "UnexpectedFraming";
+        case http.Error.UnsupportedTrailers: return "UnsupportedTrailers";
+    }
+    return "Unknown";
+}
+
+func is_would_block(value http.Error) bool {
+    switch value {
+        case http.Error.Io(inner):
+            switch inner {
+                case os.Error.WouldBlock(code,completed): return true;
+                default: return false;
+            }
+        default: return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Real socketpair transport helpers.
+
+func close_quiet(socket net.Socket) {
+    try { net.close(socket); }
+    catch error os.Error {}
+}
+
+func pair_blocking() net.Pair throws http.Error {
+    try { return net.socketpair(net.AF_UNIX,net.SOCK_STREAM | net.SOCK_CLOEXEC,0); }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+func pair_nonblocking() net.Pair throws http.Error {
+    try {
+        return net.socketpair(
+            net.AF_UNIX,
+            net.SOCK_STREAM | net.SOCK_NONBLOCK | net.SOCK_CLOEXEC,
+            0);
+    } catch error os.Error { throw http.Error.Io(error); }
+}
+
+// A loopback TCP pair whose accepted server endpoint is nonblocking.
+func tcp_nonblocking_pair() net.Pair throws http.Error {
+    var listener = net.from_fd(-1);
+    defer { close_quiet(listener); }
+    var client = net.from_fd(-1);
+    var keep_client = false;
+    defer { if !keep_client { close_quiet(client); } }
+    try {
+        listener = net.socket(
+            net.AF_INET,
+            net.SOCK_STREAM | net.SOCK_CLOEXEC,
+            0);
+        net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+        net.bind(listener,net.ip("127.0.0.1",0));
+        net.listen(listener,4);
+        let address = net.getsockname(listener);
+        client = net.socket(
+            net.AF_INET,
+            net.SOCK_STREAM | net.SOCK_CLOEXEC,
+            0);
+        net.connect(client,address);
+        let accepted = net.accept(
+            listener,
+            u32(net.SOCK_NONBLOCK | net.SOCK_CLOEXEC)).socket;
+        keep_client = true;
+        return net.Pair(first:client,second:accepted);
+    } catch error os.Error { throw http.Error.Io(error); }
+}
+
+func send_text(socket net.Socket, value string) throws http.Error {
+    try { net.send_all(socket,text.bytes(value),0); }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+func poll_readable(socket net.Socket) bool throws http.Error {
+    let rows = [net.PollFd(fd:net.fd(socket),events:net.POLLIN,revents:0)];
+    try { return net.poll(rows,2000) > 0; }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+// ---------------------------------------------------------------------------
+// Custom receive source. max_step limits every delivered fragment; the one-shot
+// fail_at byte offset raises WouldBlock before that byte is delivered.
+
+func unused_send(token u64, data Vec[u8], offset usize, count usize) usize throws os.Error {
+    throw os.Error.System(22,0);
+}
+
+func scripted_reader(
+    script Vec[u8],
+    max_step usize,
+    fail_at usize,
+    limits http.Limits) http.Reader {
+    let position = vec.make[u64](1,0);
+    let fired = vec.make[u64](1,0);
+    let receive = func(token u64, data Vec[u8], count usize) usize throws os.Error {
+        let at = usize(position[0]);
+        if fired[0] == 0 && at >= fail_at {
+            fired[0] = 1;
+            throw os.Error.WouldBlock(11,0);
+        }
+        if at >= vec.len(script) { return 0; }
+        var take = count;
+        if take > max_step { take = max_step; }
+        if take > vec.len(script) - at { take = vec.len(script) - at; }
+        if fired[0] == 0 && at + take > fail_at { take = fail_at - at; }
+        for var index usize = 0; index < take; index += 1 {
+            data[index] = script[at+index];
+        }
+        position[0] += u64(take);
+        return take;
+    };
+    return http.reader_external(0,receive,unused_send,limits);
+}
+
+func scripted_default(script Vec[u8], max_step usize, fail_at usize) http.Reader {
+    return scripted_reader(script,max_step,fail_at,http.default_limits());
+}
+
+func read_head_retry(reader http.Reader) http.Request throws http.Error {
+    for true {
+        try { return http.read_request_head(reader); }
+        catch error http.Error {
+            if !is_would_block(error) { throw error; }
+        }
+    }
+    return http.Request(
+        method:"",target:"",version:"",headers:vec.empty[http.Header](),
+        body:vec.empty[u8](),trailers:vec.empty[http.Header]());
+}
+
+func read_part_retry(reader http.Reader, max_bytes usize) http.BodyPart throws http.Error {
+    for true {
+        try { return http.read_request_body_part(reader,max_bytes); }
+        catch error http.Error {
+            if !is_would_block(error) { throw error; }
+        }
+    }
+    return http.BodyPart(
+        data:vec.empty[u8](),done:false,trailers:vec.empty[http.Header]());
+}
+
+func read_head_poll(reader http.Reader, socket net.Socket) http.Request throws http.Error {
+    for true {
+        try { return http.read_request_head(reader); }
+        catch error http.Error {
+            if !is_would_block(error) { throw error; }
+            if !poll_readable(socket) { throw http.Error.Io(os.Error.System(110,0)); }
+        }
+    }
+    return http.Request(
+        method:"",target:"",version:"",headers:vec.empty[http.Header](),
+        body:vec.empty[u8](),trailers:vec.empty[http.Header]());
+}
+
+func read_part_poll(
+    reader http.Reader,
+    socket net.Socket,
+    max_bytes usize) http.BodyPart throws http.Error {
+    for true {
+        try { return http.read_request_body_part(reader,max_bytes); }
+        catch error http.Error {
+            if !is_would_block(error) { throw error; }
+            if !poll_readable(socket) { throw http.Error.Io(os.Error.System(110,0)); }
+        }
+    }
+    return http.BodyPart(
+        data:vec.empty[u8](),done:false,trailers:vec.empty[http.Header]());
+}
+
+func drain_parts(reader http.Reader, max_bytes usize) http.BodyPart throws http.Error {
+    let all = vec.empty[u8]();
+    for true {
+        let part = read_part_retry(reader,max_bytes);
+        for byte in part.data { vec.push(all,byte); }
+        if part.done {
+            return http.BodyPart(data:all,done:true,trailers:part.trailers);
+        }
+        if vec.len(part.data) == 0 {
+            return http.BodyPart(data:all,done:false,trailers:part.trailers);
+        }
+    }
+    return http.BodyPart(data:all,done:false,trailers:vec.empty[http.Header]());
+}
+
+func head_error(reader http.Reader, expected string) bool {
+    try { let ignored = http.read_request_head(reader); }
+    catch error http.Error {
+        return check("head error "+expected,error_name(error) == expected);
+    }
+    return check("head error "+expected,false);
+}
+
+func part_error(reader http.Reader, max_bytes usize, expected string) bool {
+    try { let ignored = http.read_request_body_part(reader,max_bytes); }
+    catch error http.Error {
+        return check("part error "+expected,error_name(error) == expected);
+    }
+    return check("part error "+expected,false);
+}
+
+// Drain available body pieces until the expected framing error. A stream may
+// legitimately return a short body piece before the malformed chunk/trailer
+// bytes are needed, so an error is not required on the first call.
+func drain_error(reader http.Reader, max_bytes usize, expected string) bool {
+    for true {
+        try {
+            let part = read_part_retry(reader,max_bytes);
+            if part.done {
+                return check("drain error "+expected,false);
+            }
+        } catch error http.Error {
+            return check("drain error "+expected,error_name(error) == expected);
+        }
+    }
+    return check("drain error "+expected,false);
+}
+
+// ---------------------------------------------------------------------------
+// Request body streaming.
+
+func test_bodyless_pipeline() bool throws http.Error {
+    let pair = pair_blocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    send_text(pair.first,
+        "GET /none HTTP/1.1\r\nHost: x\r\n\r\n"+
+        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n");
+    let reader = http.reader(pair.second,http.default_limits());
+    let head = http.read_request_head(reader);
+    if !check("bodyless head",head.target == "/none") { return false; }
+    let part = http.read_request_body_part(reader,1);
+    if !check("bodyless done",part.done) { return false; }
+    if !check("bodyless empty",vec.len(part.data) == 0) { return false; }
+    if !check("bodyless no trailers",vec.len(part.trailers) == 0) { return false; }
+    if !check("bodyless pending pipeline",http.pending(reader) > 0) { return false; }
+    let next = http.read_request(reader);
+    if !check("bodyless next request",next.target == "/next") { return false; }
+    return check("bodyless finished",true);
+}
+
+func test_bounds_and_fixed() bool throws http.Error {
+    let prefix = "POST /fixed HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n";
+    let script = concat(
+        concat(text.bytes(prefix),text.bytes("abcde")),
+        text.bytes("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
+    let reader = scripted_default(script,2,999999);
+    let head = read_head_retry(reader);
+    if !check("fixed head",head.target == "/fixed") { return false; }
+    let first = read_part_retry(reader,2);
+    if !check("fixed first bound",vec.len(first.data) <= 2) { return false; }
+    if !check("fixed first bytes",bytes_text(first.data,"ab")) { return false; }
+    if !check("fixed first not done", !first.done) { return false; }
+    let second = read_part_retry(reader,2);
+    if !check("fixed second bound",vec.len(second.data) <= 2) { return false; }
+    if !check("fixed second bytes",bytes_text(second.data,"cd")) { return false; }
+    if !check("fixed second not done", !second.done) { return false; }
+    let third = read_part_retry(reader,2);
+    if !check("fixed third bound",vec.len(third.data) <= 2) { return false; }
+    if !check("fixed third bytes",bytes_text(third.data,"e")) { return false; }
+    if !check("fixed third done",third.done) { return false; }
+    if !check("fixed no trailers",vec.len(third.trailers) == 0) { return false; }
+    let next = http.read_request(reader);
+    if !check("fixed next request",next.target == "/next") { return false; }
+
+    // A body exactly equal to the bound is returned with done in one piece.
+    let exact = scripted_default(
+        text.bytes("POST /exact HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nabcde"),
+        1000,
+        999999);
+    let exact_head = read_head_retry(exact);
+    if !check("fixed exact head",exact_head.target == "/exact") { return false; }
+    let exact_part = read_part_retry(exact,5);
+    if !check("fixed exact done",exact_part.done) { return false; }
+    if !check("fixed exact body",bytes_text(exact_part.data,"abcde")) {
+        return false;
+    }
+
+    // A receive returns only a short fragment, but the bound is larger. The
+    // fragment is returned immediately instead of blocking until the bound is
+    // full; the producer can now continue.
+    let short_prefix = "POST /short-piece HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n";
+    let short = scripted_default(
+        concat(text.bytes(short_prefix),text.bytes("abcde")),
+        2,
+        999999);
+    let short_head = read_head_retry(short);
+    if !check("fixed short head",short_head.target == "/short-piece") {
+        return false;
+    }
+    let short_part = read_part_retry(short,4);
+    if !check("fixed short immediate",bytes_text(short_part.data,"ab")) {
+        return false;
+    }
+    if !check("fixed short not done", !short_part.done) { return false; }
+    let short_rest = drain_parts(short,4);
+    if !check("fixed short rest",bytes_text(short_rest.data,"cde")) { return false; }
+    return check("fixed short done",short_rest.done);
+}
+
+func test_zero_bound_and_mixed() bool throws http.Error {
+    let prefix = "POST /mix HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\n";
+    let complete = concat(
+        text.bytes(prefix),
+        text.bytes("abcdGET /after HTTP/1.1\r\nHost: x\r\n\r\n"));
+    let reader = scripted_default(complete,1000,999999);
+    let head = read_head_retry(reader);
+    if !check("mixed head",head.target == "/mix") { return false; }
+    if !part_error(reader,0,"ReadOrder") { return false; }
+    let first = read_part_retry(reader,2);
+    if !check("mixed first body",bytes_text(first.data,"ab")) { return false; }
+    try {
+        let ignored = http.read_request_body(reader);
+        return check("mixed full read rejected",false);
+    } catch error http.Error {
+        if !check("mixed full read ReadOrder",error_name(error) == "ReadOrder") {
+            return false;
+        }
+    }
+    let second = read_part_retry(reader,8);
+    if !check("mixed rest",bytes_text(second.data,"cd")) { return false; }
+    if !check("mixed done",second.done) { return false; }
+    let next = http.read_request(reader);
+    if !check("mixed next request",next.target == "/after") { return false; }
+
+    // Reverse direction: a WouldBlock partial full-body read selects FULL mode
+    // and remains retryable, but a streaming read must not reinterpret it.
+    let fail_at = vec.len(text.bytes(prefix)) + 2;
+    let full_reader = scripted_default(complete,1000,fail_at);
+    let full_head = read_head_retry(full_reader);
+    if !check("full head",full_head.target == "/mix") { return false; }
+    try {
+        let ignored = http.read_request_body(full_reader);
+        return check("mixed full expected WouldBlock",false);
+    } catch error http.Error {
+        if !check("mixed full WouldBlock",is_would_block(error)) { return false; }
+    }
+    if !part_error(full_reader,2,"ReadOrder") { return false; }
+    let full = http.read_request_body(full_reader);
+    return check("mixed full retry",bytes_text(full.body,"abcd"));
+}
+
+func test_fixed_limits_and_eof() bool throws http.Error {
+    let over = scripted_reader(
+        text.bytes("POST /big HTTP/1.1\r\nHost: x\r\nContent-Length: 6\r\n\r\nabcdef"),
+        1000,
+        999999,
+        http.limits(8192,5,100));
+    if !head_error(over,"BodyTooLarge") { return false; }
+
+    let exact = scripted_reader(
+        text.bytes("POST /exact HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nabcde"),
+        2,
+        999999,
+        http.limits(8192,5,100));
+    let head = read_head_retry(exact);
+    if !check("limit exact head",head.target == "/exact") { return false; }
+    let all = drain_parts(exact,3);
+    if !check("limit exact done",all.done) { return false; }
+    if !check("limit exact body",bytes_text(all.data,"abcde")) { return false; }
+
+    let truncated = scripted_default(
+        text.bytes("POST /short HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nabc"),
+        2,
+        999999);
+    let short_head = read_head_retry(truncated);
+    if !check("truncated head",short_head.target == "/short") { return false; }
+    var saw_fixed_eof = false;
+    for true {
+        try { let ignored = read_part_retry(truncated,8); }
+        catch error http.Error {
+            if error_name(error) == "UnexpectedEof" {
+                saw_fixed_eof = true;
+                break;
+            }
+            throw error;
+        }
+    }
+    if !check("truncated UnexpectedEof",saw_fixed_eof) { return false; }
+
+    let overflow = scripted_default(
+        text.bytes("POST /over HTTP/1.1\r\nHost: x\r\nContent-Length: 18446744073709551616\r\n\r\n"),
+        1000,
+        999999);
+    return head_error(overflow,"LengthOverflow");
+}
+
+func chunked_prefix(target string) string {
+    return "POST "+target+" HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n";
+}
+
+func test_chunked_stream() bool throws http.Error {
+    let prefix = chunked_prefix("/chunked");
+    let body = text.bytes(
+        "4;foo=bar\r\nWiki\r\n"+
+        "5;quoted=\"a b\"\r\npedia\r\n"+
+        "0;end=yes\r\n"+
+        "X-Trailer: done\r\n"+
+        "X-Dup: t1\r\n"+
+        "X-Dup: t2\r\n\r\n");
+    let script = concat(
+        concat(text.bytes(prefix),body),
+        text.bytes("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
+    let fail_at = vec.len(text.bytes(prefix)) + 12;
+    let reader = scripted_default(script,2,fail_at);
+    let head = read_head_retry(reader);
+    if !check("chunked head",head.target == "/chunked") { return false; }
+    // The custom source pauses at fail_at, but a complete short body fragment
+    // is available first. It must be returned without waiting for max_bytes.
+    let first = http.read_request_body_part(reader,32);
+    if !check("chunked first bound",vec.len(first.data) <= 32) { return false; }
+    if !check("chunked first available",vec.len(first.data) != 0) { return false; }
+    if !check("chunked first not done", !first.done) { return false; }
+    if !check("chunked first no trailers",vec.len(first.trailers) == 0) { return false; }
+    var total = vec.empty[u8]();
+    for byte in first.data { vec.push(total,byte); }
+    var done = false;
+    var trailers = vec.empty[http.Header]();
+    for true {
+        let part = read_part_retry(reader,3);
+        if !check("chunked part bound",vec.len(part.data) <= 3) { return false; }
+        if !part.done {
+            if !check("chunked non-done non-empty",vec.len(part.data) != 0) {
+                return false;
+            }
+            if !check("chunked non-done no trailers",vec.len(part.trailers) == 0) {
+                return false;
+            }
+        }
+        for byte in part.data { vec.push(total,byte); }
+        if part.done {
+            done = true;
+            trailers = part.trailers;
+            break;
+        }
+    }
+    if !check("chunked done",done) { return false; }
+    if !check("chunked body",bytes_text(total,"Wikipedia")) { return false; }
+    if !check("chunked trailer value",header_bytes_is(trailers,"X-Trailer","done")) {
+        return false;
+    }
+    if !check("chunked duplicate trailers",header_count(trailers,"X-Dup") == 2) {
+        return false;
+    }
+    if !check("chunked trailer separated", !http.has_header(head.headers,"X-Trailer")) {
+        return false;
+    }
+    let next = http.read_request(reader);
+    return check("chunked next request",next.target == "/next");
+}
+
+// Every byte offset of this small chunked body is used once as a one-shot
+// WouldBlock point and once as an EOF truncation point. The body wire covers
+// the size line, chunk data, trailing CRLF, zero chunk, trailer line and final
+// empty line. A full run also confirms the final trailers and pipelined next
+// request.
+func split_head_bytes() Vec[u8] {
+    return text.bytes(chunked_prefix("/split"));
+}
+
+func split_body_bytes() Vec[u8] {
+    return text.bytes("4\r\nWiki\r\n0\r\nX-Split: yes\r\n\r\n");
+}
+
+func split_next_bytes() Vec[u8] {
+    return text.bytes("GET /split-next HTTP/1.1\r\nHost: x\r\n\r\n");
+}
+
+func split_would_block_case(
+    head Vec[u8],
+    body Vec[u8],
+    next Vec[u8],
+    offset usize) bool throws http.Error {
+    let script = concat(concat(head,body),next);
+    let reader = scripted_default(script,1,vec.len(head)+offset);
+    let value = read_head_retry(reader);
+    if !check("split WouldBlock head",value.target == "/split") { return false; }
+    let all = drain_parts(reader,3);
+    if !check("split WouldBlock done",all.done) { return false; }
+    if !check("split WouldBlock body",bytes_text(all.data,"Wiki")) { return false; }
+    if !check("split WouldBlock trailer",
+              header_bytes_is(all.trailers,"X-Split","yes")) {
+        return false;
+    }
+    let pipelined = http.read_request(reader);
+    return check("split WouldBlock pipeline",pipelined.target == "/split-next");
+}
+
+func split_eof_case(head Vec[u8], body Vec[u8], offset usize) bool throws http.Error {
+    let reader = scripted_default(concat(head,body[:offset]),1,999999);
+    let value = read_head_retry(reader);
+    if !check("split EOF head",value.target == "/split") { return false; }
+    for true {
+        try {
+            let part = read_part_retry(reader,3);
+            if part.done {
+                return check("split EOF premature done",false);
+            }
+        } catch error http.Error {
+            return check("split EOF UnexpectedEof",error_name(error) == "UnexpectedEof");
+        }
+    }
+    return check("split EOF",false);
+}
+
+func test_chunked_wire_splits() bool throws http.Error {
+    let head = split_head_bytes();
+    let body = split_body_bytes();
+    let next = split_next_bytes();
+    for var offset usize = 0; offset < vec.len(body); offset += 1 {
+        if !split_would_block_case(head,body,next,offset) { return false; }
+    }
+    for var offset usize = 0; offset < vec.len(body); offset += 1 {
+        if !split_eof_case(head,body,offset) { return false; }
+    }
+    return check("chunked wire splits",true);
+}
+
+// Inclusive configured limits: a trailer section exactly at head_bytes and a
+// total header count exactly at header_count succeed; one more byte/field
+// fails. Body limit equality is covered by the fixed and chunked exact tests.
+func test_inclusive_limits() bool throws http.Error {
+    let prefix = chunked_prefix("/inclusive");
+    let head_bytes = vec.len(text.bytes(prefix));
+    var value_len usize = 0;
+    if head_bytes > 9 { value_len = head_bytes - 9; }
+    if !check("inclusive limit fixture",value_len != 0) { return false; }
+    let value = vec.make[u8](value_len,97);
+    let body = concat(
+        text.bytes("0\r\nX-T: "),
+        concat(value,text.bytes("\r\n\r\n")));
+    let exact = scripted_reader(
+        concat(text.bytes(prefix),body),
+        3,
+        999999,
+        http.limits(head_bytes,100,100));
+    let exact_head = read_head_retry(exact);
+    if !check("inclusive head exact",exact_head.target == "/inclusive") {
+        return false;
+    }
+    let exact_part = drain_parts(exact,7);
+    if !check("inclusive trailer exact done",exact_part.done) { return false; }
+    let exact_values = http.header_values(exact_part.trailers,"X-T");
+    if !check("inclusive trailer exact count",vec.len(exact_values) == 1) {
+        return false;
+    }
+    if !check("inclusive trailer exact value",bytes_equal(exact_values[0],value)) {
+        return false;
+    }
+
+    let longer = vec.make[u8](value_len+1,97);
+    let over = scripted_reader(
+        concat(
+            text.bytes(prefix),
+            concat(
+                text.bytes("0\r\nX-T: "),
+                concat(longer,text.bytes("\r\n\r\n")))),
+        3,
+        999999,
+        http.limits(head_bytes,100,100));
+    let over_head = read_head_retry(over);
+    if !check("inclusive head over",over_head.target == "/inclusive") {
+        return false;
+    }
+    if !drain_error(over,7,"HeadTooLarge") { return false; }
+
+    let count_exact = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/count-exact")),
+            text.bytes("0\r\nX-One: a\r\n\r\n")),
+        3,
+        999999,
+        http.limits(8192,100,3));
+    let count_head = read_head_retry(count_exact);
+    if !check("inclusive count head",count_head.target == "/count-exact") {
+        return false;
+    }
+    let count_part = drain_parts(count_exact,7);
+    if !check("inclusive count exact done",count_part.done) { return false; }
+    if !check("inclusive count exact trailer",
+              header_bytes_is(count_part.trailers,"X-One","a")) {
+        return false;
+    }
+
+    let count_over = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/count-over")),
+            text.bytes("0\r\nX-One: a\r\nX-Two: b\r\n\r\n")),
+        3,
+        999999,
+        http.limits(8192,100,3));
+    let count_over_head = read_head_retry(count_over);
+    if !check("inclusive count over head",count_over_head.target == "/count-over") {
+        return false;
+    }
+    return drain_error(count_over,7,"TooManyHeaders");
+}
+
+func test_chunked_limits() bool throws http.Error {
+    let exact = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/exact")),
+            text.bytes("5\r\nabcde\r\n0\r\n\r\n")),
+        2,
+        999999,
+        http.limits(8192,5,100));
+    let exact_head = read_head_retry(exact);
+    if !check("chunk exact head",exact_head.target == "/exact") { return false; }
+    let exact_body = drain_parts(exact,3);
+    if !check("chunk exact done",exact_body.done) { return false; }
+    if !check("chunk exact body",bytes_text(exact_body.data,"abcde")) {
+        return false;
+    }
+
+    let single = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/one")),
+            text.bytes("6\r\nabcdef\r\n0\r\n\r\n")),
+        1000,
+        999999,
+        http.limits(8192,5,100));
+    let single_head = read_head_retry(single);
+    if !check("chunk limit head",single_head.target == "/one") { return false; }
+    if !drain_error(single,10,"BodyTooLarge") { return false; }
+
+    let cumulative = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/two")),
+            text.bytes("3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n")),
+        1000,
+        999999,
+        http.limits(8192,5,100));
+    let cumulative_head = read_head_retry(cumulative);
+    if !check("chunk cumulative head",cumulative_head.target == "/two") { return false; }
+    if !drain_error(cumulative,10,"BodyTooLarge") { return false; }
+
+    let trailer_bytes = concat(
+        text.bytes(chunked_prefix("/trail")),
+        concat(
+            text.bytes("1\r\na\r\n0\r\nX-Long: "),
+            concat(
+                text.bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                text.bytes("\r\n\r\n"))));
+    let trailer = scripted_reader(trailer_bytes,1000,999999,http.limits(70,100,100));
+    let trailer_head = read_head_retry(trailer);
+    if !check("chunk trailer head",trailer_head.target == "/trail") { return false; }
+    if !drain_error(trailer,20,"HeadTooLarge") { return false; }
+
+    let count = scripted_reader(
+        concat(
+            text.bytes(chunked_prefix("/count")),
+            text.bytes("1\r\na\r\n0\r\nX-One: a\r\nX-Two: b\r\n\r\n")),
+        1000,
+        999999,
+        http.limits(8192,100,2));
+    let count_head = read_head_retry(count);
+    if !check("chunk count head",count_head.target == "/count") { return false; }
+    if !drain_error(count,20,"TooManyHeaders") { return false; }
+
+    let forbidden = scripted_default(
+        concat(
+            text.bytes(chunked_prefix("/forbidden")),
+            text.bytes("1\r\na\r\n0\r\nContent-Length: 1\r\n\r\n")),
+        1000,
+        999999);
+    let forbidden_head = read_head_retry(forbidden);
+    if !check("chunk forbidden head",forbidden_head.target == "/forbidden") {
+        return false;
+    }
+    return drain_error(forbidden,20,"ForbiddenTrailer");
+}
+
+func test_chunked_errors() bool throws http.Error {
+    let terminator = scripted_default(
+        concat(
+            text.bytes(chunked_prefix("/term")),
+            text.bytes("1\r\naZZ\r\n0\r\n\r\n")),
+        1000,
+        999999);
+    let terminator_head = read_head_retry(terminator);
+    if !check("chunk terminator head",terminator_head.target == "/term") {
+        return false;
+    }
+    if !drain_error(terminator,20,"InvalidChunkTerminator") { return false; }
+
+    let truncated = scripted_default(
+        concat(text.bytes(chunked_prefix("/short")),text.bytes("5\r\nabc")),
+        2,
+        999999);
+    let truncated_head = read_head_retry(truncated);
+    if !check("chunk truncated head",truncated_head.target == "/short") { return false; }
+    var saw_chunk_eof = false;
+    for true {
+        try { let ignored = read_part_retry(truncated,20); }
+        catch error http.Error {
+            if error_name(error) == "UnexpectedEof" {
+                saw_chunk_eof = true;
+                break;
+            }
+            throw error;
+        }
+    }
+    if !check("chunk truncated UnexpectedEof",saw_chunk_eof) { return false; }
+
+    let long_line = scripted_default(
+        concat(
+            text.bytes(chunked_prefix("/long")),
+            vec.make[u8](5000,97)),
+        997,
+        999999);
+    let long_head = read_head_retry(long_line);
+    if !check("chunk long head",long_head.target == "/long") { return false; }
+    if !drain_error(long_line,20,"ChunkLineTooLong") { return false; }
+
+    let bad_trailer_value = text.bytes("1\r\na\r\n0\r\nX-Bad: a");
+    vec.push(bad_trailer_value,1);
+    let bad_trailer = concat(bad_trailer_value,text.bytes("\r\n\r\n"));
+    let bad = scripted_default(
+        concat(text.bytes(chunked_prefix("/bad")),bad_trailer),
+        1000,
+        999999);
+    let bad_head = read_head_retry(bad);
+    if !check("chunk bad trailer head",bad_head.target == "/bad") { return false; }
+    return drain_error(bad,20,"InvalidHeaderValue");
+}
+
+func test_short_piece_transports() bool throws http.Error {
+    // Nonblocking socketpair, fixed length: no body yet blocks, then a short
+    // piece is returned immediately even though the bound is larger.
+    let fixed_pair = pair_nonblocking();
+    defer { close_quiet(fixed_pair.first); close_quiet(fixed_pair.second); }
+    let fixed = http.reader(fixed_pair.second,http.default_limits());
+    send_text(fixed_pair.first,
+        "POST /fixed HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n");
+    let fixed_head = read_head_poll(fixed,fixed_pair.second);
+    if !check("socket fixed head",fixed_head.target == "/fixed") { return false; }
+    try {
+        let ignored = http.read_request_body_part(fixed,5);
+        return check("socket fixed empty expected WouldBlock",false);
+    } catch error http.Error {
+        if !check("socket fixed empty WouldBlock",is_would_block(error)) {
+            return false;
+        }
+    }
+    send_text(fixed_pair.first,"ab");
+    if !check("socket fixed poll ab",poll_readable(fixed_pair.second)) { return false; }
+    let fixed_piece = http.read_request_body_part(fixed,5);
+    if !check("socket fixed short piece",bytes_text(fixed_piece.data,"ab")) {
+        return false;
+    }
+    if !check("socket fixed short not done", !fixed_piece.done) { return false; }
+    if !check("socket fixed short no trailers",vec.len(fixed_piece.trailers) == 0) {
+        return false;
+    }
+    send_text(fixed_pair.first,
+        "cdeGET /next HTTP/1.1\r\nHost: x\r\n\r\n");
+    if !check("socket fixed poll cde",poll_readable(fixed_pair.second)) { return false; }
+    let fixed_rest = http.read_request_body_part(fixed,5);
+    if !check("socket fixed rest",bytes_text(fixed_rest.data,"cde")) { return false; }
+    if !check("socket fixed rest done",fixed_rest.done) { return false; }
+    let fixed_next = http.read_request(fixed);
+    if !check("socket fixed pipelined next",fixed_next.target == "/next") {
+        return false;
+    }
+
+    // Nonblocking socketpair, chunked: a short decoded chunk is returned before
+    // the next chunk-size line exists.
+    let chunk_pair = pair_nonblocking();
+    defer { close_quiet(chunk_pair.first); close_quiet(chunk_pair.second); }
+    let chunked = http.reader(chunk_pair.second,http.default_limits());
+    send_text(chunk_pair.first,
+        "POST /chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
+    let chunk_head = read_head_poll(chunked,chunk_pair.second);
+    if !check("socket chunk head",chunk_head.target == "/chunk") { return false; }
+    try {
+        let ignored = http.read_request_body_part(chunked,20);
+        return check("socket chunk empty expected WouldBlock",false);
+    } catch error http.Error {
+        if !check("socket chunk empty WouldBlock",is_would_block(error)) { return false; }
+    }
+    send_text(chunk_pair.first,"1\r\na\r\n");
+    if !check("socket chunk poll short",poll_readable(chunk_pair.second)) { return false; }
+    let chunk_piece = http.read_request_body_part(chunked,20);
+    if !check("socket chunk short piece",bytes_text(chunk_piece.data,"a")) { return false; }
+    if !check("socket chunk short not done", !chunk_piece.done) { return false; }
+    if !check("socket chunk short no trailers",vec.len(chunk_piece.trailers) == 0) {
+        return false;
+    }
+    send_text(chunk_pair.first,
+        "0\r\nX-Real: yes\r\n\r\n"+
+        "GET /chunk-next HTTP/1.1\r\nHost: x\r\n\r\n");
+    if !check("socket chunk poll end",poll_readable(chunk_pair.second)) { return false; }
+    let chunk_rest = http.read_request_body_part(chunked,20);
+    if !check("socket chunk rest empty",vec.len(chunk_rest.data) == 0) { return false; }
+    if !check("socket chunk rest done",chunk_rest.done) { return false; }
+    if !check(
+        "socket chunk trailer",
+        header_bytes_is(chunk_rest.trailers,"X-Real","yes")) { return false; }
+    let chunk_next = http.read_request(chunked);
+    if !check("socket chunk pipelined next",chunk_next.target == "/chunk-next") {
+        return false;
+    }
+
+    // Nonblocking TCP, fixed length: the accepted endpoint is nonblocking.
+    let tcp_fixed_pair = tcp_nonblocking_pair();
+    defer { close_quiet(tcp_fixed_pair.first); close_quiet(tcp_fixed_pair.second); }
+    let tcp_fixed = http.reader(tcp_fixed_pair.second,http.default_limits());
+    send_text(tcp_fixed_pair.first,
+        "POST /tcp-fixed HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n");
+    let tcp_fixed_head = read_head_poll(tcp_fixed,tcp_fixed_pair.second);
+    if !check("tcp fixed head",tcp_fixed_head.target == "/tcp-fixed") { return false; }
+    send_text(tcp_fixed_pair.first,"ab");
+    if !check("tcp fixed poll ab",poll_readable(tcp_fixed_pair.second)) { return false; }
+    let tcp_first = read_part_poll(tcp_fixed,tcp_fixed_pair.second,64);
+    if !check("tcp fixed short available",vec.len(tcp_first.data) != 0) { return false; }
+    if !check("tcp fixed short prefix",bytes_is_prefix(tcp_first.data,"ab")) {
+        return false;
+    }
+    if !check("tcp fixed short not done", !tcp_first.done) { return false; }
+    send_text(tcp_fixed_pair.first,
+        "cdeGET /tcp-next HTTP/1.1\r\nHost: x\r\n\r\n");
+    if !check("tcp fixed poll rest",poll_readable(tcp_fixed_pair.second)) { return false; }
+    var tcp_fixed_total = vec.empty[u8]();
+    for byte in tcp_first.data { vec.push(tcp_fixed_total,byte); }
+    var tcp_fixed_done = false;
+    for true {
+        let part = read_part_poll(tcp_fixed,tcp_fixed_pair.second,64);
+        for byte in part.data { vec.push(tcp_fixed_total,byte); }
+        if part.done {
+            tcp_fixed_done = true;
+            break;
+        }
+    }
+    if !check("tcp fixed done",tcp_fixed_done) { return false; }
+    if !check("tcp fixed body",bytes_text(tcp_fixed_total,"abcde")) { return false; }
+    let tcp_fixed_next_head = read_head_poll(tcp_fixed,tcp_fixed_pair.second);
+    if !check("tcp fixed next",tcp_fixed_next_head.target == "/tcp-next") {
+        return false;
+    }
+    let tcp_fixed_next = http.read_request_body(tcp_fixed);
+    if !check("tcp fixed next complete",tcp_fixed_next.target == "/tcp-next") {
+        return false;
+    }
+
+    // Nonblocking TCP, chunked: short chunk data is returned without waiting
+    // for the zero chunk or trailer section.
+    let tcp_chunk_pair = tcp_nonblocking_pair();
+    defer { close_quiet(tcp_chunk_pair.first); close_quiet(tcp_chunk_pair.second); }
+    let tcp_chunk = http.reader(tcp_chunk_pair.second,http.default_limits());
+    send_text(tcp_chunk_pair.first,
+        "POST /tcp-chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "1\r\na\r\n");
+    let tcp_chunk_head = read_head_poll(tcp_chunk,tcp_chunk_pair.second);
+    if !check("tcp chunk head",tcp_chunk_head.target == "/tcp-chunk") { return false; }
+    let tcp_chunk_piece = read_part_poll(tcp_chunk,tcp_chunk_pair.second,64);
+    if !check("tcp chunk short piece",bytes_text(tcp_chunk_piece.data,"a")) {
+        return false;
+    }
+    if !check("tcp chunk short not done", !tcp_chunk_piece.done) { return false; }
+    send_text(tcp_chunk_pair.first,
+        "0\r\nX-Tcp: yes\r\n\r\n"+
+        "GET /tcp-chunk-next HTTP/1.1\r\nHost: x\r\n\r\n");
+    if !check("tcp chunk poll end",poll_readable(tcp_chunk_pair.second)) { return false; }
+    let tcp_chunk_rest = read_part_poll(tcp_chunk,tcp_chunk_pair.second,64);
+    if !check("tcp chunk rest empty",vec.len(tcp_chunk_rest.data) == 0) { return false; }
+    if !check("tcp chunk rest done",tcp_chunk_rest.done) { return false; }
+    if !check(
+        "tcp chunk trailer",
+        header_bytes_is(tcp_chunk_rest.trailers,"X-Tcp","yes")) { return false; }
+    let tcp_chunk_next_head = read_head_poll(tcp_chunk,tcp_chunk_pair.second);
+    return check("tcp chunk next",tcp_chunk_next_head.target == "/tcp-chunk-next");
+}
+
+func test_blocking_bounded_short_piece() bool throws http.Error {
+    let fixed_pair = pair_blocking();
+    defer { close_quiet(fixed_pair.first); close_quiet(fixed_pair.second); }
+    let fixed = http.reader(fixed_pair.second,http.default_limits());
+    send_text(fixed_pair.first,
+        "POST /block-fixed HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nab");
+    let fixed_head = http.read_request_head(fixed);
+    if !check("blocking fixed head",fixed_head.target == "/block-fixed") {
+        return false;
+    }
+    let fixed_piece = http.read_request_body_part(fixed,64);
+    if !check("blocking fixed short",bytes_text(fixed_piece.data,"ab")) {
+        return false;
+    }
+    if !check("blocking fixed short not done", !fixed_piece.done) { return false; }
+    send_text(fixed_pair.first,"cde");
+    let fixed_rest = http.read_request_body_part(fixed,64);
+    if !check("blocking fixed rest",bytes_text(fixed_rest.data,"cde")) { return false; }
+    if !check("blocking fixed rest done",fixed_rest.done) { return false; }
+
+    let chunk_pair = pair_blocking();
+    defer { close_quiet(chunk_pair.first); close_quiet(chunk_pair.second); }
+    let chunked = http.reader(chunk_pair.second,http.default_limits());
+    send_text(chunk_pair.first,
+        "POST /block-chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "1\r\na\r\n");
+    let chunk_head = http.read_request_head(chunked);
+    if !check("blocking chunk head",chunk_head.target == "/block-chunk") {
+        return false;
+    }
+    let chunk_piece = http.read_request_body_part(chunked,64);
+    if !check("blocking chunk short",bytes_text(chunk_piece.data,"a")) { return false; }
+    if !check("blocking chunk short not done", !chunk_piece.done) { return false; }
+    send_text(chunk_pair.first,"0\r\nX-Block: yes\r\n\r\n");
+    let chunk_rest = http.read_request_body_part(chunked,64);
+    if !check("blocking chunk rest empty",vec.len(chunk_rest.data) == 0) { return false; }
+    if !check("blocking chunk rest done",chunk_rest.done) { return false; }
+    return check(
+        "blocking chunk trailer",
+        header_bytes_is(chunk_rest.trailers,"X-Block","yes"));
+}
+
+// ---------------------------------------------------------------------------
+// Chunked response frame encoders.
+
+func response_with(
+    version string,
+    status i32,
+    reason Vec[u8],
+    headers Vec[http.Header],
+    body Vec[u8],
+    trailers Vec[http.Header]) http.Response {
+    return http.Response(
+        version:version,
+        status:status,
+        reason:reason,
+        headers:headers,
+        body:body,
+        trailers:trailers);
+}
+
+func simple_response(status i32, method string) http.Response {
+    return response_with(
+        "HTTP/1.1",status,text.bytes("OK"),vec.empty[http.Header](),
+        vec.empty[u8](),vec.empty[http.Header]());
+}
+
+func chunked_head_error(response http.Response, method string, expected string) bool {
+    try { let ignored = http.encode_response_chunked_head(response,method); }
+    catch error http.Error {
+        return check("chunk head error "+expected,error_name(error) == expected);
+    }
+    return check("chunk head error "+expected,false);
+}
+
+func chunk_end_error(trailers Vec[http.Header], expected string) bool {
+    try { let ignored = http.encode_response_chunk_end(trailers); }
+    catch error http.Error {
+        return check("chunk end error "+expected,error_name(error) == expected);
+    }
+    return check("chunk end error "+expected,false);
+}
+
+func test_encoders() bool throws http.Error {
+    let response = response_with(
+        "HTTP/1.1",200,text.bytes("OK"),
+        [http.text_header("X-Test","yes")],
+        vec.empty[u8](),vec.empty[http.Header]());
+    let head = http.encode_response_chunked_head(response,"GET");
+    if !check("encode head exact",bytes_text(head,
+        "HTTP/1.1 200 OK\r\nX-Test: yes\r\nTransfer-Encoding: chunked\r\n\r\n")) {
+        return false;
+    }
+    let data = http.encode_response_chunk_data(text.bytes("abc"));
+    if !check("encode data exact",bytes_text(data,"3\r\nabc\r\n")) { return false; }
+    let wide = vec.make[u8](16,65);
+    let wide_frame = http.encode_response_chunk_data(wide);
+    let expected_wide = concat(
+        concat(text.bytes("10\r\n"),wide),
+        text.bytes("\r\n"));
+    if !check("encode lowercase hex",bytes_equal(wide_frame,expected_wide)) {
+        return false;
+    }
+    let empty_end = http.encode_response_chunk_end(vec.empty[http.Header]());
+    if !check("encode end empty",bytes_text(empty_end,"0\r\n\r\n")) { return false; }
+    let trailers = [
+        http.text_header("X-Trailer","done"),
+        http.text_header("X-Dup","one"),
+        http.text_header("X-Dup","two")];
+    let end = http.encode_response_chunk_end(trailers);
+    if !check("encode end trailers",bytes_text(end,
+        "0\r\nX-Trailer: done\r\nX-Dup: one\r\nX-Dup: two\r\n\r\n")) {
+        return false;
+    }
+    try {
+        let ignored = http.encode_response_chunk_data(vec.empty[u8]());
+        return check("encode empty data rejected",false);
+    } catch error http.Error {
+        if !check("encode empty data InvalidChunkSize",
+                  error_name(error) == "InvalidChunkSize") {
+            return false;
+        }
+    }
+    if !chunk_end_error([http.text_header("Content-Length","1")],"ForbiddenTrailer") {
+        return false;
+    }
+    if !chunk_end_error([http.text_header("Transfer-Encoding","chunked")],
+                        "ForbiddenTrailer") {
+        return false;
+    }
+    if !chunk_end_error([http.Header(name:"Bad Name",value:text.bytes("x"))],
+                        "InvalidHeaderName") {
+        return false;
+    }
+    let bad_value = text.bytes("a");
+    vec.push(bad_value,1);
+    return chunk_end_error([http.Header(name:"X-Bad",value:bad_value)],
+                           "InvalidHeaderValue");
+}
+
+func test_encoder_validation() bool throws http.Error {
+    let normal = simple_response(200,"GET");
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            vec.empty[http.Header](),text.bytes("abc"),vec.empty[http.Header]()),
+        "GET","UnexpectedBody") { return false; }
+    if !chunked_head_error(
+        response_with("HTTP/1.0",200,text.bytes("OK"),
+            vec.empty[http.Header](),vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","UnexpectedFraming") { return false; }
+    if !chunked_head_error(normal,"HEAD","UnexpectedFraming") { return false; }
+    if !chunked_head_error(simple_response(101,"GET"),"GET","UnexpectedFraming") {
+        return false;
+    }
+    if !chunked_head_error(simple_response(204,"GET"),"GET","UnexpectedFraming") {
+        return false;
+    }
+    if !chunked_head_error(simple_response(304,"GET"),"GET","UnexpectedFraming") {
+        return false;
+    }
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            [http.text_header("Content-Length","3")],
+            vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","UnexpectedFraming") { return false; }
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            [http.text_header("Transfer-Encoding","chunked")],
+            vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","UnexpectedFraming") { return false; }
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            vec.empty[http.Header](),vec.empty[u8](),
+            [http.text_header("X-Trailer","yes")]),
+        "GET","UnsupportedTrailers") { return false; }
+    if !chunked_head_error(simple_response(99,"GET"),"GET","InvalidStatus") {
+        return false;
+    }
+    let bad_reason = text.bytes("O");
+    vec.push(bad_reason,0);
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,bad_reason,vec.empty[http.Header](),
+            vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","InvalidReason") { return false; }
+    if !chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            [http.Header(name:"Bad Name",value:text.bytes("x"))],
+            vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","InvalidHeaderName") { return false; }
+    let bad_header_value = text.bytes("a");
+    vec.push(bad_header_value,1);
+    return chunked_head_error(
+        response_with("HTTP/1.1",200,text.bytes("OK"),
+            [http.Header(name:"X-Bad",value:bad_header_value)],
+            vec.empty[u8](),vec.empty[http.Header]()),
+        "GET","InvalidHeaderValue");
+}
+
+func test_decoder_encoder_roundtrip() bool throws http.Error {
+    let response = response_with(
+        "HTTP/1.1",200,text.bytes("OK"),
+        [http.text_header("X-Reply","yes")],
+        vec.empty[u8](),vec.empty[http.Header]());
+    let wire = concat(
+        concat(
+            http.encode_response_chunked_head(response,"GET"),
+            http.encode_response_chunk_data(text.bytes("abc"))),
+        concat(
+            http.encode_response_chunk_data(text.bytes("def")),
+            http.encode_response_chunk_end([http.text_header("X-Trailer","done")])));
+    let parsed = http.parse_response(wire,"GET");
+    if !check("roundtrip status",parsed.status == 200) { return false; }
+    if !check("roundtrip body",bytes_text(parsed.body,"abcdef")) { return false; }
+    if !check("roundtrip trailer",
+              header_bytes_is(parsed.trailers,"X-Trailer","done")) {
+        return false;
+    }
+    if !check("roundtrip no header trailer",
+              !http.has_header(parsed.headers,"X-Trailer")) {
+        return false;
+    }
+    return check("roundtrip reply header",
+                 header_bytes_is(parsed.headers,"X-Reply","yes"));
+}
+
+func run_all() i32 throws http.Error {
+    if !test_bodyless_pipeline() { return 10; }
+    if !test_bounds_and_fixed() { return 20; }
+    if !test_zero_bound_and_mixed() { return 30; }
+    if !test_fixed_limits_and_eof() { return 40; }
+    if !test_chunked_stream() { return 50; }
+    if !test_chunked_limits() { return 60; }
+    if !test_chunked_errors() { return 70; }
+    if !test_chunked_wire_splits() { return 75; }
+    if !test_inclusive_limits() { return 77; }
+    if !test_short_piece_transports() { return 80; }
+    if !test_blocking_bounded_short_piece() { return 85; }
+    if !test_encoders() { return 90; }
+    if !test_encoder_validation() { return 100; }
+    if !test_decoder_encoder_roundtrip() { return 110; }
+    say("http-stream-codec: ok");
+    return 0;
+}
+
+func main() i32 {
+    try { return run_all(); }
+    catch error http.Error {
+        say("FAIL unexpected "+error_name(error));
+        return 99;
+    }
+}

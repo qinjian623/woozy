@@ -1,0 +1,39 @@
+package app;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/io" as io;
+import "std/strconv" as strconv;
+
+func code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(value, completed): return value;
+        case os.Error.WouldBlock(value, completed): return value;
+        case os.Error.System(value, completed): return value;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+func fd_count() usize throws os.Error { return vec.len(fs.read_dir("/proc/self/fd")); }
+// The harness starts this process under a low RLIMIT_NOFILE with a fresh
+// source/parent and no destination. Preflight fits under the limit; the copy
+// reaches EMFILE while opening a deeper destination directory, after the
+// destination root and some children exist. copy_dir must close the failed
+// traversal fds and leave the partial destination in place.
+func main() i32 throws os.Error {
+    let before = fd_count();
+    var result i32 = 0;
+    try { fs.copy_dir("source","parent/destination"); }
+    catch error os.Error { result = code(error); }
+    let after = fd_count();
+    let partial = fs.exists("parent/destination");
+    io.println("copy_low_rlimit result=" + strconv.format_i64(i64(result)));
+    io.println("copy_low_rlimit fds=" + strconv.format_u64(u64(before)) +
+               "->" + strconv.format_u64(u64(after)));
+    io.println("copy_low_rlimit partial");
+    io.println(partial);
+    if result != 24 { return 1; }
+    if before != after { return 2; }
+    if !partial { return 3; }
+    if !fs.is_dir(os.stat("parent/destination")) { return 4; }
+    return 0;
+}

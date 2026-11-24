@@ -1,0 +1,8 @@
+package app;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.empty[i32]();
+    let removed = vec.remove_at[i32](values, 0);
+    return removed;
+}

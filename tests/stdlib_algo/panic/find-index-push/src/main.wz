@@ -1,0 +1,21 @@
+// The predicate runs at index 0 and unconditionally attempts a structural
+// change. Without a traversal pin, push succeeds and find_index returns Some(0).
+package app;
+
+import "std/algo" as algo;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](2, 0);
+    values[0] = 2;
+    values[1] = 1;
+    let predicate = func(value i32) bool {
+        vec.push(values, 9);
+        return value == 1;
+    };
+    switch algo.find_index[i32](values, predicate) {
+        case option.Option.Some(index): return 0;
+        case option.Option.None: return 1;
+    }
+}

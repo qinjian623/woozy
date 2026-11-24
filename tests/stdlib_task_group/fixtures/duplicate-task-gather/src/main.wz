@@ -1,0 +1,30 @@
+// One Task handle enrolled three times is three independent group edges but
+// only one coroutine start. Values keep input order and the member cleanup
+// runs exactly once.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func once(log Vec[string]) i32 {
+    defer { vec.push(log, "cleanup"); }
+    await a.sleep(2);
+    return 5;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let member = once(log);
+    let outcome = await a.gather[i32,Unit]([member, member, member]);
+    switch outcome {
+        case result.Result.Ok(values): {
+            io.println(vec.len(values));
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

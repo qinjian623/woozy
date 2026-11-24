@@ -50,7 +50,7 @@ pub func read_all(file os.File) Vec[u8] throws os.Error {
             }
         }
         if count == 0 { return out; }
-        for var index usize = 0; index < count; index += 1 { vec.push(out,buffer[index]); }
+        __woozy_io_vec_append_bytes(out,buffer,0,count);
     }
 }
 pub func read_text(file os.File) string throws os.Error { return decode(read_all(file)); }
@@ -59,13 +59,13 @@ pub struct Reader { file os.File; buffer Vec[u8]; cursor Vec[usize]; }
 pub func reader(file os.File) Reader {
     return Reader(file:file,buffer:vec.make[u8](4096,0),cursor:[0,0]);
 }
-pub func read_byte(input Reader) option.Option[u8] throws os.Error {
-    for input.cursor[0] == input.cursor[1] {
+func refill(input Reader) bool throws os.Error {
+    for true {
         try {
             let count = os.read(input.file,input.buffer,vec.len(input.buffer));
             input.cursor[0] = 0;
             input.cursor[1] = count;
-            if count == 0 { return option.Option[u8].None; }
+            return count != 0;
         } catch error os.Error {
             switch error {
                 case os.Error.Interrupted(code,completed): continue;
@@ -73,40 +73,63 @@ pub func read_byte(input Reader) option.Option[u8] throws os.Error {
             }
         }
     }
+    return false;
+}
+pub func read_byte(input Reader) option.Option[u8] throws os.Error {
+    if input.cursor[0] == input.cursor[1] && !refill(input) {
+        return option.Option[u8].None;
+    }
     let byte = input.buffer[input.cursor[0]];
     input.cursor[0] += 1;
     return option.Option[u8].Some(byte);
 }
 // A line excludes LF and a preceding CR; EOF after data still returns a line.
 pub func read_line_bytes(input Reader) option.Option[Vec[u8]] throws os.Error {
-    let out = vec.empty[u8]();
-    for true {
-        try {
-            switch read_byte(input) {
-                case option.Option.None: {
-                    if vec.len(out) == 0 { return option.Option[Vec[u8]].None; }
-                    return option.Option[Vec[u8]].Some(out);
-                }
-                case option.Option.Some(byte): {
-                    if byte == 10 {
-                        if vec.len(out) > 0 && out[vec.len(out)-1] == 13 { let removed=vec.pop(out); }
-                        return option.Option[Vec[u8]].Some(out);
-                    }
-                    vec.push(out,byte);
-                }
-            }
-        } catch error os.Error {
-            // A failed refill has no unread suffix; replay this line for aliases.
-            let count = vec.len(out);
-            if count > 0 {
-                if vec.len(input.buffer) < count { vec.resize(input.buffer,count,0); }
-                for var index usize = 0; index < count; index += 1 { input.buffer[index] = out[index]; }
-                input.cursor[0] = 0;
-                input.cursor[1] = count;
-            }
-            throw error;
+    if input.cursor[0] == input.cursor[1] && !refill(input) {
+        return option.Option[Vec[u8]].None;
+    }
+    let start = input.cursor[0];
+    let limit = input.cursor[1];
+    for var index = start; index < limit; index += 1 {
+        if input.buffer[index] == 10 {
+            input.cursor[0] = index + 1;
+            var end = index;
+            if end > start && input.buffer[end-1] == 13 { end -= 1; }
+            return option.Option[Vec[u8]].Some(input.buffer[start:end]);
         }
     }
+
+    let out = input.buffer[start:limit];
+    input.cursor[0] = limit;
+    try {
+        for refill(input) {
+            var index = input.cursor[0];
+            let end = input.cursor[1];
+            for index < end {
+                let byte = input.buffer[index];
+                index += 1;
+                if byte == 10 {
+                    input.cursor[0] = index;
+                    let length = vec.len(out);
+                    if length > 0 && out[length-1] == 13 { let removed=vec.pop(out); }
+                    return option.Option[Vec[u8]].Some(out);
+                }
+                vec.push(out,byte);
+            }
+            input.cursor[0] = end;
+        }
+    } catch error os.Error {
+        // A failed refill has no unread suffix; replay this line for aliases.
+        let count = vec.len(out);
+        if count > 0 {
+            if vec.len(input.buffer) < count { vec.resize(input.buffer,count,0); }
+            for var index usize = 0; index < count; index += 1 { input.buffer[index] = out[index]; }
+            input.cursor[0] = 0;
+            input.cursor[1] = count;
+        }
+        throw error;
+    }
+    return option.Option[Vec[u8]].Some(out);
 }
 pub func read_line(input Reader) option.Option[string] throws os.Error {
     switch read_line_bytes(input) {
@@ -136,10 +159,15 @@ pub func flush(output Writer) throws os.Error {
     }
     vec.clear(output.pending);
 }
+// write_byte appends one byte and flushes before appending when the buffer is
+// full. If that flush throws, the byte is not appended: pending still holds
+// exactly the unwritten suffix, so retrying write_byte after flush neither
+// duplicates nor drops the byte. write and write_text inherit this guarantee.
+pub func write_byte(output Writer, byte u8) throws os.Error {
+    if vec.len(output.pending) == 4096 { flush(output); }
+    vec.push(output.pending, byte);
+}
 pub func write(output Writer, data Vec[u8]) throws os.Error {
-    for byte in data {
-        if vec.len(output.pending) == 4096 { flush(output); }
-        vec.push(output.pending,byte);
-    }
+    for byte in data { write_byte(output,byte); }
 }
 pub func write_text(output Writer, value string) throws os.Error { write(output,text.bytes(value)); }

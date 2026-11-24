@@ -1,0 +1,8 @@
+package app;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.empty[i32]();
+    vec.insert[i32](values, 1, 9);
+    return 0;
+}

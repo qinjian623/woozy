@@ -1,0 +1,25 @@
+// Unit-valued members still produce one result slot each and all run.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func unit_job(name string, delay i64, log Vec[string]) Unit {
+    await a.sleep(delay);
+    vec.push(log, name);
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let outcome = await a.gather[Unit,Unit]([
+        unit_job("a", 10, log),
+        unit_job("b", 1, log)]);
+    switch outcome {
+        case result.Result.Ok(values): io.println(vec.len(values));
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

@@ -905,6 +905,290 @@ void scenario_gc_safe_around_epoll_wait() noexcept {
   check_clean("after shutdown");
 }
 
+// Scoped groups: two live groups overlap, group B enrolls the shared member
+// twice and has a second slow member. Cancelling both groups must publish B
+// only after every member cancel exit plan has run. Each ScopeLink decrements
+// once, so the slow member cannot be skipped by a restarted notification scan.
+void scenario_scope_overlap_duplicate_cancel() noexcept {
+  g_scenario = "scope-overlap-duplicate-cancel";
+  FakeFrame shared_frame;
+  FakeFrame slow_frame;
+  FakeFrame group_a_frame;
+  FakeFrame group_b_frame;
+  Future *shared_timer = make_timer(40);
+  Future *slow_timer = make_timer(120);
+  Future *shared = make_task_frame(&shared_frame, shared_timer);
+  Future *slow = make_task_frame(&slow_frame, slow_timer);
+  Future *group_a = make_task_frame(&group_a_frame, shared);
+  Future *group_b = make_task_frame(&group_b_frame, shared, slow);
+  lang_async_scope_begin_v1(group_a);
+  lang_async_scope_add_v1(group_a, shared);
+  lang_async_scope_begin_v1(group_b);
+  lang_async_scope_add_v1(group_b, shared);
+  lang_async_scope_add_v1(group_b, shared);
+  lang_async_scope_add_v1(group_b, slow);
+  expect_equal(group_a->scope_pending, 1, "group A has one edge");
+  expect_equal(group_b->scope_pending, 3, "group B has duplicate + slow edges");
+
+  Future *start = make_timer(1);
+  lang_async_spawn_v1(shared);
+  lang_async_spawn_v1(slow);
+  lang_async_spawn_v1(group_a);
+  lang_async_spawn_v1(group_b);
+  lang_async_run_until_v1(start);
+
+  lang_async_cancel_v1(group_a);
+  lang_async_cancel_v1(group_b);
+  lang_async_run_until_v1(group_b);
+
+  expect_equal(lang_async_status_v1(group_b), kCancelled, "group B cancelled");
+  expect_equal(shared_frame.cleanup_count, 1, "shared cleanup ran once");
+  expect_equal(slow_frame.cleanup_count, 1, "slow cleanup ran before group B done");
+  expect(group_a->scope_members == nullptr, "group A detached members");
+  expect(group_b->scope_members == nullptr, "group B detached members");
+  expect(shared->scope_observers == nullptr, "no observer left on shared");
+  expect(slow->scope_observers == nullptr, "no observer left on slow");
+
+  lang_async_task_release_v1(group_a);
+  lang_async_task_release_v1(group_b);
+  lang_async_task_release_v1(shared);
+  lang_async_task_release_v1(slow);
+  lang_async_task_release_v1(shared_timer);
+  lang_async_task_release_v1(slow_timer);
+  lang_async_task_release_v1(start);
+  lang_async_shutdown_v1();
+  check_clean("after scope overlap cancel");
+}
+
+// A waiter suspended on a scoped group is cancelled. It must not complete until
+// the group has requested member cancellation and the member frame has run its
+// cancel exit plan. The ordinary waiter path is covered separately below.
+void scenario_scope_parent_cancel_waits() noexcept {
+  g_scenario = "scope-parent-cancel-waits";
+  FakeFrame child_frame;
+  FakeFrame group_frame;
+  FakeFrame parent_frame;
+  Future *timer = make_timer(80);
+  Future *child = make_task_frame(&child_frame, timer);
+  Future *group = make_task_frame(&group_frame, child);
+  Future *parent = make_task_frame(&parent_frame, group);
+  lang_async_scope_begin_v1(group);
+  lang_async_scope_add_v1(group, child);
+
+  Future *start = make_timer(1);
+  lang_async_spawn_v1(child);
+  lang_async_spawn_v1(group);
+  lang_async_spawn_v1(parent);
+  lang_async_run_until_v1(start);
+
+  lang_async_cancel_v1(parent);
+  lang_async_run_until_v1(parent);
+
+  expect_equal(lang_async_status_v1(parent), kCancelled, "parent cancelled");
+  expect_equal(lang_async_status_v1(group), kCancelled, "group cancelled");
+  expect_equal(parent_frame.cleanup_count, 1, "parent cleanup ran");
+  expect_equal(group_frame.cleanup_count, 1, "group cleanup ran");
+  expect_equal(child_frame.cleanup_count, 1, "child cleanup before parent done");
+
+  lang_async_task_release_v1(parent);
+  lang_async_task_release_v1(group);
+  lang_async_task_release_v1(child);
+  lang_async_task_release_v1(timer);
+  lang_async_task_release_v1(start);
+  lang_async_shutdown_v1();
+  check_clean("after scope parent cancel");
+}
+
+// A scoped group body suspends on the completion notification leaf. Completing
+// one member must bump the generation, complete the leaf, and wake exactly the
+// group frame; the runtime must not create a periodic poll timer to discover
+// the completion.
+void scenario_scope_notify_generation_wake() noexcept {
+  g_scenario = "scope-notify-generation-wake";
+  FakeFrame group_frame;
+  Future *group = make_task_frame(&group_frame);
+  Future *member = make_timer(60000);
+  lang_async_scope_begin_v1(group);
+  lang_async_scope_add_v1(group, member);
+  expect_equal(group->scope_pending, 1, "one enrolled member");
+
+  // Act as the executor: the group frame is active while it is suspended.
+  retain(group);
+  group->flags |= kActive;
+  g_current = group;
+  Future *leaf = static_cast<Future *>(lang_async_scope_wait_v1());
+  expect(leaf != nullptr, "notification leaf returned");
+  expect_equal(leaf->kind, kKindNotify, "leaf is an internal notification");
+  expect_equal(group->scope_generation, group->scope_wait_seen,
+               "wait consumed the unchanged generation");
+  expect_equal(lang_async_await_v1(leaf), kPending,
+               "group frame suspends on the notification");
+  expect(leaf->waiters == group, "group frame is linked to the leaf");
+  expect(group->waiting_on == leaf, "group points at the leaf");
+  uint64_t timers = 0;
+  for (Future *future = g_all; future; future = future->next_all)
+    if (future->kind == kKindTimer)
+      ++timers;
+  expect_equal(timers, 1, "no polling timer was created");
+  expect_equal(leaf->refs, 3,
+               "leaf: source handle, await link and group waiter reference");
+  g_current = nullptr;
+
+  complete(member, kDone);
+  expect_equal(group->scope_generation, 1, "member completion bumped generation");
+  expect_equal(lang_async_status_v1(leaf), kDone, "leaf completed");
+  expect(leaf->scope_wait_group == nullptr, "completed leaf detached from group");
+  expect(group->waiting_on == nullptr, "await link cleared");
+  expect((group->flags & kQueued) != 0, "woken group queued");
+  Future *woken = dequeue();
+  expect(woken == group, "the group, not another future, was woken");
+
+  complete(group, kDone);
+  expect_equal(lang_async_status_v1(group), kDone, "group completed");
+  lang_async_task_release_v1(leaf);
+  lang_async_task_release_v1(member);
+  lang_async_task_release_v1(group);
+  lang_async_shutdown_v1();
+  check_clean("after scope notification wake");
+}
+
+// Cancelling a scoped group while its body is suspended on a notification must
+// complete the linked leaf and wake the body; member cleanup stays owned by the
+// normal scope finalisation.
+void scenario_scope_notify_cancel_wakes() noexcept {
+  g_scenario = "scope-notify-cancel-wakes";
+  FakeFrame group_frame;
+  Future *group = make_task_frame(&group_frame);
+  Future *member = make_timer(60000);
+  lang_async_scope_begin_v1(group);
+  lang_async_scope_add_v1(group, member);
+  retain(group);
+  group->flags |= kActive;
+  g_current = group;
+  Future *leaf = static_cast<Future *>(lang_async_scope_wait_v1());
+  expect_equal(lang_async_await_v1(leaf), kPending, "body suspends");
+  g_current = nullptr;
+
+  lang_async_cancel_v1(group);
+  expect_equal(lang_async_status_v1(leaf), kCancelled,
+               "cancellation completed the notification");
+  expect_equal(lang_async_status_v1(member), kCancelled,
+               "pending member was cancelled");
+  expect_equal(lang_async_status_v1(group), kCancelled,
+               "unstarted group completed cancellation after the member drain");
+  expect(leaf->scope_wait_group == nullptr, "cancelled leaf detached from group");
+  expect(group->scope_members == nullptr, "member edges detached");
+  expect(member->scope_observers == nullptr, "member back-link cleared");
+
+  lang_async_task_release_v1(leaf);
+  lang_async_task_release_v1(member);
+  lang_async_task_release_v1(group);
+  lang_async_shutdown_v1();
+  check_clean("after scope notification cancel");
+}
+
+// The opposite race from scope-notify-cancel-wakes: the linked notification
+// completes first, while its group is still live. Completion must unlink the
+// leaf under the executor lock and drop the group-list reference exactly once;
+// the group's await link is detached by the ordinary notify path. Leaving that
+// list reference behind would keep the leaf allocation alive after its source
+// handle is released, even though the group no longer lists it.
+void scenario_scope_notify_direct_cancel_releases() noexcept {
+  g_scenario = "scope-notify-direct-cancel-releases";
+  FakeFrame group_frame;
+  Future *group = make_task_frame(&group_frame);
+  Future *member = make_timer(60000);
+  lang_async_scope_begin_v1(group);
+  lang_async_scope_add_v1(group, member);
+
+  // Act as the executor: the group frame is active while it is suspended.
+  retain(group);
+  group->flags |= kActive;
+  g_current = group;
+  Future *leaf = static_cast<Future *>(lang_async_scope_wait_v1());
+  expect_equal(lang_async_await_v1(leaf), kPending, "body suspends");
+  g_current = nullptr;
+  expect(group->scope_waiters == leaf, "leaf registered with the group");
+  expect_equal(leaf->refs, 3,
+               "leaf: source handle, await link and group waiter reference");
+
+  // Cancel the leaf itself, not the group. The leaf wins the detachment race.
+  lang_async_cancel_v1(leaf);
+  expect_equal(lang_async_status_v1(leaf), kCancelled,
+               "direct notification cancellation completes the leaf");
+  expect(leaf->scope_wait_group == nullptr,
+         "cancelled leaf detached from group");
+  expect(group->scope_waiters == nullptr, "group no longer lists the leaf");
+  expect(group->waiting_on == nullptr, "await link cleared");
+  expect((group->flags & kQueued) != 0, "group woken by the cancelled leaf");
+  expect_equal(leaf->refs, 1,
+               "only the source handle retains the completed leaf");
+  Future *woken = dequeue();
+  expect(woken == group, "the group, not another future, was woken");
+
+  lang_async_cancel_v1(group);
+  expect_equal(lang_async_status_v1(group), kCancelled, "group cancelled");
+  expect_equal(lang_async_status_v1(member), kCancelled, "member cancelled");
+  expect(group->scope_members == nullptr, "member edges detached");
+  expect(member->scope_observers == nullptr, "member back-link cleared");
+
+  lang_async_task_release_v1(leaf);
+  lang_async_task_release_v1(member);
+  lang_async_task_release_v1(group);
+  lang_async_shutdown_v1();
+  check_clean("after direct notification cancellation");
+}
+
+// Activation is kind-aware and idempotent: a timer is already scheduled, a
+// descriptor Task (including a repeated identical handle) registers once, a
+// coroutine Task uses the ordinary spawn path, and a completed member is a
+// no-op.
+void scenario_scope_activate_member_kinds() noexcept {
+  g_scenario = "scope-activate-member-kinds";
+  FakeFrame group_frame;
+  FakeFrame task_frame;
+  Future *group = make_task_frame(&group_frame);
+  lang_async_scope_begin_v1(group);
+  Future *timer = make_timer(60000);
+  Future *done = make_timer(1);
+  complete(done, kDone);
+
+  int descriptors[2] = {-1, -1};
+  expect_equal(static_cast<uint64_t>(::pipe(descriptors)), 0, "pipe created");
+  Future *fd = static_cast<Future *>(lang_async_wait_fd_v1(descriptors[0], 1));
+  Future *task = make_task_frame(&task_frame);
+
+  lang_async_scope_activate_v1(timer);
+  lang_async_scope_activate_v1(done);
+  lang_async_scope_activate_v1(fd);
+  lang_async_scope_activate_v1(fd);
+  lang_async_scope_activate_v1(task);
+
+  expect_equal(timer->flags & (kActive | kQueued | kStarted), 0,
+               "scheduled timer is not started or queued");
+  expect_equal(done->flags & (kActive | kQueued | kStarted), 0,
+               "completed member is a no-op");
+  expect((fd->flags & kFdRegistered) != 0, "descriptor registered once");
+  expect(g_epoll >= 0, "event queue created for the descriptor");
+  expect((task->flags & kActive) != 0, "pending task took the executor root");
+  expect((task->flags & kQueued) != 0, "pending task queued by spawn");
+  Future *started = dequeue();
+  expect(started == task, "activated task was the queued task");
+
+  complete(task, kCancelled);
+  lang_async_cancel_v1(fd);
+  lang_async_cancel_v1(timer);
+  lang_async_task_release_v1(group);
+  lang_async_task_release_v1(task);
+  lang_async_task_release_v1(fd);
+  lang_async_task_release_v1(done);
+  lang_async_task_release_v1(timer);
+  (void)::close(descriptors[0]);
+  (void)::close(descriptors[1]);
+  lang_async_shutdown_v1();
+  check_clean("after scope activation kinds");
+}
+
 struct Scenario {
   const char *name;
   void (*run)();
@@ -933,6 +1217,13 @@ const Scenario kScenarios[] = {
     {"promise-readable-after-completion", scenario_promise_readable_after_completion},
     {"source-cancel-fixture-ownership", scenario_source_cancel_fixture_ownership},
     {"gc-safe-around-epoll-wait", scenario_gc_safe_around_epoll_wait},
+    {"scope-overlap-duplicate-cancel", scenario_scope_overlap_duplicate_cancel},
+    {"scope-parent-cancel-waits", scenario_scope_parent_cancel_waits},
+    {"scope-notify-generation-wake", scenario_scope_notify_generation_wake},
+    {"scope-notify-cancel-wakes", scenario_scope_notify_cancel_wakes},
+    {"scope-notify-direct-cancel-releases",
+     scenario_scope_notify_direct_cancel_releases},
+    {"scope-activate-member-kinds", scenario_scope_activate_member_kinds},
 };
 
 } // namespace

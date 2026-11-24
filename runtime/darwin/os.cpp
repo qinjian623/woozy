@@ -65,6 +65,16 @@ int64_t lang_os_open_v1(const char *data, uint64_t length, int32_t flags,
   return darwin::result(open(path.bytes, translated, static_cast<mode_t>(mode)));
 }
 
+int64_t lang_os_openat_v1(int32_t fd, const char *name, uint64_t length,
+                          int32_t flags, uint32_t mode) noexcept {
+  const darwin::Component path(name, length);
+  if (path.status != 0) return path.status;
+  const int translated = open_flags(flags);
+  if (translated < 0) return -22;
+  return darwin::result(
+      openat(fd, path.bytes, translated, static_cast<mode_t>(mode)));
+}
+
 int64_t lang_os_seek_v1(int32_t fd, int64_t offset, int32_t whence) noexcept {
   return darwin::result(lseek(fd, offset, whence));
 }
@@ -75,10 +85,27 @@ int64_t lang_os_unlink_v1(const char *data, uint64_t length) noexcept {
   return darwin::result(unlink(path.bytes));
 }
 
+int64_t lang_os_unlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                            int32_t kind) noexcept {
+  if (kind != 0 && kind != 1) return -22;
+  const darwin::Component path(name, length);
+  if (path.status != 0) return path.status;
+  const int flags = kind == 1 ? AT_REMOVEDIR : 0;
+  return darwin::result(unlinkat(fd, path.bytes, flags));
+}
+
 int64_t lang_os_mkdir_v1(const char *data, uint64_t length, uint32_t mode) noexcept {
   const darwin::Path path(data, length);
   if (path.status != 0) return path.status;
   return darwin::result(mkdir(path.bytes, static_cast<mode_t>(mode)));
+}
+
+int64_t lang_os_mkdirat_v1(int32_t fd, const char *name, uint64_t length,
+                           uint32_t mode) noexcept {
+  const darwin::Component path(name, length);
+  if (path.status != 0) return path.status;
+  return darwin::result(
+      mkdirat(fd, path.bytes, static_cast<mode_t>(mode)));
 }
 
 int64_t lang_os_rmdir_v1(const char *data, uint64_t length) noexcept {

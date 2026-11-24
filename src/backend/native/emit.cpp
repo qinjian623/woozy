@@ -1397,6 +1397,19 @@ class Emitter {
     case SystemOperation::async_shutdown:
       call("lang_async_shutdown_v1", builder.getVoidTy(), {});
       return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_scope_begin:
+      call("lang_async_scope_begin_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_scope_add:
+      call("lang_async_scope_add_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_scope_activate:
+      call("lang_async_scope_activate_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_scope_wait:
+      return call("lang_async_scope_wait_v1", builder.getPtrTy(), {});
+    case SystemOperation::async_task_status:
+      return call("lang_async_status_v1", builder.getInt32Ty(), args);
     case SystemOperation::thread_spawn:
       return thread_spawn(i, args);
     case SystemOperation::thread_error:

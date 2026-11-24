@@ -1,0 +1,21 @@
+// The comparator runs for the second element and unconditionally attempts a
+// structural change. Without a traversal pin, max_by returns normally.
+package app;
+
+import "std/algo" as algo;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](2, 0);
+    values[0] = 1;
+    values[1] = 2;
+    let less = func(left i32, right i32) bool {
+        vec.push(values, 9);
+        return left < right;
+    };
+    switch algo.max_by[i32](values, less) {
+        case option.Option.Some(best): return 0;
+        case option.Option.None: return 1;
+    }
+}

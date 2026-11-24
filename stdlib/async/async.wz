@@ -7,6 +7,10 @@
 // has run; it must not be called from inside a running task.
 package asynclib;
 
+import "std/option" as option;
+import "std/result" as result;
+import "std/vec" as vec;
+
 // Queue a task without executing its body; run/await drives it. Spawning an
 // already started task is a no-op.
 pub func spawn[T,E](task Task[T,E]) {
@@ -65,5 +69,206 @@ pub async func join[T,E](task Task[T,E]) T throws E {
 pub async func join_all[T,E](tasks Vec[Task[T,E]]) Unit throws E {
     for task in tasks {
         await task;
+    }
+}
+
+// Scoped gather. `gather` is a normal function so every member is enrolled in
+// the group Task before the handle can be cancelled. Await the returned Task
+// from an async function; values come back in input order and the first typed
+// error cancels the unfinished members and waits for their cleanup.
+pub func gather[T,E](tasks Vec[Task[T,E]]) Task[result.Result[Vec[T],E],Unit] {
+    // Snapshot the handles synchronously. The caller's Vec is a shared handle;
+    // it may be cleared, resized or overwritten before the returned Task runs.
+    // Both runtime enrollment and the body must use this exact snapshot.
+    let snapshot = vec.empty[Task[T,E]]();
+    for task in tasks { vec.push(snapshot, task); }
+    let operation = gather_body(snapshot);
+    __woozy_async_scope_begin[result.Result[Vec[T],E],Unit](operation);
+    for task in snapshot {
+        __woozy_async_scope_add[result.Result[Vec[T],E],Unit,T,E](operation, task);
+    }
+    return operation;
+}
+
+const task_status_pending i32 = 0;
+const task_status_done i32 = 1;
+const task_status_error i32 = 2;
+const task_status_cancelled i32 = 3;
+
+// The body observes completion through the runtime's generation-backed
+// notification instead of a periodic status scan. A member cancellation drains
+// the remaining members so a real typed error that is already, or becomes,
+// observable can still win; only when no typed error exists does the final
+// immediate await propagate cancellation. Runtime scope membership keeps the
+// group pending while member cleanup is running.
+async func gather_body[T,E](tasks Vec[Task[T,E]]) result.Result[Vec[T],E] {
+    let total = vec.len(tasks);
+    let results = vec.empty[option.Option[T]]();
+    let done = vec.empty[bool]();
+    for var index usize = 0; index < total; index += 1 {
+        vec.push(results, option.Option[T].None);
+        vec.push(done, false);
+    }
+
+    var failure = option.Option[E].None;
+    var failure_selected = false;
+    var cancelled_member = option.Option[usize].None;
+    var remaining = total;
+
+    // Observe every member that is already terminal before starting anything.
+    // A terminal typed error means unstarted siblings are not needed: cancel
+    // them instead of starting work that cannot change the selected error. A
+    // pre-cancelled member does not erase an error that is already observable
+    // in the same scan (the lowest input index wins a same-scan tie).
+    for var index usize = 0; index < total; index += 1 {
+        let state = __woozy_async_task_status[T,E](tasks[index]);
+        if state == task_status_pending { continue; }
+        done[index] = true;
+        remaining -= 1;
+        if state == task_status_cancelled {
+            if option.is_none(cancelled_member) {
+                cancelled_member = option.Option[usize].Some(index);
+            }
+            continue;
+        }
+        if state == task_status_error {
+            if !failure_selected {
+                try {
+                    let value = await tasks[index];
+                    results[index] = option.Option[T].Some(value);
+                } catch error E {
+                    failure = option.Option[E].Some(error);
+                    failure_selected = true;
+                }
+            }
+            continue;
+        }
+        // A precompleted success is joined here; this await is immediate.
+        try {
+            let value = await tasks[index];
+            results[index] = option.Option[T].Some(value);
+        } catch error E {
+            failure = option.Option[E].Some(error);
+            failure_selected = true;
+        }
+    }
+
+    // Activate pending members by their actual runtime kind. Timers are
+    // already scheduled, coroutine Tasks use the ordinary spawn path, and a
+    // descriptor Task is registered exactly once even when the identical
+    // handle appears more than once. If the first scan already observed a
+    // terminal typed error or a member cancellation, request cancellation of
+    // every remaining member instead of starting a sibling. Cancellation is
+    // already the group's terminal disposition, and starting work that the
+    // caller cannot observe could keep the group waiting indefinitely. An
+    // already-running member can still publish a real typed error while the
+    // cancelled members drain; the scan below keeps that error priority.
+    if remaining > 0 {
+        if failure_selected || option.is_some(cancelled_member) {
+            for var index usize = 0; index < total; index += 1 {
+                if !done[index] { cancel(tasks[index]); }
+            }
+        } else {
+            for var index usize = 0; index < total; index += 1 {
+                if !done[index] {
+                    __woozy_async_scope_activate[T,E](tasks[index]);
+                }
+            }
+        }
+    }
+
+    // Drain completions. The wait is a runtime completion notification, not a
+    // periodic status scan: the generation bump and waiter registration share
+    // the executor lock, so a completion that happens after the scan above is
+    // either consumed by this wait or wakes the linked leaf.
+    for {
+        if remaining == 0 { break; }
+        for var index usize = 0; index < total; index += 1 {
+            if done[index] { continue; }
+            let state = __woozy_async_task_status[T,E](tasks[index]);
+            if state == task_status_pending { continue; }
+            done[index] = true;
+            remaining -= 1;
+            if state == task_status_cancelled {
+                // A cancellation observed before any typed error selects the
+                // cancellation result, but the remaining members are drained
+                // so a real typed error produced before or during that drain
+                // can still win. Sibling cancellations after a selected error
+                // are expected cleanup and never replace it.
+                if !failure_selected && option.is_none(cancelled_member) {
+                    cancelled_member = option.Option[usize].Some(index);
+                }
+                if !failure_selected {
+                    for var other usize = 0; other < total; other += 1 {
+                        if !done[other] { cancel(tasks[other]); }
+                    }
+                }
+                continue;
+            }
+            if state == task_status_error {
+                if !failure_selected {
+                    try {
+                        let value = await tasks[index];
+                        results[index] = option.Option[T].Some(value);
+                    } catch error E {
+                        failure = option.Option[E].Some(error);
+                        failure_selected = true;
+                        for var other usize = 0; other < total; other += 1 {
+                            if !done[other] { cancel(tasks[other]); }
+                        }
+                    }
+                }
+                continue;
+            }
+            if !failure_selected && option.is_none(cancelled_member) {
+                try {
+                    let value = await tasks[index];
+                    results[index] = option.Option[T].Some(value);
+                } catch error E {
+                    failure = option.Option[E].Some(error);
+                    failure_selected = true;
+                    for var other usize = 0; other < total; other += 1 {
+                        if !done[other] { cancel(tasks[other]); }
+                    }
+                }
+            }
+        }
+        if remaining == 0 { break; }
+        await __woozy_async_scope_wait();
+    }
+
+    // A real typed error observed before or during the drain wins over a
+    // member cancellation. Only when no typed error exists does the final
+    // cancellation await propagate member cancellation. Its empty catch is
+    // exact: status is already terminal cancelled, so this await cannot
+    // produce E; cancellation exits through the separate cancel path.
+    switch failure {
+        case option.Option.Some(error): return result.Result[Vec[T],E].Err(error);
+        case option.Option.None: {}
+    }
+    switch cancelled_member {
+        case option.Option.Some(index): {
+            try { await tasks[index]; } catch error E {}
+        }
+        case option.Option.None: {}
+    }
+    let values = vec.empty[T]();
+    for item in results {
+        switch item {
+            case option.Option.Some(value): vec.push(values, value);
+            case option.Option.None: {}
+        }
+    }
+    return result.Result[Vec[T],E].Ok(values);
+}
+
+// Convert a settled result to typed throws. This is a synchronous generic
+// helper because this compiler rejects an async function whose declared error
+// is a type parameter. It is safe as `or_throw(await gather(tasks))`: the
+// group has already cancelled siblings and drained their cleanup.
+pub func or_throw[T,E](value result.Result[T,E]) T throws E {
+    switch value {
+        case result.Result.Ok(item): return item;
+        case result.Result.Err(error): throw error;
     }
 }

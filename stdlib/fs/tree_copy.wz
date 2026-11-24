@@ -1,0 +1,483 @@
+package fs;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+
+// copy_dir copies one real directory tree with descriptor-relative operations.
+// It never reconstructs a descendant path: every child is opened, statted,
+// linked, or created relative to its parent's directory descriptor. Entries are
+// decoded one at a time with the shared private DirScanner/dir_scanner/
+// next_dir_entry helper in fs.wz, so raw Linux names never pass through UTF-8
+// conversion and no full-directory Vec is retained.
+//
+// Preconditions and failure policy:
+//   * source must resolve to a directory. A symbolic link at the source root
+//     is followed once by the initial open; descendants are never followed.
+//   * destination names a new directory entry. Its parent must already exist;
+//     the parent path is resolved normally, including any symlink components.
+//     A trailing separator is accepted, but the final component must not be
+//     empty, "." or "..". The destination entry itself is created with
+//     mkdirat, so an existing link is never followed.
+//   * An existing destination, including a dangling symbolic link, fails with
+//     EEXIST. A missing destination parent fails with ENOENT.
+//   * A bounded preflight scans every real source directory before the
+//     destination is created and compares its pinned device/inode with the
+//     destination parent and every open source ancestor. If the destination
+//     parent is the source root or any real directory inside the source, the
+//     call fails with EINVAL. The preflight keeps one scanner per active
+//     directory depth and one path of directory descriptors; it does not retain
+//     a source-tree list.
+//   * After the destination root is opened, its device/inode is pinned. The
+//     copy traversal compares every opened source directory with that pinned
+//     target and with every open source ancestor before reading it.
+//     Encountering the target root fails with EINVAL; encountering any source
+//     ancestor fails with ELOOP. This catches a destination parent moved into
+//     the source after preflight as long as the traversal reaches the moved
+//     target, and it rejects source-root or deeper bind-mount cycles before
+//     they can be re-traversed. A move that becomes visible only after the
+//     source scanner has passed that location cannot be detected.
+//
+// Entry policy:
+//   * Regular files are copied as independent files; hard-link identity and
+//     sparse holes are not preserved.
+//   * Real directories are recreated. Each directory is built with mode 0700
+//     and receives source mode & 0777 after its children are complete, so a
+//     restrictive source mode does not block the copy.
+//   * Regular files are created with mode 0600 and receive source mode & 0777
+//     after their data is written. setuid, setgid and sticky bits are not
+//     preserved. Ownership, ACLs, extended attributes and timestamps are not
+//     preserved.
+//   * Symbolic links are copied as links with their target bytes exactly as
+//     readlinkat reports them. The target is never resolved, so dangling and
+//     directory links are both just links. Linux gives symbolic links their
+//     own fixed permissions; link modes are not source data to copy.
+//   * FIFOs, sockets, devices and any other entry type fail with EOPNOTSUPP.
+//
+// Race handling:
+//   * Source files are opened with O_NOFOLLOW and O_NONBLOCK. The opened fd is
+//     fstat'ed and compared by device/inode/type with the preceding nofollow
+//     fstatat. A substituted object or opened non-regular file fails with
+//     ESTALE (116); O_NOFOLLOW itself may report ELOOP.
+//   * Source directories use the same fstatat/open/fstat comparison before
+//     they are read. Destination directories compare the nofollow stat made
+//     after mkdirat with the opened descriptor. Destination files compare the
+//     fstat of the opened fd with a nofollow stat of the new name.
+//   * mkdirat followed by openat is not atomic. The intervening nofollow stat
+//     detects a replacement visible between the stat and the open, but a
+//     concurrent replacement before the first stat can still be adopted. The
+//     destination parent must not be modified by untrusted concurrent actors.
+//   * Once a directory fd is opened, moving or renaming that directory does not
+//     change which object the fd names. Reads and creates continue in the moved
+//     directory even though its old path no longer names it. The pinning checks
+//     above reject a moved target or source-ancestor alias when the traversal
+//     reaches it; they do not re-resolve paths or roll back an earlier move.
+//   * A symbolic link has no open descriptor in this design. Its target is read
+//     by name; a concurrent replacement can change the observed target or make
+//     readlinkat fail, and is not detected as a snapshot violation.
+//   * The source is not snapshotted. The bounded preflight and the copy are
+//     separate traversals; concurrent changes can make their observed entry
+//     sets differ. Entries added after a directory scanner has passed a position
+//     may be missed, and entries removed after a stat may fail the open/read.
+//
+// Resource limits:
+//   * No arbitrary entry, depth or descriptor cap is imposed. The iterative
+//     traversal holds one source and one destination directory descriptor per
+//     active depth, so the process's RLIMIT_NOFILE/ENFILE limit and the
+//     kernel's name/path limits surface as normal typed os.Error values.
+//   * There is no internal entry/depth/fd counter arithmetic, so those counters
+//     cannot overflow. Source, target and open-ancestor identity comparisons
+//     reject cycles before a subtree is read again.
+//   * A very deep tree still consumes one descriptor per open level and will
+//     fail with EMFILE when the process limit is reached; it is not silently
+//     truncated.
+//
+// This operation is not atomic: the destination root is published before its
+// contents, observers can see a partial tree, and there is no rollback. On any
+// failure after the root is created the partial destination is left in place;
+// it is never removed wholesale by copy_dir. Unfinished directories remain at
+// mode 0700; completed files have their final modes, while a file that was
+// still being written or whose fchmod did not run remains at mode 0600. The
+// caller owns removal of that partial tree. All descriptors opened by this call
+// are closed on success and on every error path; close errors during unwinding
+// are suppressed so the original error is preserved, while an explicit close
+// failure on the success path is returned. No fsync is issued for files or
+// directories, so success is not a durability guarantee.
+const COPY_DIRECTORY_MODE u32 = 0o700;
+const COPY_FILE_MODE u32 = 0o600;
+const COPY_PERMISSION_MASK u32 = 0o777;
+const COPY_BUFFER_SIZE usize = 65536;
+const COPY_UNSUPPORTED i32 = 95; // EOPNOTSUPP
+const COPY_RACE_ERRNO i32 = 116; // ESTALE
+const COPY_TARGET_ERRNO i32 = 22; // EINVAL
+const COPY_CYCLE_ERRNO i32 = 40; // ELOOP
+
+struct CopyDestinationPath { parent string; name string; }
+struct CopyScanFrame { file os.File; scanner DirScanner; device u64; inode u64; }
+struct CopyFrame {
+    source os.File;
+    destination os.File;
+    scanner DirScanner;
+    mode u32;
+    source_device u64;
+    source_inode u64;
+    destination_device u64;
+    destination_inode u64;
+}
+struct CopyState { target_device u64; target_inode u64; }
+struct CopyOpened { file os.File; info os.FileInfo; }
+
+func copy_dir_valid_final_name(name string) bool {
+    return name != "" && name != "." && name != "..";
+}
+// copy_dir_strip_trailing_slashes keeps a lone root separator. The caller's
+// parent spelling is otherwise preserved; path.clean would change the
+// directory that a symlink or ".." component names.
+func copy_dir_strip_trailing_slashes(value string) string {
+    var end = text.len(value);
+    for end > 1 && value[end-1] == 47 { end -= 1; }
+    return value[:end];
+}
+func copy_dir_destination_path(value string) CopyDestinationPath throws os.Error {
+    let trimmed = copy_dir_strip_trailing_slashes(value);
+    switch text.find_last(trimmed,"/") {
+        case option.Option.Some(index): {
+            let name = trimmed[index+1:];
+            if !copy_dir_valid_final_name(name) { throw os.Error.System(22,0); }
+            let parent = trimmed[:index];
+            if parent == "" {
+                return CopyDestinationPath(parent:"/",name:name);
+            }
+            return CopyDestinationPath(parent:parent,name:name);
+        }
+        case option.Option.None: {
+            if !copy_dir_valid_final_name(trimmed) { throw os.Error.System(22,0); }
+            return CopyDestinationPath(parent:".",name:trimmed);
+        }
+    }
+}
+// copy_dir_require_absent accepts only ENOENT. A race after this check is still
+// closed by mkdirat, which cannot replace an existing entry.
+func copy_dir_require_absent(directory os.File, name Vec[u8]) throws os.Error {
+    try { let existing = os.fstatat_bytes(directory,name,false); }
+    catch error os.Error {
+        switch error {
+            case os.Error.System(code,completed): {
+                if code == 2 { return; }
+                throw error;
+            }
+            default: throw error;
+        }
+    }
+    throw os.Error.System(17,0);
+}
+func copy_dir_same_identity(device_a u64, inode_a u64, device_b u64, inode_b u64) bool {
+    return device_a == device_b && inode_a == inode_b;
+}
+func copy_dir_same_object(left os.FileInfo, right os.FileInfo) bool {
+    return copy_dir_same_identity(left.device,left.inode,right.device,right.inode) &&
+           (left.mode & os.S_IFMT) == (right.mode & os.S_IFMT);
+}
+func copy_dir_close_scan_stack(stack Vec[CopyScanFrame]) {
+    for frame in stack {
+        try { os.close(frame.file); } catch error os.Error {}
+    }
+}
+// copy_dir_preflight_child opens one source directory, verifies that the
+// opened fd is the object reported by nofollow fstatat, and rejects the target
+// parent or any already-open source ancestor before the caller reads the child.
+func copy_dir_preflight_child(parent os.File, name Vec[u8],
+                              expected os.FileInfo,
+                              ancestors Vec[CopyScanFrame],
+                              target_device u64, target_inode u64)
+                              CopyOpened throws os.Error {
+    let child = os.openat_bytes(parent,name,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var closed = false;
+    defer { if !closed { try { os.close(child); } catch error os.Error {} } }
+    let actual = os.fstat(child);
+    if !is_dir(actual) || !copy_dir_same_object(actual,expected) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    if copy_dir_same_identity(actual.device,actual.inode,target_device,target_inode) {
+        throw os.Error.System(COPY_TARGET_ERRNO,0);
+    }
+    for frame in ancestors {
+        if copy_dir_same_identity(actual.device,actual.inode,
+                                  frame.device,frame.inode) {
+            throw os.Error.System(COPY_CYCLE_ERRNO,0);
+        }
+    }
+    closed = true;
+    return CopyOpened(file:child,info:actual);
+}
+// copy_dir_preflight owns and closes the supplied source root descriptor,
+// including on error. It holds one scanner per active depth.
+func copy_dir_preflight(root os.File, root_info os.FileInfo,
+                        target_parent_info os.FileInfo) throws os.Error {
+    let stack = vec.empty[CopyScanFrame]();
+    vec.push(stack,CopyScanFrame(file:root,scanner:dir_scanner(root),
+        device:root_info.device,inode:root_info.inode));
+    try {
+        for vec.len(stack) > 0 {
+            let top = vec.len(stack)-1;
+            var frame = stack[top];
+            var next = option.Option[DirEntry].None;
+            next = next_dir_entry(inout frame.scanner);
+            switch next {
+                case option.Option.None: {
+                    stack[top] = frame;
+                    let removed = vec.pop(stack);
+                    os.close(frame.file);
+                }
+                case option.Option.Some(entry): {
+                    stack[top] = frame;
+                    let child_info = os.fstatat_bytes(frame.file,entry.name,false);
+                    if is_dir(child_info) {
+                        let opened = copy_dir_preflight_child(frame.file,entry.name,
+                            child_info,stack,target_parent_info.device,
+                            target_parent_info.inode);
+                        vec.push(stack,CopyScanFrame(file:opened.file,
+                            scanner:dir_scanner(opened.file),
+                            device:opened.info.device,inode:opened.info.inode));
+                    }
+                }
+            }
+        }
+    } catch error os.Error {
+        copy_dir_close_scan_stack(stack);
+        throw error;
+    }
+}
+func copy_dir_close_stack(stack Vec[CopyFrame]) {
+    for frame in stack {
+        try { os.close(frame.destination); } catch error os.Error {}
+        try { os.close(frame.source); } catch error os.Error {}
+    }
+}
+// copy_dir_finish_frame owns both root descriptors and closes them on success
+// and on a final fchmod/close failure.
+func copy_dir_finish_frame(frame CopyFrame) throws os.Error {
+    var source_closed = false;
+    defer { if !source_closed { try { os.close(frame.source); } catch error os.Error {} } }
+    var destination_closed = false;
+    defer { if !destination_closed { try { os.close(frame.destination); } catch error os.Error {} } }
+    os.fchmod(frame.destination,frame.mode & COPY_PERMISSION_MASK);
+    destination_closed = true;
+    os.close(frame.destination);
+    source_closed = true;
+    os.close(frame.source);
+}
+// copy_dir_open_child opens and verifies a source directory before creating
+// and verifying its destination counterpart. It rejects target and ancestor
+// identity cycles against the currently open frames.
+func copy_dir_open_child(source_parent os.File, destination_parent os.File,
+                         name Vec[u8], expected os.FileInfo,
+                         ancestors Vec[CopyFrame],
+                         state inout CopyState) CopyFrame throws os.Error {
+    let source_child = os.openat_bytes(source_parent,name,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var source_closed = false;
+    defer { if !source_closed { try { os.close(source_child); } catch error os.Error {} } }
+    let source_info = os.fstat(source_child);
+    if !is_dir(source_info) || !copy_dir_same_object(source_info,expected) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    if copy_dir_same_identity(source_info.device,source_info.inode,
+                              state.target_device,state.target_inode) {
+        throw os.Error.System(COPY_TARGET_ERRNO,0);
+    }
+    for frame in ancestors {
+        if copy_dir_same_identity(source_info.device,source_info.inode,
+                                  frame.source_device,frame.source_inode) {
+            throw os.Error.System(COPY_CYCLE_ERRNO,0);
+        }
+    }
+    os.mkdirat_bytes(destination_parent,name,COPY_DIRECTORY_MODE);
+    let expected_destination = os.fstatat_bytes(destination_parent,name,false);
+    if !is_dir(expected_destination) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    let destination_child = os.openat_bytes(destination_parent,name,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var destination_closed = false;
+    defer { if !destination_closed { try { os.close(destination_child); } catch error os.Error {} } }
+    let destination_info = os.fstat(destination_child);
+    if !is_dir(destination_info) || !copy_dir_same_object(destination_info,expected_destination) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    if copy_dir_same_identity(destination_info.device,destination_info.inode,
+                              state.target_device,state.target_inode) {
+        throw os.Error.System(COPY_TARGET_ERRNO,0);
+    }
+    if copy_dir_same_identity(destination_info.device,destination_info.inode,
+                              source_info.device,source_info.inode) {
+        throw os.Error.System(COPY_CYCLE_ERRNO,0);
+    }
+    for frame in ancestors {
+        if copy_dir_same_identity(destination_info.device,destination_info.inode,
+                                  frame.source_device,frame.source_inode) ||
+           copy_dir_same_identity(destination_info.device,destination_info.inode,
+                                  frame.destination_device,frame.destination_inode) {
+            throw os.Error.System(COPY_CYCLE_ERRNO,0);
+        }
+    }
+    source_closed = true;
+    destination_closed = true;
+    return CopyFrame(source:source_child,destination:destination_child,
+                     scanner:dir_scanner(source_child),mode:source_info.mode,
+                     source_device:source_info.device,
+                     source_inode:source_info.inode,
+                     destination_device:destination_info.device,
+                     destination_inode:destination_info.inode);
+}
+func copy_dir_regular_file(source_parent os.File, destination_parent os.File,
+                           name Vec[u8], expected os.FileInfo) throws os.Error {
+    // O_NONBLOCK keeps a substituted FIFO from blocking before fstat rejects it.
+    let input = os.openat_bytes(source_parent,name,
+        os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,0);
+    var input_closed = false;
+    defer { if !input_closed { try { os.close(input); } catch error os.Error {} } }
+    let info = os.fstat(input);
+    if !is_file(info) || !copy_dir_same_object(info,expected) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    let output = os.openat_bytes(destination_parent,name,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,
+        COPY_FILE_MODE);
+    var output_closed = false;
+    defer { if !output_closed { try { os.close(output); } catch error os.Error {} } }
+    let output_info = os.fstat(output);
+    let named_output = os.fstatat_bytes(destination_parent,name,false);
+    if !is_file(output_info) || !copy_dir_same_object(output_info,named_output) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    let buffer = vec.make[u8](COPY_BUFFER_SIZE,0);
+    for true {
+        var count usize = 0;
+        try { count = os.read(input,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw error;
+            }
+        }
+        if count == 0 { break; }
+        os.write_all(output,buffer[:count]);
+    }
+    os.fchmod(output,info.mode & COPY_PERMISSION_MASK);
+    output_closed = true;
+    os.close(output);
+    input_closed = true;
+    os.close(input);
+}
+func copy_dir_symbolic_link(source_parent os.File, destination_parent os.File,
+                            name Vec[u8], expected os.FileInfo) throws os.Error {
+    let target = os.readlinkat_bytes(source_parent,name);
+    let after = os.fstatat_bytes(source_parent,name,false);
+    if !is_symlink(after) || !copy_dir_same_object(after,expected) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    os.symlinkat_bytes(destination_parent,target,name);
+}
+// copy_dir_contents owns the source and destination root descriptors and
+// closes them when the root frame finishes or any error unwinds.
+func copy_dir_contents(source_root os.File, destination_root os.File,
+                       source_info os.FileInfo, target_info os.FileInfo)
+                       throws os.Error {
+    var state = CopyState(target_device:target_info.device,
+                          target_inode:target_info.inode);
+    let stack = vec.empty[CopyFrame]();
+    vec.push(stack,CopyFrame(source:source_root,destination:destination_root,
+        scanner:dir_scanner(source_root),mode:source_info.mode,
+        source_device:source_info.device,source_inode:source_info.inode,
+        destination_device:target_info.device,
+        destination_inode:target_info.inode));
+    try {
+        for vec.len(stack) > 0 {
+            let top = vec.len(stack)-1;
+            var frame = stack[top];
+            var next = option.Option[DirEntry].None;
+            next = next_dir_entry(inout frame.scanner);
+            switch next {
+                case option.Option.None: {
+                    stack[top] = frame;
+                    let removed = vec.pop(stack);
+                    copy_dir_finish_frame(frame);
+                }
+                case option.Option.Some(entry): {
+                    stack[top] = frame;
+                    let info = os.fstatat_bytes(frame.source,entry.name,false);
+                    if is_dir(info) {
+                        let child = copy_dir_open_child(frame.source,
+                            frame.destination,entry.name,info,stack,inout state);
+                        vec.push(stack,child);
+                    } else if is_file(info) {
+                        copy_dir_regular_file(frame.source,frame.destination,
+                            entry.name,info);
+                    } else if is_symlink(info) {
+                        copy_dir_symbolic_link(frame.source,frame.destination,
+                            entry.name,info);
+                    } else {
+                        throw os.Error.System(COPY_UNSUPPORTED,0);
+                    }
+                }
+            }
+        }
+    } catch error os.Error {
+        copy_dir_close_stack(stack);
+        throw error;
+    }
+}
+pub func copy_dir(source string, destination string) throws os.Error {
+    let source_directory = os.open(source,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,0);
+    var source_closed = false;
+    defer { if !source_closed { try { os.close(source_directory); } catch error os.Error {} } }
+    let source_info = os.fstat(source_directory);
+    let target = copy_dir_destination_path(destination);
+    let name = text.bytes(target.name);
+    let destination_parent = os.open(target.parent,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,0);
+    var parent_closed = false;
+    defer { if !parent_closed { try { os.close(destination_parent); } catch error os.Error {} } }
+    copy_dir_require_absent(destination_parent,name);
+    let parent_info = os.fstat(destination_parent);
+    let preflight_root = os.open(source,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,0);
+    var preflight_closed = false;
+    defer { if !preflight_closed { try { os.close(preflight_root); } catch error os.Error {} } }
+    let preflight_info = os.fstat(preflight_root);
+    if !copy_dir_same_object(preflight_info,source_info) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    if copy_dir_same_identity(preflight_info.device,preflight_info.inode,
+                              parent_info.device,parent_info.inode) {
+        throw os.Error.System(COPY_TARGET_ERRNO,0);
+    }
+    preflight_closed = true;
+    copy_dir_preflight(preflight_root,preflight_info,parent_info);
+    os.mkdirat_bytes(destination_parent,name,COPY_DIRECTORY_MODE);
+    let expected_target = os.fstatat_bytes(destination_parent,name,false);
+    if !is_dir(expected_target) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    let destination_directory = os.openat_bytes(destination_parent,name,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var destination_closed = false;
+    defer { if !destination_closed { try { os.close(destination_directory); } catch error os.Error {} } }
+    let target_info = os.fstat(destination_directory);
+    if !is_dir(target_info) || !copy_dir_same_object(target_info,expected_target) {
+        throw os.Error.System(COPY_RACE_ERRNO,0);
+    }
+    if copy_dir_same_identity(source_info.device,source_info.inode,
+                              target_info.device,target_info.inode) {
+        throw os.Error.System(COPY_TARGET_ERRNO,0);
+    }
+    // content traversal owns and closes both root descriptors from here.
+    source_closed = true;
+    destination_closed = true;
+    copy_dir_contents(source_directory,destination_directory,source_info,target_info);
+    parent_closed = true;
+    os.close(destination_parent);
+}

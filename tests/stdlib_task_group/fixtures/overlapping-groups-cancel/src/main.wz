@@ -1,0 +1,40 @@
+// Cancellation overlap: group A has one shared member, group B has the same
+// member twice plus a slow member. Both groups are cancelled while their frames
+// are live. Each ScopeLink must decrement its group exactly once, so group B
+// cannot finish before the slow member's cleanup.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func shared(log Vec[string]) Unit {
+    defer { vec.push(log, "shared.cleanup"); }
+    await a.sleep(80);
+    vec.push(log, "shared.after");
+}
+
+async func slow(log Vec[string]) Unit {
+    defer { vec.push(log, "slow.cleanup"); }
+    await a.sleep(160);
+    vec.push(log, "slow.after");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let member = shared(log);
+    let tail = slow(log);
+    let group_a = a.gather[Unit,Unit]([member]);
+    let group_b = a.gather[Unit,Unit]([member, member, tail]);
+    a.spawn(group_a);
+    a.spawn(group_b);
+    a.run_until(a.sleep(5));
+
+    a.cancel(group_a);
+    a.cancel(group_b);
+    a.run_until(group_b);
+
+    io.println(a.finished(group_b));
+    for line in log { io.println(line); }
+    return 0;
+}

@@ -2,7 +2,16 @@ package text;
 import "std/result" as result;
 import "std/vec" as vec;
 import "std/option" as option;
+pub const MAX_PADDING_WIDTH usize = 1_000_000;
 pub enum Error { InvalidUtf8; InvalidScalar(value u32); }
+// Padding has its own error type so adding width limits does not change the
+// existing conversion error or break exhaustive matches on text.Error.
+pub enum PaddingError { InvalidScalar(value u32); WidthTooLarge(value usize); }
+const PAD_LEFT u32 = 0;
+const PAD_RIGHT u32 = 1;
+const PAD_CENTER u32 = 2;
+const DIRECT_FIND_CODE_POINTS usize = 64;
+const DIRECT_FIND_PATTERN_BYTES usize = 64;
 pub func len(value string) usize { return __woozy_text_len(value); }
 pub func byte_len(value string) usize { return __woozy_text_byte_len(value); }
 pub func from_bytes(value Vec[u8]) string throws Error {
@@ -166,46 +175,137 @@ pub func split(value string, separator string) Vec[string] {
         if word_backend { return split_n(value,separator,~usize(0)); }
     }
     let out = vec.empty[string]();
-    if len(separator) == 0 {
-        for var index usize = 0; index < len(value); index += 1 {
-            vec.push(out,value[index:index+1]);
-        }
+    let value_length = len(value);
+    if value_length == 0 {
+        if len(separator) != 0 { vec.push(out,""); }
         return out;
     }
-    var start usize = 0;
-    for true {
-        switch find_from(value,separator,start) {
-            case option.Option.Some(index): {
-                vec.push(out,value[start:index]);
-                start = index+len(separator);
-            }
-            case option.Option.None: {
-                vec.push(out,value[start:]);
-                return out;
-            }
-        }
+    if len(separator) == 0 {
+        return split_n(value,separator,value_length+1);
     }
+    if byte_len(separator) > byte_len(value) {
+        vec.push(out,value);
+        return out;
+    }
+    // A non-empty separator consumes at least one code point, so the result
+    // has at most value_length+1 pieces and split_n has identical behavior.
+    return split_n(value,separator,value_length+1);
 }
-pub func join(values Vec[string], separator string) string {
-    var out = "";
-    var first = true;
-    for value in values {
-        if !first { out += separator; }
-        out += value;
-        first = false;
+// split_whitespace splits on Unicode White_Space exactly as is_space defines
+// it. Empty fields are discarded, so an empty or all-whitespace input returns
+// an empty Vec. Embedded NUL is ordinary non-whitespace text.
+pub func split_whitespace(value string) Vec[string] {
+    let out = vec.empty[string]();
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
+    var offset usize = 0;
+    var start usize = 0;
+    var in_field = false;
+    for offset < data_bytes {
+        let next = utf8_next(data,offset);
+        if is_space(utf8_decode(data,offset)) {
+            if in_field {
+                vec.push(out,text_from_span(data,start,offset));
+                in_field = false;
+            }
+        } else if !in_field {
+            start = offset;
+            in_field = true;
+        }
+        offset = next;
     }
+    if in_field { vec.push(out,text_from_span(data,start,data_bytes)); }
     return out;
 }
-pub func replace(value string, old string, replacement string) string {
-    if len(old) == 0 {
-        var out = replacement;
-        for var index usize = 0; index < len(value); index += 1 {
-            out += value[index:index+1];
-            out += replacement;
-        }
-        return out;
+pub func join(values Vec[string], separator string) string {
+    let count = vec.len(values);
+    if count == 0 { return ""; }
+    if count == 1 { return values[0]; }
+    let out = vec.empty[u8]();
+    let gap = bytes(separator);
+    for var index usize = 0; index < count; index += 1 {
+        if index != 0 { append_bytes(out,gap); }
+        append_text(out,values[index]);
     }
-    return join(split(value,old),replacement);
+    return text_from_buffer(out);
+}
+pub func replace(value string, old string, replacement string) string {
+    if len(old) == 0 { return replace_empty(value,replacement); }
+    if len(value) == 0 || byte_len(old) > byte_len(value) { return value; }
+    let haystack = bytes(value);
+    let pattern = bytes(old);
+    let pattern_bytes = vec.len(pattern);
+    switch find_bytes_from(haystack,pattern,0) {
+        case option.Option.None: return value;
+        case option.Option.Some(first): {
+            let haystack_bytes = vec.len(haystack);
+            if pattern_bytes <= DIRECT_FIND_PATTERN_BYTES &&
+               haystack_bytes > DIRECT_FIND_CODE_POINTS {
+                // A bounded number of string concatenations is linear and
+                // avoids pushing an unchanged, potentially long span byte by byte.
+                switch find_bytes_from(haystack,pattern,first+pattern_bytes) {
+                    case option.Option.None:
+                        return replace_sparse(value,old,replacement,haystack,first,haystack_bytes);
+                    case option.Option.Some(second):
+                        switch find_bytes_from(haystack,pattern,second+pattern_bytes) {
+                            case option.Option.None:
+                                return replace_sparse(value,old,replacement,haystack,first,second);
+                            case option.Option.Some(third): {}
+                        }
+                }
+            }
+            let replacement_bytes = bytes(replacement);
+            let out = vec.empty[u8]();
+            vec.reserve(out,vec.len(haystack)+vec.len(replacement_bytes));
+            append_span(out,haystack,0,first);
+            append_bytes(out,replacement_bytes);
+            var piece_start = first+pattern_bytes;
+            if pattern_bytes <= DIRECT_FIND_PATTERN_BYTES {
+                let first_byte = pattern[0];
+                let limit = haystack_bytes-pattern_bytes;
+                for var offset usize = piece_start; offset <= limit; offset += 1 {
+                    if haystack[offset] != first_byte { continue; }
+                    var index usize = 1;
+                    for index < pattern_bytes && haystack[offset+index] == pattern[index] {
+                        index += 1;
+                    }
+                    if index == pattern_bytes {
+                        append_span(out,haystack,piece_start,offset);
+                        append_bytes(out,replacement_bytes);
+                        piece_start = offset+pattern_bytes;
+                        offset = piece_start-1;
+                    }
+                }
+            } else {
+                let fallback = match_table(pattern);
+                var matched usize = 0;
+                for var offset usize = piece_start; offset < haystack_bytes; offset += 1 {
+                    matched = match_byte(pattern,fallback,matched,haystack[offset]);
+                    if matched == pattern_bytes {
+                        append_span(out,haystack,piece_start,offset+1-pattern_bytes);
+                        append_bytes(out,replacement_bytes);
+                        piece_start = offset+1;
+                        matched = 0;
+                    }
+                }
+            }
+            append_span(out,haystack,piece_start,haystack_bytes);
+            return text_from_buffer(out);
+        }
+    }
+}
+func replace_sparse(value string, old string, replacement string,
+                    data Vec[u8], first usize, second usize) string {
+    let ascii = byte_len(value) == len(value);
+    var begin = first;
+    if !ascii { begin = utf8_span_length(data,0,first); }
+    let end = begin+len(old);
+    if second == vec.len(data) {
+        return value[:begin]+replacement+value[end:];
+    }
+    var next = second;
+    if !ascii { next = end+utf8_span_length(data,first+byte_len(old),second); }
+    return value[:begin]+replacement+value[end:next]+replacement+value[next+len(old):];
 }
 pub func repeat(value string, count usize) string {
     var out = "";
@@ -218,41 +318,66 @@ pub func repeat(value string, count usize) string {
     }
     return out;
 }
+// Padding widths count Unicode code points, not bytes or display columns.
+// pad_left adds fill on the left (right-aligning value); pad_right adds fill
+// on the right (left-aligning it). A width at or below len(value) returns value
+// unchanged. The fill rune must be a Unicode scalar value and is validated
+// even when no padding is needed. Widths above MAX_PADDING_WIDTH throw
+// PaddingError.WidthTooLarge.
+pub func pad_left(value string, width usize) string throws PaddingError {
+    return pad_left_with(value,width,32);
+}
+pub func pad_left_with(value string, width usize, fill u32) string throws PaddingError {
+    return pad_with(value,width,fill,PAD_LEFT);
+}
+pub func pad_right(value string, width usize) string throws PaddingError {
+    return pad_right_with(value,width,32);
+}
+pub func pad_right_with(value string, width usize, fill u32) string throws PaddingError {
+    return pad_with(value,width,fill,PAD_RIGHT);
+}
+// pad_center puts the extra fill rune on the right when the padding is odd.
+pub func pad_center(value string, width usize) string throws PaddingError {
+    return pad_center_with(value,width,32);
+}
+pub func pad_center_with(value string, width usize, fill u32) string throws PaddingError {
+    return pad_with(value,width,fill,PAD_CENTER);
+}
+// Unicode 18.0.0 White_Space. This is the complete property: U+0009..U+000D,
+// U+0020, U+0085, U+00A0, U+1680, U+2000..U+200A, U+2028, U+2029, U+202F,
+// U+205F and U+3000. U+180E, U+200B and U+FEFF are not White_Space.
 pub func is_space(rune u32) bool {
     return (rune >= 9 && rune <= 13) || rune == 32 || rune == 0x85 ||
         rune == 0xa0 || rune == 0x1680 || (rune >= 0x2000 && rune <= 0x200a) ||
         rune == 0x2028 || rune == 0x2029 || rune == 0x202f || rune == 0x205f || rune == 0x3000;
 }
 pub func trim(value string) string {
+    let length = len(value);
+    if length == 0 { return value; }
+    // End checks use existing code point indexing, so an obvious no-op needs
+    // no bytes(value) scratch. Actual trimming still needs one O(n) byte copy.
+    if !is_space(value[0]) && !is_space(value[length-1]) { return value; }
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
     var start usize = 0;
-    var end = len(value);
-    for start < end && is_space(value[start]) { start += 1; }
-    for start < end && is_space(value[end-1]) { end -= 1; }
-    return value[start:end];
+    for start < data_bytes {
+        if !is_space(utf8_decode(data,start)) { break; }
+        start = utf8_next(data,start);
+    }
+    var end usize = data_bytes;
+    for end > start {
+        let previous = utf8_prev(data,end);
+        if !is_space(utf8_decode(data,previous)) { break; }
+        end = previous;
+    }
+    if start == 0 && end == data_bytes { return value; }
+    return text_from_span(data,start,end);
 }
 pub func ascii_lower(value string) string {
-    var out = "";
-    let alphabet = "abcdefghijklmnopqrstuvwxyz";
-    for var index usize = 0; index < len(value); index += 1 {
-        let rune = value[index];
-        if rune >= 65 && rune <= 90 {
-            let offset = usize(rune-65);
-            out += alphabet[offset:offset+1];
-        } else { out += value[index:index+1]; }
-    }
-    return out;
+    return ascii_shift(value,65,90,97);
 }
 pub func ascii_upper(value string) string {
-    var out = "";
-    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    for var index usize = 0; index < len(value); index += 1 {
-        let rune = value[index];
-        if rune >= 97 && rune <= 122 {
-            let offset = usize(rune-97);
-            out += alphabet[offset:offset+1];
-        } else { out += value[index:index+1]; }
-    }
-    return out;
+    return ascii_shift(value,97,122,65);
 }
 
 pub func find_last(value string, needle string) option.Option[usize] {
@@ -731,6 +856,7 @@ pub func split_lines(value string) Vec[string] {
     return out;
 }
 pub func trim_start(value string) string {
+    if len(value) == 0 || !is_space(value[0]) { return value; }
     let data = bytes(value);
     let data_bytes = vec.len(data);
     var offset usize = 0;
@@ -742,6 +868,7 @@ pub func trim_start(value string) string {
     return text_from_span(data,offset,data_bytes);
 }
 pub func trim_end(value string) string {
+    if len(value) == 0 || !is_space(value[len(value)-1]) { return value; }
     let data = bytes(value);
     let data_bytes = vec.len(data);
     var end usize = data_bytes;
@@ -761,6 +888,142 @@ pub func strip_suffix(value string, suffix string) option.Option[string] {
     if !ends_with(value,suffix) { return option.Option[string].None; }
     return option.Option[string].Some(value[0:len(value)-len(suffix)]);
 }
+func pad_with(value string, width usize, fill u32, mode u32) string throws PaddingError {
+    if width > MAX_PADDING_WIDTH { throw PaddingError.WidthTooLarge(width); }
+    let fill_text = pad_fill(fill);
+    let length = len(value);
+    if width <= length { return value; }
+    let total = width - length;
+    if mode == PAD_LEFT { return repeat(fill_text,total) + value; }
+    if mode == PAD_RIGHT { return value + repeat(fill_text,total); }
+    let left = total / 2;
+    return repeat(fill_text,left) + value + repeat(fill_text,total-left);
+}
+func pad_fill(fill u32) string throws PaddingError {
+    try {
+        return from_rune(fill);
+    } catch problem Error {
+        throw PaddingError.InvalidScalar(fill);
+    }
+}
+func replace_empty(value string, replacement string) string {
+    let data = bytes(value);
+    let data_bytes = vec.len(data);
+    let replacement_bytes = bytes(replacement);
+    let out = vec.empty[u8]();
+    vec.reserve(out,data_bytes+vec.len(replacement_bytes));
+    append_bytes(out,replacement_bytes);
+    var offset usize = 0;
+    for offset < data_bytes {
+        let next = utf8_next(data,offset);
+        append_span(out,data,offset,next);
+        append_bytes(out,replacement_bytes);
+        offset = next;
+    }
+    return text_from_buffer(out);
+}
+func ascii_shift(value string, source_first u8, source_last u8,
+        target_first u8) string {
+    let length = len(value);
+    if length == 0 { return value; }
+    if length == 1 {
+        let rune = value[0];
+        if rune < u32(source_first) || rune > u32(source_last) {
+            return value;
+        }
+    }
+    // There is no zero-copy byte view in the public text API. Detecting that a
+    // longer string has no byte in this range therefore costs one O(n)
+    // bytes(value) scratch copy. The output buffer is only allocated after a
+    // matching ASCII byte is found.
+    let data = bytes(value);
+    var changed = false;
+    for byte in data {
+        if byte >= source_first && byte <= source_last {
+            changed = true;
+            break;
+        }
+    }
+    if !changed { return value; }
+    let out = vec.empty[u8]();
+    vec.reserve(out,vec.len(data));
+    for byte in data {
+        if byte >= source_first && byte <= source_last {
+            vec.push(out,target_first + (byte-source_first));
+        } else { vec.push(out,byte); }
+    }
+    return text_from_buffer(out);
+}
+func find_bytes_from(data Vec[u8], pattern Vec[u8], start usize) option.Option[usize] {
+    let pattern_bytes = vec.len(pattern);
+    if pattern_bytes == 0 { return option.Option[usize].Some(start); }
+    let data_bytes = vec.len(data);
+    if start > data_bytes || pattern_bytes > data_bytes-start {
+        return option.Option[usize].None;
+    }
+    // A bounded-pattern direct scan is linear in the haystack: the per-byte
+    // work is capped by DIRECT_FIND_PATTERN_BYTES. Avoid allocating a KMP
+    // fallback table for the common short pattern case.
+    let first = pattern[0];
+    if pattern_bytes <= DIRECT_FIND_PATTERN_BYTES {
+        let limit = data_bytes-pattern_bytes;
+        for var offset usize = start; offset <= limit; offset += 1 {
+            if data[offset] != first { continue; }
+            var index usize = 1;
+            for index < pattern_bytes && data[offset+index] == pattern[index] {
+                index += 1;
+            }
+            if index == pattern_bytes { return option.Option[usize].Some(offset); }
+        }
+        return option.Option[usize].None;
+    }
+    let fallback = match_table(pattern);
+    var matched usize = 0;
+    for var offset usize = start; offset < data_bytes; offset += 1 {
+        matched = match_byte(pattern,fallback,matched,data[offset]);
+        if matched == pattern_bytes {
+            return option.Option[usize].Some(offset+1-pattern_bytes);
+        }
+    }
+    return option.Option[usize].None;
+}
+func utf8_offset(data Vec[u8], index usize) usize {
+    var offset usize = 0;
+    var count usize = 0;
+    for count < index {
+        offset = utf8_next(data,offset);
+        count += 1;
+    }
+    return offset;
+}
+func utf8_span_length(data Vec[u8], start usize, end usize) usize {
+    var offset = start;
+    var count usize = 0;
+    for offset < end {
+        offset = utf8_next(data,offset);
+        count += 1;
+    }
+    return count;
+}
+func append_bytes(out Vec[u8], source Vec[u8]) {
+    for byte in source { vec.push(out,byte); }
+}
+func append_span(out Vec[u8], data Vec[u8], start usize, end usize) {
+    for var index usize = start; index < end; index += 1 {
+        vec.push(out,data[index]);
+    }
+}
+func append_text(out Vec[u8], value string) {
+    for byte in bytes(value) { vec.push(out,byte); }
+}
+func text_from_buffer(data Vec[u8]) string {
+    // Callers only concatenate valid UTF-8 spans from existing strings.
+    try {
+        return from_bytes(data);
+    } catch problem Error {
+        return "";
+    }
+}
 // A complete UTF-8 pattern begins with a leading byte, so byte matches
 // also begin and end on code point boundaries.
 func match_table(pattern Vec[u8]) Vec[usize] {
@@ -775,11 +1038,12 @@ func match_table(pattern Vec[u8]) Vec[usize] {
 }
 func match_byte(pattern Vec[u8], fallback Vec[usize], matched usize, byte u8) usize {
     var available = matched;
-    for available > 0 && pattern[available] != byte {
+    // Each state needs only one checked read of its pattern byte.
+    for {
+        if pattern[available] == byte { return available+1; }
+        if available == 0 { return 0; }
         available = fallback[available-1];
     }
-    if pattern[available] == byte { return available+1; }
-    return available;
 }
 func utf8_next(data Vec[u8], offset usize) usize {
     let first = data[offset];

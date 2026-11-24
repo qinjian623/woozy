@@ -1,0 +1,26 @@
+// The key callback pushes through an alias of the Vec being sorted. The shape
+// pin must already be active during key extraction, so this Panics before any
+// key is cached or any value is written back.
+package app;
+
+import "std/sort" as sort;
+import "std/vec" as vec;
+
+func less_i32(left i32, right i32) bool {
+    return left < right;
+}
+
+func main() i32 {
+    let values = vec.make[i32](4, 0);
+    values[0] = 3;
+    values[1] = 1;
+    values[2] = 2;
+    values[3] = 0;
+    let alias = values;
+    let key = func(value i32) i32 {
+        vec.push(alias, 99);
+        return value;
+    };
+    sort.sort_by_key(values, key, less_i32);
+    return 0;
+}

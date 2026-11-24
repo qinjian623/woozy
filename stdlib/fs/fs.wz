@@ -4,6 +4,9 @@ import "std/io" as io;
 import "std/text" as text;
 import "std/vec" as vec;
 import "std/path" as path;
+import "std/process" as process;
+import "std/option" as option;
+import "std/random" as random;
 
 pub func read_file(name string) Vec[u8] throws os.Error {
     let file = os.open(name,os.O_RDONLY|os.O_CLOEXEC,0);
@@ -25,6 +28,46 @@ pub func write_file(name string, data Vec[u8], mode u32) throws os.Error {
 }
 pub func write_text(name string, value string, mode u32) throws os.Error {
     write_file(name,text.bytes(value),mode);
+}
+// parent_path returns the caller's spelling through name's final separator.
+// Keeping that separator preserves leading "//" and repeated separators; no
+// path.clean is applied, so symlink and ".." components still select the same
+// parent that rename will use. A name without a separator lives in ".".
+func parent_path(name string) string {
+    switch text.find_last(name,"/") {
+        case option.Option.Some(index): return name[:index+1];
+        case option.Option.None: return ".";
+    }
+}
+// write_file_atomic publishes data by renaming an exclusive temporary entry
+// from name's own parent. The temporary path uses parent_path, so the caller's
+// spelling is not lexically cleaned. mode is the requested permission bits
+// applied with fchmod, independent of the creation umask. A symbolic link at
+// name is replaced itself; its referent is not modified. The rename gives
+// atomic visibility on a stable parent, and file data is fsynced before
+// publishing; parent directories are not fsynced, so power loss after return
+// can lose the rename. On failure before the rename, close and unlink cleanup
+// is best-effort; cleanup errors are ignored so the original error is
+// preserved and rethrown. Rename is attempted only after writing, fchmod,
+// fsync and close all succeed.
+pub func write_file_atomic(name string, data Vec[u8], mode u32) throws os.Error {
+    let temporary = create_temp(parent_path(name),".atomic");
+    var closed = false;
+    var published = false;
+    defer {
+        if !closed { try { os.close(temporary.file); } catch error os.Error {} }
+        if !published { try { os.unlink(temporary.path); } catch error os.Error {} }
+    }
+    os.write_all(temporary.file,data);
+    os.fchmod(temporary.file,mode);
+    os.fsync(temporary.file);
+    closed = true;
+    os.close(temporary.file);
+    os.rename(temporary.path,name);
+    published = true;
+}
+pub func write_text_atomic(name string, value string, mode u32) throws os.Error {
+    write_file_atomic(name,text.bytes(value),mode);
 }
 pub func append_file(name string, data Vec[u8], mode u32) throws os.Error {
     let file = os.open(name,os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_CLOEXEC,mode);
@@ -50,14 +93,19 @@ pub func copy_file(source string, destination string, mode u32) throws os.Error 
     }
     os.ftruncate(output,0);
     let buffer = vec.make[u8](4096,0);
+    let capacity = vec.len(buffer);
     for true {
         var count usize = 0;
-        try { count = os.read(input,buffer,vec.len(buffer)); }
+        try { count = os.read(input,buffer,capacity); }
         catch error os.Error {
             switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
         }
         if count == 0 { break; }
-        os.write_all(output,buffer[:count]);
+        if count == capacity {
+            os.write_all(output,buffer);
+        } else {
+            os.write_all(output,buffer[:count]);
+        }
     }
     output_closed = true;
     os.close(output);
@@ -97,6 +145,345 @@ pub func create_dir_all(name string, mode u32) throws os.Error {
         }
     }
 }
+// Temporary entries live in a caller-chosen directory. The caller owns both
+// the returned path and file handle; nothing is registered for global cleanup.
+// Names are built from OS entropy; creation remains safe under collisions because
+// files are opened with O_CREAT|O_EXCL and directories are created with mkdir.
+pub const TEMP_MAX_ATTEMPTS usize = 100;
+pub const TEMP_FILE_MODE u32 = 0o600;
+pub const TEMP_DIR_MODE u32 = 0o700;
+
+pub struct TempFile { pub file os.File; pub path string; }
+
+const HEX_DIGITS string = "0123456789abcdef";
+func hex_u64(value u64) string {
+    var out = "";
+    for var shift i32 = 60; shift >= 0; shift -= 4 {
+        let digit = usize((value >> u64(shift)) & 15);
+        out = out + HEX_DIGITS[digit:digit+1];
+    }
+    return out;
+}
+func temp_name(prefix string, entropy u64) string {
+    let suffix = hex_u64(entropy);
+    if prefix == "" { return suffix; }
+    return prefix+"-"+suffix;
+}
+// temp_dir returns TMPDIR when it is non-empty, otherwise /tmp. The value is
+// returned as spelled, without resolving symlinks or checking writability.
+pub func temp_dir() string throws os.Error {
+    switch process.getenv("TMPDIR") {
+        case option.Option.Some(value): {
+            if value != "" { return value; }
+        }
+        case option.Option.None: {}
+    }
+    return "/tmp";
+}
+// Every generated name is one component of directory; embedded separators,
+// NUL, and the names . and .. are rejected instead of escaping the caller's
+// directory through lexical path cleaning.
+func temp_component(name string) bool {
+    return name != "" && name != "." && name != ".." &&
+           !text.contains(name,"/") && !text.contains(name,"\0");
+}
+// child_path keeps directory's spelling, including symlinks and .. components.
+// path.join would clean those components and can change the target directory
+// when a symlink is involved.
+func child_path(directory string, name string) string {
+    if directory == "" { return name; }
+    if text.ends_with(directory,"/") { return directory+name; }
+    return directory+"/"+name;
+}
+// create_temp_with retries only EEXIST, at most TEMP_MAX_ATTEMPTS times.
+// name receives fresh OS entropy on each attempt; callers that need a fixed
+// sequence can ignore entropy and return names relative to directory.
+pub func create_temp_with(directory string, name func(u64) string)
+                         TempFile throws os.Error {
+    for var attempt usize = 0; attempt < TEMP_MAX_ATTEMPTS; attempt += 1 {
+        let entropy = random.secure_u64();
+        let candidate = name(entropy);
+        if !temp_component(candidate) { throw os.Error.System(22,0); }
+        let full = child_path(directory,candidate);
+        try {
+            let file = os.open(full,os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,
+                               TEMP_FILE_MODE);
+            return TempFile(file:file,path:full);
+        } catch error os.Error {
+            switch error {
+                case os.Error.System(code,completed): {
+                    if code != 17 { throw error; }
+                }
+                default: throw error;
+            }
+        }
+    }
+    // All attempts collided; report the collision rather than guessing a
+    // different failure. No entry was created by this call.
+    throw os.Error.System(17,0);
+}
+// create_temp creates prefix-<hex> in directory with mode 0600. The caller
+// closes the file and removes the path when finished.
+pub func create_temp(directory string,prefix string) TempFile throws os.Error {
+    let name = func(entropy u64) string { return temp_name(prefix,entropy); };
+    return create_temp_with(directory,name);
+}
+pub func create_temp_dir_with(directory string, name func(u64) string)
+                             string throws os.Error {
+    for var attempt usize = 0; attempt < TEMP_MAX_ATTEMPTS; attempt += 1 {
+        let entropy = random.secure_u64();
+        let candidate = name(entropy);
+        if !temp_component(candidate) { throw os.Error.System(22,0); }
+        let full = child_path(directory,candidate);
+        try {
+            os.mkdir(full,TEMP_DIR_MODE);
+            return full;
+        } catch error os.Error {
+            switch error {
+                case os.Error.System(code,completed): {
+                    if code != 17 { throw error; }
+                }
+                default: throw error;
+            }
+        }
+    }
+    throw os.Error.System(17,0);
+}
+// create_temp_dir creates prefix-<hex> in directory with mode 0700 and
+// returns its path; removing the directory is the caller's responsibility.
+pub func create_temp_dir(directory string,prefix string) string throws os.Error {
+    let name = func(entropy u64) string { return temp_name(prefix,entropy); };
+    return create_temp_dir_with(directory,name);
+}
+// walk follows an explicit root, including a root symbolic link such as /tmp
+// on macOS, and reports that resolved directory's contents under the caller's
+// root spelling. Descendant symbolic links are leaves and are never followed.
+// A broken root link therefore fails with the target's I/O error instead of
+// being returned as a leaf. Traversal keeps pending directories in a heap Vec,
+// so tree depth does not consume the call stack. Order follows read_dir.
+// WalkEntry.name is decoded text. A name that is not UTF-8 cannot be represented
+// as string text; that entry is returned as NameError with its original bytes
+// and is not inspected or descended. No guarantee is made for trees changed
+// while a walk is in progress.
+//
+// Directory entries are decoded from getdents one buffer at a time, so a small
+// max_entries does not materialize the rest of a wide directory. max_depth is a
+// deliberate filter, not truncation. walk_with reports a budget stop as
+// WalkResult.truncated. The ordinary walk returns all items or throws EOVERFLOW
+// when its default safety bound would omit any item. max_entries bounds returned
+// WalkItem values, including the root, NameError and IoError.
+pub struct WalkEntry {
+    pub path string;
+    pub name string;
+    pub info os.FileInfo;
+    pub depth usize;
+}
+pub enum WalkItem {
+    Entry(entry WalkEntry);
+    NameError(directory string, name Vec[u8], error os.Error);
+    IoError(path string, error os.Error);
+}
+pub struct WalkResult {
+    pub items Vec[WalkItem];
+    pub truncated bool;
+}
+pub const WALK_DEFAULT_MAX_ENTRIES usize = 100_000;
+// Linux Native EOVERFLOW.
+const WALK_EOVERFLOW i32 = 75;
+pub struct WalkOptions {
+    // Root depth is zero. Zero means no depth limit; a positive value includes
+    // entries through that depth and deliberately filters deeper items.
+    pub max_depth usize;
+    // Bounds returned WalkItem values, including root and error items.
+    // Zero selects WALK_DEFAULT_MAX_ENTRIES; use 1 for root only.
+    pub max_entries usize;
+    // Child lstat/read_dir failures become IoError instead of throwing.
+    pub nonfatal_child_errors bool;
+}
+pub func default_walk_options() WalkOptions {
+    return WalkOptions(
+        max_depth:0,
+        max_entries:WALK_DEFAULT_MAX_ENTRIES,
+        nonfatal_child_errors:false);
+}
+struct WalkTask { path string; depth usize; }
+struct WalkState {
+    items Vec[WalkItem];
+    pending Vec[WalkTask];
+    produced usize;
+    max_depth usize;
+    max_entries usize;
+    nonfatal_child_errors bool;
+    truncated bool;
+}
+// walk returns the complete item sequence or reports that its default budget
+// stopped traversal. EOVERFLOW is Linux errno 75.
+pub func walk(root string) Vec[WalkItem] throws os.Error {
+    let result = walk_with(root,default_walk_options());
+    if result.truncated { throw os.Error.System(WALK_EOVERFLOW,0); }
+    return result.items;
+}
+pub func walk_with(root string, options WalkOptions) WalkResult throws os.Error {
+    let max_depth = options.max_depth;
+    var max_entries = options.max_entries;
+    if max_entries == 0 { max_entries = WALK_DEFAULT_MAX_ENTRIES; }
+    let items = vec.empty[WalkItem]();
+    let root_info = os.stat(root);
+    vec.push(items,WalkItem.Entry(WalkEntry(path:root,
+        name:path.base(root),info:root_info,depth:0)));
+    var state = WalkState(items:items,pending:vec.empty[WalkTask](),
+        produced:1,max_depth:max_depth,max_entries:max_entries,
+        nonfatal_child_errors:options.nonfatal_child_errors,truncated:false);
+    if is_dir(root_info) {
+        vec.push(state.pending,WalkTask(path:root,depth:0));
+        for vec.len(state.pending) > 0 && !state.truncated {
+            walk_directory(inout state);
+        }
+    }
+    return WalkResult(items:state.items,truncated:state.truncated);
+}
+// close_walk_directory reports a close failure on a normal walk exit. A child
+// close failure becomes IoError when requested; otherwise it preserves the
+// nonfatal policy by throwing. Cleanup after another error ignores close errors.
+func close_walk_directory(state inout WalkState, directory WalkTask,
+                          file os.File) throws os.Error {
+    try { os.close(file); }
+    catch error os.Error {
+        if directory.depth > 0 && state.nonfatal_child_errors {
+            if state.produced < state.max_entries {
+                vec.push(state.items,WalkItem.IoError(path:directory.path,error:error));
+                state.produced += 1;
+            } else {
+                state.truncated = true;
+            }
+            return;
+        }
+        throw error;
+    }
+}
+func directory_has_entry(directory WalkTask) bool throws os.Error {
+    let file = open_dir(directory.path,directory.depth == 0);
+    var scanner = dir_scanner(file);
+    var found = false;
+    try {
+        switch next_dir_entry(inout scanner) {
+            case option.Option.Some(entry): found = true;
+            case option.Option.None: {}
+        }
+    } catch error os.Error {
+        try { os.close(file); } catch error os.Error {}
+        throw error;
+    }
+    os.close(file);
+    return found;
+}
+// pending_would_emit probes empty pending directories only at the exact budget
+// boundary, so completion is not reported when a real item remains.
+func pending_would_emit(state inout WalkState) bool throws os.Error {
+    for vec.len(state.pending) > 0 {
+        let top = vec.len(state.pending)-1;
+        let directory = state.pending[top];
+        vec.resize(state.pending,top,WalkTask(path:"",depth:0));
+        var has = false;
+        try { has = directory_has_entry(directory); }
+        catch error os.Error {
+            if directory.depth > 0 && state.nonfatal_child_errors { return true; }
+            throw error;
+        }
+        if has { return true; }
+    }
+    return false;
+}
+// walk_directory consumes at most one directory's remaining entries. It stops
+// before decoding past the shared budget; the one-entry peek at the boundary
+// distinguishes exact completion from truncation without buffering the rest.
+func walk_directory(state inout WalkState) throws os.Error {
+    let top = vec.len(state.pending)-1;
+    let directory = state.pending[top];
+    vec.resize(state.pending,top,WalkTask(path:"",depth:0));
+    var file = os.stdin();
+    try { file = open_dir(directory.path,directory.depth == 0); }
+    catch error os.Error {
+        if directory.depth > 0 && state.nonfatal_child_errors {
+            vec.push(state.items,WalkItem.IoError(path:directory.path,error:error));
+            state.produced += 1;
+            return;
+        }
+        throw error;
+    }
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    var scanner = dir_scanner(file);
+    for true {
+        if state.produced >= state.max_entries {
+            var more = false;
+            try { more = has_next_dir_entry(inout scanner); }
+            catch error os.Error {
+                if directory.depth > 0 && state.nonfatal_child_errors {
+                    state.truncated = true;
+                    return;
+                }
+                throw error;
+            }
+            if more { state.truncated = true; }
+            else if pending_would_emit(inout state) { state.truncated = true; }
+            closed = true;
+            close_walk_directory(inout state,directory,file);
+            return;
+        }
+        var next = option.Option[DirEntry].None;
+        try { next = next_dir_entry(inout scanner); }
+        catch error os.Error {
+            if directory.depth > 0 && state.nonfatal_child_errors {
+                vec.push(state.items,WalkItem.IoError(path:directory.path,error:error));
+                state.produced += 1;
+                return;
+            }
+            throw error;
+        }
+        switch next {
+            case option.Option.None: {
+                closed = true;
+                close_walk_directory(inout state,directory,file);
+                return;
+            }
+            case option.Option.Some(entry): {
+                var base = "";
+                try { base = name_text(entry); }
+                catch error os.Error {
+                    vec.push(state.items,WalkItem.NameError(directory:directory.path,
+                                                            name:entry.name,error:error));
+                    state.produced += 1;
+                    continue;
+                }
+                let child = child_path(directory.path,base);
+                var child_info = option.Option[os.FileInfo].None;
+                try { child_info = option.Option[os.FileInfo].Some(os.lstat(child)); }
+                catch error os.Error {
+                    if state.nonfatal_child_errors {
+                        vec.push(state.items,WalkItem.IoError(path:child,error:error));
+                        state.produced += 1;
+                        continue;
+                    }
+                    throw error;
+                }
+                switch child_info {
+                    case option.Option.None: {}
+                    case option.Option.Some(info): {
+                        let depth = directory.depth+1;
+                        vec.push(state.items,WalkItem.Entry(WalkEntry(path:child,name:base,
+                                                                     info:info,depth:depth)));
+                        state.produced += 1;
+                        if is_dir(info) &&
+                           (state.max_depth == 0 || depth < state.max_depth) {
+                            vec.push(state.pending,WalkTask(path:child,depth:depth));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 // Linux filenames are bytes; converting an entry's name to text is explicit.
 pub struct DirEntry { pub name Vec[u8]; pub inode u64; pub kind u8; }
 pub func name_text(entry DirEntry) string throws os.Error { return io.decode(entry.name); }
@@ -107,36 +494,86 @@ func little_u64(bytes Vec[u8], offset usize) u64 {
     }
     return out;
 }
-pub func read_dir(name string) Vec[DirEntry] throws os.Error {
-    let file = os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
-    var closed = false;
-    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
-    let out = vec.empty[DirEntry]();
-    let buffer = vec.make[u8](8192,0);
+struct DirScanner {
+    file os.File;
+    buffer Vec[u8];
+    count usize;
+    offset usize;
+    done bool;
+}
+const DIR_BUFFER_BYTES usize = 8192;
+func dir_scanner(file os.File) DirScanner {
+    return DirScanner(file:file,buffer:vec.make[u8](DIR_BUFFER_BYTES,0),
+                      count:0,offset:0,done:false);
+}
+// next_dir_entry decodes one entry without reading the rest of the directory.
+// It skips . and .. and preserves the raw name bytes in DirEntry.name.
+func next_dir_entry(scanner inout DirScanner) option.Option[DirEntry] throws os.Error {
     for true {
-        var count usize = 0;
-        try { count = os.getdents(file,buffer,vec.len(buffer)); }
-        catch error os.Error {
-            switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
-        }
-        if count == 0 { break; }
-        var offset usize = 0;
-        for offset < count {
-            if count-offset < 20 { throw os.Error.System(5,0); }
-            let length = usize(buffer[offset+16]) | (usize(buffer[offset+17]) << 8);
-            if length < 20 || length > count-offset { throw os.Error.System(5,0); }
-            var end = offset+19;
-            for end < offset+length && buffer[end] != 0 { end += 1; }
-            if end == offset+length { throw os.Error.System(5,0); }
-            let bytes = buffer[offset+19:end];
-            if !(vec.len(bytes) == 1 && bytes[0] == 46) &&
-               !(vec.len(bytes) == 2 && bytes[0] == 46 && bytes[1] == 46) {
-                vec.push(out,DirEntry(name:bytes,inode:little_u64(buffer,offset),kind:buffer[offset+18]));
+        if scanner.offset >= scanner.count {
+            if scanner.done { return option.Option[DirEntry].None; }
+            var count usize = 0;
+            try { count = os.getdents(scanner.file,scanner.buffer,vec.len(scanner.buffer)); }
+            catch error os.Error {
+                switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
             }
-            offset += length;
+            if count == 0 {
+                scanner.done = true;
+                return option.Option[DirEntry].None;
+            }
+            scanner.count = count;
+            scanner.offset = 0;
+        }
+        let offset = scanner.offset;
+        if scanner.count-offset < 20 { throw os.Error.System(5,0); }
+        let length = usize(scanner.buffer[offset+16]) | (usize(scanner.buffer[offset+17]) << 8);
+        if length < 20 || length > scanner.count-offset { throw os.Error.System(5,0); }
+        var end = offset+19;
+        for end < offset+length && scanner.buffer[end] != 0 { end += 1; }
+        if end == offset+length { throw os.Error.System(5,0); }
+        scanner.offset = offset+length;
+        let bytes = scanner.buffer[offset+19:end];
+        if !(vec.len(bytes) == 1 && bytes[0] == 46) &&
+           !(vec.len(bytes) == 2 && bytes[0] == 46 && bytes[1] == 46) {
+            return option.Option[DirEntry].Some(DirEntry(name:bytes,
+                inode:little_u64(scanner.buffer,offset),kind:scanner.buffer[offset+18]));
         }
     }
+}
+func has_next_dir_entry(scanner inout DirScanner) bool throws os.Error {
+    switch next_dir_entry(inout scanner) {
+        case option.Option.Some(entry): return true;
+        case option.Option.None: return false;
+    }
+}
+// read_dir_fd is the reusable full-read wrapper for an already-open directory
+// descriptor. It leaves the descriptor open, including on errors.
+func read_dir_fd(file os.File) Vec[DirEntry] throws os.Error {
+    let out = vec.empty[DirEntry]();
+    var scanner = dir_scanner(file);
+    for true {
+        switch next_dir_entry(inout scanner) {
+            case option.Option.Some(entry): vec.push(out,entry);
+            case option.Option.None: return out;
+        }
+    }
+}
+func open_dir(name string, follow bool) os.File throws os.Error {
+    var flags = os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC;
+    if !follow { flags = flags|os.O_NOFOLLOW; }
+    return os.open(name,flags,0);
+}
+func read_dir_mode(name string, follow bool) Vec[DirEntry] throws os.Error {
+    let file = open_dir(name,follow);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    let out = read_dir_fd(file);
     closed = true;
     os.close(file);
     return out;
+}
+// read_dir keeps the released O_NOFOLLOW default. walk_with opts in explicitly
+// only for its root, so an explicit root link is followed but child links are not.
+pub func read_dir(name string) Vec[DirEntry] throws os.Error {
+    return read_dir_mode(name,false);
 }

@@ -1,0 +1,28 @@
+// Descriptor members are registered once per identical Task handle. The same
+// readable Task appears twice, so the runtime must not add the same epoll/kqueue
+// registration twice, while both input slots still produce a value.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func main() i32 throws os.Error {
+    let first = os.pipe(u32(os.O_CLOEXEC));
+    let second = os.pipe(u32(os.O_CLOEXEC));
+    let one = a.readable(os.fd(first.read_end));
+    let two = a.readable(os.fd(second.read_end));
+    os.write(first.write_end, [65], 1);
+    os.write(second.write_end, [66], 1);
+    let outcome = await a.gather[Unit,Unit]([one, one, two]);
+    switch outcome {
+        case result.Result.Ok(values): io.println(vec.len(values));
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    os.close(first.read_end);
+    os.close(first.write_end);
+    os.close(second.read_end);
+    os.close(second.write_end);
+    return 0;
+}

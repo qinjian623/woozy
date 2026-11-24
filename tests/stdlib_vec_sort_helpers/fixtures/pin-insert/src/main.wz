@@ -1,0 +1,11 @@
+package app;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+func main() i32 {
+    let values = vec.make[i32](3, 1);
+    let guard Slice[i32] = slice.view[i32](values, 0, 1);
+    vec.insert[i32](values, 1, 2);
+    if slice.len[i32](guard) > 100 { return 1; }
+    return 0;
+}

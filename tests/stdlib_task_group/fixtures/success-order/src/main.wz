@@ -1,0 +1,28 @@
+// All members succeed. Values must come back in input order even though the
+// tasks finish in the opposite order.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+
+enum Failure { Unexpected; }
+
+async func value(x i32, delay i64) i32 throws Failure {
+    await a.sleep(delay);
+    return x;
+}
+
+async func main() i32 throws os.Error {
+    let outcome = await a.gather[i32,Failure]([
+        value(3, 20),
+        value(1, 2),
+        value(2, 10)]);
+    switch outcome {
+        case result.Result.Ok(values): {
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    return 0;
+}

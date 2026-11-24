@@ -1299,6 +1299,14 @@ func op_args2(first usize, second usize) Vec[usize] {
     return arguments;
 }
 
+func op_args3(first usize, second usize, third usize) Vec[usize] {
+    let arguments = vec.empty[usize]();
+    vec.push(arguments, first);
+    vec.push(arguments, second);
+    vec.push(arguments, third);
+    return arguments;
+}
+
 func op_args4(first usize, second usize, third usize, fourth usize)
     Vec[usize] {
     let arguments = vec.empty[usize]();
@@ -1306,6 +1314,13 @@ func op_args4(first usize, second usize, third usize, fourth usize)
     vec.push(arguments, second);
     vec.push(arguments, third);
     vec.push(arguments, fourth);
+    return arguments;
+}
+
+func op_args5(first usize, second usize, third usize, fourth usize,
+              fifth usize) Vec[usize] {
+    let arguments = op_args4(first, second, third, fourth);
+    vec.push(arguments, fifth);
     return arguments;
 }
 
@@ -1333,6 +1348,8 @@ func run_system_phase() throws os.Error {
         base.resolved.symbols);
     let f64_type = fixture_field_type(inout context, "f64",
         base.resolved.symbols);
+    let c_type = u32_type;
+    let d_type = f64_type;
     let pollfd_type = fixture_named(inout context, model.TypeKind.NominalStruct,
         base.resolved.symbols[18].id);
     let vec_pollfd = fixture_vec(inout context, pollfd_type);
@@ -1346,10 +1363,20 @@ func run_system_phase() throws os.Error {
         if spec.type_arity >= 2 {
             vec.push(arguments, b_type);
         }
+        if spec.type_arity >= 3 {
+            vec.push(arguments, c_type);
+        }
+        if spec.type_arity >= 4 {
+            vec.push(arguments, d_type);
+        }
         case_operation("op." + num32(spec.operation) + ".module", inout context,
             some_module(base), spec.operation, arguments);
         case_operation("op." + num32(spec.operation) + ".none", inout context,
             no_module(), spec.operation, arguments);
+        if spec.operation >= 213 && spec.operation <= 226 {
+            emit("registry op." + num32(spec.operation) + " owner=" +
+                spec.owner + " arity=" + num32(spec.type_arity));
+        }
         operation_count += 1;
     }
     emit("operations " + num32(operation_count));
@@ -1366,6 +1393,24 @@ func run_system_phase() throws os.Error {
         op_args1(param_type));
     case_operation("op.task-parameters", inout context, some_module(base), 204,
         op_args2(param_type, bool_type));
+
+    case_operation("op.scope-add-missing", inout context, some_module(base),
+        223, op_args2(a_type, b_type));
+    case_operation("op.scope-add-wrong-arity", inout context,
+        some_module(base), 223, op_args3(a_type, b_type, c_type));
+    case_operation("op.scope-add-extra-type-args", inout context,
+        some_module(base), 223,
+        op_args5(a_type, b_type, c_type, d_type, string_type));
+    case_operation("op.scope-add-none", inout context, no_module(), 223,
+        op_args4(a_type, b_type, c_type, d_type));
+    case_operation("op.scope-begin-missing", inout context, some_module(base),
+        222, []);
+    case_operation("op.scope-activate-missing", inout context,
+        some_module(base), 224, []);
+    case_operation("op.scope-wait-extra-type-arg", inout context,
+        some_module(base), 225, op_args1(a_type));
+    case_operation("op.task-status-missing", inout context, some_module(base),
+        226, []);
 
     let empty_module = hir.empty_module(model.ResolvedProject(
         project: model.empty_project(), symbols: [], occurrences: [],

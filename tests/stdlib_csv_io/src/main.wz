@@ -1,0 +1,1016 @@
+// Native stream and file checks for std/csv_io. main returns 0 on success and a
+// unique non-zero code identifying the first failing check. Pure std/csv
+// behaviour runs separately in tests/stdlib_csv.
+package app;
+
+import "std/csv" as csv;
+import "std/csv_io" as csv_io;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func same_row(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_rows(left Vec[Vec[string]], right Vec[Vec[string]]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if !same_row(left[index], right[index]) { return false; }
+    }
+    return true;
+}
+
+func close_quietly(file os.File) {
+    try { os.close(file); } catch error os.Error {}
+}
+
+func parse_text(value string) Vec[Vec[string]] throws csv_io.Error {
+    try {
+        return csv.parse(value);
+    } catch error csv.Error {
+        throw csv_io.Error.Csv(error);
+    }
+}
+
+func read_text(file os.File) string throws csv_io.Error {
+    try {
+        return io.read_text(file);
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func write_text(file os.File, value string) throws csv_io.Error {
+    try {
+        os.write_all_text(file, value);
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func make_pipe() os.Pipe throws csv_io.Error {
+    try {
+        return os.pipe(u32(os.O_CLOEXEC));
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func make_nonblocking_pipe() os.Pipe throws csv_io.Error {
+    try {
+        return os.pipe(u32(os.O_NONBLOCK | os.O_CLOEXEC));
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func write_bytes(file os.File, data Vec[u8]) throws csv_io.Error {
+    try {
+        os.write_all(file, data);
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func read_all_bytes(data Vec[u8]) Vec[Vec[string]] throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_bytes(pipe.write_end, data);
+    close_quietly(pipe.write_end);
+    return csv_io.read_all(csv_io.reader(io.reader(pipe.read_end)));
+}
+
+func read_all_bytes_limited(data Vec[u8], constraints csv.Limits)
+    Vec[Vec[string]] throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_bytes(pipe.write_end, data);
+    close_quietly(pipe.write_end);
+    return csv_io.read_all(csv_io.reader_limited(io.reader(pipe.read_end),
+        constraints));
+}
+
+func expect_stream_syntax(data Vec[u8], offset usize, row usize,
+    column usize) bool {
+    try {
+        let rows = read_all_bytes(data);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.Syntax(actual_offset, actual_row,
+                        actual_column):
+                        return actual_offset == offset && actual_row == row &&
+                            actual_column == column;
+                    default: return false;
+                }
+            }
+            case csv_io.Error.Io(problem): return false;
+            case csv_io.Error.PendingOutput: return false;
+            case csv_io.Error.BatchIo(cause, accepted): return false;
+        }
+    }
+    return false;
+}
+
+func expect_stream_field_limit(data Vec[u8], constraints csv.Limits,
+    offset usize, row usize, column usize, limit usize) bool {
+    try {
+        let rows = read_all_bytes_limited(data, constraints);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.FieldTooLarge(actual_offset, actual_row,
+                        actual_column, actual_limit):
+                        return actual_offset == offset && actual_row == row &&
+                            actual_column == column && actual_limit == limit;
+                    default: return false;
+                }
+            }
+            case csv_io.Error.Io(problem): return false;
+            case csv_io.Error.PendingOutput: return false;
+            case csv_io.Error.BatchIo(cause, accepted): return false;
+        }
+    }
+    return false;
+}
+
+func expect_stream_row_limit(data Vec[u8], constraints csv.Limits,
+    offset usize, row usize, column usize, limit usize) bool {
+    try {
+        let rows = read_all_bytes_limited(data, constraints);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.RowTooLarge(actual_offset, actual_row,
+                        actual_column, actual_limit):
+                        return actual_offset == offset && actual_row == row &&
+                            actual_column == column && actual_limit == limit;
+                    default: return false;
+                }
+            }
+            case csv_io.Error.Io(problem): return false;
+            case csv_io.Error.PendingOutput: return false;
+            case csv_io.Error.BatchIo(cause, accepted): return false;
+        }
+    }
+    return false;
+}
+
+func expect_stream_field_count_limit(data Vec[u8], constraints csv.Limits,
+    offset usize, row usize, column usize, limit usize) bool {
+    try {
+        let rows = read_all_bytes_limited(data, constraints);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.TooManyFields(actual_offset, actual_row,
+                        actual_column, actual_limit):
+                        return actual_offset == offset && actual_row == row &&
+                            actual_column == column && actual_limit == limit;
+                    default: return false;
+                }
+            }
+            case csv_io.Error.Io(problem): return false;
+            case csv_io.Error.PendingOutput: return false;
+            case csv_io.Error.BatchIo(cause, accepted): return false;
+        }
+    }
+    return false;
+}
+
+func append_bytes(out Vec[u8], data Vec[u8]) {
+    for byte in data {
+        vec.push(out, byte);
+    }
+}
+
+func is_prefix(value Vec[u8], whole Vec[u8]) bool {
+    if vec.len(value) > vec.len(whole) { return false; }
+    for var index usize = 0; index < vec.len(value); index += 1 {
+        if value[index] != whole[index] { return false; }
+    }
+    return true;
+}
+
+func read_available(file os.File) Vec[u8] throws csv_io.Error {
+    let out = vec.empty[u8]();
+    let buffer = vec.make[u8](8192, 0);
+    for true {
+        var count usize = 0;
+        try {
+            count = os.read(file, buffer, vec.len(buffer));
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code, completed): continue;
+                case os.Error.WouldBlock(code, completed): return out;
+                case os.Error.System(code, completed):
+                    throw csv_io.Error.Io(error);
+                case os.Error.NoProgress(completed):
+                    throw csv_io.Error.Io(error);
+            }
+        }
+        if count == 0 { return out; }
+        for var index usize = 0; index < count; index += 1 {
+            vec.push(out, buffer[index]);
+        }
+    }
+}
+
+func fill_pipe(file os.File) usize throws csv_io.Error {
+    let block = vec.make[u8](65536, 70);
+    var total usize = 0;
+    for true {
+        var count usize = 0;
+        try {
+            count = os.write(file, block, vec.len(block));
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code, completed): continue;
+                case os.Error.WouldBlock(code, completed): return total;
+                case os.Error.System(code, completed):
+                    throw csv_io.Error.Io(error);
+                case os.Error.NoProgress(completed): return total;
+            }
+        }
+        if count == 0 { return total; }
+        total += count;
+    }
+}
+
+func is_would_block(problem os.Error) bool {
+    switch problem {
+        case os.Error.WouldBlock(code, completed): return true;
+        case os.Error.Interrupted(code, completed): return false;
+        case os.Error.System(code, completed): return false;
+        case os.Error.NoProgress(completed): return false;
+    }
+}
+
+func flush_to_pipe(output csv_io.Writer, file os.File) Vec[u8]
+    throws csv_io.Error {
+    let out = vec.empty[u8]();
+    for var attempt usize = 0; attempt < 1000; attempt += 1 {
+        var flushed = false;
+        try {
+            csv_io.flush(output);
+            flushed = true;
+        } catch error csv_io.Error {
+            switch error {
+                case csv_io.Error.Io(problem):
+                    if !is_would_block(problem) { throw error; }
+                default: throw error;
+            }
+        }
+        let chunk = read_available(file);
+        append_bytes(out, chunk);
+        if flushed { return out; }
+        if vec.len(chunk) == 0 {
+            throw csv_io.Error.Io(os.Error.NoProgress(0));
+        }
+    }
+    throw csv_io.Error.Io(os.Error.NoProgress(0));
+}
+
+func check_terminal_syntax() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_text(pipe.write_end, "a\"b\nc,d\n");
+    close_quietly(pipe.write_end);
+    let input = csv_io.reader(io.reader(pipe.read_end));
+    let alias = input;
+    var first = false;
+    try {
+        let row = csv_io.read_row(input);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.Syntax(offset, row, column):
+                        first = offset == 1 && row == 1 && column == 1;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !first { return 130; }
+
+    var second = false;
+    try {
+        let row = csv_io.read_row(alias);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.Syntax(offset, row, column):
+                        second = offset == 1 && row == 1 && column == 1;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !second { return 131; }
+
+    var third = false;
+    try {
+        let rows = csv_io.read_all(input);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.Syntax(offset, row, column):
+                        third = offset == 1 && row == 1 && column == 1;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !third { return 132; }
+    return 0;
+}
+
+func check_terminal_limit() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_text(pipe.write_end, "a,b,c\nd,e\n");
+    close_quietly(pipe.write_end);
+    let input = csv_io.reader_with_limited(io.reader(pipe.read_end), ",",
+        csv.limits(100, 100, 2));
+    let alias = input;
+    var first = false;
+    try {
+        let row = csv_io.read_row(input);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.TooManyFields(offset, row, column, limit):
+                        first = offset == 3 && row == 1 && column == 3 &&
+                            limit == 2;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !first { return 200; }
+
+    var second = false;
+    try {
+        let row = csv_io.read_row(alias);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.TooManyFields(offset, row, column, limit):
+                        second = offset == 3 && row == 1 && column == 3 &&
+                            limit == 2;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !second { return 201; }
+
+    var third = false;
+    try {
+        let rows = csv_io.read_all(input);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.TooManyFields(offset, row, column, limit):
+                        third = offset == 3 && row == 1 && column == 3 &&
+                            limit == 2;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !third { return 202; }
+    return 0;
+}
+
+func check_stream_limits() i32 throws csv_io.Error {
+    let field = csv.limits(4, 100, 4);
+    if !same_rows(read_all_bytes_limited([u8(97), u8(98), u8(99), u8(100)],
+                                        field), [["abcd"]]) { return 210; }
+    if !expect_stream_field_limit([u8(97), u8(98), u8(99), u8(100),
+                                   u8(101)], field, 4, 1, 1, 4) {
+        return 211;
+    }
+
+    let row = csv.limits(100, 5, 4);
+    if !same_rows(read_all_bytes_limited([u8(97), u8(44), u8(98), u8(99),
+                                         u8(100)], row), [["a", "bcd"]]) {
+        return 212;
+    }
+    if !expect_stream_row_limit([u8(97), u8(44), u8(98), u8(99), u8(100),
+                                 u8(101)], row, 5, 1, 2, 5) {
+        return 213;
+    }
+
+    let columns = csv.limits(100, 100, 2);
+    if !same_rows(read_all_bytes_limited([u8(97), u8(44), u8(98)],
+                                        columns), [["a", "b"]]) {
+        return 214;
+    }
+    if !expect_stream_field_count_limit([u8(97), u8(44), u8(98), u8(44),
+                                         u8(99)], columns, 3, 1, 3, 2) {
+        return 215;
+    }
+    return 0;
+}
+
+func check_invalid_utf8_offsets() i32 throws csv_io.Error {
+    if !expect_stream_syntax([u8(97), u8(13), u8(10), u8(255), u8(10)],
+                             3, 2, 1) { return 140; }
+    if !expect_stream_syntax([u8(34), u8(97), u8(255), u8(98), u8(34),
+                              u8(10)], 2, 1, 1) { return 141; }
+    if !expect_stream_syntax([u8(34), u8(97), u8(34), u8(44), u8(255),
+                              u8(10)], 4, 1, 2) { return 142; }
+    // Escaped quotes shrink the decoded field, so offsets must follow the raw
+    // input: 22 61 22 22 FF 22 0A has the bad byte at offset 4.
+    if !expect_stream_syntax([u8(34), u8(97), u8(34), u8(34), u8(255),
+                              u8(34), u8(10)], 4, 1, 1) { return 143; }
+    // An incomplete lead after an escaped quote reports that lead byte.
+    if !expect_stream_syntax([u8(34), u8(97), u8(34), u8(34), u8(228),
+                              u8(34), u8(10)], 4, 1, 1) { return 144; }
+    // An invalid byte before the first escaped quote maps from the field
+    // content start without losing the later raw bytes.
+    if !expect_stream_syntax([u8(34), u8(255), u8(34), u8(34), u8(97),
+                              u8(34), u8(10)], 1, 1, 1) { return 145; }
+    // Several escaped quotes keep mapping successive decoded bytes to raw
+    // offsets. Three pairs start at 2, 4, and 6; FF is at 8.
+    if !expect_stream_syntax([u8(34), u8(97), u8(34), u8(34), u8(34),
+                              u8(34), u8(34), u8(34), u8(255), u8(34),
+                              u8(10)], 8, 1, 1) { return 146; }
+    return 0;
+}
+
+func check_pipe_writer() i32 throws csv_io.Error {
+    let rows = [[], [""], ["a", "b"], ["c\r\nd", "e\"f"], ["中😀", ""]];
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let output = csv_io.writer(io.writer(pipe.write_end));
+    csv_io.write_all(output, rows);
+    csv_io.flush(output);
+    close_quietly(pipe.write_end);
+    let actual = read_text(pipe.read_end);
+    let expected = csv.serialize(rows);
+    if actual != expected { return 90; }
+    if !same_rows(parse_text(actual), rows) { return 91; }
+    return 0;
+}
+
+func check_pipe_reader() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_text(pipe.write_end, "a,b\r\n\"c\r\nd\",e\n\n");
+    close_quietly(pipe.write_end);
+    let input = csv_io.reader(io.reader(pipe.read_end));
+    let alias = input;
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row):
+            if !same_row(row, ["a", "b"]) { return 100; }
+        case option.Option.None: return 101;
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row):
+            if !same_row(row, ["c\r\nd", "e"]) { return 102; }
+        case option.Option.None: return 103;
+    }
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row):
+            if vec.len(row) != 0 { return 104; }
+        case option.Option.None: return 105;
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row): return 106;
+        case option.Option.None: {}
+    }
+    // End of input is terminal and idempotent for every alias.
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row): return 107;
+        case option.Option.None: {}
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row): return 108;
+        case option.Option.None: {}
+    }
+    if vec.len(csv_io.read_all(alias)) != 0 { return 109; }
+    return 0;
+}
+
+func check_buffered_input() i32 throws csv_io.Error {
+    let field = text.repeat("x", 5000);
+    let payload = "\"" + field + "\"," + field + "\n";
+    try {
+        let temporary = fs.create_temp(".", "csv-buffered");
+        let file = temporary.file;
+        defer {
+            close_quietly(file);
+            try { os.unlink(temporary.path); } catch error os.Error {}
+        }
+        write_text(file, payload);
+        os.lseek(file, 0, os.SEEK_SET);
+        let rows = csv_io.read_all(csv_io.reader(io.reader(file)));
+        if vec.len(rows) != 1 { return 110; }
+        if !same_row(rows[0], [field, field]) { return 111; }
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+    return 0;
+}
+
+func temp_name() string throws csv_io.Error {
+    try {
+        let temporary = fs.create_temp(".", "csv-file-helper");
+        try { os.close(temporary.file); }
+        catch error os.Error {
+            try { os.unlink(temporary.path); } catch cleanup_error os.Error {}
+            throw error;
+        }
+        return temporary.path;
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+}
+
+func check_file_helpers() i32 throws csv_io.Error {
+    let name = temp_name();
+    defer { try { os.unlink(name); } catch error os.Error {} }
+    let rows = [[], [""], ["a,b", "c\"d"], ["中😀", ""]];
+    csv_io.write_file(name, rows);
+    if !same_rows(csv_io.read_file(name), rows) { return 202; }
+
+    var rejected = false;
+    try {
+        let limited = csv_io.read_file_limited(name, csv.limits(1, 100, 4));
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.FieldTooLarge(offset, row, column, limit):
+                        rejected = true;
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !rejected { return 203; }
+
+    let rows_with = [["a", "b;c"], ["d", ""]];
+    csv_io.write_file_with(name, rows_with, ";");
+    if !same_rows(csv_io.read_file_with(name, ";"), rows_with) { return 204; }
+    if !same_rows(csv_io.read_file_with_limited(name, ";",
+        csv.limits(100, 100, 2)), rows_with) { return 205; }
+
+    // A rejected delimiter must not truncate the existing file.
+    csv_io.write_file(name, [["keep"]]);
+    var invalid = false;
+    try {
+        csv_io.write_file_with(name, [["new"]], "\"");
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Csv(problem): {
+                switch problem {
+                    case csv.Error.InvalidDelimiter(value):
+                        invalid = value == "\"";
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    if !invalid { return 206; }
+    if !same_rows(csv_io.read_file(name), [["keep"]]) { return 207; }
+    return 0;
+}
+
+func check_io_errors() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let input = csv_io.reader(io.reader(pipe.write_end));
+    var wrapped = false;
+    try {
+        let row = csv_io.read_row(input);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Io(problem): wrapped = true;
+            default: {}
+        }
+    }
+    if !wrapped { return 120; }
+
+    wrapped = false;
+    let output = csv_io.writer(io.writer(pipe.read_end));
+    try {
+        csv_io.write_row(output, ["a"]);
+        csv_io.flush(output);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Io(problem): wrapped = true;
+            default: {}
+        }
+    }
+    if !wrapped { return 121; }
+    return 0;
+}
+
+func check_partial_writer() i32 throws csv_io.Error {
+    let pipe = make_nonblocking_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let capacity = fill_pipe(pipe.write_end);
+    if capacity == 0 { return 150; }
+    let initial = read_available(pipe.read_end);
+    if vec.len(initial) != capacity { return 151; }
+
+    let field = text.repeat("x", capacity + 10000);
+    let row = [field];
+    let expected = text.bytes(csv.serialize([row]));
+    let output = csv_io.writer(io.writer(pipe.write_end));
+    var blocked = false;
+    try {
+        csv_io.write_row(output, row);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Io(problem): blocked = is_would_block(problem);
+            default: {}
+        }
+    }
+    if !blocked { return 152; }
+
+    let collected = read_available(pipe.read_end);
+    if vec.len(collected) != capacity { return 153; }
+    if !is_prefix(collected, expected) { return 154; }
+
+    var done = false;
+    for var attempt usize = 0; attempt < 1000; attempt += 1 {
+        var flushed = false;
+        try {
+            csv_io.flush(output);
+            flushed = true;
+        } catch error csv_io.Error {
+            switch error {
+                case csv_io.Error.Io(problem):
+                    if !is_would_block(problem) { return 155; }
+                default: return 155;
+            }
+        }
+        let chunk = read_available(pipe.read_end);
+        append_bytes(collected, chunk);
+        if flushed {
+            done = true;
+            break;
+        }
+        if vec.len(chunk) == 0 { return 156; }
+    }
+    if !done { return 157; }
+    if vec.len(collected) != vec.len(expected) { return 158; }
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        if collected[index] != expected[index] { return 159; }
+    }
+    return 0;
+}
+
+func check_pending_output_recovery() i32 throws csv_io.Error {
+    let pipe = make_nonblocking_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let capacity = fill_pipe(pipe.write_end);
+    if capacity == 0 { return 170; }
+    let output = csv_io.writer(io.writer(pipe.write_end));
+    let prior = text.repeat("p", 4095);
+    csv_io.write_row(output, [prior]);
+
+    var blocked = false;
+    try {
+        csv_io.write_row(output, ["A"]);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.Io(problem): blocked = is_would_block(problem);
+            default: {}
+        }
+    }
+    if !blocked { return 171; }
+
+    var row_pending = false;
+    try {
+        csv_io.write_row(output, ["B"]);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.PendingOutput: row_pending = true;
+            default: {}
+        }
+    }
+    if !row_pending { return 172; }
+
+    var batch_pending = false;
+    try {
+        csv_io.write_all(output, [["B"], ["C"]]);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.PendingOutput: batch_pending = true;
+            default: {}
+        }
+    }
+    if !batch_pending { return 173; }
+
+    let initial = read_available(pipe.read_end);
+    if vec.len(initial) != capacity { return 174; }
+    let collected = flush_to_pipe(output, pipe.read_end);
+    csv_io.write_row(output, ["B"]);
+    csv_io.write_row(output, ["C"]);
+    let tail = flush_to_pipe(output, pipe.read_end);
+    append_bytes(collected, tail);
+    let expected = text.bytes(csv.serialize([[prior], ["A"], ["B"], ["C"]]));
+    if vec.len(collected) != vec.len(expected) { return 175; }
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        if collected[index] != expected[index] { return 176; }
+    }
+    return 0;
+}
+
+func check_batch_first_recovery() i32 throws csv_io.Error {
+    let pipe = make_nonblocking_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let capacity = fill_pipe(pipe.write_end);
+    if capacity == 0 { return 180; }
+    let output = csv_io.writer(io.writer(pipe.write_end));
+    let prior = text.repeat("p", 4095);
+    csv_io.write_row(output, [prior]);
+    let rows = [["A"], ["B"], ["C"]];
+
+    var batch_io = false;
+    var accepted usize = 0;
+    try {
+        csv_io.write_all(output, rows);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.BatchIo(cause, count):
+                batch_io = is_would_block(cause);
+                accepted = count;
+            default: {}
+        }
+    }
+    if !batch_io || accepted != 1 { return 181; }
+
+    let initial = read_available(pipe.read_end);
+    if vec.len(initial) != capacity { return 182; }
+    let collected = flush_to_pipe(output, pipe.read_end);
+    csv_io.write_all(output, rows[accepted:]);
+    let tail = flush_to_pipe(output, pipe.read_end);
+    append_bytes(collected, tail);
+    let expected = text.bytes(csv.serialize([[prior], ["A"], ["B"], ["C"]]));
+    if vec.len(collected) != vec.len(expected) { return 183; }
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        if collected[index] != expected[index] { return 184; }
+    }
+    return 0;
+}
+
+func check_batch_middle_recovery() i32 throws csv_io.Error {
+    let pipe = make_nonblocking_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    let capacity = fill_pipe(pipe.write_end);
+    if capacity == 0 { return 190; }
+    let output = csv_io.writer(io.writer(pipe.write_end));
+    let large = text.repeat("x", 5000);
+    let rows = [["A"], [large], ["C"]];
+
+    var batch_io = false;
+    var accepted usize = 0;
+    try {
+        csv_io.write_all(output, rows);
+    } catch error csv_io.Error {
+        switch error {
+            case csv_io.Error.BatchIo(cause, count):
+                batch_io = is_would_block(cause);
+                accepted = count;
+            default: {}
+        }
+    }
+    if !batch_io || accepted != 2 { return 191; }
+
+    let initial = read_available(pipe.read_end);
+    if vec.len(initial) != capacity { return 192; }
+    let collected = flush_to_pipe(output, pipe.read_end);
+    csv_io.write_all(output, rows[accepted:]);
+    let tail = flush_to_pipe(output, pipe.read_end);
+    append_bytes(collected, tail);
+    let expected = text.bytes(csv.serialize(rows));
+    if vec.len(collected) != vec.len(expected) { return 193; }
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        if collected[index] != expected[index] { return 194; }
+    }
+    return 0;
+}
+
+func check_repeated_eof() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer { close_quietly(pipe.read_end); }
+    // The final record has no terminator. Close the writer before reading.
+    {
+        defer { close_quietly(pipe.write_end); }
+        write_text(pipe.write_end, "a,b\nc,d");
+    }
+    let input = csv_io.reader(io.reader(pipe.read_end));
+    let alias = input;
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row):
+            if !same_row(row, ["a", "b"]) { return 225; }
+        case option.Option.None: return 226;
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row):
+            if !same_row(row, ["c", "d"]) { return 227; }
+        case option.Option.None: return 228;
+    }
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row): return 229;
+        case option.Option.None: {}
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row): return 230;
+        case option.Option.None: {}
+    }
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row): return 231;
+        case option.Option.None: {}
+    }
+    if vec.len(csv_io.read_all(alias)) != 0 { return 232; }
+    return 0;
+}
+
+func check_eof_terminal_closed() i32 throws csv_io.Error {
+    let pipe = make_pipe();
+    defer {
+        close_quietly(pipe.write_end);
+        close_quietly(pipe.read_end);
+    }
+    write_text(pipe.write_end, "a,b\nc,d");
+    close_quietly(pipe.write_end);
+    let input = csv_io.reader(io.reader(pipe.read_end));
+    let alias = input;
+    switch csv_io.read_row(input) {
+        case option.Option.Some(row):
+            if !same_row(row, ["a", "b"]) { return 240; }
+        case option.Option.None: return 241;
+    }
+    switch csv_io.read_row(alias) {
+        case option.Option.Some(row):
+            if !same_row(row, ["c", "d"]) { return 242; }
+        case option.Option.None: return 243;
+    }
+    // EOF was observed and the final unterminated row returned. Closing the
+    // underlying fd must not turn the next alias read into Error.Io.
+    close_quietly(pipe.read_end);
+    try {
+        switch csv_io.read_row(alias) {
+            case option.Option.Some(row): return 244;
+            case option.Option.None: {}
+        }
+    } catch error csv_io.Error {
+        return 244;
+    }
+    return 0;
+}
+
+func check_eof_terminal_growth() i32 throws csv_io.Error {
+    try {
+        let temporary = fs.create_temp(".", "csv-eof");
+        let file = temporary.file;
+        defer {
+            close_quietly(file);
+            try { os.unlink(temporary.path); } catch error os.Error {}
+        }
+        write_text(file, "a,b\nc,d");
+        os.lseek(file, 0, os.SEEK_SET);
+        let input = csv_io.reader(io.reader(file));
+        let alias = input;
+        switch csv_io.read_row(input) {
+            case option.Option.Some(row):
+                if !same_row(row, ["a", "b"]) { return 245; }
+            case option.Option.None: return 246;
+        }
+        switch csv_io.read_row(alias) {
+            case option.Option.Some(row):
+                if !same_row(row, ["c", "d"]) { return 247; }
+            case option.Option.None: return 248;
+        }
+        // parser_finish returned the final unterminated row and the file is at
+        // EOF. Appending must not be consumed by an alias, and must not produce
+        // FeedAfterEnd.
+        try {
+            fs.append_file(temporary.path, text.bytes("e,f\n"), 0o600);
+        } catch error os.Error {
+            throw csv_io.Error.Io(error);
+        }
+        let before = os.lseek(file, 0, os.SEEK_CUR);
+        if before != 7 { return 249; }
+        try {
+            switch csv_io.read_row(alias) {
+                case option.Option.Some(row): return 250;
+                case option.Option.None: {}
+            }
+        } catch error csv_io.Error {
+            return 250;
+        }
+        if os.lseek(file, 0, os.SEEK_CUR) != before { return 251; }
+        // The appended bytes remain unread at the reader's own offset.
+        let buffer = vec.make[u8](16, 0);
+        let count = os.read(file, buffer, vec.len(buffer));
+        if count != 4 { return 252; }
+        let expected = text.bytes("e,f\n");
+        for var index usize = 0; index < count; index += 1 {
+            if buffer[index] != expected[index] { return 253; }
+        }
+    } catch error os.Error {
+        throw csv_io.Error.Io(error);
+    }
+    return 0;
+}
+
+func main() i32 throws csv_io.Error {
+    var result = check_terminal_syntax();
+    if result != 0 { return result; }
+    result = check_terminal_limit();
+    if result != 0 { return result; }
+    result = check_stream_limits();
+    if result != 0 { return result; }
+    result = check_invalid_utf8_offsets();
+    if result != 0 { return result; }
+    result = check_pipe_writer();
+    if result != 0 { return result; }
+    result = check_pipe_reader();
+    if result != 0 { return result; }
+    result = check_buffered_input();
+    if result != 0 { return result; }
+    result = check_file_helpers();
+    if result != 0 { return result; }
+    result = check_io_errors();
+    if result != 0 { return result; }
+    result = check_partial_writer();
+    if result != 0 { return result; }
+    result = check_pending_output_recovery();
+    if result != 0 { return result; }
+    result = check_batch_first_recovery();
+    if result != 0 { return result; }
+    result = check_batch_middle_recovery();
+    if result != 0 { return result; }
+    result = check_repeated_eof();
+    if result != 0 { return result; }
+    result = check_eof_terminal_closed();
+    if result != 0 { return result; }
+    return check_eof_terminal_growth();
+}

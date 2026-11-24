@@ -1,0 +1,32 @@
+// Unstarted scoped group cancellation after the caller mutates its input Vec.
+// The two members are already started and suspended. Cancelling the unstarted
+// group must use the synchronous enrollment snapshot, cancel both members and
+// keep the group pending until their cancel exit plans finish.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func slow(name string, delay i64, log Vec[string]) Unit {
+    defer { vec.push(log, name + ".cleanup"); }
+    await a.sleep(delay);
+    vec.push(log, name + ".after");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let tasks = [slow("a", 100, log), slow("b", 100, log)];
+    for task in tasks { a.spawn(task); }
+    a.run_until(a.sleep(5));
+
+    let group = a.gather[Unit,Unit](tasks);
+    vec.clear(tasks);
+    io.println(vec.len(tasks));
+    a.cancel(group);
+    a.run_until(group);
+
+    io.println(a.finished(group));
+    for line in log { io.println(line); }
+    return 0;
+}

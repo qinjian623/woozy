@@ -6,16 +6,20 @@
 // and nonblocking. The executor is single-threaded by language design, so
 // handlers must not perform long blocking work themselves.
 //
-// A single watchdog task enforces header, body, idle and write deadlines. It
-// only calls shutdown(2) on the owning descriptor; the connection task remains
-// the sole owner that closes it. Stop is graceful: the listener closes, idle
-// connections close, in-flight requests may finish, and a drain deadline
-// aborts the rest. Abort closes everything immediately.
+// A single watchdog task enforces header, body, idle, write, async-handler and
+// stream read/processing/write deadlines. It only calls shutdown(2) on the
+// owning descriptor; the connection task remains the sole owner that closes
+// it. Stop is graceful: the listener closes, idle connections close, in-flight
+// requests may finish, and a drain deadline aborts the rest. Abort closes
+// everything immediately.
 //
 // Server-owned framing policy:
 // - Response version follows the request version (HTTP/1.0 or HTTP/1.1).
-// - Content-Length framing is always used; Transfer-Encoding responses are
-//   rejected by the codec and become 500 responses.
+// - Sync/async handler responses use Content-Length; handler
+//   Transfer-Encoding is rejected by the codec and becomes a 500 response.
+// - Stream handlers may send one fixed response or an HTTP/1.1 chunked
+//   response. Chunked is rejected before commit for HTTP/1.0 and no-body
+//   methods/statuses.
 // - The server replaces every Connection header with its own keep-alive or
 //   close decision.
 // - HEAD, 1xx, 204 and 304 responses are sent without a message body.
@@ -56,6 +60,14 @@ const PHASE_IDLE u64 = 1;
 const PHASE_HEADER u64 = 2;
 const PHASE_BODY u64 = 3;
 const PHASE_WRITE u64 = 4;
+const PHASE_HANDLER u64 = 5;
+const PHASE_STREAM_READ u64 = 6;
+const PHASE_STREAM_PROCESS u64 = 7;
+
+const FRAME_FIXED u64 = 0;
+const FRAME_HEAD u64 = 1;
+const FRAME_CHUNK u64 = 2;
+const FRAME_END u64 = 3;
 
 const EXPECT_NONE i32 = 0;
 const EXPECT_CONTINUE i32 = 1;
@@ -70,6 +82,8 @@ const DEFAULT_WRITE_TIMEOUT_MS i64 = 30000;
 const DEFAULT_DRAIN_TIMEOUT_MS i64 = 10000;
 const DEFAULT_TIMER_TICK_MS i64 = 100;
 const DEFAULT_LARGE_BODY_THRESHOLD usize = 16384;
+const DEFAULT_HANDLER_TIMEOUT_MS i64 = 30000;
+const DEFAULT_STREAM_PROCESSING_TIMEOUT_MS i64 = 30000;
 const ACCEPT_BATCH usize = 32;
 const YIELD_BATCH u64 = 1024;
 const FAIRNESS_YIELD_MS i64 = 1;
@@ -98,6 +112,21 @@ pub struct Config {
     pub large_body_threshold usize;
 }
 
+// Async handler execution has a deadline separate from the body deadline.
+// Non-positive disables the deadline.
+pub struct AsyncSettings {
+    pub handler_timeout_ms i64;
+}
+
+// Stream handlers use three independent clocks: waiting for a decoded request
+// piece, doing handler work between operations, and writing one response
+// frame. Non-positive values disable the corresponding clock.
+pub struct StreamSettings {
+    pub read_timeout_ms i64;
+    pub processing_timeout_ms i64;
+    pub write_timeout_ms i64;
+}
+
 pub struct Stats {
     pub active_connections usize;
     pub accepted_connections u64;
@@ -116,6 +145,8 @@ struct Connection {
     phase u64;
     deadline u64;
     timed_out bool;
+    handler_task option.Option[Task[http.Response,http.Error]];
+    stream_task option.Option[Task[Unit,http.Error]];
 }
 
 struct Slot {
@@ -129,13 +160,93 @@ struct ReadOutcome {
     pub failure http.Error;
 }
 
+// Per-request streaming state. The handle is copied freely, but every public
+// operation validates its generation before touching the reader or socket.
+struct StreamState {
+    active bool;
+    generation u64;
+    request http.Request;
+    input http.Reader;
+    socket net.Socket;
+    server Server;
+    slot Slot;
+    handled u64;
+    body_done bool;
+    trailers Vec[http.Header];
+    read_in_progress bool;
+    write_in_progress bool;
+    // Raw descriptor wait that a suspended stream read/write is blocked on.
+    // Retained so the connection task can cancel it while it still owns the
+    // socket; see cancel_stream_wait.
+    wait_task option.Option[Task[Unit,Unit]];
+    committed bool;
+    chunked bool;
+    complete bool;
+    keep bool;
+    response_bytes u64;
+    error_status i32;
+    // Set once the handler Task is published. Checking its completion closes
+    // the scheduling window between the handler returning and this connection
+    // task invalidating the generation: an aliased operation must reject even
+    // if it resumes before the connection task runs again.
+    handler_task option.Option[Task[Unit,http.Error]];
+}
+
+// One stream response frame. Predicate checks, state transitions and completion
+// recording happen in send_stream_frame after the frame admits itself with
+// write_in_progress, and before any descriptor wait can suspend the frame.
+struct OutboundFrame {
+    kind u64;
+    response http.Response;
+    data Vec[u8];
+    trailers Vec[http.Header];
+}
+
+// Private-state handle passed to a stream handler. Copies share the same
+// per-request state; after the handler returns the state is invalidated and
+// retained copies reject further reads or writes.
+pub struct Stream {
+    state Vec[StreamState];
+    generation u64;
+}
+
 pub struct Server {
     listener net.Socket;
     handler func(http.Request) http.Response throws http.Error;
+    async_handler func(http.Request) Task[http.Response,http.Error];
+    stream_handler func(http.Request, Stream) Task[Unit,http.Error];
+    asynchronous bool;
+    streaming bool;
+    async_settings AsyncSettings;
+    stream_settings StreamSettings;
     config Config;
     state Vec[u64];
     connections Vec[Connection];
     free_slots Vec[usize];
+}
+
+// The unused handler is never called. It only supplies a well-typed function
+// value for the handler kind that a Server does not use.
+func no_sync_handler(request http.Request) http.Response throws http.Error {
+    throw http.Error.ReaderBusy;
+}
+
+func no_async_handler(request http.Request) Task[http.Response,http.Error] {
+    return no_async_failure(request);
+}
+
+async func no_async_failure(request http.Request) http.Response throws http.Error {
+    throw http.Error.ReaderBusy;
+}
+
+func no_stream_handler(
+    request http.Request,
+    stream Stream) Task[Unit,http.Error] {
+    return no_stream_failure();
+}
+
+async func no_stream_failure() Unit throws http.Error {
+    throw http.Error.ReaderBusy;
 }
 
 pub func default_config() Config {
@@ -156,6 +267,24 @@ pub func default_config() Config {
         large_body_threshold:DEFAULT_LARGE_BODY_THRESHOLD);
 }
 
+pub func default_async_settings() AsyncSettings {
+    return AsyncSettings(handler_timeout_ms:DEFAULT_HANDLER_TIMEOUT_MS);
+}
+
+pub func default_stream_settings() StreamSettings {
+    return StreamSettings(
+        read_timeout_ms:DEFAULT_BODY_TIMEOUT_MS,
+        processing_timeout_ms:DEFAULT_STREAM_PROCESSING_TIMEOUT_MS,
+        write_timeout_ms:DEFAULT_WRITE_TIMEOUT_MS);
+}
+
+func stream_settings_from_config(config Config) StreamSettings {
+    return StreamSettings(
+        read_timeout_ms:config.body_timeout_ms,
+        processing_timeout_ms:DEFAULT_STREAM_PROCESSING_TIMEOUT_MS,
+        write_timeout_ms:config.write_timeout_ms);
+}
+
 pub func listen(
     address net.Address,
     handler func(http.Request) http.Response throws http.Error) Server throws os.Error {
@@ -165,6 +294,82 @@ pub func listen(
 pub func listen_with(
     address net.Address,
     handler func(http.Request) http.Response throws http.Error,
+    config Config) Server throws os.Error {
+    return create_server(
+        address,handler,no_async_handler,no_stream_handler,false,false,
+        default_async_settings(),stream_settings_from_config(config),config);
+}
+
+// Register an asynchronous handler. The handler function itself runs on the
+// connection task and returns a Task; the connection task awaits it before it
+// reads the next request on the same connection. A handler that throws
+// http.Error, including through its returned Task, produces a 500 response.
+pub func listen_async(
+    address net.Address,
+    handler func(http.Request) Task[http.Response,http.Error]) Server throws os.Error {
+    return listen_async_with(address,handler,default_config());
+}
+
+pub func listen_async_with(
+    address net.Address,
+    handler func(http.Request) Task[http.Response,http.Error],
+    config Config) Server throws os.Error {
+    return listen_async_with_settings(
+        address,handler,config,default_async_settings());
+}
+
+// Async handler execution gets its own deadline after the request body has
+// been fully decoded. This API keeps Config's synchronous layout unchanged.
+pub func listen_async_with_settings(
+    address net.Address,
+    handler func(http.Request) Task[http.Response,http.Error],
+    config Config,
+    settings AsyncSettings) Server throws os.Error {
+    return create_server(
+        address,no_sync_handler,handler,no_stream_handler,true,false,
+        settings,stream_settings_from_config(config),config);
+}
+
+// Register a streaming handler. The callback runs after the request head and
+// Expect handling; it receives a head-only Request and a Stream. The returned
+// Task owns the request until it completes; only one request is active per
+// connection.
+pub func listen_stream(
+    address net.Address,
+    handler func(http.Request, Stream) Task[Unit,http.Error]) Server throws os.Error {
+    return listen_stream_with(address,handler,default_config());
+}
+
+pub func listen_stream_with(
+    address net.Address,
+    handler func(http.Request, Stream) Task[Unit,http.Error],
+    config Config) Server throws os.Error {
+    return listen_stream_with_settings(
+        address,handler,config,stream_settings_from_config(config));
+}
+
+// Stream handlers use explicit read, processing and write clocks. The read
+// clock covers a body-part wait; processing covers handler work between
+// operations; write covers one response frame.
+pub func listen_stream_with_settings(
+    address net.Address,
+    handler func(http.Request, Stream) Task[Unit,http.Error],
+    config Config,
+    settings StreamSettings) Server throws os.Error {
+    return create_server(
+        address,no_sync_handler,no_async_handler,handler,false,true,
+        default_async_settings(),settings,config);
+}
+
+func create_server(
+    address net.Address,
+    handler func(http.Request) http.Response throws http.Error,
+    async_handler func(http.Request) Task[http.Response,http.Error],
+    stream_handler func(http.Request, Stream) Task[Unit,http.Error],
+    asynchronous bool,
+    streaming bool,
+    async_settings AsyncSettings,
+    stream_settings StreamSettings,
     config Config) Server throws os.Error {
     let socket = net.socket(
         address.family,
@@ -188,10 +393,507 @@ pub func listen_with(
     return Server(
         listener:socket,
         handler:handler,
+        async_handler:async_handler,
+        stream_handler:stream_handler,
+        asynchronous:asynchronous,
+        streaming:streaming,
+        async_settings:async_settings,
+        stream_settings:stream_settings,
         config:config,
         state:vec.make[u64](SERVER_STATE_COUNT,0),
         connections:vec.empty[Connection](),
         free_slots:vec.empty[usize]());
+}
+
+// ---------------------------------------------------------------------------
+// Streaming handler API
+// ---------------------------------------------------------------------------
+
+func make_stream(state Vec[StreamState]) Stream {
+    var generation u64 = 0;
+    if vec.len(state) == 1 { generation = state[0].generation; }
+    return Stream(state:state,generation:generation);
+}
+
+func require_stream(stream Stream) throws http.Error {
+    if vec.len(stream.state) != 1 { throw http.Error.ReadOrder; }
+    if !stream.state[0].active || stream.state[0].generation != stream.generation {
+        throw http.Error.ReadOrder;
+    }
+    switch stream.state[0].handler_task {
+        case option.Option.Some(task): {
+            if tasks.finished(task) { throw http.Error.ReadOrder; }
+        }
+        case option.Option.None: {}
+    }
+}
+
+// Reject a second stream direction before any operation state, deadline,
+// committed flag or socket mutation. Linux epoll permits only one event future
+// per descriptor, so a read and a write may not wait on the same stream at the
+// same time. Sequential read/write interleaving remains supported because each
+// operation clears its in-progress flag before returning.
+func require_stream_idle(stream Stream) throws http.Error {
+    require_stream(stream);
+    if stream.state[0].read_in_progress || stream.state[0].write_in_progress {
+        throw http.Error.ReadOrder;
+    }
+}
+
+// Revalidate both halves of the lifetime after a descriptor wait. The handler
+// may have returned (which bumps the generation) or the connection slot may
+// have been released and reused while this operation was suspended. Neither
+// case may reach the reader, the numeric fd or the next pipelined request.
+func require_stream_slot(
+    stream Stream,
+    server Server,
+    slot Slot) throws http.Error {
+    require_stream(stream);
+    if !valid_slot(server,slot) { throw http.Error.ReadOrder; }
+}
+
+// Wait for explicitly in-flight stream operations to observe invalidation and
+// leave their read/write sections. The caller has already shut down the socket
+// so a suspended readable/writable wait completes promptly.
+async func settle_stream_io(state Vec[StreamState]) Unit {
+    for true {
+        if vec.len(state) != 1 { return; }
+        if !state[0].read_in_progress && !state[0].write_in_progress { return; }
+        await tasks.sleep(1);
+    }
+}
+
+func invalidate_stream(state Vec[StreamState]) {
+    if vec.len(state) != 1 { return; }
+    if !state[0].active { return; }
+    state[0].active = false;
+    state[0].generation += 1;
+    state[0].handler_task = option.Option[Task[Unit,http.Error]].None;
+}
+
+// Cancel the raw descriptor wait a suspended stream operation is blocked on.
+// A connection task that unwinds while a read or write is pending (stream
+// deadline, drain deadline, abort) closes the descriptor from its release
+// defer. close(2) removes the epoll registration without waking the waiter, so
+// an uncancelled wait would stay suspended forever and its cleanup would only
+// print when the executor shuts down. Cancelling the retained Task here, while
+// the socket is still owned and the slot is still valid, unregisters the wait
+// synchronously; the operation resumes later on its cancellation path, so no
+// watch can outlive the fd. Its own defer/cleanup is scheduled separately and
+// is not run inside cancel or before the connection task closes the socket.
+func cancel_stream_wait(state Vec[StreamState]) {
+    if vec.len(state) != 1 { return; }
+    switch state[0].wait_task {
+        case option.Option.Some(task): {
+            if !tasks.finished(task) { tasks.cancel(task); }
+        }
+        case option.Option.None: {}
+    }
+    state[0].wait_task = option.Option[Task[Unit,Unit]].None;
+}
+
+func record_complete_stream_response(state Vec[StreamState]) {
+    if vec.len(state) != 1 { return; }
+    let server = state[0].server;
+    server.state[SERVER_REQUESTS] += 1;
+    server.state[SERVER_BYTES_SENT] += state[0].response_bytes;
+}
+
+func stream_keep(
+    server Server,
+    request http.Request,
+    handled u64,
+    body_done bool) bool {
+    if !body_done { return false; }
+    if server.state[SERVER_STOPPING] != 0 || server.state[SERVER_CLOSED] != 0 {
+        return false;
+    }
+    return wants_keep_alive(request,server.config,handled);
+}
+
+func stream_operation_status(failure http.Error) i32 {
+    switch failure {
+        case http.Error.UnsupportedVersion: return 505;
+        default: return 500;
+    }
+}
+
+func prepare_chunked_response(
+    request http.Request,
+    response http.Response,
+    keep bool) http.Response throws http.Error {
+    if request.version != "HTTP/1.1" { throw http.Error.UnsupportedVersion; }
+    if request.method == "HEAD" || response.status == 204 ||
+       response.status == 304 ||
+       (response.status >= 100 && response.status < 200) {
+        throw http.Error.UnexpectedBody;
+    }
+    var reason = response.reason;
+    if vec.len(reason) == 0 {
+        reason = text.bytes(default_reason(response.status));
+    }
+    // Framing headers are left in place so the chunked head encoder rejects
+    // them before any bytes are committed. The server owns Connection.
+    let headers = filter_headers(response.headers,true,false,false,false);
+    if keep {
+        vec.push(headers,http.text_header("Connection","keep-alive"));
+    } else {
+        vec.push(headers,http.text_header("Connection","close"));
+    }
+    return http.Response(
+        version:"HTTP/1.1",
+        status:response.status,
+        reason:reason,
+        headers:headers,
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+}
+
+// Read at most max_bytes decoded request bytes. The codec returns any decoded
+// bytes immediately, so WouldBlock means no request bytes are available yet;
+// retry the same reader and framing state after descriptor readability. A final
+// part carries trailers and leaves the reader at the next pipelined request.
+pub async func read(stream Stream, max_bytes usize) http.BodyPart throws http.Error {
+    require_stream_idle(stream);
+    if max_bytes == 0 {
+        stream.state[0].error_status = 500;
+        throw http.Error.ReadOrder;
+    }
+    if stream.state[0].body_done {
+        return http.BodyPart(
+            data:vec.empty[u8](),
+            done:true,
+            trailers:stream.state[0].trailers);
+    }
+    let server = stream.state[0].server;
+    let slot = stream.state[0].slot;
+    stream.state[0].read_in_progress = true;
+    var waiting = false;
+    defer {
+        if vec.len(stream.state) == 1 {
+            stream.state[0].read_in_progress = false;
+            // Unregister this operation's pending descriptor wait even when
+            // the response is already complete. A read of the remaining body
+            // after an early response is legal, but its direct cancellation
+            // must still wake the raw wait before the connection can close
+            // the socket. The processing-clock reset below is optional and
+            // stays limited to a live handler that owns unfinished work.
+            if waiting { cancel_stream_wait(stream.state); }
+            if stream_operation_cancelled(
+                stream,server,slot,PHASE_STREAM_READ) {
+                settle_stream_phase(server,slot);
+            }
+        }
+    }
+    let collected = vec.empty[u8]();
+    if !valid_slot(server,slot) { throw http.Error.ReadOrder; }
+    touch_stream_read(server,slot);
+    for true {
+        let remaining = max_bytes - vec.len(collected);
+        if remaining == 0 {
+            settle_stream_phase(server,slot);
+            return http.BodyPart(
+                data:collected,done:false,trailers:vec.empty[http.Header]());
+        }
+        try {
+            let part = http.read_request_body_part(
+                stream.state[0].input,remaining);
+            for byte in part.data { vec.push(collected,byte); }
+            if part.done {
+                stream.state[0].body_done = true;
+                stream.state[0].trailers = part.trailers;
+                settle_stream_phase(server,slot);
+                return http.BodyPart(
+                    data:collected,done:true,trailers:part.trailers);
+            }
+            // A non-final part reaching this point has hit the caller bound or
+            // already has progress; returning it is safe and bounded.
+            settle_stream_phase(server,slot);
+            return http.BodyPart(
+                data:collected,done:false,trailers:vec.empty[http.Header]());
+        } catch error http.Error {
+            if !is_would_block(error) {
+                stream.state[0].error_status = failure_status(error);
+                settle_stream_phase(server,slot);
+                throw error;
+            }
+        }
+        if vec.len(collected) != 0 {
+            settle_stream_phase(server,slot);
+            return http.BodyPart(
+                data:collected,done:false,trailers:vec.empty[http.Header]());
+        }
+        if timed_out(server,slot) {
+            throw http.Error.ReaderBusy;
+        }
+        let wait = tasks.readable(net.fd(stream.state[0].socket));
+        stream.state[0].wait_task = option.Option[Task[Unit,Unit]].Some(wait);
+        waiting = true;
+        await wait;
+        waiting = false;
+        stream.state[0].wait_task = option.Option[Task[Unit,Unit]].None;
+        require_stream_slot(stream,server,slot);
+        if timed_out(server,slot) {
+            throw http.Error.ReaderBusy;
+        }
+    }
+    return http.BodyPart(
+        data:vec.empty[u8](),
+        done:false,
+        trailers:vec.empty[http.Header]());
+}
+
+// Send a complete fixed-length response. The frame task owns the commit for
+// the response and its completion count, so a second start or finish cannot
+// observe the pre-commit state and send a duplicate response.
+pub async func start(stream Stream, response http.Response) Unit throws http.Error {
+    let frame = OutboundFrame(
+        kind:FRAME_FIXED,
+        response:response,
+        data:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    let sending = send_stream_frame(stream,frame);
+    defer { cancel_unfinished_frame(sending); }
+    await sending;
+}
+
+// Send one HTTP/1.1 chunked response head. The handler must call write_chunk
+// for each non-empty piece and finish exactly once afterwards.
+pub async func start_chunked(
+    stream Stream,
+    response http.Response) Unit throws http.Error {
+    let frame = OutboundFrame(
+        kind:FRAME_HEAD,
+        response:response,
+        data:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    let sending = send_stream_frame(stream,frame);
+    defer { cancel_unfinished_frame(sending); }
+    await sending;
+}
+
+pub async func write_chunk(stream Stream, data Vec[u8]) Unit throws http.Error {
+    let frame = OutboundFrame(
+        kind:FRAME_CHUNK,
+        response:empty_response(),
+        data:data,
+        trailers:vec.empty[http.Header]());
+    let sending = send_stream_frame(stream,frame);
+    defer { cancel_unfinished_frame(sending); }
+    await sending;
+}
+
+pub async func finish(
+    stream Stream,
+    trailers Vec[http.Header]) Unit throws http.Error {
+    let frame = OutboundFrame(
+        kind:FRAME_END,
+        response:empty_response(),
+        data:vec.empty[u8](),
+        trailers:trailers);
+    let sending = send_stream_frame(stream,frame);
+    defer { cancel_unfinished_frame(sending); }
+    await sending;
+}
+
+// A public stream write defers this before awaiting its frame. The executor
+// does not propagate cancellation from an awaiting task to the child Task it
+// awaits, so cancelling only the public operation would leave the frame task
+// and its write clock live. Cancelling the child here lets its own defer reset
+// the abandoned phase and poison a partly written frame.
+func cancel_unfinished_frame(task Task[usize,http.Error]) {
+    if !tasks.finished(task) { tasks.cancel(task); }
+}
+
+// Send one response frame under one write clock. Admission, predicate check,
+// state transition and completion recording all happen in this task before it
+// can suspend on a descriptor wait; the public operation only encodes nothing
+// and awaits this frame. The pieces stay separate so a large fixed response is
+// never copied into one buffer. A frame rejected before admission leaves no
+// busy flag behind, and a frame cancelled before it starts never runs here.
+async func send_stream_frame(
+    stream Stream,
+    frame OutboundFrame) usize throws http.Error {
+    require_stream_idle(stream);
+    let server = stream.state[0].server;
+    let slot = stream.state[0].slot;
+    stream.state[0].write_in_progress = true;
+    var waiting = false;
+    var accepted = false;
+    var write_done = false;
+    var poison_on_failure = false;
+    defer {
+        if vec.len(stream.state) == 1 {
+            // Unregister this frame's pending descriptor wait before the
+            // socket can be closed. A frame rejected before it installed a
+            // wait must not cancel a wait owned by another stream operation.
+            if waiting { cancel_stream_wait(stream.state); }
+            stream.state[0].write_in_progress = false;
+            // A partly written chunk, head or terminal chunk cannot be
+            // followed by another response frame. Predicate rejections did
+            // not admit a write, so they leave the chunked state intact.
+            if accepted && !write_done && poison_on_failure {
+                stream.state[0].chunked = false;
+            }
+            if stream_operation_cancelled(
+                stream,server,slot,PHASE_WRITE) {
+                settle_stream_phase(server,slot);
+            }
+        }
+    }
+    if !valid_slot(server,slot) { throw http.Error.ReadOrder; }
+    var data = vec.empty[u8]();
+    var tail = vec.empty[u8]();
+    var has_tail = false;
+    if frame.kind == FRAME_FIXED {
+        if stream.state[0].committed { throw http.Error.ReadOrder; }
+        let request = stream.state[0].request;
+        var keep = stream_keep(
+            server,
+            request,
+            stream.state[0].handled,
+            stream.state[0].body_done);
+        if response_requests_close(frame.response.headers) { keep = false; }
+        if frame.response.status == 101 { keep = false; }
+        let prepared = prepare_response(request,frame.response,keep);
+        try {
+            if vec.len(prepared.body) > server.config.large_body_threshold {
+                has_tail = true;
+                data = http.encode_response_head(prepared,request.method);
+            } else {
+                data = http.encode_response(prepared,request.method);
+            }
+        } catch error http.Error {
+            stream.state[0].error_status = stream_operation_status(error);
+            throw error;
+        }
+        stream.state[0].committed = true;
+        stream.state[0].chunked = false;
+        stream.state[0].keep = keep;
+        tail = prepared.body;
+        accepted = true;
+    } else if frame.kind == FRAME_HEAD {
+        if stream.state[0].committed { throw http.Error.ReadOrder; }
+        if vec.len(frame.response.body) != 0 {
+            stream.state[0].error_status = 500;
+            throw http.Error.UnexpectedBody;
+        }
+        if vec.len(frame.response.trailers) != 0 {
+            stream.state[0].error_status = 500;
+            throw http.Error.UnsupportedTrailers;
+        }
+        let request = stream.state[0].request;
+        var keep = stream_keep(
+            server,
+            request,
+            stream.state[0].handled,
+            stream.state[0].body_done);
+        if response_requests_close(frame.response.headers) { keep = false; }
+        try {
+            let prepared = prepare_chunked_response(
+                request,frame.response,keep);
+            data = http.encode_response_chunked_head(prepared,request.method);
+        } catch error http.Error {
+            stream.state[0].error_status = stream_operation_status(error);
+            throw error;
+        }
+        stream.state[0].committed = true;
+        stream.state[0].chunked = true;
+        stream.state[0].keep = keep;
+        accepted = true;
+        poison_on_failure = true;
+    } else if frame.kind == FRAME_CHUNK {
+        if !stream.state[0].committed || !stream.state[0].chunked ||
+           stream.state[0].complete {
+            throw http.Error.ReadOrder;
+        }
+        try {
+            data = http.encode_response_chunk_data(frame.data);
+        } catch error http.Error {
+            stream.state[0].error_status = stream_operation_status(error);
+            throw error;
+        }
+        accepted = true;
+        poison_on_failure = true;
+    } else {
+        if !stream.state[0].committed { throw http.Error.ReadOrder; }
+        if !stream.state[0].chunked {
+            // A fixed start already finished the response. finish([]) stays a
+            // no-op, while trailers on a fixed response are rejected.
+            if !stream.state[0].complete { throw http.Error.ReadOrder; }
+            if vec.len(frame.trailers) != 0 {
+                throw http.Error.UnsupportedTrailers;
+            }
+            return 0;
+        }
+        if stream.state[0].complete { throw http.Error.ReadOrder; }
+        try {
+            data = http.encode_response_chunk_end(frame.trailers);
+        } catch error http.Error {
+            stream.state[0].error_status = stream_operation_status(error);
+            throw error;
+        }
+        accepted = true;
+        poison_on_failure = true;
+    }
+    touch_stream_write(server,slot);
+    var total usize = 0;
+    var part u64 = 0;
+    for part < 2 {
+        var bytes = data;
+        if part == 1 {
+            if !has_tail { break; }
+            bytes = tail;
+        }
+        var offset usize = 0;
+        let length = vec.len(bytes);
+        for offset < length {
+            require_stream_slot(stream,server,slot);
+            var wait = false;
+            try {
+                var count usize = 0;
+                if offset == 0 {
+                    count = net.send(stream.state[0].socket,bytes,length,0);
+                } else {
+                    let size = min_usize(length-offset,WRITE_SLICE);
+                    let piece = bytes[offset:offset+size];
+                    count = net.send(stream.state[0].socket,piece,size,0);
+                }
+                if count == 0 { throw os.Error.NoProgress(offset); }
+                offset += count;
+            } catch error os.Error {
+                switch error {
+                    case os.Error.WouldBlock(code,completed): wait = true;
+                    case os.Error.Interrupted(code,completed): {}
+                    default: {
+                        settle_stream_phase(server,slot);
+                        throw http.Error.Io(error);
+                    }
+                }
+            }
+            if wait {
+                let queued = tasks.writable(net.fd(stream.state[0].socket));
+                stream.state[0].wait_task =
+                    option.Option[Task[Unit,Unit]].Some(queued);
+                waiting = true;
+                await queued;
+                waiting = false;
+                stream.state[0].wait_task =
+                    option.Option[Task[Unit,Unit]].None;
+                require_stream_slot(stream,server,slot);
+            }
+        }
+        stream.state[0].response_bytes += u64(offset);
+        total += offset;
+        part += 1;
+    }
+    if frame.kind == FRAME_FIXED || frame.kind == FRAME_END {
+        stream.state[0].complete = true;
+        record_complete_stream_response(stream.state);
+    }
+    write_done = true;
+    settle_stream_phase(server,slot);
+    return total;
 }
 
 // Stop accepting and start graceful drain. Idle keep-alive connections are
@@ -223,6 +925,7 @@ pub func abort(server Server) {
     stop_listener(server);
     for var index usize = 0; index < vec.len(server.connections); index += 1 {
         if server.connections[index].active {
+            cancel_handler_task(server,index);
             shutdown_fd(server.connections[index].fd,net.SHUT_RDWR);
         }
     }
@@ -341,7 +1044,11 @@ pub async func serve(server Server) Unit throws os.Error {
         }
         let slot = register_connection(server,net.fd(peer));
         server.state[SERVER_ACTIVE] += 1;
-        tasks.spawn(connection(server,peer,slot));
+        if server.streaming {
+            tasks.spawn(stream_connection(server,peer,slot));
+        } else {
+            tasks.spawn(connection(server,peer,slot));
+        }
         batch += 1;
         if batch >= ACCEPT_BATCH {
             batch = 0;
@@ -397,7 +1104,9 @@ func register_connection(server Server, fd i32) Slot {
                 fd:fd,
                 phase:PHASE_NONE,
                 deadline:U64_MAX,
-                timed_out:false);
+                timed_out:false,
+                handler_task:option.Option[Task[http.Response,http.Error]].None,
+                stream_task:option.Option[Task[Unit,http.Error]].None);
             return Slot(index:index,token:token);
         }
         case option.Option.None: {
@@ -408,7 +1117,9 @@ func register_connection(server Server, fd i32) Slot {
                 fd:fd,
                 phase:PHASE_NONE,
                 deadline:U64_MAX,
-                timed_out:false));
+                timed_out:false,
+                handler_task:option.Option[Task[http.Response,http.Error]].None,
+                stream_task:option.Option[Task[Unit,http.Error]].None));
             return Slot(index:vec.len(server.connections)-1,token:token);
         }
     }
@@ -424,6 +1135,10 @@ func release_connection(server Server, slot Slot) {
     server.connections[slot.index].phase = PHASE_NONE;
     server.connections[slot.index].deadline = U64_MAX;
     server.connections[slot.index].timed_out = false;
+    server.connections[slot.index].handler_task =
+        option.Option[Task[http.Response,http.Error]].None;
+    server.connections[slot.index].stream_task =
+        option.Option[Task[Unit,http.Error]].None;
     vec.push(server.free_slots,slot.index);
 }
 
@@ -450,6 +1165,70 @@ func min_deadline(left u64, right u64) u64 {
     return right;
 }
 
+func start_phase(server Server, slot Slot, phase u64, timeout_ms i64) {
+    if !valid_slot(server,slot) { return; }
+    var deadline = deadline_after(timeout_ms);
+    if server.state[SERVER_STOPPING] != 0 {
+        deadline = min_deadline(deadline,server.state[SERVER_DRAIN_DEADLINE]);
+    }
+    server.connections[slot.index].phase = phase;
+    server.connections[slot.index].deadline = deadline;
+}
+
+// Async handler execution starts only after the complete request body has been
+// decoded. It no longer inherits the remaining body-phase deadline.
+func begin_async_handler(server Server, slot Slot) {
+    start_phase(server,slot,PHASE_HANDLER,
+        server.async_settings.handler_timeout_ms);
+}
+
+// A stream handler is in "processing" while it runs user code between reads
+// and writes. Every completed read/write starts a fresh processing clock.
+func begin_stream_processing(server Server, slot Slot) {
+    start_phase(server,slot,PHASE_STREAM_PROCESS,
+        server.stream_settings.processing_timeout_ms);
+}
+
+func touch_stream_read(server Server, slot Slot) {
+    start_phase(server,slot,PHASE_STREAM_READ,
+        server.stream_settings.read_timeout_ms);
+}
+
+func touch_stream_write(server Server, slot Slot) {
+    start_phase(server,slot,PHASE_WRITE,
+        server.stream_settings.write_timeout_ms);
+}
+
+func settle_stream_phase(server Server, slot Slot) {
+    begin_stream_processing(server,slot);
+}
+
+// An operation's defer calls this after clearing its in-progress flag. A
+// directly cancelled operation resumes at an await without reaching the normal
+// settle below, so its phase still names the read or write clock. If the
+// handler still owns a live, unfinished request, charge the remaining handler
+// work to the processing clock instead of leaving that stale deadline behind.
+// Terminal, timed-out and invalidated states keep their existing state.
+func stream_operation_cancelled(
+    stream Stream,
+    server Server,
+    slot Slot,
+    phase u64) bool {
+    if vec.len(stream.state) != 1 { return false; }
+    if !stream.state[0].active ||
+       stream.state[0].generation != stream.generation { return false; }
+    switch stream.state[0].handler_task {
+        case option.Option.Some(task): {
+            if tasks.finished(task) { return false; }
+        }
+        case option.Option.None: {}
+    }
+    if !valid_slot(server,slot) { return false; }
+    if server.state[SERVER_CLOSED] != 0 { return false; }
+    if server.connections[slot.index].timed_out { return false; }
+    return server.connections[slot.index].phase == phase;
+}
+
 func timed_out(server Server, slot Slot) bool {
     if !valid_slot(server,slot) { return false; }
     return server.connections[slot.index].timed_out;
@@ -459,6 +1238,52 @@ func shutdown_fd(fd i32, how i32) {
     if fd < 0 { return; }
     try { net.shutdown(net.from_fd(fd),how); }
     catch error os.Error {}
+}
+
+func set_handler_task(
+    server Server,
+    slot Slot,
+    task Task[http.Response,http.Error]) {
+    if !valid_slot(server,slot) { return; }
+    server.connections[slot.index].handler_task =
+        option.Option[Task[http.Response,http.Error]].Some(task);
+}
+
+func clear_handler_task(server Server, slot Slot) {
+    if !valid_slot(server,slot) { return; }
+    server.connections[slot.index].handler_task =
+        option.Option[Task[http.Response,http.Error]].None;
+}
+
+func set_stream_task(server Server, slot Slot, task Task[Unit,http.Error]) {
+    if !valid_slot(server,slot) { return; }
+    server.connections[slot.index].stream_task =
+        option.Option[Task[Unit,http.Error]].Some(task);
+}
+
+func clear_stream_task(server Server, slot Slot) {
+    if !valid_slot(server,slot) { return; }
+    server.connections[slot.index].stream_task =
+        option.Option[Task[Unit,http.Error]].None;
+}
+
+// Cancel only while the task is still running. A completed task is left alone
+// so a normal response is not disturbed by stop/abort bookkeeping.
+func cancel_handler_task(server Server, index usize) {
+    if index >= vec.len(server.connections) { return; }
+    if !server.connections[index].active { return; }
+    switch server.connections[index].handler_task {
+        case option.Option.Some(task): {
+            if !tasks.finished(task) { tasks.cancel(task); }
+        }
+        case option.Option.None: {}
+    }
+    switch server.connections[index].stream_task {
+        case option.Option.Some(task): {
+            if !tasks.finished(task) { tasks.cancel(task); }
+        }
+        case option.Option.None: {}
+    }
 }
 
 func watchdog_interval(server Server) i64 {
@@ -513,6 +1338,7 @@ func reap_timeouts(server Server) {
         if deadline == U64_MAX || deadline > now { continue; }
         server.connections[index].timed_out = true;
         server.state[SERVER_TIMEOUTS] += 1;
+        cancel_handler_task(server,index);
         let phase = server.connections[index].phase;
         if phase == PHASE_WRITE {
             shutdown_fd(server.connections[index].fd,net.SHUT_RDWR);
@@ -522,12 +1348,279 @@ func reap_timeouts(server Server) {
     }
 }
 
-async func connection(server Server, socket net.Socket, slot Slot) Unit {
+// A stream-mode connection starts the handler after the request head and
+// Expect processing. The handler reads decoded body pieces and writes response
+// frames through Stream; this task owns keep-alive, cancellation and the only
+// socket close.
+async func stream_connection(server Server, socket net.Socket, slot Slot) Unit {
+    var handler_task = option.Option[Task[Unit,http.Error]].None;
+    var current_stream = vec.empty[StreamState]();
     defer {
         release_connection(server,slot);
         server.state[SERVER_ACTIVE] -= 1;
         try { net.close(socket); }
         catch error os.Error {}
+    }
+    defer {
+        invalidate_stream(current_stream);
+        if vec.len(current_stream) == 1 {
+            if current_stream[0].read_in_progress ||
+               current_stream[0].write_in_progress {
+                // Runs before release_connection and net.close: the pending
+                // descriptor wait is unregistered synchronously while this
+                // task still owns the socket, so close(2) cannot orphan the
+                // epoll registration. The aliased operation and its cleanup
+                // resume separately after this unwind.
+                cancel_stream_wait(current_stream);
+                shutdown_fd(net.fd(current_stream[0].socket),net.SHUT_RDWR);
+            }
+        }
+        switch handler_task {
+            case option.Option.Some(task): {
+                if !tasks.finished(task) { tasks.cancel(task); }
+            }
+            case option.Option.None: {}
+        }
+    }
+    let input = http.reader(socket,server.config.limits);
+    var handled u64 = 0;
+    for true {
+        if server.state[SERVER_STOPPING] != 0 { return; }
+        if http.pending(input) == 0 {
+            var idle_timeout = server.config.idle_timeout_ms;
+            if handled == 0 { idle_timeout = server.config.header_timeout_ms; }
+            touch(server,slot,PHASE_IDLE,idle_timeout);
+            await tasks.readable(net.fd(socket));
+            if !valid_slot(server,slot) { return; }
+            if timed_out(server,slot) {
+                if handled == 0 { send_failure(socket,408); }
+                return;
+            }
+            if server.state[SERVER_STOPPING] != 0 { return; }
+        }
+
+        touch(server,slot,PHASE_HEADER,server.config.header_timeout_ms);
+        var head = empty_request();
+        var head_failed = false;
+        var head_ready = false;
+        var failure = http.Error.ReaderBusy;
+        for !head_ready && !head_failed {
+            let outcome = try_read_head(input);
+            switch outcome.request {
+                case option.Option.Some(value): {
+                    head = value;
+                    head_ready = true;
+                }
+                case option.Option.None: {
+                    if outcome.wait {
+                        await tasks.readable(net.fd(socket));
+                        if !valid_slot(server,slot) { return; }
+                        if timed_out(server,slot) { head_failed = true; }
+                    } else {
+                        failure = outcome.failure;
+                        head_failed = true;
+                    }
+                }
+            }
+        }
+        if head_failed {
+            handle_read_failure(server,socket,slot,failure);
+            return;
+        }
+
+        let expectation = expectation_kind(head.headers);
+        if expectation == EXPECT_UNSUPPORTED {
+            server.state[SERVER_ERRORS] += 1;
+            send_failure(socket,417);
+            return;
+        }
+        let has_body = request_has_body(head);
+        if expectation == EXPECT_CONTINUE && has_body {
+            touch_stream_write(server,slot);
+            let cont = text.bytes("HTTP/1.1 100 Continue\r\n\r\n");
+            var continue_failed = false;
+            var continue_sent usize = 0;
+            try { continue_sent = await write_bytes(socket,cont); }
+            catch error os.Error { continue_failed = true; }
+            if continue_failed { return; }
+            server.state[SERVER_BYTES_SENT] += u64(continue_sent);
+        }
+
+        var body_done = false;
+        var initial_trailers = vec.empty[http.Header]();
+        if !has_body {
+            // Bodyless and Content-Length: 0 requests can be finalized now;
+            // this clears the reader for pipelining without touching the wire.
+            try {
+                let part = http.read_request_body_part(input,1);
+                body_done = part.done;
+                initial_trailers = part.trailers;
+            } catch error http.Error {
+                handle_read_failure(server,socket,slot,error);
+                return;
+            }
+            if !body_done { return; }
+        }
+        begin_stream_processing(server,slot);
+
+        let state = vec.empty[StreamState]();
+        vec.push(state,StreamState(
+            active:true,
+            generation:1,
+            request:head,
+            input:input,
+            socket:socket,
+            server:server,
+            slot:slot,
+            handled:handled,
+            body_done:body_done,
+            trailers:initial_trailers,
+            read_in_progress:false,
+            write_in_progress:false,
+            wait_task:option.Option[Task[Unit,Unit]].None,
+            committed:false,
+            chunked:false,
+            complete:false,
+            keep:false,
+            response_bytes:0,
+            error_status:0,
+            handler_task:option.Option[Task[Unit,http.Error]].None));
+        current_stream = state;
+        let stream = make_stream(state);
+        if server.state[SERVER_CLOSED] != 0 { return; }
+        let task = server.stream_handler(head,stream);
+        state[0].handler_task =
+            option.Option[Task[Unit,http.Error]].Some(task);
+        handler_task = option.Option[Task[Unit,http.Error]].Some(task);
+        set_stream_task(server,slot,task);
+        if server.state[SERVER_CLOSED] != 0 {
+            if !tasks.finished(task) { tasks.cancel(task); }
+            return;
+        }
+        var handler_failed = false;
+        try {
+            await task;
+        } catch error http.Error {
+            handler_failed = true;
+        }
+        handler_task = option.Option[Task[Unit,http.Error]].None;
+        clear_stream_task(server,slot);
+        if !valid_slot(server,slot) {
+            invalidate_stream(state);
+            current_stream = vec.empty[StreamState]();
+            return;
+        }
+
+        let committed = state[0].committed;
+        let complete = state[0].complete;
+        let keep = state[0].keep;
+        let body_finished = state[0].body_done;
+        let error_status = state[0].error_status;
+        let pending_io = state[0].read_in_progress ||
+                         state[0].write_in_progress;
+        invalidate_stream(state);
+        current_stream = vec.empty[StreamState]();
+
+        // An aliased stream operation may still be suspended on this socket.
+        // Invalidate it first (done above), then wake its descriptor wait and
+        // wait until the operation leaves its read/write section. The socket
+        // and slot stay owned here until that settles, so the operation cannot
+        // race connection reuse or a closed fd. The half-closed socket is not
+        // reusable, so this connection closes without parsing another request.
+        if pending_io {
+            shutdown_fd(net.fd(socket),net.SHUT_RDWR);
+            await settle_stream_io(state);
+            // A completed response only had an aliased read/write left behind;
+            // the alias alone is not a handler or framing failure. A handler
+            // failure or an incomplete response still counts one error unless
+            // the watchdog already counted the same event as a timeout.
+            if (handler_failed || !complete) && !timed_out(server,slot) {
+                server.state[SERVER_ERRORS] += 1;
+            }
+            return;
+        }
+
+        if timed_out(server,slot) { return; }
+        if handler_failed {
+            if !committed {
+                var status i32 = 500;
+                if error_status != 0 { status = error_status; }
+                server.state[SERVER_ERRORS] += 1;
+                await send_stream_failure(server,socket,slot,head,status);
+            } else {
+                server.state[SERVER_ERRORS] += 1;
+            }
+            return;
+        }
+        if !committed {
+            var status i32 = 500;
+            if error_status != 0 { status = error_status; }
+            server.state[SERVER_ERRORS] += 1;
+            await send_stream_failure(server,socket,slot,head,status);
+            return;
+        }
+        if !complete {
+            server.state[SERVER_ERRORS] += 1;
+            return;
+        }
+        // An early response may be complete while the request body was never
+        // consumed. Parsing another request would be unsafe, so close.
+        if !body_finished { return; }
+        if !keep || server.state[SERVER_STOPPING] != 0 { return; }
+        handled += 1;
+        if handled % YIELD_BATCH == 0 {
+            await tasks.sleep(FAIRNESS_YIELD_MS);
+            if !valid_slot(server,slot) { return; }
+        }
+    }
+    return;
+}
+
+// A stream handler error before commit becomes one normal status response.
+// The generated status response counts transfer bytes but not a successful
+// completed handler request. Once committed, the connection closes without
+// appending a second response.
+async func send_stream_failure(
+    server Server,
+    socket net.Socket,
+    slot Slot,
+    request http.Request,
+    status i32) Unit {
+    if status == 0 { return; }
+    let response = status_response(status,default_reason(status));
+    let prepared = prepare_response(request,response,false);
+    var encoded = vec.empty[u8]();
+    try {
+        encoded = http.encode_response(prepared,request.method);
+    } catch error http.Error {
+        return;
+    }
+    touch_stream_write(server,slot);
+    try {
+        let sent = await write_bytes(socket,encoded);
+        server.state[SERVER_BYTES_SENT] += u64(sent);
+    } catch error os.Error {
+        let ignored = error;
+    }
+}
+
+async func connection(server Server, socket net.Socket, slot Slot) Unit {
+    var handler_task = option.Option[Task[http.Response,http.Error]].None;
+    defer {
+        release_connection(server,slot);
+        server.state[SERVER_ACTIVE] -= 1;
+        try { net.close(socket); }
+        catch error os.Error {}
+    }
+    // Registered after the release defer, so it runs first when this connection
+    // task unwinds without having resumed normally from its handler await.
+    defer {
+        switch handler_task {
+            case option.Option.Some(task): {
+                if !tasks.finished(task) { tasks.cancel(task); }
+            }
+            case option.Option.None: {}
+        }
     }
     let input = http.reader(socket,server.config.limits);
     var handled u64 = 0;
@@ -624,11 +1717,34 @@ async func connection(server Server, socket net.Socket, slot Slot) Unit {
 
         var response = empty_response();
         var handler_failed = false;
-        try {
-            response = server.handler(request);
-        } catch error http.Error {
-            handler_failed = true;
-            server.state[SERVER_ERRORS] += 1;
+        if server.asynchronous {
+            // The callback builds the Task on this connection task, then this
+            // task awaits it. Only one request is active per connection, while
+            // another connection's task can run during the suspension.
+            if server.state[SERVER_CLOSED] != 0 { return; }
+            begin_async_handler(server,slot);
+            let task = server.async_handler(request);
+            handler_task = option.Option[Task[http.Response,http.Error]].Some(task);
+            set_handler_task(server,slot,task);
+            if server.state[SERVER_CLOSED] != 0 {
+                if !tasks.finished(task) { tasks.cancel(task); }
+                return;
+            }
+            try {
+                response = await task;
+            } catch error http.Error {
+                handler_failed = true;
+                server.state[SERVER_ERRORS] += 1;
+            }
+            handler_task = option.Option[Task[http.Response,http.Error]].None;
+            clear_handler_task(server,slot);
+        } else {
+            try {
+                response = server.handler(request);
+            } catch error http.Error {
+                handler_failed = true;
+                server.state[SERVER_ERRORS] += 1;
+            }
         }
         var keep = false;
         if handler_failed {

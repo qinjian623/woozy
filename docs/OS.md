@@ -46,6 +46,30 @@ func main() throws os.Error {
 
 路径使用 `string` 的完整 UTF-8 字节，不要求调用者补结尾 NUL。路径中包含 NUL 时抛出代码为 22（EINVAL）的错误；长度达到 4096 字节时抛出代码为 36（ENAMETOOLONG）的错误，不会静默截断。
 
+### 描述符相对操作
+
+`openat`、`mkdirat`、`unlinkat` 和 `fstatat` 以已打开的目录 `File` 为基准解析名称，适用于逐项复制、删除和遍历。它们只接受一个目录项名称：空名称、`.`、`..`、含 `/` 或 NUL 的名称都抛出代码为 22（EINVAL）的错误。这样遍历器每次只处理一个 `getdents` 返回的项，不会在一次调用中跟随名称内部的符号链接。`_bytes` 版本直接接受 `Vec[u8]`，可处理非 UTF-8 文件名。
+
+| 接口 | 返回和行为 |
+| --- | --- |
+| `openat(directory File, name string, flags i32, mode u32) File throws Error` | 相对目录打开一个名称；标志和 mode 与 `open` 相同 |
+| `openat_bytes(directory File, name Vec[u8], flags i32, mode u32) File throws Error` | 字节名称版本 |
+| `mkdirat(directory File, name string, mode u32) throws Error` | 在目录中创建一个子目录 |
+| `mkdirat_bytes(directory File, name Vec[u8], mode u32) throws Error` | 字节名称版本 |
+| `unlinkat(directory File, name string, kind UnlinkKind) throws Error` | 删除一个目录项；`UnlinkKind.File` 删除文件或符号链接本身，`UnlinkKind.Directory` 删除空目录 |
+| `unlinkat_bytes(directory File, name Vec[u8], kind UnlinkKind) throws Error` | 字节名称版本 |
+| `fstatat(directory File, name string, follow bool) FileInfo throws Error` | 取得目录项信息；`follow` 为 `false` 时报告符号链接本身 |
+| `fstatat_bytes(directory File, name Vec[u8], follow bool) FileInfo throws Error` | 字节名称版本 |
+
+```wz
+pub enum UnlinkKind {
+    File;
+    Directory;
+}
+```
+
+目录描述符在创建后绑定到该目录对象，不随之后的 `rename` 改变；用旧描述符创建或删除的子项仍落在原来的目录对象中。`unlinkat` 不跟随最后一个符号链接，`fstatat` 的 `follow = false` 只读取链接本身。
+
 ## 读写字节
 
 下面是另一个完整文件，写入三个字节，再读取并检查它们：

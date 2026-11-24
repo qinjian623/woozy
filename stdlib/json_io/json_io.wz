@@ -1,0 +1,61 @@
+// Native-only JSON file conveniences.
+//
+// read_file decodes the whole file with std/fs and parses it with std/json.
+// write_file encodes before opening the destination, so an invalid manually
+// constructed Value cannot truncate an existing file. The file helpers close
+// their descriptors internally and return a fresh Value; they keep no handle
+// or borrowed data. See README.md for limits and ownership.
+package json_io;
+
+import "std/fs" as fs;
+import "std/json" as json;
+import "std/os" as os;
+
+pub enum Error {
+    Io(value os.Error);
+    Json(value json.Error);
+}
+
+func encode(value json.Value, pretty bool) string throws Error {
+    try {
+        if pretty { return json.serialize_pretty(value); }
+        return json.serialize(value);
+    } catch error json.Error {
+        throw Error.Json(error);
+    }
+}
+
+func write_encoded(name string, source string, mode u32) throws Error {
+    try {
+        fs.write_text(name, source, mode);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+pub func read_file(name string) json.Value throws Error {
+    var source = "";
+    try {
+        source = fs.read_text(name);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+    try {
+        return json.parse(source);
+    } catch error json.Error {
+        throw Error.Json(error);
+    }
+}
+
+// write_file writes compact JSON. Encoding finishes before the destination is
+// opened or truncated, so Error.Json leaves an existing file untouched.
+pub func write_file(name string, value json.Value, mode u32) throws Error {
+    let source = encode(value, false);
+    write_encoded(name, source, mode);
+}
+
+// write_file_pretty writes two-space-indented JSON with the same guarantee.
+pub func write_file_pretty(name string, value json.Value, mode u32) throws Error {
+    let source = encode(value, true);
+    write_encoded(name, source, mode);
+}

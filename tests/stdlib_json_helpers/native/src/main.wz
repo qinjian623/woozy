@@ -1,0 +1,144 @@
+// Native-only std/json_io checks. The program runs in an empty directory and
+// returns 0 only when all file, mapping, and no-truncation checks pass.
+package app;
+
+import "std/fs" as fs;
+import "std/json" as json;
+import "std/json_io" as json_io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func is_json_error(problem json_io.Error, invalid_number bool) bool {
+    switch problem {
+        case json_io.Error.Json(cause): {
+            switch cause {
+                case json.Error.InvalidNumber: return invalid_number;
+                case json.Error.DepthLimit: return !invalid_number;
+                default: return false;
+            }
+        }
+        case json_io.Error.Io(cause): return false;
+    }
+}
+
+func is_io_error(problem json_io.Error) bool {
+    switch problem {
+        case json_io.Error.Io(cause): return true;
+        case json_io.Error.Json(cause): return false;
+    }
+}
+
+func check_roundtrip() i32 throws os.Error {
+    let source = "{\"n\":123456789012345678901234567890,\"a\":[],\"o\":{\"x\":[1,{}]}}";
+    fs.write_text("input.json", source, 0o600);
+    try {
+        let value = json_io.read_file("input.json");
+        json_io.write_file("compact.json", value, 0o600);
+        if fs.read_text("compact.json") != source { return 101; }
+        json_io.write_file_pretty("pretty.json", value, 0o600);
+        let expected = "{\n  \"n\": 123456789012345678901234567890,\n  \"a\": [],\n  \"o\": {\n    \"x\": [\n      1,\n      {}\n    ]\n  }\n}";
+        if fs.read_text("pretty.json") != expected { return 102; }
+        let reparsed = json_io.read_file("pretty.json");
+        var reparsed_text = "";
+        try { reparsed_text = json.serialize(reparsed); }
+        catch error json.Error { return 103; }
+        if reparsed_text != source { return 104; }
+        var original_text = "";
+        try { original_text = json.serialize(value); }
+        catch error json.Error { return 105; }
+        if original_text != source { return 106; }
+    } catch problem json_io.Error { return 199; }
+    return 0;
+}
+
+func check_malformed() i32 throws os.Error {
+    fs.write_text("bad.json", "{\"a\":}", 0o600);
+    try {
+        let value = json_io.read_file("bad.json");
+        return 201;
+    } catch problem json_io.Error {
+        switch problem {
+            case json_io.Error.Json(cause): {
+                switch cause {
+                    case json.Error.Syntax(offset): {}
+                    default: return 202;
+                }
+            }
+            case json_io.Error.Io(cause): return 203;
+        }
+    }
+    let bytes = vec.make[u8](1, 0xff);
+    fs.write_file("bad-utf8.json", bytes, 0o600);
+    try {
+        let value = json_io.read_file("bad-utf8.json");
+        return 204;
+    } catch problem json_io.Error {
+        if !is_io_error(problem) { return 205; }
+    }
+    return 0;
+}
+
+func check_filesystem() i32 throws os.Error {
+    try {
+        let value = json_io.read_file("missing.json");
+        return 301;
+    } catch problem json_io.Error {
+        if !is_io_error(problem) { return 302; }
+    }
+    try {
+        json_io.write_file("missing-dir/out.json", json.Value.Null, 0o600);
+        return 303;
+    } catch problem json_io.Error {
+        if !is_io_error(problem) { return 304; }
+    }
+    return 0;
+}
+
+func check_no_truncate() i32 throws os.Error {
+    fs.write_text("keep.json", "sentinel", 0o600);
+    let invalid = json.Value.Number("01");
+    try {
+        json_io.write_file("keep.json", invalid, 0o600);
+        return 401;
+    } catch problem json_io.Error {
+        if !is_json_error(problem, true) { return 402; }
+    }
+    if fs.read_text("keep.json") != "sentinel" { return 403; }
+    let items = vec.empty[json.Value]();
+    vec.push(items, invalid);
+    try {
+        json_io.write_file_pretty("keep.json", json.Value.Array(items), 0o600);
+        return 404;
+    } catch problem json_io.Error {
+        if !is_json_error(problem, true) { return 405; }
+    }
+    if fs.read_text("keep.json") != "sentinel" { return 406; }
+    var deep = json.Value.Null;
+    for var index usize = 0; index < 257; index += 1 {
+        let outer = vec.empty[json.Value]();
+        vec.push(outer, deep);
+        deep = json.Value.Array(outer);
+    }
+    try {
+        json_io.write_file_pretty("keep.json", deep, 0o600);
+        return 407;
+    } catch problem json_io.Error {
+        if !is_json_error(problem, false) { return 408; }
+    }
+    if fs.read_text("keep.json") != "sentinel" { return 409; }
+    return 0;
+}
+
+func main() i32 {
+    try {
+        let roundtrip = check_roundtrip();
+        if roundtrip != 0 { return roundtrip; }
+        let malformed = check_malformed();
+        if malformed != 0 { return malformed; }
+        let filesystem = check_filesystem();
+        if filesystem != 0 { return filesystem; }
+        return check_no_truncate();
+    } catch error os.Error {
+        return 900;
+    }
+}

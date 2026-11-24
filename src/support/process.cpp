@@ -17,6 +17,13 @@ struct Actions {
     Actions() { int e = posix_spawn_file_actions_init(&value); if (e) fail(e); }
     ~Actions() { posix_spawn_file_actions_destroy(&value); }
 };
+// POSIX temp directory: TMPDIR when set and non-empty, otherwise /tmp.
+std::string capture_pattern() {
+    const char* dir = std::getenv("TMPDIR");
+    std::string base = (dir && *dir) ? dir : "/tmp";
+    if (base.back() != '/') base += '/';
+    return base + "woozyc-process-XXXXXX";
+}
 }
 ProcessResult run_process(const std::vector<std::string>& argv) {
     if (argv.empty()) throw std::invalid_argument("empty argv");
@@ -24,10 +31,10 @@ ProcessResult run_process(const std::vector<std::string>& argv) {
     std::vector<char*> args;
     for (const auto& s : argv) args.push_back(const_cast<char*>(s.c_str()));
     args.push_back(nullptr);
-    char name[] = "/tmp/woozyc-process-XXXXXX";
-    File file{mkostemp(name, O_CLOEXEC)};
+    std::string name = capture_pattern();
+    File file{mkostemp(name.data(), O_CLOEXEC)};
     if (file.fd < 0) fail(errno);
-    if (unlink(name) < 0) { int e = errno; ::unlink(name); fail(e); }
+    if (unlink(name.c_str()) < 0) { int e = errno; ::unlink(name.c_str()); fail(e); }
     // Keep the capture descriptor distinct from stdin/stdout/stderr.
     if (file.fd < 3) {
         int fd = fcntl(file.fd, F_DUPFD_CLOEXEC, 3);

@@ -1,0 +1,858 @@
+package app;
+
+import "std/option" as option;
+import "std/regex" as regex;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func same_strings(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func some_span(value option.Option[regex.Match], start usize,
+    end usize) bool {
+    switch value {
+        case option.Option.Some(actual): return actual.start == start && actual.end == end;
+        case option.Option.None: return false;
+    }
+}
+
+func none_span(value option.Option[regex.Match]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func some_text(value option.Option[string], expected string) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func none_text(value option.Option[string]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func same_usizes(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_captures(left option.Option[regex.Captures],
+    right option.Option[regex.Captures]) bool {
+    switch left {
+        case option.Option.Some(a): {
+            switch right {
+                case option.Option.Some(b): {
+                    if a.start != b.start || a.end != b.end { return false; }
+                    let count = regex.group_count(a);
+                    if regex.group_count(b) != count { return false; }
+                    for var index usize = 0; index <= count; index += 1 {
+                        switch regex.group(a, index) {
+                            case option.Option.Some(span): {
+                                if !some_span(regex.group(b, index),
+                                    span.start, span.end) { return false; }
+                            }
+                            case option.Option.None: {
+                                if !none_span(regex.group(b, index)) { return false; }
+                            }
+                        }
+                    }
+                    return true;
+                }
+                case option.Option.None: return false;
+            }
+        }
+        case option.Option.None: {
+            switch right {
+                case option.Option.Some(b): return false;
+                case option.Option.None: return true;
+            }
+        }
+    }
+}
+
+// CaptureError is only expected for a Pattern whose compile pass fell back to
+// grouping-only states.  Supported patterns in these tests must not produce it;
+// route an unexpected CaptureError into the existing regex.Error failure path.
+func capture_supported(compiled regex.Pattern,
+    value string) option.Option[regex.Captures] throws regex.Error {
+    try {
+        return regex.find_captures(compiled, value);
+    } catch error regex.CaptureError {
+        throw regex.Error.PatternTooLarge(0);
+    }
+}
+
+func capture_supported_from(compiled regex.Pattern, value string,
+    from usize) option.Option[regex.Captures] throws regex.Error {
+    try {
+        return regex.find_captures_from(compiled, value, from);
+    } catch error regex.CaptureError {
+        throw regex.Error.PatternTooLarge(0);
+    }
+}
+
+func flatten_matches(values Vec[regex.Match]) Vec[usize] {
+    let out = vec.empty[usize]();
+    for value in values {
+        vec.push(out, value.start);
+        vec.push(out, value.end);
+    }
+    return out;
+}
+
+func some_find(value option.Option[regex.Match], start usize,
+    end usize) bool {
+    return some_span(value, start, end);
+}
+
+func none_find(value option.Option[regex.Match]) bool {
+    return none_span(value);
+}
+
+func check_find_from() bool throws regex.Error {
+    let runs = regex.compile("a+");
+    if !some_find(regex.find_from(runs, "baaacaa", 0), 1, 4) { return false; }
+    if !some_find(regex.find_from(runs, "baaacaa", 1), 1, 4) { return false; }
+    // The search starts at index 2, so the overlapping earlier run is not
+    // used; the longest match beginning exactly at 2 is "aa", not "aaa".
+    if !some_find(regex.find_from(runs, "baaacaa", 2), 2, 4) { return false; }
+    if !some_find(regex.find_from(runs, "baaacaa", 4), 5, 7) { return false; }
+    if !some_find(regex.find_from(runs, "baaacaa", 6), 6, 7) { return false; }
+    if !none_find(regex.find_from(runs, "baaacaa", 7)) { return false; }
+    if !none_find(regex.find_from(runs, "baaacaa", 8)) { return false; }
+
+    let pair = regex.compile("aa");
+    if !some_find(regex.find_from(pair, "aaa", 1), 1, 3) { return false; }
+    if !none_find(regex.find_from(pair, "aaa", 2)) { return false; }
+    if !none_find(regex.find_from(regex.compile("abc"), "xabc", 2)) { return false; }
+
+    if !some_find(regex.find_from(regex.compile(""), "中😀", 1), 1, 1) { return false; }
+    if !some_find(regex.find_from(regex.compile(""), "", 0), 0, 0) { return false; }
+    if !some_find(regex.find_from(regex.compile("$"), "abc", 3), 3, 3) { return false; }
+    if !some_find(regex.find_from(regex.compile("$"), "abc", 2), 3, 3) { return false; }
+    if !some_find(regex.find_from(regex.compile("^"), "abc", 0), 0, 0) { return false; }
+    if !none_find(regex.find_from(regex.compile("^"), "abc", 1)) { return false; }
+    if !some_find(regex.find_from(regex.compile("^"), "", 0), 0, 0) { return false; }
+    if !none_find(regex.find_from(regex.compile("^"), "", 1)) { return false; }
+    // ^ is anchored to the whole input, not to from.
+    if !none_find(regex.find_from(regex.compile("^a"), "ba", 1)) { return false; }
+    if !some_find(regex.find_from(regex.compile("^|b"), "ab", 1), 1, 2) { return false; }
+    if !some_find(regex.find_from(regex.compile("a*"), "ba", 1), 1, 2) { return false; }
+    if !some_find(regex.find_from(regex.compile("a*"), "ba", 2), 2, 2) { return false; }
+    if !none_find(regex.find_from(regex.compile("a*"), "ba", 3)) { return false; }
+    if !some_find(regex.find_from(regex.compile("😀+"), "x😀😀y", 1), 1, 3) { return false; }
+    if !some_find(regex.find_from(regex.compile("😀+"), "x😀😀y", 2), 2, 3) { return false; }
+    return true;
+}
+
+func check_early_stop_semantics() bool throws regex.Error {
+    // The short alternative matches first, but a live longer alternative with
+    // the same start must still be allowed to extend the match.
+    if !some_find(regex.find(regex.compile("a|a.*b"), "xa__b"), 1, 5) {
+        return false;
+    }
+    if !some_find(regex.find(regex.compile("a.*b|a"), "xa__b"), 1, 5) {
+        return false;
+    }
+    if !some_find(regex.find(regex.compile("a|a.*b"), "xa__b__b"), 1, 8) {
+        return false;
+    }
+    // When the longer alternative fails, the already found short match wins.
+    if !some_find(regex.find(regex.compile("a|a.*b"), "xa__c"), 1, 2) {
+        return false;
+    }
+    if !some_find(regex.find(regex.compile("a.*b|a"), "xa__c"), 1, 2) {
+        return false;
+    }
+    if !same_strings(regex.split(regex.compile("a|a.*b"), "xa__b,y"),
+        ["x", ",y"]) {
+        return false;
+    }
+    if !same_strings(regex.split(regex.compile("a.*b|a"), "xa__b,y"),
+        ["x", ",y"]) {
+        return false;
+    }
+    if regex.replace_all(regex.compile("a|a.*b"), "xa__b,y", "-") != "x-,y" {
+        return false;
+    }
+    if regex.replace_all(regex.compile("a.*b|a"), "xa__b,y", "-") != "x-,y" {
+        return false;
+    }
+
+    // Anchors must keep a candidate alive until the whole-input end.
+    if !some_find(regex.find(regex.compile("a.*b$"), "xa__b"), 1, 5) {
+        return false;
+    }
+    if !some_find(regex.find(regex.compile("^a.*b$"), "a__b"), 0, 4) {
+        return false;
+    }
+    if !none_find(regex.find(regex.compile("a$"), "a\n")) {
+        return false;
+    }
+    if !same_strings(regex.split(regex.compile("a.*b$"), "xa__b"),
+        ["x", ""]) {
+        return false;
+    }
+    if regex.replace_all(regex.compile("a.*b$"), "xa__b", "-") != "x-" {
+        return false;
+    }
+    if !same_strings(regex.split(regex.compile("^a.*b$"), "a__b"),
+        ["", ""]) {
+        return false;
+    }
+    if regex.replace_all(regex.compile("^a.*b$"), "a__b", "-") != "-" {
+        return false;
+    }
+
+    // Repeated short separators cover both ordinary UTF-8 and multibyte
+    // pieces; these are correctness checks, not timing measurements.
+    let comma = regex.compile(",");
+    let sizes Vec[usize] = [0, 1, 2, 100, 1000];
+    for size in sizes {
+        let value = text.repeat("a,", size);
+        let pieces = regex.split(comma, value);
+        if vec.len(pieces) != size + 1 {
+            return false;
+        }
+        if size > 0 {
+            if pieces[0] != "a" || pieces[size] != "" {
+                return false;
+            }
+        }
+        if regex.replace_all(comma, value, ":") != text.repeat("a:", size) {
+            return false;
+        }
+    }
+    let wide = text.repeat("中😀,", 100);
+    let wide_pieces = regex.split(comma, wide);
+    if vec.len(wide_pieces) != 101 {
+        return false;
+    }
+    if wide_pieces[0] != "中😀" || wide_pieces[100] != "" {
+        return false;
+    }
+    if regex.replace_all(comma, wide, ":") != text.repeat("中😀:", 100) {
+        return false;
+    }
+    return true;
+}
+
+func check_split() bool throws regex.Error {
+    let comma = regex.compile(",");
+    if !same_strings(regex.split(comma, "a,b,,c,"),
+        ["a", "b", "", "c", ""]) { return false; }
+    if !same_strings(regex.split(comma, "abc"), ["abc"]) { return false; }
+    if !same_strings(regex.split(comma, ""), [""]) { return false; }
+    if !same_strings(regex.split(regex.compile("中"), "a中😀中b"),
+        ["a", "😀", "b"]) { return false; }
+    if !same_strings(regex.split(regex.compile("[0-9]+"), "a12b3"),
+        ["a", "b", ""]) { return false; }
+
+    // Zero-width separators are real boundaries.  The piece before the first
+    // boundary and the piece after the last boundary are kept.
+    if !same_strings(regex.split(regex.compile(""), "ab"),
+        ["", "a", "b", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile(""), ""), ["", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile(""), "中😀"),
+        ["", "中", "😀", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("a*"), "ba"),
+        ["", "b", "", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("a*"), "aa"),
+        ["", "", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("a?"), "ba"),
+        ["", "b", "", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("b*"), "abc"),
+        ["", "a", "", "c", ""]) { return false; }
+
+    // Anchors are tested against the whole input, so ^ can appear only once.
+    if !same_strings(regex.split(regex.compile("^"), "abc"),
+        ["", "abc"]) { return false; }
+    if !same_strings(regex.split(regex.compile("$"), "abc"),
+        ["abc", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("^|$"), "abc"),
+        ["", "abc", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("^"), ""), ["", ""]) { return false; }
+    if !same_strings(regex.split(regex.compile("$"), ""), ["", ""]) { return false; }
+
+    if vec.len(regex.split_n(comma, "a,b,c", 0)) != 0 { return false; }
+    if !same_strings(regex.split_n(comma, "a,b,c", 1), ["a,b,c"]) { return false; }
+    if !same_strings(regex.split_n(comma, "a,b,c", 2), ["a", "b,c"]) { return false; }
+    if !same_strings(regex.split_n(comma, "a,b,c", 3), ["a", "b", "c"]) { return false; }
+    if !same_strings(regex.split_n(comma, "a,b,c", 9), ["a", "b", "c"]) { return false; }
+    if !same_strings(regex.split_n(comma, "a,", 2), ["a", ""]) { return false; }
+    if !same_strings(regex.split_n(comma, ",a", 2), ["", "a"]) { return false; }
+    if !same_strings(regex.split_n(comma, "abc", 2), ["abc"]) { return false; }
+    if vec.len(regex.split_n(regex.compile(""), "", 0)) != 0 { return false; }
+    if !same_strings(regex.split_n(regex.compile(""), "", 1), [""]) { return false; }
+    if !same_strings(regex.split_n(regex.compile(""), "abc", 2),
+        ["", "abc"]) { return false; }
+    if !same_strings(regex.split_n(regex.compile(""), "abc", 3),
+        ["", "a", "bc"]) { return false; }
+    if !same_strings(regex.split_n(regex.compile("a"), "aaa", 2),
+        ["", "aa"]) { return false; }
+    if !same_strings(regex.split_n(regex.compile("a"), "aaa", 3),
+        ["", "", "a"]) { return false; }
+    return true;
+}
+
+func check_replace() bool throws regex.Error {
+    if regex.replace_all(regex.compile("a+"), "baaacaa", "-") != "b-c-" { return false; }
+    if regex.replace_all(regex.compile("a+"), "baaacaa", "") != "bc" { return false; }
+    if regex.replace_all(regex.compile("a+"), "bbb", "-") != "bbb" { return false; }
+    if regex.replace_all(regex.compile("中"), "a中😀中b", "X") != "aX😀Xb" { return false; }
+    if regex.replace_all(regex.compile("[0-9]+"), "a12b3", "#") != "a#b#" { return false; }
+
+    // Replacement text is literal: no $1 or backslash expansion.
+    if regex.replace_all(regex.compile("(a)"), "a", "$1\\n") != "$1\\n" { return false; }
+    if regex.replace_all(regex.compile("a"), "a", "\\") != "\\" { return false; }
+
+    // Zero-width matches insert before every code point, including both ends.
+    if regex.replace_all(regex.compile(""), "abc", "-") != "-a-b-c-" { return false; }
+    if regex.replace_all(regex.compile(""), "中😀", "-") != "-中-😀-" { return false; }
+    if regex.replace_all(regex.compile(""), "", "-") != "-" { return false; }
+    if regex.replace_all(regex.compile("a*"), "ba", "-") != "-b--" { return false; }
+    if regex.replace_all(regex.compile("a*"), "a", "-") != "--" { return false; }
+    if regex.replace_all(regex.compile("a*"), "aa", "-") != "--" { return false; }
+    if regex.replace_all(regex.compile("b*"), "abc", "-") != "-a--c-" { return false; }
+    if regex.replace_all(regex.compile("^"), "abc", "-") != "-abc" { return false; }
+    if regex.replace_all(regex.compile("$"), "abc", "-") != "abc-" { return false; }
+    if regex.replace_all(regex.compile("^|$"), "abc", "-") != "-abc-" { return false; }
+    if regex.replace_all(regex.compile("^"), "", "-") != "-" { return false; }
+    if regex.replace_all(regex.compile("$"), "", "-") != "-" { return false; }
+
+    if regex.replace_n(regex.compile("a+"), "baaacaa", "-", 0) != "baaacaa" { return false; }
+    if regex.replace_n(regex.compile("a+"), "baaacaa", "-", 1) != "b-caa" { return false; }
+    if regex.replace_n(regex.compile("a+"), "baaacaa", "-", 2) != "b-c-" { return false; }
+    if regex.replace_n(regex.compile("a+"), "baaacaa", "-", 99) != "b-c-" { return false; }
+    if regex.replace_n(regex.compile(""), "abc", "-", 1) != "-abc" { return false; }
+    if regex.replace_n(regex.compile(""), "abc", "-", 2) != "-a-bc" { return false; }
+    if regex.replace_n(regex.compile(""), "abc", "-", 3) != "-a-b-c" { return false; }
+    if regex.replace_n(regex.compile(""), "abc", "", 99) != "abc" { return false; }
+    return true;
+}
+
+func check_capture_span_agreement() bool throws regex.Error {
+    let patterns = ["", "a", "a*", "a+", "a?", "a|ab", "ab|a", "(a*)*b",
+        "(a|aa)*b", "^a*$", "中+", ".", ".*", "[a-z]+", "(a)(b)?", "$",
+        "^", "a$|ab", "b|abc", "(a|)*", "()*", "(a|ab)b?", "(a+)(b+)?"];
+    let values = ["", "a", "aaa", "ab", "baaa", "中中", "a\nb", "abc", "\n"];
+    for pattern in patterns {
+        let plain = regex.compile(pattern);
+        let tagged = regex.compile_captures(pattern);
+        for value in values {
+            // compile now emits capture tags automatically for <=32 groups.
+            // The two compile entry points must agree on spans and captures.
+            if !same_captures(capture_supported(plain, value),
+                capture_supported(tagged, value)) { return false; }
+            switch regex.find(plain, value) {
+                case option.Option.Some(found): {
+                    // The same Pattern value must work through ordinary find
+                    // even when compile_captures added tag states.
+                    if !some_find(regex.find(tagged, value),
+                        found.start, found.end) { return false; }
+                    switch capture_supported(tagged, value) {
+                        case option.Option.Some(captured):
+                            if found.start != captured.start ||
+                               found.end != captured.end { return false; }
+                        case option.Option.None: return false;
+                    }
+                }
+                case option.Option.None: {
+                    if !none_find(regex.find(tagged, value)) { return false; }
+                    switch capture_supported(tagged, value) {
+                        case option.Option.Some(captured): return false;
+                        case option.Option.None: {}
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+func check_captures() bool throws regex.Error {
+    let two = regex.compile_captures("(a+)(b+)");
+    switch capture_supported(two, "xaabbbz") {
+        case option.Option.Some(found): {
+            if found.start != 1 || found.end != 6 { return false; }
+            if !some_span(regex.group(found, 0), 1, 6) { return false; }
+            if !some_span(regex.group(found, 1), 1, 3) { return false; }
+            if !some_span(regex.group(found, 2), 3, 6) { return false; }
+            if !none_span(regex.group(found, 3)) { return false; }
+        }
+        case option.Option.None: return false;
+    }
+    let greedy = regex.compile_captures("(a*)(a*)");
+    switch capture_supported(greedy, "aaa") {
+        case option.Option.Some(found):
+            if !some_span(regex.group(found, 1), 0, 3) { return false; }
+            if !some_span(regex.group(found, 2), 3, 3) { return false; }
+        case option.Option.None: return false;
+    }
+    let optional = regex.compile_captures("(a)(b)?");
+    switch capture_supported(optional, "a") {
+        case option.Option.Some(found):
+            if !some_span(regex.group(found, 1), 0, 1) { return false; }
+            if !none_span(regex.group(found, 2)) { return false; }
+        case option.Option.None: return false;
+    }
+    switch capture_supported(optional, "ab") {
+        case option.Option.Some(found):
+            if !some_span(regex.group(found, 1), 0, 1) { return false; }
+            if !some_span(regex.group(found, 2), 1, 2) { return false; }
+        case option.Option.None: return false;
+    }
+    let empty_group = regex.compile_captures("()a");
+    switch capture_supported(empty_group, "a") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 1 { return false; }
+            if !some_span(regex.group(found, 1), 0, 0) { return false; }
+        case option.Option.None: return false;
+    }
+    let empty_match = regex.compile_captures("(a*)");
+    switch capture_supported(empty_match, "bbb") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 0 { return false; }
+            if !some_span(regex.group(found, 1), 0, 0) { return false; }
+        case option.Option.None: return false;
+    }
+    let branches = regex.compile_captures("(a)|(b)");
+    switch capture_supported(branches, "b") {
+        case option.Option.Some(found):
+            if !none_span(regex.group(found, 1)) { return false; }
+            if !some_span(regex.group(found, 2), 0, 1) { return false; }
+        case option.Option.None: return false;
+    }
+    let nested = regex.compile_captures("((a)(b))");
+    switch capture_supported(nested, "ab") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 3 { return false; }
+            if !some_span(regex.group(found, 1), 0, 2) { return false; }
+            if !some_span(regex.group(found, 2), 0, 1) { return false; }
+            if !some_span(regex.group(found, 3), 1, 2) { return false; }
+        case option.Option.None: return false;
+    }
+    let repeated = regex.compile_captures("(a(b)?)+");
+    switch capture_supported(repeated, "aab") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 3 { return false; }
+            if !some_span(regex.group(found, 1), 1, 3) { return false; }
+            if !some_span(regex.group(found, 2), 2, 3) { return false; }
+        case option.Option.None: return false;
+    }
+    let last_repeat = regex.compile_captures("(ab)+");
+    switch capture_supported(last_repeat, "xababy") {
+        case option.Option.Some(found):
+            if found.start != 1 || found.end != 5 { return false; }
+            if !some_span(regex.group(found, 1), 3, 5) { return false; }
+        case option.Option.None: return false;
+    }
+
+    // Longest overall span wins even when a shorter alternative appears first.
+    let longest = regex.compile_captures("(a|ab)");
+    switch capture_supported(longest, "ab") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 2 { return false; }
+            if !some_span(regex.group(found, 1), 0, 2) { return false; }
+        case option.Option.None: return false;
+    }
+    // With equal overall spans, the earlier alternative has priority.
+    let tie = regex.compile_captures("(a|ab)b?");
+    switch capture_supported(tie, "ab") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 2 { return false; }
+            if !some_span(regex.group(found, 1), 0, 1) { return false; }
+        case option.Option.None: return false;
+    }
+
+    let anchored = regex.compile_captures("^(a+)$");
+    switch capture_supported(anchored, "aaa") {
+        case option.Option.Some(found):
+            if !some_span(regex.group(found, 1), 0, 3) { return false; }
+        case option.Option.None: return false;
+    }
+    let from_runs = regex.compile_captures("(a+)");
+    switch capture_supported_from(from_runs, "baaacaa", 2) {
+        case option.Option.Some(found):
+            if found.start != 2 || found.end != 4 { return false; }
+            if !some_span(regex.group(found, 1), 2, 4) { return false; }
+            if !none_span(regex.group(found, 2)) { return false; }
+        case option.Option.None: return false;
+    }
+    switch capture_supported_from(regex.compile_captures("(^a)"), "ba", 1) {
+        case option.Option.Some(found): return false;
+        case option.Option.None: {}
+    }
+    switch capture_supported_from(regex.compile_captures("(a*)"), "ba", 2) {
+        case option.Option.Some(found):
+            if found.start != 2 || found.end != 2 { return false; }
+            if !some_span(regex.group(found, 1), 2, 2) { return false; }
+        case option.Option.None: return false;
+    }
+    let plain_groups = regex.compile_captures("abc");
+    switch capture_supported(plain_groups, "zabc") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 0 { return false; }
+            if !some_text(regex.group_text(found, 0), "abc") { return false; }
+            if !none_span(regex.group(found, 1)) { return false; }
+        case option.Option.None: return false;
+    }
+    let unicode_groups = regex.compile_captures("([中😀]+)([a-z]+)");
+    switch capture_supported(unicode_groups, "x中😀abc") {
+        case option.Option.Some(found):
+            if found.start != 1 || found.end != 6 { return false; }
+            if !some_span(regex.group(found, 1), 1, 3) { return false; }
+            if !some_span(regex.group(found, 2), 3, 6) { return false; }
+        case option.Option.None: return false;
+    }
+    let limit_pattern = text.repeat("()", 32);
+    let at_limit = regex.compile_captures(limit_pattern);
+    switch capture_supported(at_limit, "") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 32 { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+// The bounded tagged closure visits each NFA state once per position.  A final
+// zero-length repetition is therefore not re-entered, so a group whose only
+// remaining participation would be an empty final iteration reports the last
+// non-empty capture.  This is deterministic and documented as a limitation;
+// the overall leftmost-longest span is unaffected.
+func check_empty_loop_capture_model() bool throws regex.Error {
+    let repeated = regex.compile_captures("^(a*)*");
+    switch capture_supported(repeated, "aaa") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 3 { return false; }
+            if !some_span(regex.group(found, 1), 0, 3) { return false; }
+        case option.Option.None: return false;
+    }
+    switch capture_supported(repeated, "") {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 0 { return false; }
+            if !none_span(regex.group(found, 1)) { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+func rejects_too_many_groups(pattern string) bool {
+    try {
+        let compiled = regex.compile_captures(pattern);
+    } catch error regex.Error {
+        switch error {
+            case regex.Error.Syntax(offset): return false;
+            case regex.Error.PatternTooLarge(offset): return true;
+            case regex.Error.NestingTooDeep(offset): return false;
+        }
+    }
+    return false;
+}
+
+func capture_unavailable(compiled regex.Pattern, from usize) bool {
+    try {
+        switch regex.find_captures_from(compiled, "z", from) {
+            case option.Option.Some(found): return false;
+            case option.Option.None: return false;
+        }
+    } catch error regex.CaptureError {
+        switch error {
+            case regex.CaptureError.Unavailable: return true;
+        }
+    }
+}
+
+func check_capture_limits() bool throws regex.Error {
+    // The explicit checked form still rejects the 33rd opening parenthesis.
+    if !rejects_too_many_groups(text.repeat("()", 33)) { return false; }
+    // compile must preserve its previous success for a >32-group pattern.
+    // It falls back to grouping-only states, so ordinary matching works while
+    // the capture APIs report a typed error instead of missing groups.
+    let many = regex.compile(text.repeat("()", 33) + "z");
+    if !some_find(regex.find(many, "az"), 1, 2) { return false; }
+    if !same_strings(regex.split(many, "az"), ["a", ""]) { return false; }
+    if regex.replace_all(many, "az", "-") != "a-" { return false; }
+    if !capture_unavailable(many, 0) { return false; }
+    if !capture_unavailable(many, 9) { return false; }
+    // The automatic path also accepts exactly 32 groups.
+    let at_limit = regex.compile(text.repeat("()", 32));
+    switch capture_supported(at_limit, "") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 32 { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+func check_unified_pattern_api() bool throws regex.Error {
+    // compile_captures returns the same public Pattern type.  Reuse it with
+    // every ordinary operation; tag states must be ignored without captures.
+    let tagged = regex.compile_captures("(a+)(b+)");
+    if !some_find(regex.find(tagged, "xaabbbz"), 1, 6) { return false; }
+    if !regex.is_match(tagged, "xxaabbb") || regex.is_match(tagged, "xxx") {
+        return false;
+    }
+    if !some_find(regex.find_from(tagged, "xaabbbz", 2), 2, 6) { return false; }
+    if !same_strings(regex.split(tagged, "xaabbbz"), ["x", "z"]) {
+        return false;
+    }
+    if regex.replace_all(tagged, "xaabbbz", "-") != "x-z" { return false; }
+    if regex.replace_n(tagged, "aabbbxaabbb", "-", 1) != "-xaabbb" {
+        return false;
+    }
+    if !same_usizes(flatten_matches(regex.find_all(tagged, "xaabbbz")),
+        [1, 6]) { return false; }
+    // The same value still works for captures after ordinary calls.
+    switch capture_supported(tagged, "xaabbbz") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 2 { return false; }
+            if !some_text(regex.group_text(found, 1), "aa") { return false; }
+            if !some_text(regex.group_text(found, 2), "bbb") { return false; }
+        case option.Option.None: return false;
+    }
+
+    // A pattern without parentheses has an explicit zero-group shape whether
+    // it came from compile_captures or compile.
+    let no_groups = regex.compile_captures("abc");
+    switch capture_supported(no_groups, "zabc") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 0 { return false; }
+            if !some_text(regex.group_text(found, 0), "abc") { return false; }
+            if !none_text(regex.group_text(found, 1)) { return false; }
+            if !none_span(regex.group(found, 1)) { return false; }
+        case option.Option.None: return false;
+    }
+    let plain = regex.compile("abc");
+    switch capture_supported(plain, "zabc") {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 0 { return false; }
+            if !some_text(regex.group_text(found, 0), "abc") { return false; }
+            if !none_text(regex.group_text(found, 1)) { return false; }
+        case option.Option.None: return false;
+    }
+
+    // Common repeated-separator workload with a tagged Pattern used through
+    // ordinary split/replace/find_all.
+    let tagged_comma = regex.compile_captures("(,)");
+    let repeated = text.repeat("a,", 1000);
+    let pieces = regex.split(tagged_comma, repeated);
+    if vec.len(pieces) != 1001 { return false; }
+    if pieces[0] != "a" || pieces[1000] != "" { return false; }
+    if regex.replace_all(tagged_comma, repeated, ":") != text.repeat("a:", 1000) {
+        return false;
+    }
+    if vec.len(regex.find_all(tagged_comma, repeated)) != 1000 {
+        return false;
+    }
+
+    // Ambiguous later-longer alternative through the unified tagged Pattern.
+    let ambiguous = regex.compile_captures("(a|a.*b)");
+    if !some_find(regex.find(ambiguous, "xa__b"), 1, 5) { return false; }
+    if !same_strings(regex.split(ambiguous, "xa__b,y"), ["x", ",y"]) {
+        return false;
+    }
+    if regex.replace_all(ambiguous, "xa__b,y", "-") != "x-,y" { return false; }
+    switch capture_supported(ambiguous, "xa__b") {
+        case option.Option.Some(found):
+            if !some_text(regex.group_text(found, 1), "a__b") { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+func check_find_all() bool throws regex.Error {
+    if !same_usizes(flatten_matches(regex.find_all(regex.compile(""), "ab")),
+        [0, 0, 1, 1, 2, 2]) { return false; }
+    if !same_usizes(flatten_matches(regex.find_all(regex.compile(""), "")),
+        [0, 0]) { return false; }
+    if !same_usizes(flatten_matches(regex.find_all(regex.compile("a*"), "ba")),
+        [0, 0, 1, 2, 2, 2]) { return false; }
+    if !same_usizes(flatten_matches(regex.find_all(regex.compile("^"), "abc")),
+        [0, 0]) { return false; }
+    if !same_usizes(flatten_matches(regex.find_all(regex.compile("$"), "abc")),
+        [3, 3]) { return false; }
+    if !same_usizes(flatten_matches(
+        regex.find_all(regex.compile("a|a.*b"), "xa__b,y")), [1, 5]) {
+        return false;
+    }
+    if !same_usizes(flatten_matches(
+        regex.find_all(regex.compile("a.*b|a"), "xa__c\na__b")),
+        [1, 2, 6, 10]) { return false; }
+    let tagged = regex.compile_captures("(a|a.*b)");
+    if !same_usizes(flatten_matches(regex.find_all(tagged, "xa__b,y")),
+        [1, 5]) { return false; }
+    return true;
+}
+
+func saved_captures() option.Option[regex.Captures] throws regex.Error {
+    let source = "x中😀aaaz";
+    let compiled = regex.compile_captures("(中😀)(a+)");
+    return capture_supported(compiled, source);
+}
+
+func check_group_text_lifetime() bool throws regex.Error {
+    // Captures retains the source, so the local source in saved_captures is
+    // gone when these accesses run.
+    switch saved_captures() {
+        case option.Option.Some(found):
+            if regex.group_count(found) != 2 { return false; }
+            if !some_text(regex.group_text(found, 0), "中😀aaa") { return false; }
+            if !some_text(regex.group_text(found, 1), "中😀") { return false; }
+            if !some_text(regex.group_text(found, 2), "aaa") { return false; }
+            if !none_text(regex.group_text(found, 3)) { return false; }
+            if !none_text(regex.group_text(found, 999)) { return false; }
+        case option.Option.None: return false;
+    }
+    let optional = regex.compile_captures("(a)(b)?");
+    switch capture_supported(optional, "a") {
+        case option.Option.Some(found):
+            if !some_text(regex.group_text(found, 1), "a") { return false; }
+            if !none_text(regex.group_text(found, 2)) { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+func pathological() bool throws regex.Error {
+    let many = text.repeat("a", 2000);
+    if !none_find(regex.find_from(regex.compile("(a*)*b"), many, 1000)) { return false; }
+    if !none_find(regex.find_from(regex.compile("((a*)*)*b"), many, 0)) { return false; }
+    if !some_find(regex.find_from(regex.compile("(a*)*"), many, 0), 0, 2000) { return false; }
+
+    // Long inputs with many separators exercise repeated searches.
+    let lines = text.repeat("a,", 1000) + "z";
+    let pieces = regex.split(regex.compile(","), lines);
+    if vec.len(pieces) != 1001 { return false; }
+    if pieces[0] != "a" || pieces[999] != "a" || pieces[1000] != "z" { return false; }
+
+    // A zero-width pattern over a long input is the quadratic case documented
+    // in stdlib/regex/README.md; keep this size modest for the test runner.
+    let zeros = text.repeat("😀", 600);
+    let split_zero = regex.split(regex.compile(""), zeros);
+    if vec.len(split_zero) != 602 { return false; }
+    let replaced_zero = regex.replace_all(regex.compile(""), zeros, "-");
+    if text.len(replaced_zero) != 1201 { return false; }
+
+    // Tagged capture path over a pathological repetition must also terminate.
+    let tagged = regex.compile_captures("(a*)*b");
+    switch capture_supported(tagged, many) {
+        case option.Option.Some(found): return false;
+        case option.Option.None: {}
+    }
+    return true;
+}
+
+// Fixed-size inputs exercise the capture runner's suffix pruning.  These are
+// bounded correctness regressions; the README records separate timings and
+// keeps conversion of the full input distinct from the matcher scan.
+func check_capture_early_stop() bool throws regex.Error {
+    let early_input = text.repeat("a", 20000);
+    let early = regex.compile("(a)");
+    switch capture_supported(early, early_input) {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 1 { return false; }
+            if !some_span(regex.group(found, 1), 0, 1) { return false; }
+        case option.Option.None: return false;
+    }
+    let empty = regex.compile("()");
+    switch capture_supported(empty, early_input) {
+        case option.Option.Some(found):
+            if found.start != 0 || found.end != 0 { return false; }
+            if !some_span(regex.group(found, 1), 0, 0) { return false; }
+        case option.Option.None: return false;
+    }
+    let late_input = text.repeat("x", 2000) + "aaa" + text.repeat("y", 2000);
+    let late = regex.compile("(a+)");
+    switch capture_supported(late, late_input) {
+        case option.Option.Some(found):
+            if found.start != 2000 || found.end != 2003 { return false; }
+            if !some_span(regex.group(found, 1), 2000, 2003) { return false; }
+        case option.Option.None: return false;
+    }
+    return true;
+}
+
+func check_capture_round_trip() bool throws regex.Error {
+    let patterns = ["(a+)(b+)", "(a)|(b)", "((a)(b))", "()", "([中😀]+)([a-z]+)",
+        "(a*)(a*)"];
+    let values = ["xaabbbz", "b", "ab", "", "x中😀abc", "aaa"];
+    for pattern in patterns {
+        // Automatic capture tags from compile are enough; compile_captures is
+        // covered separately.  Every returned span must round-trip to the
+        // retained source text, including empty and nonparticipating groups.
+        let compiled = regex.compile(pattern);
+        for value in values {
+            switch capture_supported(compiled, value) {
+                case option.Option.Some(found): {
+                    switch regex.group_text(found, 0) {
+                        case option.Option.Some(actual):
+                            if actual != value[found.start:found.end] { return false; }
+                        case option.Option.None: return false;
+                    }
+                    for var index usize = 1; index <= regex.group_count(found);
+                        index += 1 {
+                        switch regex.group(found, index) {
+                            case option.Option.Some(span): {
+                                switch regex.group_text(found, index) {
+                                    case option.Option.Some(actual):
+                                        if actual != value[span.start:span.end] {
+                                            return false;
+                                        }
+                                    case option.Option.None: return false;
+                                }
+                            }
+                            case option.Option.None: {
+                                if !none_text(regex.group_text(found, index)) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                    switch regex.find(compiled, value) {
+                        case option.Option.Some(overall):
+                            if overall.start != found.start ||
+                               overall.end != found.end { return false; }
+                        case option.Option.None: return false;
+                    }
+                }
+                case option.Option.None: {
+                    if !none_find(regex.find(compiled, value)) { return false; }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+func main() i32 throws regex.Error {
+    if !check_find_from() { return 1; }
+    if !check_split() { return 2; }
+    if !check_replace() { return 3; }
+    if !check_capture_span_agreement() { return 4; }
+    if !check_captures() { return 5; }
+    if !check_empty_loop_capture_model() { return 6; }
+    if !check_capture_limits() { return 7; }
+    if !pathological() { return 8; }
+    if !check_early_stop_semantics() { return 9; }
+    if !check_unified_pattern_api() { return 10; }
+    if !check_find_all() { return 11; }
+    if !check_group_text_lifetime() { return 12; }
+    if !check_capture_early_stop() { return 13; }
+    if !check_capture_round_trip() { return 14; }
+    return 0;
+}

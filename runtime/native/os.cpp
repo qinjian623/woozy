@@ -1,6 +1,7 @@
 #include "os.hpp"
 
 #include "gc_program.hpp"
+#include "linux.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,8 @@
 
 namespace {
 
+namespace linux_abi = lang::native::linux_x86_64;
+
 // Local Linux x86_64 syscall numbers and the openat sentinel. Keeping these
 // here avoids including kernel or libc headers in the freestanding runtime.
 constexpr long kSysRead = 0;
@@ -26,7 +29,10 @@ constexpr long kSysMkdir = 83;
 constexpr long kSysRmdir = 84;
 constexpr long kSysUnlink = 87;
 constexpr long kSysOpenat = 257;
+constexpr long kSysMkdirat = 258;
+constexpr long kSysUnlinkat = 263;
 constexpr long kAtFdcwd = -100; // AT_FDCWD
+constexpr long kAtRemoveDir = 0x200;
 
 constexpr uint64_t kMaxPathBytes = 4096;
 constexpr int64_t kErrFault = -14;       // EFAULT
@@ -146,6 +152,17 @@ int64_t lang_os_open_v1(const char *data, uint64_t byte_length, int32_t flags,
                   static_cast<long>(flags), static_cast<long>(mode));
 }
 
+LANG_OS_NO_STACK_PROTECTOR
+int64_t lang_os_openat_v1(int32_t fd, const char *name, uint64_t length,
+                          int32_t flags, uint32_t mode) noexcept {
+  char path[linux_abi::kPathMax];
+  const int64_t prepared = linux_abi::copy_component(name, length, path);
+  if (prepared < 0) return prepared;
+  return syscall4(kSysOpenat, static_cast<long>(fd),
+                  static_cast<long>(reinterpret_cast<intptr_t>(path)),
+                  static_cast<long>(flags), static_cast<long>(mode));
+}
+
 int64_t lang_os_seek_v1(int32_t fd, int64_t offset, int32_t whence) noexcept {
   return syscall3(kSysLseek, static_cast<long>(fd),
                   static_cast<long>(offset), static_cast<long>(whence));
@@ -170,6 +187,29 @@ int64_t lang_os_mkdir_v1(const char *path_data, uint64_t length,
   return syscall2(kSysMkdir,
                   static_cast<long>(reinterpret_cast<intptr_t>(path)),
                   static_cast<long>(mode));
+}
+
+LANG_OS_NO_STACK_PROTECTOR
+int64_t lang_os_mkdirat_v1(int32_t fd, const char *name, uint64_t length,
+                           uint32_t mode) noexcept {
+  char path[linux_abi::kPathMax];
+  const int64_t prepared = linux_abi::copy_component(name, length, path);
+  if (prepared < 0) return prepared;
+  return syscall3(kSysMkdirat, static_cast<long>(fd),
+                  static_cast<long>(reinterpret_cast<intptr_t>(path)),
+                  static_cast<long>(mode));
+}
+
+LANG_OS_NO_STACK_PROTECTOR
+int64_t lang_os_unlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                            int32_t kind) noexcept {
+  if (kind != 0 && kind != 1) return kErrInval;
+  char path[linux_abi::kPathMax];
+  const int64_t prepared = linux_abi::copy_component(name, length, path);
+  if (prepared < 0) return prepared;
+  const long flags = kind == 1 ? kAtRemoveDir : 0;
+  return syscall3(kSysUnlinkat, static_cast<long>(fd),
+                  static_cast<long>(reinterpret_cast<intptr_t>(path)), flags);
 }
 
 LANG_OS_NO_STACK_PROTECTOR

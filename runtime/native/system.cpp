@@ -8,6 +8,9 @@
 
 #if defined(__x86_64__) && defined(__linux__)
 
+extern "C" uintptr_t lang_native_cached_tid() noexcept
+    __attribute__((weak, visibility("hidden")));
+
 // GCC at -O0 cannot see that the kernel writes through the output buffers
 // passed to syscall6 and reports a false -Wmaybe-uninitialized at the call.
 // The buffers are intentionally left uninitialised so that a failing syscall
@@ -41,6 +44,8 @@ constexpr long kSysRename = 82;
 constexpr long kSysLink = 86;
 constexpr long kSysSymlink = 88;
 constexpr long kSysReadlink = 89;
+constexpr long kSysSymlinkat = 266;
+constexpr long kSysReadlinkat = 267;
 constexpr long kSysChmod = 90;
 constexpr long kSysFchmod = 91;
 constexpr long kSysGetuid = 102;
@@ -55,10 +60,12 @@ constexpr long kSysGettid = 186;
 constexpr long kSysGetdents64 = 217;
 constexpr long kSysClockGettime = 228;
 constexpr long kSysMknodat = 259;
+constexpr long kSysFstatat = 262;
 constexpr long kSysPipe2 = 293;
 constexpr long kSysGetrandom = 318;
 
 constexpr long kAtFdcwd = -100; // AT_FDCWD
+constexpr long kAtSymlinkNoFollow = 0x100;
 constexpr uint32_t kFileTypeFifo = 0010000u;
 constexpr uint32_t kModePermissionMask = 07777u;
 constexpr uint64_t kMaxSignedCount = 0x7fffffffffffffffULL;
@@ -231,6 +238,27 @@ int64_t lang_sys_fstat_v1(int32_t fd, LangFileStat *out) noexcept {
 }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
+int64_t lang_sys_fstatat_v1(int32_t fd, const char *path, uint64_t length,
+                            int32_t no_follow,
+                            LangFileStat *out) noexcept {
+  if (no_follow != 0 && no_follow != 1) return linux_abi::kErrorInval;
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result =
+      linux_abi::copy_component(path, length, prepared);
+  if (prepared_result < 0) return prepared_result;
+  if (out == nullptr) return linux_abi::kErrorFault;
+
+  KernelStat kernel;
+  const long flags = no_follow == 1 ? kAtSymlinkNoFollow : 0;
+  const int64_t result = sys4(kSysFstatat, static_cast<long>(fd),
+                              to_long(prepared), to_long(&kernel), flags);
+  if (result < 0) return result;
+
+  fill_file_stat(out, kernel);
+  return 0;
+}
+
+LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_rename_v1(const char *old_path, uint64_t old_length,
                            const char *new_path,
                            uint64_t new_length) noexcept {
@@ -317,6 +345,22 @@ int64_t lang_sys_readlink_v1(const char *path, uint64_t length, void *buffer,
 }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
+int64_t lang_sys_readlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                               void *buffer, uint64_t capacity) noexcept {
+  char prepared[linux_abi::kPathMax];
+  const int64_t prepared_result =
+      linux_abi::copy_component(name, length, prepared);
+  if (prepared_result < 0) return prepared_result;
+
+  if (capacity == 0) return 0;
+  if (capacity > kMaxSignedCount) return linux_abi::kErrorInval;
+  if (buffer == nullptr) return linux_abi::kErrorFault;
+
+  return sys4(kSysReadlinkat, static_cast<long>(fd), to_long(prepared),
+              to_long(buffer), static_cast<long>(capacity));
+}
+
+LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
                             const char *link_path,
                             uint64_t link_length) noexcept {
@@ -330,6 +374,23 @@ int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
   if (prepared < 0) return prepared;
 
   return sys2(kSysSymlink, to_long(target_prepared), to_long(link_prepared));
+}
+
+LANG_NATIVE_NO_STACK_PROTECTOR
+int64_t lang_sys_symlinkat_v1(int32_t fd, const char *target,
+                              uint64_t target_length, const char *name,
+                              uint64_t name_length) noexcept {
+  char target_prepared[linux_abi::kPathMax];
+  char name_prepared[linux_abi::kPathMax];
+
+  int64_t prepared =
+      linux_abi::copy_path(target, target_length, target_prepared);
+  if (prepared < 0) return prepared;
+  prepared = linux_abi::copy_component(name, name_length, name_prepared);
+  if (prepared < 0) return prepared;
+
+  return sys3(kSysSymlinkat, to_long(target_prepared),
+              static_cast<long>(fd), to_long(name_prepared));
 }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
@@ -444,7 +505,13 @@ LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_getppid_v1() noexcept { return sys0(kSysGetppid); }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
-int64_t lang_sys_gettid_v1() noexcept { return sys0(kSysGettid); }
+int64_t lang_sys_gettid_v1() noexcept {
+  if (lang_native_cached_tid) {
+    const uintptr_t tid = lang_native_cached_tid();
+    if (tid != 0) return static_cast<int64_t>(tid);
+  }
+  return sys0(kSysGettid);
+}
 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t lang_sys_setpgid_v1(int32_t pid, int32_t pgid) noexcept {

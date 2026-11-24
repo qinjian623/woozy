@@ -1,0 +1,38 @@
+// A typed failure is already terminal before gather starts. The unstarted
+// sibling must be cancelled, not started, and the typed error must win.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+enum Failure { Bad; }
+
+async func fail(log Vec[string]) i32 throws Failure {
+    vec.push(log, "fail");
+    throw Failure.Bad;
+}
+
+async func sibling(name string, log Vec[string]) i32 throws Failure {
+    vec.push(log, name + ".start");
+    defer { vec.push(log, name + ".cleanup"); }
+    await a.sleep(100);
+    vec.push(log, name + ".after");
+    return 0;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let failing = fail(log);
+    a.spawn(failing);
+    await a.sleep(5);
+    let never = sibling("never", log);
+    let outcome = await a.gather[i32,Failure]([failing, never]);
+    switch outcome {
+        case result.Result.Ok(values): io.println("unexpected.ok");
+        case result.Result.Err(error): io.println("typed-error");
+    }
+    for line in log { io.println(line); }
+    return 0;
+}

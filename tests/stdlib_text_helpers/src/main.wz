@@ -1,0 +1,402 @@
+// Checks for std/text whitespace and padding helpers and std/fmt. main returns
+// 0 on success and a unique non-zero code identifying the first failure.
+package app;
+
+import "std/fmt" as fmt;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func same_strings(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func reason_code(value fmt.Reason) u32 {
+    switch value {
+        case fmt.Reason.UnclosedBrace: return 1;
+        case fmt.Reason.UnexpectedClosingBrace: return 2;
+        case fmt.Reason.InvalidPlaceholder: return 3;
+        case fmt.Reason.WidthTooLarge: return 4;
+        case fmt.Reason.FieldIndexTooLarge: return 5;
+        case fmt.Reason.ZeroPaddingUnsupported: return 6;
+    }
+}
+
+func expect_pad_width(width usize, code i32) i32 {
+    try {
+        let ignored = text.pad_left("x",width);
+        return code;
+    } catch problem text.PaddingError {
+        switch problem {
+            case text.PaddingError.WidthTooLarge(actual):
+                if actual != width { return code+1; }
+            case text.PaddingError.InvalidScalar(fill):
+                return code+2;
+        }
+        return 0;
+    }
+}
+
+func expect_pad_invalid(fill u32, width usize, code i32) i32 {
+    try {
+        let ignored = text.pad_left_with("x",width,fill);
+        return code;
+    } catch problem text.PaddingError {
+        switch problem {
+            case text.PaddingError.InvalidScalar(actual):
+                if actual != fill { return code+1; }
+            case text.PaddingError.WidthTooLarge(width):
+                return code+2;
+        }
+        return 0;
+    }
+}
+
+func expect_fmt_missing(template string, values Vec[string],
+        offset usize, index usize, code i32) i32 {
+    try {
+        let ignored = fmt.format(template,values);
+        return code;
+    } catch problem fmt.Error {
+        switch problem {
+            case fmt.Error.MissingField(actual_offset,actual_index):
+                if actual_offset != offset { return code+1; }
+                if actual_index != index { return code+2; }
+            case fmt.Error.MalformedTemplate(actual_offset,reason):
+                return code+3;
+            case fmt.Error.MixedPositionalModes(actual_offset):
+                return code+4;
+            case fmt.Error.OutputTooLarge(actual_offset):
+                return code+5;
+        }
+        return 0;
+    }
+}
+
+func expect_fmt_mixed(template string, values Vec[string],
+        offset usize, code i32) i32 {
+    try {
+        let ignored = fmt.format(template,values);
+        return code;
+    } catch problem fmt.Error {
+        switch problem {
+            case fmt.Error.MixedPositionalModes(actual_offset):
+                if actual_offset != offset { return code+1; }
+            case fmt.Error.MalformedTemplate(actual_offset,reason):
+                return code+2;
+            case fmt.Error.MissingField(actual_offset,index):
+                return code+3;
+            case fmt.Error.OutputTooLarge(actual_offset):
+                return code+4;
+        }
+        return 0;
+    }
+}
+
+func expect_fmt_malformed(template string, values Vec[string],
+        offset usize, reason fmt.Reason, code i32) i32 {
+    try {
+        let ignored = fmt.format(template,values);
+        return code;
+    } catch problem fmt.Error {
+        switch problem {
+            case fmt.Error.MalformedTemplate(actual_offset,actual_reason):
+                if actual_offset != offset { return code+1; }
+                if reason_code(actual_reason) != reason_code(reason) { return code+2; }
+            case fmt.Error.MissingField(actual_offset,index):
+                return code+3;
+            case fmt.Error.MixedPositionalModes(actual_offset):
+                return code+4;
+            case fmt.Error.OutputTooLarge(actual_offset):
+                return code+5;
+        }
+        return 0;
+    }
+}
+
+func expect_fmt_output(template string, values Vec[string],
+        offset usize, code i32) i32 {
+    try {
+        let ignored = fmt.format(template,values);
+        return code;
+    } catch problem fmt.Error {
+        switch problem {
+            case fmt.Error.OutputTooLarge(actual_offset):
+                if actual_offset != offset { return code+1; }
+            case fmt.Error.MalformedTemplate(actual_offset,reason):
+                return code+2;
+            case fmt.Error.MissingField(actual_offset,index):
+                return code+3;
+            case fmt.Error.MixedPositionalModes(actual_offset):
+                return code+4;
+        }
+        return 0;
+    }
+}
+
+func check_split_whitespace() i32 {
+    if vec.len(text.split_whitespace("")) != 0 { return 1001; }
+    if vec.len(text.split_whitespace(" \t\r\n")) != 0 { return 1002; }
+    if !same_strings(text.split_whitespace("a"), ["a"]) { return 1003; }
+    if !same_strings(text.split_whitespace(" a "), ["a"]) { return 1004; }
+    if !same_strings(text.split_whitespace("a  b\tc\r\nd"),
+        ["a","b","c","d"]) { return 1005; }
+
+    // The complete Unicode 18.0.0 White_Space property.
+    if vec.len(text.split_whitespace("\u{9}\u{a}\u{b}\u{c}\u{d}\u{20}\u{85}\u{a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}")) != 0 {
+        return 1006;
+    }
+    // U+200B, U+180E and U+FEFF are space-like but not White_Space.
+    if !same_strings(text.split_whitespace("a\u{200b}b\u{180e}c\u{feff}d"),
+        ["a\u{200b}b\u{180e}c\u{feff}d"]) { return 1007; }
+    if !same_strings(text.split_whitespace("中\u{3000}😀\u{a0}e\u{301}"),
+        ["中","😀","e\u{301}"]) { return 1008; }
+    if !same_strings(text.split_whitespace("a\0b"), ["a\0b"]) { return 1009; }
+    if !same_strings(text.split_whitespace("\0 a \0"), ["\0","a","\0"]) {
+        return 1010;
+    }
+
+    let fields = text.split_whitespace(text.repeat("a ",10000));
+    if vec.len(fields) != 10000 { return 1011; }
+    if fields[0] != "a" || fields[9999] != "a" { return 1012; }
+    return 0;
+}
+
+func check_padding() i32 {
+    try {
+        if text.pad_left("abc",5) != "  abc" { return 1101; }
+        if text.pad_right("abc",5) != "abc  " { return 1102; }
+        if text.pad_center("abc",6) != " abc  " { return 1103; }
+        if text.pad_center("abc",7) != "  abc  " { return 1104; }
+        if text.pad_left("abc",3) != "abc" { return 1105; }
+        if text.pad_right("",0) != "" { return 1106; }
+        if text.pad_left("中",3) != "  中" { return 1107; }
+        if text.pad_right("😀",2) != "😀 " { return 1108; }
+        if text.pad_center("中😀",5) != " 中😀  " { return 1109; }
+        if text.pad_left_with("x",4,0x30) != "000x" { return 1110; }
+        if text.pad_right_with("中",3,0x1f600) != "中😀😀" { return 1111; }
+        if text.pad_center_with("a",4,0x2d) != "-a--" { return 1112; }
+        if text.pad_left_with("a",3,0) != "\0\0a" { return 1113; }
+        if text.pad_right("a\0b",5) != "a\0b  " { return 1114; }
+        if text.pad_left("e\u{301}",3) != " e\u{301}" { return 1118; }
+        if text.pad_right("e\u{301}",3) != "e\u{301} " { return 1119; }
+        if text.pad_center("e\u{301}",4) != " e\u{301} " { return 1120; }
+
+        let boundary = text.pad_left("x",text.MAX_PADDING_WIDTH);
+        if text.len(boundary) != text.MAX_PADDING_WIDTH { return 1115; }
+        if boundary[0] != 32 ||
+            boundary[text.len(boundary)-1] != 120 { return 1116; }
+    } catch problem text.PaddingError {
+        return 1117;
+    }
+    return 0;
+}
+
+func check_padding_errors() i32 {
+    var code = expect_pad_width(text.MAX_PADDING_WIDTH+1,1201);
+    if code != 0 { return code; }
+    code = expect_pad_invalid(0xd800,2,1211);
+    if code != 0 { return code; }
+    code = expect_pad_invalid(0x110000,2,1216);
+    if code != 0 { return code; }
+    // Fill is validated even when the value already meets the width.
+    code = expect_pad_invalid(0xd800,1,1221);
+    if code != 0 { return code; }
+    return 0;
+}
+
+func check_format_success() i32 {
+    try {
+        if fmt.format("",[]) != "" { return 1301; }
+        if fmt.format("plain中😀\0",[]) != "plain中😀\0" { return 1302; }
+        if fmt.format("{}!",["a"]) != "a!" { return 1303; }
+        if fmt.format("{}-{}-{}",["a","中","😀"]) != "a-中-😀" { return 1304; }
+        if fmt.format("{2}-{0}-{1}",["a","b","c"]) != "c-a-b" { return 1305; }
+        if fmt.format("{0}{0}",["x"]) != "xx" { return 1306; }
+        if fmt.format("{{}}",[]) != "{}" { return 1307; }
+        if fmt.format("{{{0}}}",["x"]) != "{x}" { return 1308; }
+        if fmt.format("a{{b}}c",[]) != "a{b}c" { return 1309; }
+        if fmt.format("{}\0{}",["a","b"]) != "a\0b" { return 1310; }
+        if fmt.format("中{}😀",["x"]) != "中x😀" { return 1311; }
+        if fmt.format("{:<5}",["a"]) != "a    " { return 1312; }
+        if fmt.format("{:>5}",["a"]) != "    a" { return 1313; }
+        if fmt.format("{:^6}",["a"]) != "  a   " { return 1314; }
+        if fmt.format("{0:>4}-{1:<4}",["a","b"]) != "   a-b   " { return 1315; }
+        if fmt.format("{:>3}",["中"]) != "  中" { return 1316; }
+        if fmt.format("{:^4}",["中"]) != " 中  " { return 1317; }
+        if fmt.format("{:<0}",["abc"]) != "abc" { return 1318; }
+        if fmt.format("{}",["a","b"]) != "a" { return 1319; }
+        if fmt.format("{1}",["a","b"]) != "b" { return 1320; }
+        if fmt.format("{{{}}}",["x"]) != "{x}" { return 1321; }
+        if fmt.format("{}",["\0"]) != "\0" { return 1322; }
+        if fmt.format("{:>5}",["😀\0"]) != "   😀\0" { return 1323; }
+        if fmt.format("{{",[]) != "{" { return 1324; }
+        if fmt.format("}}",[]) != "}" { return 1325; }
+        if fmt.format("{}",["{x}"]) != "{x}" { return 1329; }
+        if fmt.format("{:>3}",["e\u{301}"]) != " e\u{301}" { return 1330; }
+        if fmt.format("{{0}}",[]) != "{0}" { return 1331; }
+        if fmt.format("{{}} {0} {1}",["a","b"]) != "{} a b" { return 1332; }
+        if fmt.format("{{}} {}",["a"]) != "{} a" { return 1333; }
+        if fmt.format("a\0{{b}}\0c",[]) != "a\0{b}\0c" { return 1334; }
+        if fmt.format("{}",["{{}}"]) != "{{}}" { return 1335; }
+        if fmt.format("{:8}",["a\0b"]) != "a\0b     " { return 1336; }
+        if fmt.format("{00}",["a"]) != "a" { return 1337; }
+        if fmt.format("{:8}",["hi"]) != "hi      " { return 1338; }
+        if fmt.format("{0:8}",["hi"]) != "hi      " { return 1339; }
+        if fmt.format("{:5}",["a"]) != "a    " { return 1340; }
+        if fmt.format("{:0}",["abc"]) != "abc" { return 1341; }
+        if fmt.format("{:3}",["a\0"]) != "a\0 " { return 1342; }
+        if fmt.format("{:3}",["中"]) != "中  " { return 1343; }
+
+        let wide = fmt.format("{:>1000000}",["x"]);
+        if text.len(wide) != fmt.MAX_WIDTH { return 1326; }
+        if wide[0] != 32 || wide[text.len(wide)-1] != 120 { return 1327; }
+        if fmt.MAX_WIDTH != text.MAX_PADDING_WIDTH { return 1328; }
+        if fmt.MAX_OUTPUT_CODE_POINTS != fmt.MAX_WIDTH { return 1344; }
+        if fmt.MAX_OUTPUT_BYTES != 4_000_000 { return 1345; }
+    } catch problem fmt.Error {
+        return 1399;
+    }
+    return 0;
+}
+
+func check_format_errors() i32 {
+    var code = expect_fmt_missing("{}",[],0,0,1401);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("{1}",["a"],0,1,1411);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("x{} {}",["a"],4,1,1421);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("中{} {}",["a"],4,1,1431);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("{:>4}",[],0,0,1441);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("{0:>4}",[],0,0,1451);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("{999999}",["a"],0,999999,1461);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("{1000000}",["a"],0,1000000,1466);
+    if code != 0 { return code; }
+
+    code = expect_fmt_mixed("{} {0}",["a"],3,1471);
+    if code != 0 { return code; }
+    code = expect_fmt_mixed("{0} {}",["a"],4,1481);
+    if code != 0 { return code; }
+    code = expect_fmt_mixed("中{} {0}",["a"],4,1491);
+    if code != 0 { return code; }
+    code = expect_fmt_mixed("{{}} {} {0}",["a"],8,1501);
+    if code != 0 { return code; }
+
+    code = expect_fmt_malformed("{",[],0,fmt.Reason.UnclosedBrace,1511);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0",[],0,fmt.Reason.UnclosedBrace,1521);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>",[],0,fmt.Reason.UnclosedBrace,1531);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>5",[],0,fmt.Reason.UnclosedBrace,1541);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("}",[],0,fmt.Reason.UnexpectedClosingBrace,1551);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("a}",[],1,fmt.Reason.UnexpectedClosingBrace,1561);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("}}}",[],2,fmt.Reason.UnexpectedClosingBrace,1571);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{x}",[],0,fmt.Reason.InvalidPlaceholder,1581);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0x}",[],0,fmt.Reason.InvalidPlaceholder,1591);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0:}",[],0,fmt.Reason.InvalidPlaceholder,1601);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>}",[],0,fmt.Reason.InvalidPlaceholder,1611);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>x}",[],0,fmt.Reason.InvalidPlaceholder,1621);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0!r}",[],0,fmt.Reason.InvalidPlaceholder,1631);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0.foo}",[],0,fmt.Reason.InvalidPlaceholder,1641);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{ }",[],0,fmt.Reason.InvalidPlaceholder,1651);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:08}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1661);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:<08}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1791);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>08}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1801);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:^08}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1811);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0:08}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1821);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:00}",[],0,
+        fmt.Reason.ZeroPaddingUnsupported,1831);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("x{:08}",[],1,
+        fmt.Reason.ZeroPaddingUnsupported,1841);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("中{:08}",[],1,
+        fmt.Reason.ZeroPaddingUnsupported,1846);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("\0{",[],1,fmt.Reason.UnclosedBrace,1671);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("中{ x}",[],1,fmt.Reason.InvalidPlaceholder,1681);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>1000001}",["x"],0,
+        fmt.Reason.WidthTooLarge,1691);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>999999999999999999999999}",["x"],0,
+        fmt.Reason.WidthTooLarge,1781);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0:>1000001}",["x"],0,
+        fmt.Reason.WidthTooLarge,1701);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{1000001}",["x"],0,
+        fmt.Reason.FieldIndexTooLarge,1711);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{999999999999999999999999}",["x"],0,
+        fmt.Reason.FieldIndexTooLarge,1721);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("中}",[],1,
+        fmt.Reason.UnexpectedClosingBrace,1731);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{0:",[],0,fmt.Reason.UnclosedBrace,1741);
+    if code != 0 { return code; }
+    code = expect_fmt_malformed("{:>\u{1f600}}",[],0,
+        fmt.Reason.InvalidPlaceholder,1751);
+    if code != 0 { return code; }
+    // A combining mark is a separate code point for offsets and widths.
+    code = expect_fmt_malformed("e\u{301}{",[],2,
+        fmt.Reason.UnclosedBrace,1761);
+    if code != 0 { return code; }
+    code = expect_fmt_missing("e\u{301} {}",[],3,0,1771);
+    if code != 0 { return code; }
+
+    let full = text.repeat("😀",fmt.MAX_OUTPUT_CODE_POINTS);
+    code = expect_fmt_output("{}x",[full],2,1851);
+    if code != 0 { return code; }
+    let over = text.repeat("a",fmt.MAX_OUTPUT_CODE_POINTS+1);
+    code = expect_fmt_output("{}",[over],0,1861);
+    if code != 0 { return code; }
+    code = expect_fmt_output("{:1000000}{}",["x","y"],10,1871);
+    if code != 0 { return code; }
+    return 0;
+}
+
+func main() i32 {
+    var code = check_split_whitespace();
+    if code != 0 { return code; }
+    code = check_padding();
+    if code != 0 { return code; }
+    code = check_padding_errors();
+    if code != 0 { return code; }
+    code = check_format_success();
+    if code != 0 { return code; }
+    return check_format_errors();
+}

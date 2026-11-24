@@ -1,0 +1,273 @@
+// Safe formatting for templates with positional string values.
+//
+// Supported grammar:
+//   {{ and }}              literal { and }
+//   {}                     next value in automatic order
+//   {N}                    value N, counted from zero
+//   {:W}, {N:W}            left-aligned in W code points (string default)
+//   {:<W}, {:>W}, {:^W}    left, right or centre aligned in W code points
+//   {N:<W}, {N:>W}, {N:^W} indexed value with explicit alignment
+//
+// Automatic and indexed fields cannot be mixed. Every value is a string, and
+// the only fill character is a space. W is either "0" or a decimal number
+// without a leading zero. A leading zero in a width (for example {:08} or
+// {:<08}) is rejected with Reason.ZeroPaddingUnsupported; zero fill is not
+// implemented and is never silently treated as space padding. Other format
+// specs are rejected. This is a deliberately small formatter: it does not
+// evaluate expressions, read fields or attributes, apply conversions, accept
+// named fields, or implement the rest of Python str.format. Unreferenced
+// values are ignored. Errors carry a zero-based Unicode code point offset into
+// the template; the offset is the opening brace for field errors and the
+// closing brace for an unmatched '}'.
+//
+// A width or field index above its limit is rejected rather than overflowing.
+// The complete result is limited to MAX_OUTPUT_CODE_POINTS Unicode code points
+// and MAX_OUTPUT_BYTES UTF-8 bytes. Both bounds are checked before appending
+// each piece; a piece that would exceed either bound throws
+// OutputTooLarge(offset), where offset identifies the literal, escape or field
+// that could not be appended.
+package fmt;
+
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+
+pub const MAX_WIDTH usize = text.MAX_PADDING_WIDTH;
+pub const MAX_FIELD_INDEX usize = 1_000_000;
+pub const MAX_OUTPUT_CODE_POINTS usize = 1_000_000;
+// UTF-8 represents one code point with at most four bytes. Keep the byte bound
+// explicit even though the code point limit already implies it for valid text.
+pub const MAX_OUTPUT_BYTES usize = 4_000_000;
+
+pub enum Reason {
+    UnclosedBrace;
+    UnexpectedClosingBrace;
+    InvalidPlaceholder;
+    WidthTooLarge;
+    FieldIndexTooLarge;
+    ZeroPaddingUnsupported;
+}
+
+pub enum Error {
+    MalformedTemplate(offset usize, reason Reason);
+    MissingField(offset usize, index usize);
+    MixedPositionalModes(offset usize);
+    OutputTooLarge(offset usize);
+}
+
+const LEFT_BRACE u32 = 123;
+const RIGHT_BRACE u32 = 125;
+const COLON u32 = 58;
+const LESS u32 = 60;
+const GREATER u32 = 62;
+const CARET u32 = 94;
+const ZERO u32 = 48;
+const NINE u32 = 57;
+const MODE_NONE u32 = 0;
+const MODE_AUTO u32 = 1;
+const MODE_INDEXED u32 = 2;
+
+struct Buffer {
+    first string;
+    pieces option.Option[Vec[string]];
+    code_points usize;
+    bytes usize;
+}
+
+func is_digit(value u32) bool { return value >= ZERO && value <= NINE; }
+func digit_value(value u32) usize { return usize(value - ZERO); }
+
+func check_size(code_points usize, bytes usize, count usize, size usize,
+        offset usize) throws Error {
+    if code_points > MAX_OUTPUT_CODE_POINTS || count > MAX_OUTPUT_CODE_POINTS-code_points ||
+        bytes > MAX_OUTPUT_BYTES || size > MAX_OUTPUT_BYTES-bytes {
+        throw Error.OutputTooLarge(offset);
+    }
+}
+
+func store(buffer inout Buffer, piece string, count usize, size usize) {
+    if count == 0 { return; }
+    if buffer.code_points == 0 {
+        buffer.first = piece;
+    } else {
+        switch buffer.pieces {
+            case option.Option.Some(pieces): vec.push(pieces,piece);
+            case option.Option.None:
+                buffer.pieces = option.Option[Vec[string]].Some([buffer.first,piece]);
+        }
+    }
+    buffer.code_points += count;
+    buffer.bytes += size;
+}
+
+func append(buffer inout Buffer, piece string, count usize, offset usize) throws Error {
+    let size = text.byte_len(piece);
+    check_size(buffer.code_points,buffer.bytes,count,size,offset);
+    store(inout buffer,piece,count,size);
+}
+
+// Combine in a balanced tree so many small fields do not repeatedly copy the
+// whole result. Every leaf has already passed the total output bound.
+func combine(pieces Vec[string], start usize, end usize) string {
+    let count = end - start;
+    if count == 0 { return ""; }
+    if count == 1 { return pieces[start]; }
+    let middle = start + count / 2;
+    return combine(pieces,start,middle) + combine(pieces,middle,end);
+}
+
+func append_value(buffer inout Buffer, value string, width usize,
+        alignment u32, offset usize) throws Error {
+    let count = text.len(value);
+    if width <= count {
+        append(inout buffer,value,count,offset);
+        return;
+    }
+    let padding = width-count;
+    let size = text.byte_len(value);
+    // Check before allocating padding. Check value bytes separately so the
+    // padded byte count cannot overflow before we enforce the result limit.
+    check_size(buffer.code_points,buffer.bytes,width,size,offset);
+    if padding > MAX_OUTPUT_BYTES-buffer.bytes-size {
+        throw Error.OutputTooLarge(offset);
+    }
+    let padded = aligned(value,padding,alignment);
+    store(inout buffer,padded,width,size+padding);
+}
+
+pub func format(template string, values Vec[string]) string throws Error {
+    var out = Buffer(first:"",pieces:option.Option[Vec[string]].None,code_points:0,bytes:0);
+    let length = text.len(template);
+    var cursor usize = 0;
+    var automatic_index usize = 0;
+    var mode u32 = MODE_NONE;
+    for cursor < length {
+        let literal_start = cursor;
+        var brace u32 = 0;
+        for cursor < length {
+            brace = template[cursor];
+            if brace == LEFT_BRACE || brace == RIGHT_BRACE { break; }
+            cursor += 1;
+        }
+        if cursor > literal_start {
+            if literal_start == 0 && cursor == length {
+                check_size(0,0,length,text.byte_len(template),0);
+                return template;
+            }
+            append(inout out,template[literal_start:cursor],cursor-literal_start,literal_start);
+        }
+        if cursor >= length { break; }
+        if brace == LEFT_BRACE {
+            let offset = cursor;
+            cursor += 1;
+            if cursor < length && template[cursor] == LEFT_BRACE {
+                append(inout out,"{",1,offset);
+                cursor += 1;
+                continue;
+            }
+            var has_index = false;
+            var field_index usize = 0;
+            if cursor < length && is_digit(template[cursor]) {
+                has_index = true;
+                for cursor < length && is_digit(template[cursor]) {
+                    let digit = digit_value(template[cursor]);
+                    if field_index > MAX_FIELD_INDEX / 10 {
+                        throw Error.MalformedTemplate(offset,Reason.FieldIndexTooLarge);
+                    }
+                    field_index = field_index * 10 + digit;
+                    if field_index > MAX_FIELD_INDEX {
+                        throw Error.MalformedTemplate(offset,Reason.FieldIndexTooLarge);
+                    }
+                    cursor += 1;
+                }
+            }
+            var alignment u32 = 0;
+            var width usize = 0;
+            if cursor < length && template[cursor] == COLON {
+                cursor += 1;
+                if cursor >= length {
+                    throw Error.MalformedTemplate(offset,Reason.UnclosedBrace);
+                }
+                let spec = template[cursor];
+                if spec == LESS || spec == GREATER || spec == CARET {
+                    alignment = spec;
+                    cursor += 1;
+                }
+                if cursor < length && is_digit(template[cursor]) {
+                    if template[cursor] == ZERO && cursor + 1 < length &&
+                        is_digit(template[cursor + 1]) {
+                        throw Error.MalformedTemplate(
+                            offset,Reason.ZeroPaddingUnsupported);
+                    }
+                    for cursor < length && is_digit(template[cursor]) {
+                        let digit = digit_value(template[cursor]);
+                        if width > MAX_WIDTH / 10 {
+                            throw Error.MalformedTemplate(offset,Reason.WidthTooLarge);
+                        }
+                        width = width * 10 + digit;
+                        if width > MAX_WIDTH {
+                            throw Error.MalformedTemplate(offset,Reason.WidthTooLarge);
+                        }
+                        cursor += 1;
+                    }
+                } else {
+                    if cursor >= length {
+                        throw Error.MalformedTemplate(offset,Reason.UnclosedBrace);
+                    }
+                    throw Error.MalformedTemplate(offset,Reason.InvalidPlaceholder);
+                }
+            }
+            if cursor >= length {
+                throw Error.MalformedTemplate(offset,Reason.UnclosedBrace);
+            }
+            if template[cursor] != RIGHT_BRACE {
+                throw Error.MalformedTemplate(offset,Reason.InvalidPlaceholder);
+            }
+            cursor += 1;
+            if has_index {
+                if mode == MODE_AUTO {
+                    throw Error.MixedPositionalModes(offset);
+                }
+                mode = MODE_INDEXED;
+            } else {
+                if mode == MODE_INDEXED {
+                    throw Error.MixedPositionalModes(offset);
+                }
+                mode = MODE_AUTO;
+                if automatic_index > MAX_FIELD_INDEX {
+                    throw Error.MalformedTemplate(offset,Reason.FieldIndexTooLarge);
+                }
+                field_index = automatic_index;
+                automatic_index += 1;
+            }
+            if field_index >= vec.len(values) {
+                throw Error.MissingField(offset,field_index);
+            }
+            let value = values[field_index];
+            append_value(inout out,value,width,alignment,offset);
+        } else {
+            let offset = cursor;
+            cursor += 1;
+            if cursor < length && template[cursor] == RIGHT_BRACE {
+                append(inout out,"}",1,offset);
+                cursor += 1;
+            } else {
+                throw Error.MalformedTemplate(offset,Reason.UnexpectedClosingBrace);
+            }
+        }
+    }
+    switch out.pieces {
+        case option.Option.Some(pieces): return combine(pieces,0,vec.len(pieces));
+        case option.Option.None: return out.first;
+    }
+}
+
+func aligned(value string, padding usize, alignment u32) string {
+    if alignment == GREATER { return text.repeat(" ",padding)+value; }
+    if alignment == CARET {
+        let left = padding/2;
+        return text.repeat(" ",left)+value+text.repeat(" ",padding-left);
+    }
+    // A bare width and explicit left alignment use the same padding.
+    return value+text.repeat(" ",padding);
+}

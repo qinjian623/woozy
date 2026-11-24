@@ -1,0 +1,35 @@
+// Parent cancellation of a direct `await gather(...)`: run_until(parent)
+// alone must wait for both member cancel exit plans before the parent frame
+// completes. No ordinary await edge changes this test.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func child(name string, delay i64, log Vec[string]) Unit {
+    defer { vec.push(log, name + ".cleanup"); }
+    await a.sleep(delay);
+    vec.push(log, name + ".after");
+}
+
+async func parent(log Vec[string]) Unit {
+    defer { vec.push(log, "parent.cleanup"); }
+    let outcome = await a.gather[Unit,Unit]([
+        child("a", 100, log),
+        child("b", 100, log)]);
+    vec.push(log, "after.join");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = parent(log);
+    a.spawn(task);
+    a.run_until(a.sleep(5));
+    a.cancel(task);
+    a.run_until(task);
+
+    io.println(a.finished(task));
+    for line in log { io.println(line); }
+    return 0;
+}

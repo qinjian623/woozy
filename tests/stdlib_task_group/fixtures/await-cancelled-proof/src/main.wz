@@ -1,0 +1,36 @@
+// Runtime fact used by join_group's design: awaiting a cancelled task cancels
+// the waiter. The coordinator reaches "before.await", observes the cancelled
+// child, and then runs only its cancellation cleanup. It must never print
+// "after.await". The child's own cleanup still runs first.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+async func child(log Vec[string]) Unit {
+    defer { vec.push(log, "child.cleanup"); }
+    await a.sleep(50);
+    vec.push(log, "child.after");
+}
+
+async func coordinator(log Vec[string]) Unit {
+    defer { vec.push(log, "coordinator.cleanup"); }
+    let task = child(log);
+    a.spawn(task);
+    await a.sleep(5);
+    a.cancel(task);
+    vec.push(log, "before.await");
+    await task;
+    vec.push(log, "after.await");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = coordinator(log);
+    a.spawn(task);
+    a.run_until(task);
+    io.println(a.finished(task));
+    for line in log { io.println(line); }
+    return 0;
+}

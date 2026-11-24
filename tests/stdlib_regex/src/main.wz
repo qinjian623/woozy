@@ -3,6 +3,7 @@ package app;
 import "std/option" as option;
 import "std/regex" as regex;
 import "std/text" as text;
+import "std/vec" as vec;
 
 func matches(pattern string, value string, start usize, end usize) bool throws regex.Error {
     let compiled = regex.compile(pattern);
@@ -126,6 +127,7 @@ func quantifiers_and_empty() bool throws regex.Error {
 
 func leftmost_longest() bool throws regex.Error {
     if !matches("b|abc","abc",0,3) { return false; }
+    if !matches("b|a.*z","ab😀z",0,4) { return false; }
     if !matches(".*a","baaa",0,4) || !matches(".*a","aaab",0,3) { return false; }
     if !matches("a.*a","aXaYa",0,5) { return false; }
     if !matches("a*","aaab",0,3) || !matches("a*","baaa",0,0) { return false; }
@@ -206,6 +208,15 @@ func public_api() bool throws regex.Error {
     }
 }
 
+func repeated_search() bool throws regex.Error {
+    let compiled = regex.compile("^|(😀+)|$");
+    let found = regex.find_all(compiled,"a😀😀b");
+    if vec.len(found) != 3 { return false; }
+    return found[0].start == 0 && found[0].end == 0 &&
+           found[1].start == 1 && found[1].end == 3 &&
+           found[2].start == 4 && found[2].end == 4;
+}
+
 func main() i32 throws regex.Error {
     if !literals_and_dot() { return 1; }
     if !anchors() { return 2; }
@@ -218,5 +229,6 @@ func main() i32 throws regex.Error {
     if !limits() { return 9; }
     if !pathological() { return 10; }
     if !public_api() { return 11; }
+    if !repeated_search() { return 12; }
     return 0;
 }

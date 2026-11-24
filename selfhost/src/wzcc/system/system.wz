@@ -143,6 +143,12 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", result: "Result[std/os.FileInfo,i32]", parameters: ["Vec[u8]"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 214, name: "__woozy_os_flock", result: "Result[Unit,i32]", parameters: ["i32", "i32"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 215, name: "__woozy_os_executable_path", result: "i64", parameters: ["Vec[u8]", "usize"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 216, name: "__woozy_os_openat", result: "Result[i32,i32]", parameters: ["i32", "Vec[u8]", "i32", "u32"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 217, name: "__woozy_os_mkdirat", result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", "u32"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 218, name: "__woozy_os_unlinkat", result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", "i32"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 219, name: "__woozy_os_fstatat", result: "Result[std/os.FileInfo,i32]", parameters: ["i32", "Vec[u8]", "i32"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 220, name: "__woozy_os_readlinkat_bytes", result: "i64", parameters: ["i32", "Vec[u8]", "Vec[u8]"], owner: "std/os", type_arity: 0),
+        OperationSpec(operation: 221, name: "__woozy_os_symlinkat_bytes", result: "Result[Unit,i32]", parameters: ["i32", "Vec[u8]", "Vec[u8]"], owner: "std/os", type_arity: 0),
         OperationSpec(operation: 85, name: "__woozy_net_socket", result: "Result[i32,i32]", parameters: ["i32", "i32", "i32"], owner: "std/net", type_arity: 0),
         OperationSpec(operation: 86, name: "__woozy_net_bind", result: "Result[Unit,i32]", parameters: ["i32", "std/net.Address"], owner: "std/net", type_arity: 0),
         OperationSpec(operation: 87, name: "__woozy_net_connect", result: "Result[Unit,i32]", parameters: ["i32", "std/net.Address"], owner: "std/net", type_arity: 0),
@@ -234,6 +240,12 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 210, name: "__woozy_async_run", result: "Unit", parameters: [], owner: "std/async", type_arity: 0),
         OperationSpec(operation: 211, name: "__woozy_async_run_until", result: "Unit", parameters: ["Task[A,B]"], owner: "std/async", type_arity: 2),
         OperationSpec(operation: 212, name: "__woozy_async_shutdown", result: "Unit", parameters: [], owner: "std/async", type_arity: 0),
+        OperationSpec(operation: 222, name: "__woozy_async_scope_begin", result: "Unit", parameters: ["Task[A,B]"], owner: "std/async", type_arity: 2),
+        OperationSpec(operation: 223, name: "__woozy_async_scope_add", result: "Unit", parameters: ["Task[A,B]", "Task[C,D]"], owner: "std/async", type_arity: 4),
+        OperationSpec(operation: 224, name: "__woozy_async_scope_activate", result: "Unit", parameters: ["Task[A,B]"], owner: "std/async", type_arity: 2),
+        OperationSpec(operation: 225, name: "__woozy_async_scope_wait", result: "Task[Unit,Unit]", parameters: [], owner: "std/async", type_arity: 0),
+        OperationSpec(operation: 226, name: "__woozy_async_task_status", result: "i32", parameters: ["Task[A,B]"], owner: "std/async", type_arity: 2),
+        OperationSpec(operation: 227, name: "__woozy_io_vec_append_bytes", result: "Unit", parameters: ["Vec[u8]", "Vec[u8]", "usize", "usize"], owner: "std/io", type_arity: 0),
     ];
 }
 

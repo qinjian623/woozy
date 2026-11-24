@@ -240,6 +240,25 @@ bool aliases_payload(LangVec *v, const void *pointer) noexcept {
   return address >= begin && address - begin < v->capacity * v->stride;
 }
 
+// Unlike aliases_payload's one-element probe, this checks a borrowed byte
+// range. An append must stage its source when growth can free any part of the
+// range, including a range that begins before the target payload.
+bool range_aliases_payload(const LangVec *v, const void *pointer,
+                           uint64_t count) noexcept {
+  if (!v->data || !pointer || !v->capacity || !v->stride || !count)
+    return false;
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(v->data);
+  uintptr_t bytes = kMaxU64;
+  if (v->capacity <= kMaxU64 / v->stride)
+    bytes = v->capacity * v->stride;
+  const uintptr_t source = reinterpret_cast<uintptr_t>(pointer);
+  const uintptr_t source_end =
+      count > kMaxU64 - source ? kMaxU64 : source + count;
+  const uintptr_t target_end =
+      bytes > kMaxU64 - begin ? kMaxU64 : begin + bytes;
+  return source < target_end && begin < source_end;
+}
+
 uint64_t grown_capacity(uint64_t current, uint64_t minimum) noexcept {
   uint64_t capacity = current ? current : 1;
   while (capacity < minimum) {
@@ -531,18 +550,14 @@ extern "C" bool lang_vec_try_move_trivial_v1(
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {
   if (start > end || end > v->length) vec_panic(9);
-  auto *result = lang_vec_new_v1(end-start, v->stride, v->copy, v->drop);
   const uint64_t count = end - start;
-  // Trivial slices have no element callback, so one overlap-safe byte move can
-  // replace the per-element loop. A non-empty source range still has to stop at
-  // the initialized prefix exactly where lang_vec_at_v1 would panic; empty
-  // ranges read nothing even when start is past that prefix.
-  if (!has_owner_ops(v) && (count == 0 || end <= v->initialized)) {
-    if (count) {
-      const uint64_t bytes = checked_payload_bytes(count, v->stride);
-      copy_bytes(result->data, element(v, start), bytes);
-      result->initialized = count;
+  auto *result = lang_vec_new_v1(count, v->stride, v->copy, v->drop);
+  if (!has_owner_ops(result)) {
+    if (start != end) {
+      if (end > v->length || end > v->initialized) vec_panic(4);
+      copy_bytes(result->data, element(v, start), count * v->stride);
     }
+    result->initialized = count;
     return result;
   }
   // A copy callback may call arbitrary C retain code. Snapshot and retain each
@@ -721,6 +736,59 @@ extern "C" void lang_vec_clear_v1(LangVec *v) noexcept {
     v->length = 0;
   }
   drop_staged(v, stage, removed);
+}
+extern "C" void lang_io_vec_append_bytes_v1(LangVec *v,
+                                             const LangVec *source,
+                                             uint64_t offset,
+                                             uint64_t count) noexcept {
+  // This is a typed byte operation, not a generic element copy. Reject a
+  // descriptor that could require element callbacks before touching storage.
+  if (!v || !source || v->stride != 1 || source->stride != 1 ||
+      v->copy || v->drop || source->copy || source->drop)
+    vec_panic(4);
+  if (offset > source->length || count > source->length - offset)
+    vec_panic(9);
+  if (count && (offset > source->initialized ||
+                count > source->initialized - offset))
+    vec_panic(4);
+  // A zero-byte append is a no-op even while the target is pinned, matching
+  // resize's no-change path.
+  if (!count) return;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  // Appending after an uninitialized gap cannot publish a contiguous
+  // initialized prefix, so reject that descriptor state before any write.
+  if (v->initialized != v->length || !source->data) vec_panic(4);
+  const uint64_t old_length = v->length;
+  if (count > kMaxU64 - old_length) vec_panic(6);
+  const uint64_t new_length = old_length + count;
+  const bool distinct_source = source != v;
+  if (distinct_source) {
+    // Pin the source prefix while its bytes are read. A self-append skips the
+    // pin because the target's active-iteration check already covers it and
+    // growth must remain legal for this descriptor.
+    (void)lang_vec_begin_v1(const_cast<LangVec *>(source));
+  }
+  const bool grow = new_length > v->capacity;
+  const void *input =
+      static_cast<const unsigned char *>(source->data) + offset;
+  StageBuffer alias;
+  if (grow && distinct_source &&
+      range_aliases_payload(v, input, count)) {
+    // Growth may release the old target payload. Snapshot the entire source
+    // range first so a raw alias that starts before the target stays valid.
+    if (!alias.reserve(count)) vec_panic(5);
+    copy_bytes(alias.data(), input, count);
+    input = alias.data();
+  }
+  if (grow) grow_storage(v, new_length);
+  // A self-append must read the relocated prefix after growth, never the old
+  // payload pointer captured above.
+  if (!distinct_source) input = element(v, offset);
+  copy_bytes(element(v, old_length), input, count);
+  // Publish the completed byte range before exposing its length.
+  v->initialized = new_length;
+  v->length = new_length;
+  if (distinct_source) lang_vec_end_v1(const_cast<LangVec *>(source));
 }
 extern "C" void lang_vec_check_resize_v1(LangVec *v) noexcept {
   // Structural changes still require caller synchronization against new iterations.

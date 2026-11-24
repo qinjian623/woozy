@@ -11,7 +11,16 @@
 //
 // ^ and $ assert the beginning and end of the whole input. . does not match
 // U+000A. Offsets in Error are Unicode code point indices in the pattern.
-// Backreferences, lookaround, captures, {m,n} and flags are rejected.
+// compile emits capture tags automatically when a pattern has at most
+// MAX_CAPTURE_GROUPS groups.  If a pattern needs more groups, or its tag states
+// would exceed the existing NFA state budget, compile falls back to grouping-
+// only states; ordinary matching is unchanged and find_captures reports
+// CaptureError.Unavailable.  compile_captures is the explicitly checked form
+// and reports PatternTooLarge instead of falling back.  Ordinary
+// find/find_all/split/replace skip tag states without copying them;
+// find_captures runs the tagged thread path.  See README.md in this directory
+// for the extended API, capture tie model and performance limits.
+// Backreferences, lookaround, {m,n} and flags are rejected.
 package regex;
 
 import "std/option" as option;
@@ -23,6 +32,7 @@ const MAX_PATTERN_CODEPOINTS usize = 4096;
 const MAX_NESTING usize = 128;
 const MAX_STATES usize = 16384;
 const MAX_CLASS_RANGES usize = 16384;
+const MAX_CAPTURE_GROUPS usize = 32;
 const NO_STATE usize = 18446744073709551615;
 
 const KIND_CHAR u32 = 0;
@@ -34,6 +44,8 @@ const KIND_JUMP u32 = 5;
 const KIND_START u32 = 6;
 const KIND_END u32 = 7;
 const KIND_MATCH u32 = 8;
+const KIND_TAG_START u32 = 9;
+const KIND_TAG_END u32 = 10;
 
 pub enum Error {
     Syntax(offset usize);
@@ -41,9 +53,29 @@ pub enum Error {
     NestingTooDeep(offset usize);
 }
 
+// CaptureError is separate from Error so the published compile error cases stay
+// exhaustive-compatible.  Unavailable is reported only by
+// find_captures/find_captures_from when compile returned a valid Pattern
+// without capture tags because the pattern exceeded the capture-group or
+// tag-state budget.
+pub enum CaptureError {
+    Unavailable;
+}
+
 pub struct Match {
     pub start usize;
     pub end usize;
+}
+
+// Captures holds the leftmost-longest overall match, retained source and the
+// participating groups.  Use group_count/group/group_text instead of indexing
+// the private group vector.  Group 0 is the overall match; group 1 is the
+// first opening parenthesis.  Non-participating groups are None.
+pub struct Captures {
+    pub start usize;
+    pub end usize;
+    source string;
+    groups Vec[option.Option[Match]];
 }
 
 struct Range {
@@ -64,6 +96,8 @@ pub struct Pattern {
     states Vec[Inst];
     ranges Vec[Range];
     start usize;
+    groups usize;
+    captures_available bool;
 }
 
 struct Patch {
@@ -82,6 +116,8 @@ struct Compiler {
     cursor Vec[usize];
     states Vec[Inst];
     ranges Vec[Range];
+    capture bool;
+    groups Vec[usize];
 }
 
 struct Runner {
@@ -90,6 +126,25 @@ struct Runner {
     starts Vec[usize];
     touched Vec[usize];
     active Vec[usize];
+}
+
+struct CaptureThread {
+    state usize;
+    start usize;
+    tags Vec[usize];
+}
+
+struct CaptureFrame {
+    state usize;
+    tags Vec[usize];
+}
+
+struct CaptureRunner {
+    compiled Pattern;
+    input Vec[u32];
+    seen Vec[bool];
+    touched Vec[usize];
+    active Vec[CaptureThread];
 }
 
 func at_end(c Compiler) bool {
@@ -253,12 +308,33 @@ func parse_atom(c Compiler, depth usize) Frag throws Error {
         if depth >= MAX_NESTING {
             throw Error.NestingTooDeep(offset);
         }
+        if !c.capture {
+            let inner = parse_alternation(c, depth + 1);
+            if at_end(c) || peek(c) != 41 {
+                throw Error.Syntax(c.cursor[0]);
+            }
+            advance(c);
+            return Frag(start:inner.start, outs:inner.outs, repeatable:true);
+        }
+        if c.groups[0] >= MAX_CAPTURE_GROUPS {
+            throw Error.PatternTooLarge(offset);
+        }
+        let group = c.groups[0];
+        c.groups[0] += 1;
+        let open = emit(c, KIND_TAG_START, NO_STATE, NO_STATE, u32(group * 2),
+            0, 0, offset);
         let inner = parse_alternation(c, depth + 1);
         if at_end(c) || peek(c) != 41 {
             throw Error.Syntax(c.cursor[0]);
         }
         advance(c);
-        return Frag(start:inner.start, outs:inner.outs, repeatable:true);
+        let close = emit(c, KIND_TAG_END, NO_STATE, NO_STATE,
+            u32(group * 2 + 1), 0, 0, offset);
+        patch(c, inner.outs, close);
+        c.states[open].next = inner.start;
+        let outs = vec.empty[Patch]();
+        vec.push(outs, Patch(state:close, alt:false));
+        return Frag(start:open, outs:outs, repeatable:true);
     }
     if rune == 91 {
         advance(c);
@@ -356,7 +432,7 @@ func parse_alternation(c Compiler, depth usize) Frag throws Error {
     return result;
 }
 
-pub func compile(pattern string) Pattern throws Error {
+func compile_pattern(pattern string, capture bool) Pattern throws Error {
     if text.byte_len(pattern) > MAX_PATTERN_BYTES {
         throw Error.PatternTooLarge(0);
     }
@@ -368,14 +444,40 @@ pub func compile(pattern string) Pattern throws Error {
         pattern:runes,
         cursor:vec.make[usize](1, 0),
         states:vec.empty[Inst](),
-        ranges:vec.empty[Range]());
+        ranges:vec.empty[Range](),
+        capture:capture,
+        groups:vec.make[usize](1, 0));
     let root = parse_alternation(c, 0);
     if !at_end(c) {
         throw Error.Syntax(c.cursor[0]);
     }
     let match_state = emit(c, KIND_MATCH, NO_STATE, NO_STATE, 0, 0, 0, c.cursor[0]);
     patch(c, root.outs, match_state);
-    return Pattern(states:c.states, ranges:c.ranges, start:root.start);
+    return Pattern(states:c.states, ranges:c.ranges, start:root.start,
+        groups:c.groups[0], captures_available:capture);
+}
+
+// compile prefers a capture-capable Pattern so find_captures works on ordinary
+// values.  A Pattern that previously compiled only because groups emitted no
+// extra states must still compile: if the tagged form exceeds the group or
+// state budget, retry without tags.  Syntax and nesting diagnostics are the
+// same in both forms, so they are not retried.
+pub func compile(pattern string) Pattern throws Error {
+    try {
+        return compile_pattern(pattern, true);
+    } catch error Error {
+        switch error {
+            case Error.PatternTooLarge(offset): {
+                return compile_pattern(pattern, false);
+            }
+            case Error.Syntax(offset): throw Error.Syntax(offset);
+            case Error.NestingTooDeep(offset): throw Error.NestingTooDeep(offset);
+        }
+    }
+}
+
+pub func compile_captures(pattern string) Pattern throws Error {
+    return compile_pattern(pattern, true);
 }
 
 func class_matches(compiled Pattern, inst Inst, rune u32) bool {
@@ -396,71 +498,146 @@ func class_matches(compiled Pattern, inst Inst, rune u32) bool {
 // Add one thread and its epsilon closure. starts holds the earliest start for
 // every state visited at this input position; earlier threads always run
 // first, so a later thread can never overwrite one.
-func add_thread(runner Runner, seed usize, start usize, position usize) {
-    if runner.starts[seed] != NO_STATE {
-        return;
-    }
-    let stack = vec.empty[usize]();
-    vec.push(stack, seed);
-    let count = vec.len(runner.input);
-    for vec.len(stack) != 0 {
-        let state = stack[vec.len(stack) - 1];
-        let discarded = vec.pop(stack);
-        if runner.starts[state] != NO_STATE {
-            continue;
+func add_thread(runner Runner, stack Vec[usize], seed usize, start usize,
+    position usize, count usize) {
+    var state = seed;
+    for true {
+        // Follow the preferred edge directly. Only deferred split edges need
+        // the stack. Mark before following any edge to bound epsilon cycles.
+        for runner.starts[state] == NO_STATE {
+            runner.starts[state] = start;
+            vec.push(runner.touched, state);
+            let inst = runner.compiled.states[state];
+            if inst.kind == KIND_SPLIT {
+                vec.push(stack, inst.alt);
+            } else if inst.kind == KIND_START {
+                if position != 0 { break; }
+            } else if inst.kind == KIND_END {
+                if position != count { break; }
+            } else if inst.kind != KIND_JUMP && inst.kind != KIND_TAG_START &&
+                      inst.kind != KIND_TAG_END {
+                if inst.kind != KIND_MATCH {
+                    vec.push(runner.active, state);
+                }
+                break;
+            }
+            state = inst.next;
         }
-        runner.starts[state] = start;
-        vec.push(runner.touched, state);
-        let inst = runner.compiled.states[state];
-        if inst.kind == KIND_SPLIT {
-            vec.push(stack, inst.alt);
-            vec.push(stack, inst.next);
-        } else if inst.kind == KIND_JUMP {
-            vec.push(stack, inst.next);
-        } else if inst.kind == KIND_START {
-            if position == 0 {
-                vec.push(stack, inst.next);
-            }
-        } else if inst.kind == KIND_END {
-            if position == count {
-                vec.push(stack, inst.next);
-            }
-        } else {
-            vec.push(runner.active, state);
+        if vec.len(stack) == 0 { return; }
+        switch vec.pop(stack) {
+            case option.Option.Some(next): state = next;
+            case option.Option.None: return;
         }
     }
 }
 
-pub func find(compiled Pattern, value string) option.Option[Match] {
-    let runner = Runner(
+func make_runner(compiled Pattern, input Vec[u32]) Runner {
+    return Runner(
         compiled:compiled,
-        input:text.runes(value),
+        input:input,
         starts:vec.make[usize](vec.len(compiled.states), NO_STATE),
         touched:vec.empty[usize](),
         active:vec.empty[usize]());
+}
+
+func reset_runner(runner Runner) {
+    for state in runner.touched {
+        runner.starts[state] = NO_STATE;
+    }
+    vec.clear(runner.touched);
+    vec.clear(runner.active);
+}
+
+func runner_for(compiled Pattern, value string) Runner {
+    return make_runner(compiled, text.runes(value));
+}
+
+// rune_byte_len is only called for scalar values from a valid source string.
+func rune_byte_len(rune u32) usize {
+    if rune < 0x80 { return 1; }
+    if rune < 0x800 { return 2; }
+    if rune < 0x10000 { return 3; }
+    return 4;
+}
+
+// byte_offsets maps every code point boundary to its UTF-8 byte offset.  It
+// lets split/replace copy byte ranges without calling a code-point slice,
+// whose runtime implementation rescans from the start of the string.
+func byte_offsets(input Vec[u32]) Vec[usize] {
+    let offsets = vec.make[usize](vec.len(input) + 1, 0);
+    var offset usize = 0;
+    for var index usize = 0; index < vec.len(input); index += 1 {
+        offset += rune_byte_len(input[index]);
+        offsets[index + 1] = offset;
+    }
+    return offsets;
+}
+
+// These slices are always on valid code point boundaries, so the error arm is
+// unreachable for strings received from the language runtime.
+func text_from_byte_range(data Vec[u8], start usize, end usize) string {
+    try {
+        return text.from_bytes(data[start:end]);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func text_from_byte_vec(data Vec[u8]) string {
+    try {
+        return text.from_bytes(data);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func append_byte_range(out Vec[u8], data Vec[u8], start usize, end usize) {
+    for var index usize = start; index < end; index += 1 {
+        vec.push(out, data[index]);
+    }
+}
+
+// search_runner searches input[from:] for the earliest start and, for that
+// start, the longest end.  A fresh or reused runner is accepted; the caller's
+// input is already in code points.  ^ is tested against position zero of the
+// whole input, never against from.
+func search_runner(runner Runner, from usize) option.Option[Match] {
+    reset_runner(runner);
     let count = vec.len(runner.input);
+    if from > count {
+        return option.Option[Match].None;
+    }
     var best_start = NO_STATE;
     var best_end usize = 0;
-    var position usize = 0;
+    var position usize = from;
+    let stack = vec.empty[usize]();
+    let seed_states = vec.empty[usize]();
+    let seed_starts = vec.empty[usize]();
+    // compile_pattern appends the sole MATCH instruction after all others.
+    let match_state = vec.len(runner.compiled.states) - 1;
+    add_thread(runner, stack, runner.compiled.start, position, position, count);
     for true {
-        add_thread(runner, runner.compiled.start, position, position);
-        for var index usize = 0; index < vec.len(runner.active); index += 1 {
-            let state = runner.active[index];
-            if runner.compiled.states[state].kind == KIND_MATCH {
-                let start = runner.starts[state];
-                if start < best_start || (start == best_start && position > best_end) {
-                    best_start = start;
-                    best_end = position;
-                }
-            }
+        let start = runner.starts[match_state];
+        if start < best_start ||
+           (start != NO_STATE && start == best_start && position > best_end) {
+            best_start = start;
+            best_end = position;
         }
         if position == count {
             break;
         }
+        // Active contains only consuming states, ordered by thread start.
+        // After a match, its first thread determines whether we can improve it.
+        if best_start != NO_STATE &&
+           (vec.len(runner.active) == 0 || runner.starts[runner.active[0]] > best_start) {
+            break;
+        }
         let rune = runner.input[position];
-        let seed_states = vec.empty[usize]();
-        let seed_starts = vec.empty[usize]();
         for state in runner.active {
+            let start = runner.starts[state];
+            if best_start != NO_STATE && start > best_start {
+                continue;
+            }
             let inst = runner.compiled.states[state];
             var matched = false;
             if inst.kind == KIND_CHAR {
@@ -472,18 +649,18 @@ pub func find(compiled Pattern, value string) option.Option[Match] {
             }
             if matched {
                 vec.push(seed_states, inst.next);
-                vec.push(seed_starts, runner.starts[state]);
+                vec.push(seed_starts, start);
             }
         }
-        for state in runner.touched {
-            runner.starts[state] = NO_STATE;
-        }
-        vec.clear(runner.touched);
-        vec.clear(runner.active);
+        reset_runner(runner);
         for var index usize = 0; index < vec.len(seed_states); index += 1 {
-            add_thread(runner, seed_states[index], seed_starts[index], position + 1);
+            add_thread(runner, stack, seed_states[index], seed_starts[index], position + 1, count);
         }
-        add_thread(runner, runner.compiled.start, position + 1, position + 1);
+        vec.clear(seed_states);
+        vec.clear(seed_starts);
+        if best_start == NO_STATE {
+            add_thread(runner, stack, runner.compiled.start, position + 1, position + 1, count);
+        }
         position += 1;
     }
     if best_start == NO_STATE {
@@ -492,9 +669,425 @@ pub func find(compiled Pattern, value string) option.Option[Match] {
     return option.Option[Match].Some(Match(start:best_start, end:best_end));
 }
 
+pub func find(compiled Pattern, value string) option.Option[Match] {
+    return find_from(compiled, value, 0);
+}
+
+// find_from starts searching at code point index from.  Matches that begin
+// before from are ignored.  from greater than the input length yields None;
+// from equal to the length can still find an empty match at the end.  The
+// ordinary leftmost-longest rule is preserved: earliest start at or after
+// from, then the longest end for that start.
+pub func find_from(compiled Pattern, value string, from usize) option.Option[Match] {
+    let runner = runner_for(compiled, value);
+    return search_runner(runner, from);
+}
+
 pub func is_match(compiled Pattern, value string) bool {
     switch find(compiled, value) {
         case option.Option.Some(found): return true;
         case option.Option.None: return false;
+    }
+}
+
+// find_all returns non-overlapping matches in order.  It uses the same
+// zero-width advance rule as split and replace: after an empty match at p the
+// next search begins at p+1, while a non-empty match continues at its end.
+// An empty match at the end is included once and then stops.  Ordinary
+// matching ignores capture tag states without copying tags.
+pub func find_all(compiled Pattern, value string) Vec[Match] {
+    let out = vec.empty[Match]();
+    let runner = runner_for(compiled, value);
+    let count = vec.len(runner.input);
+    var search usize = 0;
+    var done = false;
+    for !done {
+        switch search_runner(runner, search) {
+            case option.Option.Some(found): {
+                vec.push(out, found);
+                if found.start == found.end {
+                    if found.start >= count {
+                        done = true;
+                    } else {
+                        search = found.start + 1;
+                    }
+                } else {
+                    search = found.end;
+                }
+            }
+            case option.Option.None: done = true;
+        }
+    }
+    return out;
+}
+
+// split and split_n partition value at non-overlapping matches.  An empty
+// match is a real separator at its position; after it the next search starts
+// one code point later, so a zero-width pattern cannot loop.  The piece before
+// every separator and the piece after the last one are both kept, including
+// empty pieces.  split_n mirrors std/text.split_n: limit 0 returns an empty
+// Vec, limit 1 returns [value], and otherwise at most limit pieces are
+// returned with the last piece holding the remaining text.
+func split_core(compiled Pattern, value string, bounded bool, limit usize) Vec[string] {
+    let out = vec.empty[string]();
+    if bounded && limit == 0 {
+        return out;
+    }
+    if bounded && limit == 1 {
+        vec.push(out, value);
+        return out;
+    }
+    let runner = runner_for(compiled, value);
+    let count = vec.len(runner.input);
+    let data = text.bytes(value);
+    let offsets = byte_offsets(runner.input);
+    var piece_start usize = 0;
+    var search usize = 0;
+    var done = false;
+    for !done {
+        if bounded && vec.len(out) + 1 >= limit {
+            done = true;
+        } else {
+            switch search_runner(runner, search) {
+                case option.Option.Some(found): {
+                    vec.push(out, text_from_byte_range(data,
+                        offsets[piece_start], offsets[found.start]));
+                    if found.start == found.end {
+                        piece_start = found.start;
+                        if found.start >= count {
+                            done = true;
+                        } else {
+                            search = found.start + 1;
+                        }
+                    } else {
+                        piece_start = found.end;
+                        search = found.end;
+                    }
+                }
+                case option.Option.None: done = true;
+            }
+        }
+    }
+    vec.push(out, text_from_byte_range(data, offsets[piece_start],
+        offsets[count]));
+    return out;
+}
+
+pub func split(compiled Pattern, value string) Vec[string] {
+    return split_core(compiled, value, false, 0);
+}
+
+pub func split_n(compiled Pattern, value string, limit usize) Vec[string] {
+    return split_core(compiled, value, true, limit);
+}
+
+// replace_all and replace_n insert replacement literally; $ and \ are not
+// expanded.  The bounded form replaces at most limit matches, with limit 0
+// leaving value unchanged.  Zero-width matches follow the same advance rule as
+// split: after a match at position p the next search begins at p+1, while the
+// character at p is still copied before the next replacement.
+func replace_core(compiled Pattern, value string, replacement string,
+    bounded bool, limit usize) string {
+    if bounded && limit == 0 {
+        return value;
+    }
+    let runner = runner_for(compiled, value);
+    let count = vec.len(runner.input);
+    let data = text.bytes(value);
+    let offsets = byte_offsets(runner.input);
+    let replacement_data = text.bytes(replacement);
+    let out = vec.empty[u8]();
+    vec.reserve(out, vec.len(data));
+    var piece_start usize = 0;
+    var search usize = 0;
+    var replaced usize = 0;
+    var done = false;
+    for !done {
+        if bounded && replaced >= limit {
+            done = true;
+        } else {
+            switch search_runner(runner, search) {
+                case option.Option.Some(found): {
+                    append_byte_range(out, data, offsets[piece_start],
+                        offsets[found.start]);
+                    append_byte_range(out, replacement_data, 0,
+                        vec.len(replacement_data));
+                    replaced += 1;
+                    if found.start == found.end {
+                        piece_start = found.start;
+                        if found.start >= count {
+                            done = true;
+                        } else {
+                            search = found.start + 1;
+                        }
+                    } else {
+                        piece_start = found.end;
+                        search = found.end;
+                    }
+                }
+                case option.Option.None: done = true;
+            }
+        }
+    }
+    if replaced == 0 {
+        return value;
+    }
+    append_byte_range(out, data, offsets[piece_start], offsets[count]);
+    return text_from_byte_vec(out);
+}
+
+pub func replace_all(compiled Pattern, value string, replacement string) string {
+    return replace_core(compiled, value, replacement, false, 0);
+}
+
+pub func replace_n(compiled Pattern, value string, replacement string,
+    limit usize) string {
+    return replace_core(compiled, value, replacement, true, limit);
+}
+
+// Tagged capture path.  compile_captures returns a normal Pattern with tag
+// states.  Threads are kept in deterministic priority order: the first
+// alternative and the greedy repetition branch come first.  Deduplication
+// keeps at most one thread per NFA state and position, so this is not a
+// backtracking matcher.  For a fixed overall leftmost-longest span, the
+// surviving highest-priority path determines the captures; this tie rule is
+// deterministic but is not the POSIX subexpression-longest rule.  Because a state is not revisited at one
+// position, a final zero-length repetition is not re-entered; a group that
+// would only participate in that final empty iteration keeps its last
+// non-empty capture or stays None.  Overall spans are unaffected.
+func make_capture_runner(compiled Pattern, input Vec[u32]) CaptureRunner {
+    return CaptureRunner(
+        compiled:compiled,
+        input:input,
+        seen:vec.make[bool](vec.len(compiled.states), false),
+        touched:vec.empty[usize](),
+        active:vec.empty[CaptureThread]());
+}
+
+func reset_capture_runner(runner CaptureRunner) {
+    for state in runner.touched {
+        runner.seen[state] = false;
+    }
+    vec.clear(runner.touched);
+    vec.clear(runner.active);
+}
+
+func copy_tags(tags Vec[usize]) Vec[usize] {
+    let out = vec.make[usize](vec.len(tags), NO_STATE);
+    for var index usize = 0; index < vec.len(tags); index += 1 {
+        out[index] = tags[index];
+    }
+    return out;
+}
+
+// add_capture_thread adds one tagged thread and its epsilon closure.  Tags are
+// treated as immutable handles: a tag state clones before writing, so split
+// branches can share the old vector safely.  The seen map deduplicates both
+// epsilon states and consuming states; the first thread in priority order wins.
+func add_capture_thread(runner CaptureRunner, seed usize, start usize,
+    position usize, tags Vec[usize]) {
+    let stack = vec.empty[CaptureFrame]();
+    vec.push(stack, CaptureFrame(state:seed, tags:tags));
+    let count = vec.len(runner.input);
+    for vec.len(stack) != 0 {
+        let frame = stack[vec.len(stack) - 1];
+        let discarded = vec.pop(stack);
+        let state = frame.state;
+        if runner.seen[state] {
+            continue;
+        }
+        runner.seen[state] = true;
+        vec.push(runner.touched, state);
+        let inst = runner.compiled.states[state];
+        if inst.kind == KIND_SPLIT {
+            vec.push(stack, CaptureFrame(state:inst.alt, tags:frame.tags));
+            vec.push(stack, CaptureFrame(state:inst.next, tags:frame.tags));
+        } else if inst.kind == KIND_JUMP {
+            vec.push(stack, CaptureFrame(state:inst.next, tags:frame.tags));
+        } else if inst.kind == KIND_TAG_START || inst.kind == KIND_TAG_END {
+            let updated = copy_tags(frame.tags);
+            updated[usize(inst.value)] = position;
+            vec.push(stack, CaptureFrame(state:inst.next, tags:updated));
+        } else if inst.kind == KIND_START {
+            if position == 0 {
+                vec.push(stack, CaptureFrame(state:inst.next, tags:frame.tags));
+            }
+        } else if inst.kind == KIND_END {
+            if position == count {
+                vec.push(stack, CaptureFrame(state:inst.next, tags:frame.tags));
+            }
+        } else {
+            vec.push(runner.active, CaptureThread(state:state, start:start,
+                tags:frame.tags));
+        }
+    }
+}
+
+func make_captures(source string, start usize, end usize, tags Vec[usize],
+    groups usize) Captures {
+    let spans = vec.empty[option.Option[Match]]();
+    vec.reserve(spans, groups);
+    for var index usize = 0; index < groups; index += 1 {
+        let group_start = tags[index * 2];
+        let group_end = tags[index * 2 + 1];
+        if group_start == NO_STATE || group_end == NO_STATE {
+            vec.push(spans, option.Option[Match].None);
+        } else {
+            vec.push(spans, option.Option[Match].Some(
+                Match(start:group_start, end:group_end)));
+        }
+    }
+    return Captures(source:source, start:start, end:end, groups:spans);
+}
+
+// Like the ordinary search, tagged matching prunes later starts. A MATCH thread is
+// terminal, and a thread whose start is later than the best match cannot
+// improve the leftmost start or its captures.
+func capture_can_extend(runner CaptureRunner, best_start usize) bool {
+    for thread in runner.active {
+        if thread.start <= best_start &&
+           runner.compiled.states[thread.state].kind != KIND_MATCH {
+            return true;
+        }
+    }
+    return false;
+}
+
+// search_captures uses the same leftmost-match pruning as search_runner, but
+// keeps the highest-priority tagged path for a fixed overall span.  Once a
+// match exists, later starts are discarded and not spawned; if no live thread
+// with the best start (or an earlier one) can consume another code point, the
+// remaining suffix cannot change the result.
+func search_captures(runner CaptureRunner, from usize,
+    source string) option.Option[Captures] {
+    reset_capture_runner(runner);
+    let count = vec.len(runner.input);
+    if from > count {
+        return option.Option[Captures].None;
+    }
+    let groups = runner.compiled.groups;
+    var best_start = NO_STATE;
+    var best_end usize = 0;
+    var best_tags = vec.empty[usize]();
+    var position usize = from;
+    let initial_tags = vec.make[usize](groups * 2, NO_STATE);
+    add_capture_thread(runner, runner.compiled.start, position, position,
+        initial_tags);
+    for true {
+        for var index usize = 0; index < vec.len(runner.active); index += 1 {
+            let thread = runner.active[index];
+            if runner.compiled.states[thread.state].kind == KIND_MATCH {
+                let start = thread.start;
+                if start < best_start || (start == best_start && position > best_end) {
+                    best_start = start;
+                    best_end = position;
+                    best_tags = copy_tags(thread.tags);
+                }
+            }
+        }
+        if position == count {
+            break;
+        }
+        // Kept identical to the ordinary runner: only threads that can still
+        // tie or improve the earliest start survive, and an all-terminal state
+        // set ends the suffix scan.
+        if best_start != NO_STATE && !capture_can_extend(runner, best_start) {
+            break;
+        }
+        let rune = runner.input[position];
+        let seed_states = vec.empty[usize]();
+        let seed_starts = vec.empty[usize]();
+        let seed_tags = vec.empty[Vec[usize]]();
+        for thread in runner.active {
+            if best_start != NO_STATE && thread.start > best_start {
+                continue;
+            }
+            let inst = runner.compiled.states[thread.state];
+            var matched = false;
+            if inst.kind == KIND_CHAR {
+                matched = rune == inst.value;
+            } else if inst.kind == KIND_ANY {
+                matched = rune != 10;
+            } else if inst.kind == KIND_CLASS || inst.kind == KIND_NEG_CLASS {
+                matched = class_matches(runner.compiled, inst, rune);
+            }
+            if matched {
+                vec.push(seed_states, inst.next);
+                vec.push(seed_starts, thread.start);
+                vec.push(seed_tags, thread.tags);
+            }
+        }
+        reset_capture_runner(runner);
+        for var index usize = 0; index < vec.len(seed_states); index += 1 {
+            add_capture_thread(runner, seed_states[index], seed_starts[index],
+                position + 1, seed_tags[index]);
+        }
+        if best_start == NO_STATE {
+            let next_tags = vec.make[usize](groups * 2, NO_STATE);
+            add_capture_thread(runner, runner.compiled.start, position + 1,
+                position + 1, next_tags);
+        }
+        position += 1;
+    }
+    if best_start == NO_STATE {
+        return option.Option[Captures].None;
+    }
+    return option.Option[Captures].Some(
+        make_captures(source, best_start, best_end, best_tags, groups));
+}
+
+pub func find_captures(compiled Pattern,
+    value string) option.Option[Captures] throws CaptureError {
+    return find_captures_from(compiled, value, 0);
+}
+
+// find_captures_from follows find_from for the overall span.  It accepts any
+// Pattern whose compile pass could emit capture tags, including plain compile
+// of a pattern with zero groups.  Capture groups are numbered by their opening
+// parenthesis, starting at 1, including groups inside alternations that did
+// not participate (those are None).  The result retains the source string for
+// group_text.  A Pattern that had to fall back to grouping-only states throws
+// CaptureError.Unavailable instead of silently returning zero groups.
+pub func find_captures_from(compiled Pattern, value string,
+    from usize) option.Option[Captures] throws CaptureError {
+    if !compiled.captures_available {
+        throw CaptureError.Unavailable;
+    }
+    let runner = make_capture_runner(compiled, text.runes(value));
+    return search_captures(runner, from, value);
+}
+
+// group_count returns the number of capture groups in a result.  A Pattern
+// compiled from a pattern without parentheses has zero.
+pub func group_count(captures Captures) usize {
+    return vec.len(captures.groups);
+}
+
+// group returns group index 0 (the overall match) or 1..group_count.  An
+// out-of-range or non-participating group is None.
+pub func group(captures Captures, index usize) option.Option[Match] {
+    if index == 0 {
+        return option.Option[Match].Some(
+            Match(start:captures.start, end:captures.end));
+    }
+    if index > vec.len(captures.groups) {
+        return option.Option[Match].None;
+    }
+    return captures.groups[index - 1];
+}
+
+// group_text returns the captured source text without requiring the caller to
+// index a group vector or slice the source.  The Captures value retains its
+// source string, so this remains valid after the original source goes out of
+// scope.  Out-of-range and non-participating groups return None.
+pub func group_text(captures Captures, index usize) option.Option[string] {
+    switch group(captures, index) {
+        case option.Option.Some(span): {
+            if span.start > span.end ||
+               span.end > text.len(captures.source) { return option.Option[string].None; }
+            return option.Option[string].Some(
+                captures.source[span.start:span.end]);
+        }
+        case option.Option.None: return option.Option[string].None;
     }
 }

@@ -1,0 +1,31 @@
+// The first member is already complete before gather runs; the second is still
+// pending. The completed value is joined immediately and only the pending
+// member needs a completion notification.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func value(item i32, delay i64) i32 {
+    await a.sleep(delay);
+    return item;
+}
+
+async func main() i32 throws os.Error {
+    let early = value(1, 1);
+    let late = value(2, 60);
+    a.spawn(early);
+    a.spawn(late);
+    await a.sleep(10);
+    let outcome = await a.gather[i32,Unit]([early, late]);
+    switch outcome {
+        case result.Result.Ok(values): {
+            io.println(vec.len(values));
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.error");
+    }
+    return 0;
+}

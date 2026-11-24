@@ -65,6 +65,12 @@
                  ? builder.CreateICmpEQ(magnitude, infinity)
                  : builder.CreateICmpULT(magnitude, infinity);
     }
+    if (operation == SystemOperation::io_vec_append_bytes) {
+      // The operands are already passed as Vec descriptors. Runtime byte-range
+      // validation, alias staging and length publication stay in shared core.
+      runtime("lang_io_vec_append_bytes_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    }
     if (operation >= SystemOperation::math_fabs && operation <= SystemOperation::math_signbit) {
       const auto *spec = hir::system_operation_spec(operation);
       const auto name = "lang_"+std::string(spec->name.substr(8))+"_v1";
@@ -148,6 +154,12 @@
     case SystemOperation::fs_pipe: name = "lang_sys_pipe_v1"; output = output_first = true; break;
     case SystemOperation::fs_mkfifo: name = "lang_sys_mkfifo_v1"; break;
     case SystemOperation::fs_access: name = "lang_sys_access_v1"; break;
+    case SystemOperation::fs_openat: name = "lang_os_openat_v1"; break;
+    case SystemOperation::fs_mkdirat: name = "lang_os_mkdirat_v1"; break;
+    case SystemOperation::fs_unlinkat: name = "lang_os_unlinkat_v1"; break;
+    case SystemOperation::fs_fstatat: name = "lang_sys_fstatat_v1"; output = true; break;
+    case SystemOperation::fs_readlinkat: name = "lang_sys_readlinkat_v1"; raw = true; break;
+    case SystemOperation::fs_symlinkat: name = "lang_sys_symlinkat_v1"; break;
     case SystemOperation::os_getuid: name = "lang_sys_getuid_v1"; break;
     case SystemOperation::os_geteuid: name = "lang_sys_geteuid_v1"; break;
     case SystemOperation::os_getgid: name = "lang_sys_getgid_v1"; break;
@@ -164,12 +176,28 @@
     default: return nullptr;
     }
     const auto signature = type(i.signature);
+    const bool byte_path =
+        operation == SystemOperation::fs_openat ||
+        operation == SystemOperation::fs_mkdirat ||
+        operation == SystemOperation::fs_unlinkat ||
+        operation == SystemOperation::fs_fstatat ||
+        operation == SystemOperation::fs_readlinkat ||
+        operation == SystemOperation::fs_symlinkat;
     std::vector<llvm::Value *> actual;
     for (size_t a = 0; a < args.size(); ++a) {
       const auto parameter = signature.parameters[a].type;
       if (type(parameter).kind == hir::TypeKind::String) {
         actual.push_back(builder.CreateExtractValue(args[a], {0}));
         actual.push_back(builder.CreateExtractValue(args[a], {1}));
+      } else if (byte_path &&
+                 type(parameter).kind == hir::TypeKind::Vec) {
+        // Descriptor-relative link operations borrow every Vec as a pointer
+        // plus its current length. Names and link targets stay raw bytes;
+        // readlinkat's buffer uses the same length as the kernel capacity.
+        // A Vec descriptor stores the element pointer in field 5 and the
+        // current length in field 1.
+        actual.push_back(vec_field(args[a], 5, builder.getPtrTy()));
+        actual.push_back(vec_field(args[a], 1, builder.getInt64Ty()));
       } else if (type(parameter).kind == hir::TypeKind::NominalStruct) {
         actual.push_back(element_storage(parameter, args[a]));
       } else actual.push_back(args[a]);

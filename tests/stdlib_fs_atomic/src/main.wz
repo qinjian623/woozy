@@ -1,0 +1,215 @@
+// Behaviour checks for std/fs atomic replacement helpers.
+// main returns 0 on success and a unique non-zero code identifying the first
+// failed check. Each case uses its own temporary directory so a leftover
+// temporary entry is visible as an unexpected directory entry.
+package app;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func code_of(error os.Error) i32 {
+    switch error {
+        case os.Error.System(code,completed): return code;
+        default: return -1;
+    }
+}
+
+func entry_count(directory string) usize throws os.Error {
+    return vec.len(fs.read_dir(directory));
+}
+
+func test_new_file(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"new");
+    let binary = directory+"/binary.bin";
+    let data Vec[u8] = [0,65,255,66];
+    fs.write_file_atomic(binary,data,0o640);
+    if !same_bytes(fs.read_file(binary),data) { return 101; }
+    if (os.stat(binary).mode & 0o777) != 0o640 { return 102; }
+    if entry_count(directory) != 1 { return 103; }
+
+    let unicode_name = directory+"/文本😀.txt";
+    fs.write_text_atomic(unicode_name,"alpha中😀",0o600);
+    if fs.read_text(unicode_name) != "alpha中😀" { return 104; }
+    if (os.stat(unicode_name).mode & 0o777) != 0o600 { return 105; }
+    if entry_count(directory) != 2 { return 106; }
+
+    os.unlink(binary);
+    os.unlink(unicode_name);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_replace_with_open_handle(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"replace");
+    let name = directory+"/state.txt";
+    fs.write_text(name,"old-value",0o600);
+    let old = os.open(name,os.O_RDONLY|os.O_CLOEXEC,0);
+    let old_inode = os.fstat(old).inode;
+    fs.write_text_atomic(name,"new-value😀",0o644);
+    let observed = io.decode(io.read_all(old));
+    os.close(old);
+    if observed != "old-value" { return 111; }
+    if os.stat(name).inode == old_inode { return 112; }
+    if fs.read_text(name) != "new-value😀" { return 113; }
+    if (os.stat(name).mode & 0o777) != 0o644 { return 114; }
+    if entry_count(directory) != 1 { return 115; }
+    os.unlink(name);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_parent_spelling(scratch string) i32 throws os.Error {
+    let guard = fs.create_temp_dir(scratch,"parents");
+    let real = guard+"/真实";
+    let sub = real+"/子目录";
+    os.mkdir(real,0o700);
+    os.mkdir(sub,0o700);
+    let link = guard+"/链接😀";
+    os.symlink("真实/子目录",link);
+    // link/.. resolves to real, while lexical cleaning would select guard.
+    let destination = link+"/../文件😀.txt";
+    // Keep the lexically cleaned parent unwritable so a cleaned implementation
+    // fails instead of silently creating the temporary entry in the wrong place.
+    os.chmod(guard,0o500);
+    var code i32 = 0;
+    try { fs.write_text_atomic(destination,"spelled",0o640); }
+    catch error os.Error { code = code_of(error); }
+    os.chmod(guard,0o700);
+    if code != 0 { return 121; }
+
+    let actual = real+"/文件😀.txt";
+    if fs.read_text(actual) != "spelled" { return 122; }
+    if (os.stat(actual).mode & 0o777) != 0o640 { return 123; }
+    if !fs.is_symlink(os.lstat(link)) { return 124; }
+    if entry_count(real) != 2 { return 125; }
+    if entry_count(sub) != 0 { return 126; }
+
+    os.unlink(actual);
+    os.rmdir(sub);
+    os.rmdir(real);
+    os.unlink(link);
+    os.rmdir(guard);
+    return 0;
+}
+
+func test_double_separator_spelling(scratch string) i32 throws os.Error {
+    // Linux resolves "//" like "/", so a real write into root is unnecessary.
+    // This checks a doubled leading separator plus an internal doubled
+    // separator reaches the same non-root parent and leaves no temp entry.
+    // The exact parent contract is name[:index+1], i.e. it keeps the final
+    // separator instead of collapsing "//name" to "/".
+    let doubled = "/"+os.getcwd();
+    let directory = fs.create_temp_dir(doubled,"double");
+    let destination = directory+"//double.txt";
+    fs.write_text_atomic(destination,"double",0o640);
+    let actual = directory+"/double.txt";
+    if fs.read_text(actual) != "double" { return 171; }
+    if (os.stat(actual).mode & 0o777) != 0o640 { return 172; }
+    if entry_count(directory) != 1 { return 173; }
+    os.unlink(actual);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_destination_symlink(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"destination-link");
+    let target = directory+"/target.txt";
+    let link = directory+"/link.txt";
+    fs.write_text(target,"referent",0o600);
+    let target_inode = os.stat(target).inode;
+    os.symlink("target.txt",link);
+    fs.write_text_atomic(link,"replacement😀",0o640);
+
+    let link_info = os.lstat(link);
+    if !fs.is_file(link_info) || fs.is_symlink(link_info) { return 131; }
+    if fs.read_text(link) != "replacement😀" { return 132; }
+    if fs.read_text(target) != "referent" { return 133; }
+    if os.stat(target).inode != target_inode { return 134; }
+    if (os.stat(target).mode & 0o777) != 0o600 { return 135; }
+    if (link_info.mode & 0o777) != 0o640 { return 136; }
+    if entry_count(directory) != 2 { return 137; }
+
+    os.unlink(link);
+    os.unlink(target);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_invalid_parent(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"invalid-parent");
+    let missing = directory+"/missing/file.txt";
+    var code i32 = 0;
+    try { fs.write_text_atomic(missing,"x",0o600); }
+    catch error os.Error { code = code_of(error); }
+    if code != 2 { return 141; }
+    if entry_count(directory) != 0 { return 142; }
+
+    let blocker = directory+"/blocker";
+    fs.write_text(blocker,"blocked",0o600);
+    let through = blocker+"/file.txt";
+    code = 0;
+    try { fs.write_text_atomic(through,"x",0o600); }
+    catch error os.Error { code = code_of(error); }
+    if code != 20 { return 143; }
+    if entry_count(directory) != 1 { return 144; }
+    if fs.read_text(blocker) != "blocked" { return 145; }
+
+    os.unlink(blocker);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_failed_rename_cleanup(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"rename");
+    let occupied = directory+"/occupied";
+    let marker = occupied+"/marker";
+    os.mkdir(occupied,0o700);
+    fs.write_text(marker,"keep",0o600);
+    var code i32 = 0;
+    try { fs.write_text_atomic(occupied,"not-published",0o640); }
+    catch error os.Error { code = code_of(error); }
+    if code != 21 { return 151; }
+    if !fs.is_dir(os.lstat(occupied)) { return 152; }
+    if fs.read_text(marker) != "keep" { return 153; }
+    if entry_count(directory) != 1 { return 154; }
+
+    os.unlink(marker);
+    os.rmdir(occupied);
+    os.rmdir(directory);
+    return 0;
+}
+
+func run_checks(scratch string) i32 throws os.Error {
+    var code = test_new_file(scratch);
+    if code != 0 { return code; }
+    code = test_replace_with_open_handle(scratch);
+    if code != 0 { return code; }
+    code = test_parent_spelling(scratch);
+    if code != 0 { return code; }
+    code = test_double_separator_spelling(scratch);
+    if code != 0 { return code; }
+    code = test_destination_symlink(scratch);
+    if code != 0 { return code; }
+    code = test_invalid_parent(scratch);
+    if code != 0 { return code; }
+    return test_failed_rename_cleanup(scratch);
+}
+
+func main() i32 throws os.Error {
+    let scratch = fs.create_temp_dir(".","stdlib-fs-atomic");
+    let code = run_checks(scratch);
+    if code != 0 { return code; }
+    try { os.rmdir(scratch); }
+    catch error os.Error { return 160; }
+    return 0;
+}

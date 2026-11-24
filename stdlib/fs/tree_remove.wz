@@ -1,0 +1,284 @@
+package fs;
+
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// A target spelling is split without path.clean. The parent keeps every
+// component and separator before the final component, so symlinks and ".."
+// in the caller's spelling still select the directory that the original path
+// selected. Trailing separators are ignored because they name the same entry.
+struct RemoveTarget { parent string; name string; }
+
+func remove_target(name string) RemoveTarget throws os.Error {
+    var end = text.len(name);
+    for end > 0 && name[end-1] == 47 { end -= 1; }
+    if end == 0 { throw os.Error.System(22,0); }
+    let trimmed = name[:end];
+    var parent = ".";
+    var base = trimmed;
+    var slash = text.len(trimmed);
+    for slash > 0 && trimmed[slash-1] != 47 { slash -= 1; }
+    if slash > 0 {
+        parent = trimmed[:slash];
+        base = trimmed[slash:];
+    }
+    // "." and ".." denote the starting directory or its parent, never a tree
+    // the caller owns. Rejecting them also prevents a root spelling from
+    // selecting an already-open ancestor.
+    if base == "" || base == "." || base == ".." {
+        throw os.Error.System(22,0);
+    }
+    return RemoveTarget(parent:parent,name:base);
+}
+
+func missing(error os.Error) bool {
+    switch error {
+        case os.Error.System(code,completed): return code == 2;
+        default: return false;
+    }
+}
+
+func close_quietly(file os.File) {
+    try { os.close(file); } catch error os.Error {}
+}
+
+func unlink_missing_ok(parent os.File, name Vec[u8],
+                       kind os.UnlinkKind) throws os.Error {
+    try { os.unlinkat_bytes(parent,name,kind); }
+    catch error os.Error {
+        if missing(error) { return; }
+        throw error;
+    }
+}
+
+// Each frame owns directory and keeps parent borrowed from the frame below.
+// The root frame is not owned because remove_dir_all closes the root itself.
+// Popping a frame before closing or removing it means an error can never cause
+// the cleanup defer to close the same descriptor twice.
+struct RemoveFrame {
+    parent os.File;
+    name Vec[u8];
+    directory os.File;
+    device u64;
+    inode u64;
+    entries Vec[DirEntry];
+    next usize;
+    owned bool;
+}
+
+// remove_children deletes all entries observed in root. Pending directories
+// live in a heap Vec rather than the call stack, so tree depth does not consume
+// recursion depth. Every child is classified with fstatat no-follow and
+// addressed with *_bytes operations, so d_type is advisory only and names that
+// are not UTF-8 survive unchanged. A symlink is unlinked as an entry; it is
+// never opened or descended into.
+//
+// If an entry disappears before it is removed, that entry is treated as
+// already removed. If a directory is replaced between fstatat and openat, the
+// opened descriptor's dev/inode must match the recorded entry or EEXIST is
+// thrown without traversing the replacement. If a new entry appears after a
+// directory was read, the corresponding rmdir can fail with ENOTEMPTY; the
+// function stops and leaves the partially processed tree in place. Directories
+// are still removed before return only when their observed entries were all
+// removed successfully.
+//
+// Each active directory keeps one descriptor. A tree deeper than the process
+// descriptor limit therefore reports EMFILE at the first openat that cannot
+// allocate a descriptor. The unwinding defers close every descriptor already
+// opened; entries removed before that point stay removed, and there is no
+// path-based retry that would abandon the descriptor-relative guarantees.
+func remove_children(root os.File, device u64, inode u64) throws os.Error {
+    let stack = vec.empty[RemoveFrame]();
+    defer {
+        for var index usize = 0; index < vec.len(stack); index += 1 {
+            if stack[index].owned { close_quietly(stack[index].directory); }
+        }
+    }
+    vec.push(stack,RemoveFrame(parent:root,name:vec.empty[u8](),
+        directory:root,device:device,inode:inode,entries:read_dir_fd(root),
+        next:0,owned:false));
+    for vec.len(stack) > 0 {
+        let top = vec.len(stack)-1;
+        if stack[top].next < vec.len(stack[top].entries) {
+            let entry = stack[top].entries[stack[top].next];
+            stack[top].next += 1;
+            let parent = stack[top].directory;
+            try {
+                let found = os.fstatat_bytes(parent,entry.name,false);
+                if is_dir(found) {
+                    let child = os.openat_bytes(parent,entry.name,
+                        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+                    // fstatat and openat are separate operations. A real child
+                    // can be renamed and replaced in between, so traverse only
+                    // the inode that openat actually opened when it is still
+                    // the one classified above. The frame is not on the stack
+                    // yet; this is the only close for the new descriptor.
+                    try {
+                        let opened = os.fstat(child);
+                        if opened.device != found.device ||
+                           opened.inode != found.inode {
+                            throw os.Error.System(17,0);
+                        }
+                        let entries = read_dir_fd(child);
+                        vec.push(stack,RemoveFrame(parent:parent,name:entry.name,
+                            directory:child,device:opened.device,inode:opened.inode,
+                            entries:entries,next:0,owned:true));
+                    } catch error os.Error {
+                        close_quietly(child);
+                        throw error;
+                    }
+                } else {
+                    // unlinkat does not follow a symlink and removes FIFOs and
+                    // other non-directory entries by name as well.
+                    unlink_missing_ok(parent,entry.name,os.UnlinkKind.File);
+                }
+            } catch error os.Error {
+                if missing(error) { continue; }
+                throw error;
+            }
+            continue;
+        }
+        let frame = stack[top];
+        // Shrink before touching the descriptor. If close or rmdir fails, the
+        // cleanup defer must not close this frame's descriptor a second time.
+        vec.resize(stack,top,RemoveFrame(parent:frame.parent,
+            name:vec.empty[u8](),directory:frame.directory,device:0,inode:0,
+            entries:vec.empty[DirEntry](),next:0,owned:false));
+        if frame.owned {
+            // Keep the opened child descriptor alive through the name check
+            // and rmdir. This pins the inode, so a replacement cannot reuse its
+            // dev/inode before the check, and the check is immediately before
+            // the removal syscall.
+            var present = true;
+            var unchanged = true;
+            try {
+                let current = os.fstatat_bytes(frame.parent,frame.name,false);
+                if current.device != frame.device ||
+                   current.inode != frame.inode {
+                    unchanged = false;
+                }
+            } catch error os.Error {
+                if missing(error) { present = false; }
+                else {
+                    close_quietly(frame.directory);
+                    throw error;
+                }
+            }
+            if !present {
+                os.close(frame.directory);
+                continue;
+            }
+            if !unchanged {
+                os.close(frame.directory);
+                throw os.Error.System(17,0);
+            }
+            try { unlink_missing_ok(frame.parent,frame.name,os.UnlinkKind.Directory); }
+            catch error os.Error {
+                close_quietly(frame.directory);
+                throw error;
+            }
+            os.close(frame.directory);
+        }
+    }
+}
+
+// remove_dir_all removes the directory tree named by name. name is resolved
+// once through its parent spelling; after that, the root and descendants are
+// addressed only through owned descriptors and single-component byte names.
+//
+// The root must be a directory and is opened with O_DIRECTORY|O_NOFOLLOW: a
+// symlink at name is rejected with ELOOP and its referent is never touched; a
+// regular file, FIFO, or other non-directory is rejected with ENOTDIR. Empty
+// names, separator-only roots, and roots ending in "." or ".." are rejected
+// with EINVAL. A missing root reports ENOENT.
+//
+// Symlinks below the root are removed themselves. The parent path may contain
+// symlinks and ".."; it is never lexically cleaned, so the parent opened is the
+// one selected by the caller's spelling. Trailing separators name the same
+// entry and are ignored. The parent descriptor is held until the root rmdir.
+//
+// Concurrent changes are not a transaction. Entries removed by another actor
+// are ignored; entries added after their directory was read can make rmdir
+// fail with ENOTEMPTY. A directory opened after a no-follow fstatat is checked
+// again with fstat: if rename/replacement made the opened inode differ from
+// the classified entry, EEXIST is thrown and the replacement is not traversed.
+// Every child name is checked no-follow against its opened dev/inode before
+// rmdir; a missing child is treated as already gone, and a different inode
+// fails with EEXIST instead of removing the replacement. The root gets the
+// same check; a missing root name is treated as already gone (its observed
+// children were removed through the pinned descriptor), while a replacement
+// root fails with EEXIST.
+//
+// Linux has no unlink-by-descriptor for directories, so a name check and the
+// following unlinkat/rmdir are two syscalls, not one atomic operation. A
+// replacement installed after the check but before rmdir cannot be
+// distinguished by the syscall used here. Linux does have
+// renameat2(RENAME_EXCHANGE), but std/os does not expose it, and a quarantine
+// swap/rollback would itself be a name-based multi-step operation needing a
+// shared interface change. On any error,
+// already removed entries stay removed and every descriptor opened by this
+// call is closed exactly once. Under a low RLIMIT_NOFILE, a deep tree reports
+// EMFILE after the descriptors needed for further depth are exhausted; the
+// same unwinding closes all held descriptors.
+pub func remove_dir_all(name string) throws os.Error {
+    let target = remove_target(name);
+    let parent = os.open(target.parent,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,0);
+    var parent_closed = false;
+    defer { if !parent_closed { close_quietly(parent); } }
+
+    let base = text.bytes(target.name);
+    let before = os.fstatat_bytes(parent,base,false);
+    if is_symlink(before) { throw os.Error.System(40,0); }
+    if !is_dir(before) { throw os.Error.System(20,0); }
+
+    let root = os.openat_bytes(parent,base,
+        os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var root_closed = false;
+    defer { if !root_closed { close_quietly(root); } }
+    let opened = os.fstat(root);
+    if opened.device != before.device || opened.inode != before.inode {
+        throw os.Error.System(17,0);
+    }
+
+    remove_children(root,opened.device,opened.inode);
+
+    // Keep the root descriptor alive through the final name check and rmdir.
+    // The opened inode is pinned, so the current name can be compared against
+    // the exact tree that was traversed immediately before removal.
+    var current = opened;
+    var present = true;
+    var unchanged = true;
+    try {
+        current = os.fstatat_bytes(parent,base,false);
+        if current.device != opened.device || current.inode != opened.inode {
+            unchanged = false;
+        }
+    } catch error os.Error {
+        if missing(error) { present = false; }
+        else {
+            root_closed = true;
+            close_quietly(root);
+            throw error;
+        }
+    }
+    if present && !unchanged {
+        root_closed = true;
+        close_quietly(root);
+        throw os.Error.System(17,0);
+    }
+    if present {
+        try { unlink_missing_ok(parent,base,os.UnlinkKind.Directory); }
+        catch error os.Error {
+            root_closed = true;
+            close_quietly(root);
+            throw error;
+        }
+    }
+    root_closed = true;
+    os.close(root);
+
+    parent_closed = true;
+    os.close(parent);
+}

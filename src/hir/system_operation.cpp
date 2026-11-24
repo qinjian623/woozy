@@ -19,7 +19,7 @@ TypeId build_signature(TypeContext &types, const HirModule *module,
   std::function<TypeId(std::string_view, size_t)> value_type;
   value_type = [&](std::string_view name, size_t depth) -> TypeId {
     if (depth > 128) return invalid();
-    if (name == "A" || name == "B") {
+    if (name == "A" || name == "B" || name == "C" || name == "D") {
       const size_t index = name.front() - 'A';
       if (index >= args.size()) return invalid();
       return args[index];

@@ -124,6 +124,12 @@ int64_t lang_sys_stat_v1(const char *path, uint64_t length,
 int64_t lang_sys_lstat_v1(const char *path, uint64_t length,
                           LangFileStat *out) noexcept;
 int64_t lang_sys_fstat_v1(int32_t fd, LangFileStat *out) noexcept;
+// Descriptor-relative stat over exactly one component. `no_follow` is a typed
+// intent: 0 follows the final symlink and 1 reports the link itself. Any other
+// value returns -EINVAL. The path validation rules are the same as
+// lang_os_openat_v1.
+int64_t lang_sys_fstatat_v1(int32_t fd, const char *path, uint64_t length,
+                            int32_t no_follow, LangFileStat *out) noexcept;
 
 // rename(2). Both paths are validated before the kernel call.
 int64_t lang_sys_rename_v1(const char *old_path, uint64_t old_length,
@@ -160,10 +166,22 @@ int64_t lang_sys_getdents_v1(int32_t fd, void *buffer,
 int64_t lang_sys_readlink_v1(const char *path, uint64_t length, void *buffer,
                              uint64_t capacity) noexcept;
 
+// readlinkat(2). `name` is exactly one component relative to `fd`; the target
+// is written as raw bytes into the borrowed buffer. The name is validated
+// before the zero-capacity rule, matching lang_sys_readlink_v1.
+int64_t lang_sys_readlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                               void *buffer, uint64_t capacity) noexcept;
+
 // symlink(2)/link(2). Both paths are validated before the kernel call.
 int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
                             const char *link_path,
                             uint64_t link_length) noexcept;
+// symlinkat(2). The target is arbitrary borrowed bytes and is never resolved;
+// `name` is exactly one component relative to `fd` and uses the same
+// component validation as lang_sys_readlinkat_v1.
+int64_t lang_sys_symlinkat_v1(int32_t fd, const char *target,
+                              uint64_t target_length, const char *name,
+                              uint64_t name_length) noexcept;
 int64_t lang_sys_link_v1(const char *old_path, uint64_t old_length,
                          const char *new_path, uint64_t new_length) noexcept;
 

@@ -1,0 +1,885 @@
+// Behaviour checks for std/fs temporary entries and walking.
+// main returns 0 on success and a unique non-zero code identifying the first
+// failing check. The Python driver supplies a scratch directory and a fixture
+// tree containing names that are not valid UTF-8.
+package app;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/path" as path;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func code_of(error os.Error) i32 {
+    switch error {
+        case os.Error.System(code,completed): return code;
+        default: return -1;
+    }
+}
+
+func find_entry(items Vec[fs.WalkItem], wanted string) i32 {
+    var found i32 = -1;
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path == wanted {
+                    if found != -1 { return -2; }
+                    found = 1;
+                }
+            }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return found;
+}
+
+func entry_depth(items Vec[fs.WalkItem], wanted string) i32 {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path == wanted { return i32(entry.depth); }
+            }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return -1;
+}
+
+func entry_is_symlink(items Vec[fs.WalkItem], wanted string) bool {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path == wanted { return fs.is_symlink(entry.info); }
+            }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return false;
+}
+
+func entry_is_dir(items Vec[fs.WalkItem], wanted string) bool {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path == wanted { return fs.is_dir(entry.info); }
+            }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return false;
+}
+
+func entry_name(items Vec[fs.WalkItem], wanted string) string {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path == wanted { return entry.name; }
+            }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return "";
+}
+
+func count_entries(items Vec[fs.WalkItem]) usize {
+    var count usize = 0;
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): { count += 1; }
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return count;
+}
+
+func find_io_error(items Vec[fs.WalkItem], wanted string) bool {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {}
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): {
+                if path == wanted && code_of(error) == 13 { return true; }
+            }
+        }
+    }
+    return false;
+}
+
+func count_io_errors(items Vec[fs.WalkItem]) usize {
+    var count usize = 0;
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {}
+            case fs.WalkItem.NameError(directory,name,error): {}
+            case fs.WalkItem.IoError(path,error): { count += 1; }
+        }
+    }
+    return count;
+}
+
+func find_name_error(items Vec[fs.WalkItem], directory string,
+                     name Vec[u8]) bool {
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {}
+            case fs.WalkItem.NameError(parent,raw,error): {
+                if parent == directory && same_bytes(raw,name) &&
+                   code_of(error) == 84 { return true; }
+            }
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return false;
+}
+
+func count_name_errors(items Vec[fs.WalkItem]) usize {
+    var count usize = 0;
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {}
+            case fs.WalkItem.NameError(directory,name,error): { count += 1; }
+            case fs.WalkItem.IoError(path,error): {}
+        }
+    }
+    return count;
+}
+
+func test_temp_files(scratch string) i32 throws os.Error {
+    let count usize = 8;
+    let paths = vec.empty[string]();
+    let files = vec.empty[os.File]();
+    for var index usize = 0; index < count; index += 1 {
+        let temporary = fs.create_temp(scratch,"entry");
+        for var other usize = 0; other < index; other += 1 {
+            if paths[other] == temporary.path { return 100; }
+        }
+        let mode = os.stat(temporary.path).mode & 0o777;
+        if mode != fs.TEMP_FILE_MODE { return 101; }
+        if !fs.is_file(os.fstat(temporary.file)) { return 102; }
+        let value = "temp:"+strconv.format_u64(u64(index));
+        os.write_all_text(temporary.file,value);
+        vec.push(paths,temporary.path);
+        vec.push(files,temporary.file);
+    }
+    for var index usize = 0; index < count; index += 1 {
+        let expected = "temp:"+strconv.format_u64(u64(index));
+        if fs.read_text(paths[index]) != expected { return 103; }
+    }
+    for var index usize = 0; index < count; index += 1 {
+        os.close(files[index]);
+        os.unlink(paths[index]);
+        if fs.exists(paths[index]) { return 104; }
+    }
+    let bare = fs.create_temp(scratch,"");
+    let bare_name = path.base(bare.path);
+    if bare_name == "" || bare_name[0] == 45 {
+        os.close(bare.file);
+        os.unlink(bare.path);
+        return 105;
+    }
+    os.close(bare.file);
+    os.unlink(bare.path);
+    return 0;
+}
+
+func test_temp_dirs(scratch string) i32 throws os.Error {
+    let count usize = 6;
+    let paths = vec.empty[string]();
+    for var index usize = 0; index < count; index += 1 {
+        let directory = fs.create_temp_dir(scratch,"dir");
+        for var other usize = 0; other < index; other += 1 {
+            if paths[other] == directory { return 110; }
+        }
+        let mode = os.stat(directory).mode & 0o777;
+        if mode != fs.TEMP_DIR_MODE { return 111; }
+        fs.write_text(path.join(directory,"marker.txt"),"x",fs.TEMP_FILE_MODE);
+        vec.push(paths,directory);
+    }
+    for var index usize = 0; index < count; index += 1 {
+        let marker = path.join(paths[index],"marker.txt");
+        if fs.read_text(marker) != "x" { return 112; }
+        os.unlink(marker);
+        os.rmdir(paths[index]);
+        if fs.exists(paths[index]) { return 113; }
+    }
+    let bare = fs.create_temp_dir(scratch,"");
+    let bare_name = path.base(bare);
+    if bare_name == "" || bare_name[0] == 45 {
+        os.rmdir(bare);
+        return 114;
+    }
+    os.rmdir(bare);
+    return 0;
+}
+
+func test_temp_dir(scratch string) i32 throws os.Error {
+    var saved = "";
+    var had = false;
+    switch process.getenv("TMPDIR") {
+        case option.Option.Some(value): { had = true; saved = value; }
+        case option.Option.None: {}
+    }
+    defer {
+        if had {
+            try { process.setenv("TMPDIR",saved,true); }
+            catch error os.Error {}
+        } else {
+            try { process.unsetenv("TMPDIR"); }
+            catch error os.Error {}
+        }
+    }
+    var failure i32 = 0;
+    process.setenv("TMPDIR",scratch,true);
+    if fs.temp_dir() != scratch { failure = 115; }
+    let temporary = fs.create_temp(fs.temp_dir(),"");
+    let expected = path.join(scratch,path.base(temporary.path));
+    if temporary.path != expected { failure = 117; }
+    os.close(temporary.file);
+    os.unlink(temporary.path);
+    process.setenv("TMPDIR","",true);
+    if fs.temp_dir() != "/tmp" { failure = 116; }
+    process.unsetenv("TMPDIR");
+    if fs.temp_dir() != "/tmp" { failure = 118; }
+    return failure;
+}
+
+func test_file_collisions(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"collide-file");
+    let target = path.join(directory,"fixed");
+    fs.write_text(target,"",fs.TEMP_FILE_MODE);
+    let attempts = vec.make[usize](1,0);
+    let always = func(entropy u64) string {
+        attempts[0] += 1;
+        return "fixed";
+    };
+    var code i32 = -1;
+    try {
+        let temporary = fs.create_temp_with(directory,always);
+        os.close(temporary.file);
+    } catch error os.Error { code = code_of(error); }
+    if code != 17 || attempts[0] != fs.TEMP_MAX_ATTEMPTS {
+        os.unlink(target);
+        os.rmdir(directory);
+        return 120;
+    }
+
+    attempts[0] = 0;
+    let after_collision = func(entropy u64) string {
+        attempts[0] += 1;
+        if attempts[0] == 1 { return "fixed"; }
+        return "fresh";
+    };
+    let created = fs.create_temp_with(directory,after_collision);
+    let expected = path.join(directory,"fresh");
+    if attempts[0] != 2 || created.path != expected {
+        os.close(created.file);
+        os.unlink(created.path);
+        os.unlink(target);
+        os.rmdir(directory);
+        return 121;
+    }
+    os.write_all_text(created.file,"retry");
+    os.close(created.file);
+    if fs.read_text(expected) != "retry" {
+        os.unlink(expected);
+        os.unlink(target);
+        os.rmdir(directory);
+        return 122;
+    }
+    os.unlink(expected);
+    if fs.exists(expected) { return 123; }
+
+    let absent = path.join(scratch,"absent-directory");
+    if fs.exists(absent) { return 124; }
+    attempts[0] = 0;
+    code = -1;
+    try {
+        let temporary = fs.create_temp_with(absent,always);
+        os.close(temporary.file);
+    } catch error os.Error { code = code_of(error); }
+    if code != 2 || attempts[0] != 1 {
+        os.unlink(target);
+        os.rmdir(directory);
+        return 125;
+    }
+
+    attempts[0] = 0;
+    let invalid = func(entropy u64) string {
+        attempts[0] += 1;
+        return "../escape";
+    };
+    code = -1;
+    try {
+        let temporary = fs.create_temp_with(directory,invalid);
+        os.close(temporary.file);
+    } catch error os.Error { code = code_of(error); }
+    if code != 22 || attempts[0] != 1 {
+        os.unlink(target);
+        os.rmdir(directory);
+        return 126;
+    }
+    os.unlink(target);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_dir_collisions(scratch string) i32 throws os.Error {
+    let directory = fs.create_temp_dir(scratch,"collide-dir");
+    let target = path.join(directory,"fixed");
+    os.mkdir(target,fs.TEMP_DIR_MODE);
+    let attempts = vec.make[usize](1,0);
+    let always = func(entropy u64) string {
+        attempts[0] += 1;
+        return "fixed";
+    };
+    var code i32 = -1;
+    try { let temporary = fs.create_temp_dir_with(directory,always); }
+    catch error os.Error { code = code_of(error); }
+    if code != 17 || attempts[0] != fs.TEMP_MAX_ATTEMPTS {
+        os.rmdir(target);
+        os.rmdir(directory);
+        return 130;
+    }
+
+    attempts[0] = 0;
+    let after_collision = func(entropy u64) string {
+        attempts[0] += 1;
+        if attempts[0] == 1 { return "fixed"; }
+        return "fresh";
+    };
+    let created = fs.create_temp_dir_with(directory,after_collision);
+    let expected = path.join(directory,"fresh");
+    if attempts[0] != 2 || created != expected {
+        os.rmdir(created);
+        os.rmdir(target);
+        os.rmdir(directory);
+        return 131;
+    }
+    if (os.stat(created).mode & 0o777) != fs.TEMP_DIR_MODE {
+        os.rmdir(created);
+        os.rmdir(target);
+        os.rmdir(directory);
+        return 132;
+    }
+    os.rmdir(created);
+
+    let absent = path.join(scratch,"absent-dir-parent");
+    if fs.exists(absent) { return 133; }
+    attempts[0] = 0;
+    code = -1;
+    try { let temporary = fs.create_temp_dir_with(absent,always); }
+    catch error os.Error { code = code_of(error); }
+    if code != 2 || attempts[0] != 1 {
+        os.rmdir(target);
+        os.rmdir(directory);
+        return 134;
+    }
+
+    attempts[0] = 0;
+    let invalid = func(entropy u64) string {
+        attempts[0] += 1;
+        return "nested/dir";
+    };
+    code = -1;
+    try { let temporary = fs.create_temp_dir_with(directory,invalid); }
+    catch error os.Error { code = code_of(error); }
+    if code != 22 || attempts[0] != 1 {
+        os.rmdir(target);
+        os.rmdir(directory);
+        return 135;
+    }
+    os.rmdir(target);
+    os.rmdir(directory);
+    return 0;
+}
+
+func test_walk_tree(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"walk");
+    let a = path.join(base,"a");
+    let b = path.join(a,"b");
+    let c = path.join(base,"c");
+    os.mkdir(a,fs.TEMP_DIR_MODE);
+    os.mkdir(b,fs.TEMP_DIR_MODE);
+    os.mkdir(c,fs.TEMP_DIR_MODE);
+    let one = path.join(a,"one.txt");
+    let two = path.join(c,"two.txt");
+    let unicode = path.join(a,"中.txt");
+    fs.write_text(one,"one",fs.TEMP_FILE_MODE);
+    fs.write_text(two,"two",fs.TEMP_FILE_MODE);
+    fs.write_text(unicode,"unicode",fs.TEMP_FILE_MODE);
+    let link_file = path.join(a,"link-file");
+    let link_dir = path.join(base,"link-dir");
+    let broken = path.join(base,"broken");
+    os.symlink("one.txt",link_file);
+    os.symlink("a",link_dir);
+    os.symlink("missing",broken);
+
+    let items = fs.walk(base);
+    var failure i32 = 0;
+    let expected = [base,a,b,one,unicode,c,two,link_file,link_dir,broken];
+    for wanted in expected {
+        if find_entry(items,wanted) != 1 { failure = 140; }
+    }
+    if vec.len(items) != vec.len(expected) { failure = 141; }
+    if count_name_errors(items) != 0 { failure = 142; }
+    if find_entry(items,path.join(link_dir,"two.txt")) != -1 { failure = 143; }
+    if find_entry(items,path.join(link_dir,"b")) != -1 { failure = 144; }
+    if !entry_is_symlink(items,link_file) { failure = 145; }
+    if !entry_is_symlink(items,link_dir) { failure = 146; }
+    if !entry_is_symlink(items,broken) { failure = 147; }
+    if entry_depth(items,base) != 0 { failure = 148; }
+    if entry_depth(items,one) != 2 { failure = 149; }
+    if entry_depth(items,b) != 2 { failure = 150; }
+    if entry_name(items,one) != "one.txt" { failure = 168; }
+    if entry_name(items,unicode) != "中.txt" { failure = 169; }
+
+    let single = fs.walk(one);
+    if vec.len(single) != 1 { failure = 151; }
+    else {
+        switch single[0] {
+            case fs.WalkItem.Entry(entry): {
+                if entry.path != one || !fs.is_file(entry.info) { failure = 152; }
+            }
+            case fs.WalkItem.NameError(directory,name,error): { failure = 153; }
+            case fs.WalkItem.IoError(path,error): { failure = 153; }
+        }
+    }
+
+    // An explicit root link is followed, but links below it remain leaves.
+    let root_link = path.join(scratch,"walk-root-link");
+    os.symlink(base,root_link);
+    let linked = fs.walk(root_link);
+    if vec.len(linked) != vec.len(expected) { failure = 154; }
+    if find_entry(linked,root_link) != 1 { failure = 155; }
+    if !entry_is_dir(linked,root_link) || entry_is_symlink(linked,root_link) {
+        failure = 155;
+    }
+    if find_entry(linked,path.join(root_link,"a")) != 1 { failure = 156; }
+    if find_entry(linked,root_link+"/a/b") != 1 { failure = 157; }
+    if find_entry(linked,path.join(root_link,"link-dir")) != 1 { failure = 158; }
+    if !entry_is_symlink(linked,path.join(root_link,"link-dir")) {
+        failure = 158;
+    }
+    if find_entry(linked,root_link+"/link-dir/two.txt") != -1 {
+        failure = 159;
+    }
+    if find_entry(linked,root_link+"/link-dir/b") != -1 {
+        failure = 159;
+    }
+    if count_name_errors(linked) != 0 || count_io_errors(linked) != 0 {
+        failure = 166;
+    }
+    var read_dir_rejected = false;
+    try { let ignored = fs.read_dir(root_link); }
+    catch error os.Error { read_dir_rejected = true; }
+    if !read_dir_rejected { failure = 196; }
+    os.unlink(root_link);
+
+    // A broken explicit root link fails instead of being returned as a leaf.
+    var broken_root_rejected = false;
+    try { let ignored = fs.walk(broken); }
+    catch error os.Error { broken_root_rejected = true; }
+    if !broken_root_rejected { failure = 167; }
+
+    os.unlink(link_file);
+    os.unlink(link_dir);
+    os.unlink(broken);
+    os.unlink(one);
+    os.unlink(two);
+    os.unlink(unicode);
+    os.rmdir(b);
+    os.rmdir(a);
+    os.rmdir(c);
+    os.rmdir(base);
+    return failure;
+}
+
+func test_symlink_parent_paths(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"spell");
+    let from = path.join(base,"from");
+    let to = path.join(base,"to");
+    let target_parent = path.join(to,"child");
+    os.mkdir(from,fs.TEMP_DIR_MODE);
+    os.mkdir(to,fs.TEMP_DIR_MODE);
+    os.mkdir(target_parent,fs.TEMP_DIR_MODE);
+    os.symlink("../to/child",path.join(from,"link"));
+    let spelled = from+"/link/..";
+    let existing = path.join(to,"existing.txt");
+    fs.write_text(existing,"existing",fs.TEMP_FILE_MODE);
+    // Decoys at the lexically cleaned location make a path.join regression
+    // return the wrong entries instead of merely failing to stat.
+    let decoy_child = path.join(from,"child");
+    let decoy_file = path.join(from,"existing.txt");
+    os.mkdir(decoy_child,fs.TEMP_DIR_MODE);
+    fs.write_text(decoy_file,"decoy",fs.TEMP_FILE_MODE);
+
+    let temporary_file = fs.create_temp(spelled,"file");
+    let file_name = path.base(temporary_file.path);
+    let expected_file = spelled+"/"+file_name;
+    let lexical_file = from+"/"+file_name;
+    var failure i32 = 0;
+    if temporary_file.path != expected_file { failure = 180; }
+    if !fs.exists(expected_file) { failure = 181; }
+    if fs.exists(lexical_file) { failure = 182; }
+    let real_file = os.stat(path.join(to,file_name));
+    let actual_file = os.stat(expected_file);
+    if real_file.device != actual_file.device ||
+       real_file.inode != actual_file.inode { failure = 183; }
+    os.close(temporary_file.file);
+    os.unlink(expected_file);
+    if fs.exists(expected_file) { failure = 184; }
+
+    let temporary_dir = fs.create_temp_dir(spelled,"dir");
+    let dir_name = path.base(temporary_dir);
+    let expected_dir = spelled+"/"+dir_name;
+    let lexical_dir = from+"/"+dir_name;
+    if temporary_dir != expected_dir { failure = 185; }
+    if !fs.exists(expected_dir) { failure = 186; }
+    if fs.exists(lexical_dir) { failure = 187; }
+    let real_dir = os.stat(path.join(to,dir_name));
+    let actual_dir = os.stat(expected_dir);
+    if real_dir.device != actual_dir.device ||
+       real_dir.inode != actual_dir.inode { failure = 188; }
+    os.rmdir(expected_dir);
+    if fs.exists(expected_dir) { failure = 189; }
+
+    let items = fs.walk(spelled);
+    if find_entry(items,spelled) != 1 { failure = 190; }
+    if find_entry(items,spelled+"/existing.txt") != 1 { failure = 191; }
+    if find_entry(items,spelled+"/child") != 1 { failure = 192; }
+    if find_entry(items,from+"/existing.txt") != -1 { failure = 193; }
+    if find_entry(items,from+"/child") != -1 { failure = 195; }
+    if count_name_errors(items) != 0 { failure = 194; }
+
+    os.unlink(path.join(from,"link"));
+    os.unlink(decoy_file);
+    os.rmdir(decoy_child);
+    os.unlink(existing);
+    os.rmdir(target_parent);
+    os.rmdir(to);
+    os.rmdir(from);
+    os.rmdir(base);
+    return failure;
+}
+
+func test_walk_depth(scratch string, depth usize) i32 throws os.Error {
+    let root = fs.create_temp_dir(scratch,"deep");
+    let directories = vec.empty[string]();
+    vec.push(directories,root);
+    var current = root;
+    for var level usize = 0; level < depth; level += 1 {
+        current = current+"/d";
+        os.mkdir(current,fs.TEMP_DIR_MODE);
+        vec.push(directories,current);
+    }
+    let options = fs.WalkOptions(max_depth:depth+1,max_entries:depth+2,
+                                 nonfatal_child_errors:false);
+    let result = fs.walk_with(root,options);
+    let items = result.items;
+    var failure i32 = 0;
+    if result.truncated { failure = 199; }
+    if vec.len(items) != depth+1 { failure = 160; }
+    if count_name_errors(items) != 0 { failure = 161; }
+    if find_entry(items,current) != 1 { failure = 162; }
+    if entry_depth(items,current) != i32(depth) { failure = 163; }
+    for item in items {
+        switch item {
+            case fs.WalkItem.Entry(entry): {}
+            case fs.WalkItem.NameError(directory,name,error): { failure = 164; }
+            case fs.WalkItem.IoError(path,error): { failure = 164; }
+        }
+    }
+    for var index usize = vec.len(directories); index > 0; index -= 1 {
+        os.rmdir(directories[index-1]);
+    }
+    if fs.exists(root) { failure = 165; }
+    return failure;
+}
+
+func test_walk_encoding(fixture string, expect_invalid bool)
+                       i32 throws os.Error {
+    let items = fs.walk(fixture);
+    var failure i32 = 0;
+    if find_entry(items,path.join(fixture,"good.txt")) != 1 { failure = 170; }
+    if find_entry(items,path.join(fixture,"link")) != 1 { failure = 171; }
+    if entry_name(items,path.join(fixture,"good.txt")) != "good.txt" {
+        failure = 170;
+    }
+    if count_io_errors(items) != 0 { failure = 179; }
+    if !expect_invalid {
+        io.println("stdlib_fs_helpers: skipped invalid UTF-8 name checks");
+        if vec.len(items) != 3 { failure = 177; }
+        if count_name_errors(items) != 0 { failure = 178; }
+        return failure;
+    }
+    let bad = vec.make[u8](5,0);
+    bad[0] = 98;
+    bad[1] = 97;
+    bad[2] = 100;
+    bad[3] = 45;
+    bad[4] = 255;
+    if !find_name_error(items,fixture,bad) { failure = 172; }
+    let bad_dir = vec.make[u8](5,0);
+    bad_dir[0] = 100;
+    bad_dir[1] = 105;
+    bad_dir[2] = 114;
+    bad_dir[3] = 45;
+    bad_dir[4] = 254;
+    if !find_name_error(items,fixture,bad_dir) { failure = 173; }
+    if count_name_errors(items) != 2 { failure = 174; }
+    if vec.len(items) != 5 { failure = 175; }
+    if find_entry(items,path.join(fixture,"good.txt")) != 1 { failure = 176; }
+    return failure;
+}
+
+func test_walk_limits(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"limits");
+    let a = path.join(base,"a");
+    let b = path.join(a,"b");
+    let file = path.join(base,"f.txt");
+    os.mkdir(a,fs.TEMP_DIR_MODE);
+    os.mkdir(b,fs.TEMP_DIR_MODE);
+    fs.write_text(file,"f",fs.TEMP_FILE_MODE);
+    var failure i32 = 0;
+    let defaults = fs.default_walk_options();
+    if defaults.max_depth != 0 ||
+       defaults.max_entries != fs.WALK_DEFAULT_MAX_ENTRIES ||
+       defaults.nonfatal_child_errors { failure = 200; }
+
+    let shallow_result = fs.walk_with(base,fs.WalkOptions(max_depth:1,
+        max_entries:100,nonfatal_child_errors:false));
+    if count_entries(shallow_result.items) != 3 { failure = 201; }
+    if shallow_result.truncated { failure = 201; }
+    if find_entry(shallow_result.items,base) != 1 ||
+       find_entry(shallow_result.items,a) != 1 ||
+       find_entry(shallow_result.items,file) != 1 { failure = 202; }
+    if find_entry(shallow_result.items,b) != -1 { failure = 203; }
+
+    let limited = fs.walk_with(base,fs.WalkOptions(max_depth:10,
+        max_entries:2,nonfatal_child_errors:false));
+    if count_entries(limited.items) != 2 { failure = 204; }
+    if !limited.truncated { failure = 205; }
+    if find_entry(limited.items,base) != 1 { failure = 205; }
+
+    let root_only = fs.walk_with(base,fs.WalkOptions(max_depth:10,
+        max_entries:1,nonfatal_child_errors:false));
+    if vec.len(root_only.items) != 1 || !root_only.truncated ||
+       find_entry(root_only.items,base) != 1 { failure = 206; }
+
+    let exact = fs.walk_with(base,fs.WalkOptions(max_depth:10,
+        max_entries:4,nonfatal_child_errors:false));
+    if count_entries(exact.items) != 4 { failure = 209; }
+    if exact.truncated { failure = 290; }
+
+    let below = fs.walk_with(base,fs.WalkOptions(max_depth:10,
+        max_entries:3,nonfatal_child_errors:false));
+    if count_entries(below.items) != 3 { failure = 291; }
+    if !below.truncated { failure = 292; }
+
+    let defaulted = fs.walk(base);
+    if count_entries(defaulted) != 4 { failure = 207; }
+    let zero_options = fs.walk_with(base,fs.WalkOptions(max_depth:0,
+        max_entries:0,nonfatal_child_errors:false));
+    if count_entries(zero_options.items) != 4 || zero_options.truncated {
+        failure = 208;
+    }
+
+    os.unlink(file);
+    os.rmdir(b);
+    os.rmdir(a);
+    os.rmdir(base);
+
+    let empty = fs.create_temp_dir(scratch,"limits-empty");
+    let empty_result = fs.walk_with(empty,fs.WalkOptions(max_depth:1,
+        max_entries:1,nonfatal_child_errors:false));
+    if vec.len(empty_result.items) != 1 || empty_result.truncated {
+        failure = 218;
+    }
+    os.rmdir(empty);
+    return failure;
+}
+
+func test_walk_wide(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"wide");
+    let count usize = 700;
+    for var index usize = 0; index < count; index += 1 {
+        let name = base+"/w"+strconv.format_u64(u64(index));
+        let file = os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,
+                           fs.TEMP_FILE_MODE);
+        os.close(file);
+    }
+    let total = count+1;
+    var failure i32 = 0;
+
+    // 700 names span several getdents buffers; 300 must stop exactly at the
+    // shared budget instead of materializing the rest of the directory.
+    let capped = fs.walk_with(base,fs.WalkOptions(max_depth:2,
+        max_entries:300,nonfatal_child_errors:false));
+    if count_entries(capped.items) != 300 { failure = 220; }
+    if !capped.truncated { failure = 221; }
+
+    let exact = fs.walk_with(base,fs.WalkOptions(max_depth:2,
+        max_entries:total,nonfatal_child_errors:false));
+    if count_entries(exact.items) != total { failure = 222; }
+    if exact.truncated { failure = 223; }
+
+    let below = fs.walk_with(base,fs.WalkOptions(max_depth:2,
+        max_entries:total-1,nonfatal_child_errors:false));
+    if count_entries(below.items) != total-1 { failure = 224; }
+    if !below.truncated { failure = 225; }
+
+    let whole = fs.walk(base);
+    if count_entries(whole) != total { failure = 226; }
+    for var index usize = 0; index < count; index += 1 {
+        if find_entry(whole,base+"/w"+strconv.format_u64(u64(index))) != 1 {
+            failure = 228;
+        }
+    }
+    let directory = fs.read_dir(base);
+    if vec.len(directory) != count { failure = 227; }
+
+    for var index usize = 0; index < count; index += 1 {
+        os.unlink(base+"/w"+strconv.format_u64(u64(index)));
+    }
+    os.rmdir(base);
+    return failure;
+}
+
+func test_walk_overflow(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"overflow");
+    let count = fs.WALK_DEFAULT_MAX_ENTRIES+1;
+    for var index usize = 0; index < count; index += 1 {
+        let name = base+"/o"+strconv.format_u64(u64(index));
+        let file = os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,
+                           fs.TEMP_FILE_MODE);
+        os.close(file);
+    }
+    var failure i32 = 0;
+    var code i32 = -1;
+    try { let ignored = fs.walk(base); }
+    catch error os.Error { code = code_of(error); }
+    if code != 75 { failure = 230; }
+
+    let result = fs.walk_with(base,fs.default_walk_options());
+    if count_entries(result.items) != fs.WALK_DEFAULT_MAX_ENTRIES {
+        failure = 231;
+    }
+    if !result.truncated { failure = 232; }
+
+    for var index usize = 0; index < count; index += 1 {
+        os.unlink(base+"/o"+strconv.format_u64(u64(index)));
+    }
+    os.rmdir(base);
+    return failure;
+}
+
+func test_walk_child_errors(scratch string) i32 throws os.Error {
+    let base = fs.create_temp_dir(scratch,"errors");
+    let denied = path.join(base,"denied");
+    let file = path.join(base,"ok.txt");
+    os.mkdir(denied,fs.TEMP_DIR_MODE);
+    fs.write_text(file,"ok",fs.TEMP_FILE_MODE);
+    os.chmod(denied,0);
+    var unreadable = false;
+    try { let probe = fs.read_dir(denied); }
+    catch error os.Error { unreadable = true; }
+    if !unreadable {
+        os.chmod(denied,fs.TEMP_DIR_MODE);
+        os.unlink(file);
+        os.rmdir(denied);
+        os.rmdir(base);
+        io.println("stdlib_fs_helpers: skipped unreadable-child check");
+        return 0;
+    }
+
+    var failure i32 = 0;
+    let fatal = fs.WalkOptions(max_depth:0,
+        max_entries:fs.WALK_DEFAULT_MAX_ENTRIES,
+        nonfatal_child_errors:false);
+    var threw = false;
+    try { let ignored = fs.walk_with(base,fatal); }
+    catch error os.Error { threw = true; }
+    if !threw { failure = 210; }
+
+    let tolerant = fs.WalkOptions(max_depth:0,
+        max_entries:fs.WALK_DEFAULT_MAX_ENTRIES,
+        nonfatal_child_errors:true);
+    let result = fs.walk_with(base,tolerant);
+    let items = result.items;
+    if result.truncated { failure = 214; }
+    if !find_io_error(items,denied) { failure = 211; }
+    if find_entry(items,file) != 1 { failure = 212; }
+    if count_io_errors(items) != 1 { failure = 213; }
+
+    os.chmod(denied,fs.TEMP_DIR_MODE);
+    os.unlink(file);
+    os.rmdir(denied);
+    os.rmdir(base);
+    return failure;
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) != 6 { return 2; }
+    let scratch = args[1];
+    let fixture = args[2];
+    let invalid_mode = args[3];
+    let overflow_mode = args[5];
+    if overflow_mode != "0" && overflow_mode != "1" { return 6; }
+    var expect_invalid = true;
+    if invalid_mode == "skip" { expect_invalid = false; }
+    else if invalid_mode != "invalid" { return 3; }
+    var depth usize = 0;
+    try { depth = usize(strconv.parse_u64(args[4])); }
+    catch error strconv.Error { return 4; }
+    if depth == 0 { return 5; }
+    var failure = test_temp_files(scratch);
+    if failure != 0 { return failure; }
+    failure = test_temp_dirs(scratch);
+    if failure != 0 { return failure; }
+    failure = test_temp_dir(scratch);
+    if failure != 0 { return failure; }
+    failure = test_file_collisions(scratch);
+    if failure != 0 { return failure; }
+    failure = test_dir_collisions(scratch);
+    if failure != 0 { return failure; }
+    failure = test_walk_tree(scratch);
+    if failure != 0 { return failure; }
+    failure = test_walk_limits(scratch);
+    if failure != 0 { return failure; }
+    failure = test_walk_wide(scratch);
+    if failure != 0 { return failure; }
+    if overflow_mode == "1" {
+        failure = test_walk_overflow(scratch);
+        if failure != 0 { return failure; }
+    } else {
+        io.println("stdlib_fs_helpers: skipped 100001-file overflow reproduction");
+    }
+    failure = test_walk_child_errors(scratch);
+    if failure != 0 { return failure; }
+    failure = test_symlink_parent_paths(scratch);
+    if failure != 0 { return failure; }
+    failure = test_walk_depth(scratch,depth);
+    if failure != 0 { return failure; }
+    failure = test_walk_encoding(fixture,expect_invalid);
+    if failure != 0 { return failure; }
+    io.println("stdlib_fs_helpers: ok");
+    return 0;
+}

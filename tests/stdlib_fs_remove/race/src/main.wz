@@ -1,0 +1,101 @@
+// Deterministic rename points are driven by race_harness.c through ptrace.
+// The fixture only sets up a known tree, prints ARM, and checks that the
+// replacement trees survive while removal reports the documented typed error.
+package app;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+const EEXIST i32 = 17;
+
+func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code, completed): return code;
+        case os.Error.WouldBlock(code, completed): return code;
+        case os.Error.System(code, completed): return code;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+
+func make_file(path string) throws os.Error {
+    let file = os.open(path,
+        os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all_text(file,"x");
+    closed = true;
+    os.close(file);
+}
+
+func exists(path string) bool throws os.Error {
+    try { let info = os.lstat(path); return true; }
+    catch error os.Error {
+        if error_code(error) == 2 { return false; }
+        throw error;
+    }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 2 { return 90; }
+    let mode = arguments[1];
+
+    os.mkdir("race-root",0o700);
+    if mode == "child-open" || mode == "child-rmdir" {
+        os.mkdir("race-root/child",0o700);
+        make_file("race-root/child/old");
+    }
+    // The ptrace harness arms itself on this exact write and then mutates the
+    // tree at the requested syscall boundary.
+    os.write_all_text(os.stdout(),"ARM\n");
+
+    var code i32 = 0;
+    var failed = false;
+    try { fs.remove_dir_all("race-root"); }
+    catch error os.Error {
+        failed = true;
+        code = error_code(error);
+    }
+
+    if mode == "root-away" {
+        if failed {
+            io.eprintln("root-away returned "+
+                strconv.format_i64(i64(code))+", expected success");
+            return 1;
+        }
+        if exists("race-root") { return 2; }
+        if !exists("moved-root") { return 3; }
+        return 0;
+    }
+
+    if !failed || code != EEXIST {
+        io.eprintln(mode+" returned "+
+            strconv.format_i64(i64(code))+", expected EEXIST");
+        return 4;
+    }
+    if mode == "child-open" {
+        // The replacement child was never traversed, and the renamed original
+        // child still has its sentinel.
+        if !exists("race-root/child/replacement") { return 5; }
+        if !exists("race-root/moved/old") { return 6; }
+        return 0;
+    }
+    if mode == "child-rmdir" {
+        // The replacement name was detected before rmdir; the renamed original
+        // directory remains, but its observed child was already removed.
+        if !exists("race-root/child/replacement") { return 7; }
+        if !exists("race-root/moved") { return 8; }
+        if exists("race-root/moved/old") { return 9; }
+        return 0;
+    }
+    if mode == "root-replace" {
+        if !exists("race-root/replacement") { return 10; }
+        if !exists("moved-root") { return 11; }
+        return 0;
+    }
+    return 91;
+}

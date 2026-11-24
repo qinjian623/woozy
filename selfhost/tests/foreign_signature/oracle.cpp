@@ -1270,9 +1270,16 @@ std::vector<TypeId> op_args1(TypeId first) { return {first}; }
 std::vector<TypeId> op_args2(TypeId first, TypeId second) {
   return {first, second};
 }
+std::vector<TypeId> op_args3(TypeId first, TypeId second, TypeId third) {
+  return {first, second, third};
+}
 std::vector<TypeId> op_args4(TypeId first, TypeId second, TypeId third,
                              TypeId fourth) {
   return {first, second, third, fourth};
+}
+std::vector<TypeId> op_args5(TypeId first, TypeId second, TypeId third,
+                             TypeId fourth, TypeId fifth) {
+  return {first, second, third, fourth, fifth};
 }
 
 void run_system_phase() {
@@ -1287,6 +1294,8 @@ void run_system_phase() {
   TypeId u32_type = fixture_field_type(context, "u32", base.resolved->symbols);
   TypeId u64_type = fixture_field_type(context, "u64", base.resolved->symbols);
   TypeId f64_type = fixture_field_type(context, "f64", base.resolved->symbols);
+  TypeId c_type = u32_type;
+  TypeId d_type = f64_type;
   TypeId pollfd_type =
       fixture_named(context, TypeKind::NominalStruct,
                     base.resolved->symbols[18].id.value);
@@ -1296,11 +1305,17 @@ void run_system_phase() {
     std::vector<TypeId> arguments;
     if (spec.type_arity >= 1) arguments.push_back(a_type);
     if (spec.type_arity >= 2) arguments.push_back(b_type);
+    if (spec.type_arity >= 3) arguments.push_back(c_type);
+    if (spec.type_arity >= 4) arguments.push_back(d_type);
     uint32_t operation = static_cast<uint32_t>(spec.operation);
     case_operation("op." + num(operation) + ".module", context, base,
                    operation, arguments);
     case_operation("op." + num(operation) + ".none", context, std::nullopt,
                    operation, arguments);
+    if (operation >= 213 && operation <= 226) {
+      emit("registry op." + num(operation) + " owner=" +
+           std::string(spec.owner) + " arity=" + num(spec.type_arity));
+    }
     ++operation_count;
   }
   emit("operations " + num(operation_count));
@@ -1314,6 +1329,20 @@ void run_system_phase() {
   case_operation("op.vec-parameter", context, base, 34, op_args1(param_type));
   case_operation("op.task-parameters", context, base, 204,
                  op_args2(param_type, bool_type));
+
+  case_operation("op.scope-add-missing", context, base, 223,
+                 op_args2(a_type, b_type));
+  case_operation("op.scope-add-wrong-arity", context, base, 223,
+                 op_args3(a_type, b_type, c_type));
+  case_operation("op.scope-add-extra-type-args", context, base, 223,
+                 op_args5(a_type, b_type, c_type, d_type, string_type));
+  case_operation("op.scope-add-none", context, std::nullopt, 223,
+                 op_args4(a_type, b_type, c_type, d_type));
+  case_operation("op.scope-begin-missing", context, base, 222, {});
+  case_operation("op.scope-activate-missing", context, base, 224, {});
+  case_operation("op.scope-wait-extra-type-arg", context, base, 225,
+                 op_args1(a_type));
+  case_operation("op.task-status-missing", context, base, 226, {});
 
   HirModule empty_module = empty_module_default();
   case_operation("op.unknown", context, base, 65535, {});

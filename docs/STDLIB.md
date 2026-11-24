@@ -2,6 +2,8 @@
 
 标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/http_server`、`std/async`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 用于 Linux x86_64 和 macOS arm64 的 Native 程序。`std/text`、`std/unicode`、`std/vec`、`std/sort`、`std/slice`、`std/box`、`std/weak`、`std/iter`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 在 Native 和 Python 后端都可以使用。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
 
+`std/algo`、`std/deque`、`std/heap`、`std/fmt`、`std/regex` 和 `std/csv` 有 Linux Native 和 Python 用例。`std/csv_io` 和 `std/json_io` 提供 Linux Native 文件读写接口。
+
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
 ```wz
@@ -62,6 +64,7 @@ func main() throws os.Error {
 | `writer(file os.File) Writer` | 建立带缓冲的 Writer |
 | `flush(output Writer) throws os.Error` | 写出 pending 中的字节 |
 | `write(output Writer, data Vec[u8]) throws os.Error` | 追加字节，pending 到 4096 字节时先 flush |
+| `write_byte(output Writer, value u8) throws os.Error` | 追加一个字节，缓冲已满时先 flush |
 | `write_text(output Writer, value string) throws os.Error` | 追加字符串的 UTF-8 字节 |
 
 `println` 等函数要求类型实现 `Printable`。标准库已经为 `string`、`bool`、各种整数和浮点类型提供实现；自定义类型可以写 `impl Printable for 类型名` 并实现 `to_text`。
@@ -69,6 +72,8 @@ func main() throws os.Error {
 `read_line` 去掉行尾的 LF，并去掉 LF 前紧挨着的一个 CR。文件在最后一行后没有 LF 时，剩余数据仍返回 `Some`；没有剩余数据才返回 `None`。Reader 复制后共享缓冲区和游标。非阻塞读行遇到 WouldBlock 时，尚未返回的行前缀留在 Reader 中，下一次 read_line 或 read_byte 可以继续读取。
 
 Writer 必须显式 `flush`。丢弃 Writer 不会自动写出 pending；只用 `write` 写满 4096 字节也不代表最后一段已经写到文件。`flush` 失败时，已经完成的字节会从 pending 移除，剩余字节保留，错误继续抛出。
+
+`write_byte` 需要先 `flush` 且刷新失败时，本次传入的字节还没进缓冲。恢复写入后可重试该字节。
 
 ## std/os
 
@@ -78,6 +83,10 @@ Writer 必须显式 `flush`。丢弃 Writer 不会自动写出 pending；只用 
 | --- | --- |
 | `stdin() File`、`stdout() File`、`stderr() File` | 标准输入、输出、错误 |
 | `open(path string, flags i32, mode u32) File throws Error` | 打开文件 |
+| `openat(directory, name, flags, mode)` | 从已打开的目录描述符打开一个目录项 |
+| `mkdirat(directory, name, mode)` | 在已打开的目录中创建子目录 |
+| `unlinkat(directory, name, kind)` | 删除目录项，`kind` 指定普通项或目录 |
+| `fstatat(directory, name, follow)` | 读取目录项信息，`follow` 控制是否跟随末尾符号链接 |
 | `close(file File) throws Error` | 关闭描述符，不自动重试 |
 | `read(file File, data Vec[u8], count usize) usize throws Error` | 读一次，返回实际字节数；结束返回 0 |
 | `write(file File, data Vec[u8], count usize) usize throws Error` | 写一次，返回实际字节数 |
@@ -116,6 +125,8 @@ pub enum Error {
 
 `read` 和 `write` 使用缓冲区已有长度，`count` 不能超过它；读取不会改变 Vec 的长度，只会改已有元素。空 Vec 只能读写 0 字节。
 
+`openat`、`mkdirat`、`unlinkat` 和 `fstatat` 的 `name` 只接受一个名称，拒绝空串、`.`、`..`、斜杠和 NUL。`_bytes` 版本接收 `Vec[u8]`，用于保留 Linux 的非 UTF-8 名称。调用不会关闭传入的目录描述符。
+
 `File` 离开作用域不会关闭，复制只复制描述符。`os.pipe` 的两个端点都要关闭；关闭写端后，读端读到文件结束。短写、中断和描述符生命周期的更多说明见 [系统接口](OS.md)。
 
 ## std/fs
@@ -128,19 +139,37 @@ pub enum Error {
 | `read_text(name string) string throws os.Error` | 读完整文件并按 UTF-8 解码 |
 | `write_file(name string, data Vec[u8], mode u32) throws os.Error` | 创建或截断后写入 |
 | `write_text(name string, value string, mode u32) throws os.Error` | 写入字符串 |
+| `write_file_atomic(name, data, mode)`、`write_text_atomic(name, value, mode)` | 先写入同一目录的临时文件，再用重命名替换目标 |
 | `append_file(name string, data Vec[u8], mode u32) throws os.Error` | 追加字节 |
 | `copy_file(source string, destination string, mode u32) throws os.Error` | 复制文件 |
+| `copy_dir(source string, destination string) throws os.Error` | 在 Linux Native 复制目录树，目标必须尚不存在 |
 | `exists(name string) bool throws os.Error` | 路径存在时返回 `true` |
 | `create_dir_all(name string, mode u32) throws os.Error` | 逐级创建目录 |
+| `remove_dir_all(name string) throws os.Error` | 删除实际目录及内容。后代符号链接只删除链接本身 |
 | `read_dir(name string) Vec[DirEntry] throws os.Error` | 读目录项，不含 `.` 和 `..` |
 | `name_text(entry DirEntry) string throws os.Error` | 把目录项名称按 UTF-8 解码 |
 | `is_dir(info os.FileInfo)`、`is_file(info)`、`is_symlink(info)` | 判断 `stat` 结果的类型 |
+| `create_temp(directory, prefix) TempFile throws os.Error` | 在指定目录创建临时文件，返回已打开的 `file` 和 `path` |
+| `create_temp_dir(directory, prefix) string throws os.Error` | 创建临时目录并返回路径 |
+| `temp_dir() string throws os.Error` | 返回非空的 `TMPDIR` 或 `/tmp` |
+| `walk(root) Vec[WalkItem] throws os.Error` | 列出根路径及其后代，超过默认条目上限时抛出 `EOVERFLOW` |
+| `walk_with(root, options) WalkResult throws os.Error` | 指定深度、条目数和子项错误的处理方式 |
 
 `DirEntry.name` 是 `Vec[u8]`，用于保留系统返回的文件名字节。需要字符串时调用 `name_text`，非 UTF-8 名称会抛出 `os.Error`。目录项的 `kind` 是系统给出的类型字节，跨文件系统时不要只依赖它。
 
 `exists` 只在系统返回“不存在”或“路径中间不是目录”时返回 `false`，其他错误继续抛出。`copy_file` 在截断目标前比较源和目标，源和目标指向同一 inode 时抛出 `os.Error.System(22,0)`。
 
-这些便捷函数会自行打开和关闭文件。完整程序：
+临时文件和目录用随机后缀，分别以 `0600` 和 `0700` 请求权限。调用者负责关闭临时文件并删除文件或目录。`walk` 解析调用者给出的根符号链接。后代符号链接按一项返回，悬空根链接报 `ENOENT`。`WalkEntry.name` 是字符串，无法按 UTF-8 解码的名字通过 `WalkItem.NameError` 返回原始字节。遍历期间若其他进程修改了目录，结果可能变化或抛出系统错误。
+
+`walk_with` 返回 `items` 和 `truncated`。默认上限为 100,000 项，根项和错误项都计入上限。达到上限且仍有条目时 `truncated` 为 `true`。正数 `max_depth` 用于过滤更深项，设为 0 时不限制深度。`nonfatal_child_errors` 为 `true` 时，子项的 I/O 错误用 `WalkItem.IoError` 返回。
+
+原子写入在替换前设置最终权限、同步并关闭临时文件。目标是符号链接时，替换链接本身。已打开旧文件的描述符仍可读取旧内容。出错时尝试删除临时文件，并保留引发操作失败的错误。函数只同步文件，断电后重命名可能丢失。
+
+`remove_dir_all` 在 Linux Native 用目录描述符和原始文件名字节遍历。根路径必须指向实际目录，根符号链接会报错。操作失败时已经删除的内容不会恢复。每层目录占用一个描述符，超出进程限额会返回 `EMFILE`。调用期间应保持目录树稳定，最后一次身份检查和删除之间仍有一次按名称操作。
+
+`copy_dir` 复制常规文件、子目录和符号链接。文件名和链接目标保留原始字节，源目录的普通权限位会复制。复制期间应保持源目录和目标父目录稳定。目标父目录须已存在，且不能位于源目录内。每层打开一对目录描述符，超出进程限额时返回 `EMFILE`。写入失败会留下已复制的部分，由调用者决定如何处理。
+
+`read_file`、`write_file` 这类直接读写接口会关闭自己打开的文件。下面的程序写入三行并输出。
 
 ```wz
 package main;
@@ -192,19 +221,31 @@ func main() throws os.Error {
 
 字符串本身可以用 `len`、索引和切片；这些操作都按码点计算，索引结果是 `u32`。字符串不自动做 Unicode 正规化，例如组合字符和预组合字符是不同的字节序列。需要按字节处理时先用 `bytes`，再显式转换回来。
 
+`split_whitespace(value)` 按 Unicode 空白拆分，略过空字段。`pad_left`、`pad_right`、`pad_center` 按码点数填充空格，`*_with` 版本可选填充码点。无效填充值或宽度超过 `MAX_PADDING_WIDTH` 时抛出 `PaddingError`。
+
+## std/fmt
+
+`fmt.format(template, values)` 把 `Vec[string]` 中的值填入模板。`{}` 依次取值，`{0}` 取第一个值。一个模板中使用一种编号方式。`{{` 和 `}}` 输出字面花括号。`{:8}` 和 `{:<8}` 按 8 个码点左对齐，`{:>8}` 右对齐，`{:^8}` 居中。例如 `fmt.format("{:>5}", ["42"])` 返回 `"   42"`。宽度 `0` 合法，`08` 这类零填充写法会报错。
+
+单次结果至多 100 万码点和 400 万 UTF-8 字节。模板错误、缺少字段或输出超限时抛出 `fmt.Error`，位置按模板码点计数。
+
 ## std/regex
 
 正则表达式在 Native 和 Python 后端使用同一实现。可先编译一个模式，再搜索多段文本。
 
 | 接口 | 说明 |
 | --- | --- |
-| `compile(pattern string) Pattern throws Error` | 编译模式，语法错误报告码点位置 |
+| `compile(pattern string) Pattern throws Error` | 编译模式。有余量时同时记录捕获组，语法错误报告码点位置 |
+| `compile_captures(pattern string) Pattern throws Error` | 要求记录捕获组，超出限制时直接报 `PatternTooLarge` |
 | `find(compiled Pattern, value string) option.Option[Match]` | 返回开始位置最早的匹配，同一起点取最长结果。字段 `start`、`end` 是左闭右开的码点下标 |
+| `find_from(compiled, value, from)`、`find_all(compiled, value)` | 从指定码点查找，或收集所有不重叠的匹配 |
 | `is_match(compiled Pattern, value string) bool` | 是否存在匹配 |
+| `split`、`split_n`、`replace_all`、`replace_n` | 按匹配拆分，或用给定字符串替换匹配。带 `_n` 的写法接受数量上限 |
+| `find_captures`、`find_captures_from` | 取得匹配和捕获组。用 `group` 读取区间，用 `group_text` 读取原文 |
 
 支持字面字符、`.`、`^`、`$`、分组 `(...)`、分支 `|`、重复 `* + ?`、字符类 `[a-z]` 和反向字符类 `[^x]`。可转义元字符，也可用 `\n`、`\r`、`\t`。锚点匹配整个字符串的首尾，点号跳过 LF。`regex.find(regex.compile("中+"), "a中中b")` 的匹配区间是 `[1, 3)`。
 
-匹配器逐码点推进状态集合，不做指数级回溯。模式最多 4096 个码点，分组最多嵌套 128 层。当前范围为查找和判定，捕获组、反向引用、环视、`{m,n}` 和模式标志尚未提供。
+匹配器逐码点推进状态集合，模式最多 4096 个码点，分组最多嵌套 128 层。捕获限 32 组。组号 0 是整段匹配，后续组从 1 开始。分组数或状态数超过捕获限额时，`compile` 仍可编译符合普通匹配限额的模式，此时捕获接口会抛出 `CaptureError.Unavailable`。反向引用、环视、`{m,n}` 和模式标志尚未提供。 [正则匹配规则](../stdlib/regex/README.md)
 
 ## std/unicode
 
@@ -215,6 +256,7 @@ func main() throws os.Error {
 | `normalize(value string, form Form) string` | 按 `Form.NFC`、`NFD`、`NFKC` 或 `NFKD` 正规化 |
 | `nfc`、`nfd`、`nfkc`、`nfkd` | 对应正规化形式的简写，参数和结果都是 string |
 | `casefold(value string) string` | 完整默认大小写折叠，可把一个码点展开成多个；不按用户地区选择规则 |
+| `upper(value string)`、`lower(value string)` | 按 Unicode 默认规则转换大小写，支持多码点展开和希腊词尾 σ 的转换 |
 | `boundaries(value string) Vec[usize]` | 字素簇边界，按码点位置计，包含 0 和字符串末尾；空串返回 `[0]` |
 | `grapheme_count(value string) usize` | 字素簇数量；空串为 0 |
 | `graphemes(value string) Vec[string]` | 逐个字素簇拆分；空串返回空 Vec |
@@ -232,6 +274,8 @@ let bounds = unicode.boundaries("🇨🇳e\u{301}"); // [0, 2, 4]
 
 正规化和 casefold 都需要主动调用；字符串比较不会自动执行它们。它们保留嵌入的 NUL。Native 和 Python 均支持这些接口，使用相同版本的数据。
 
+`upper` 和 `lower` 保留嵌入的 NUL，使用统一的默认规则，不读取系统语言设置。 [大小写数据来源](../stdlib/unicode/CASE_PROVENANCE.md)
+
 ## std/vec
 
 Vec 的长度、容量和可变操作。
@@ -247,6 +291,10 @@ Vec 的长度、容量和可变操作。
 | `pop[T](values Vec[T]) option.Option[T]` | 去掉并返回末尾元素 |
 | `resize[T](values Vec[T], length usize, fill T)` | 改变长度，新增元素填 `fill` |
 | `clear[T](values Vec[T])` | 长度变为 0，容量保留 |
+| `insert(values, index, value)` | 在下标处插入，后续元素右移。下标等于长度时追加 |
+| `remove_at(values, index)` | 删除并返回指定元素，后续元素左移 |
+| `swap_remove(values, index)` | 删除并返回指定元素，用末尾元素填空位 |
+| `extend(values, extra)` | 追加 `extra` 中的元素。两个参数共享容器时，追加调用前的原有元素 |
 
 Vec 赋值共享同一个容器；`push`、`pop`、`resize` 和 `clear` 会改变所有别名。切片建立新的 Vec，复制选中的元素。`pop` 在空 Vec 上返回 `option.Option.None`。
 
@@ -261,9 +309,34 @@ Vec 赋值共享同一个容器；`push`、`pop`、`resize` 和 `clear` 会改�
 | `sort_by(values, less)` | 原地稳定归并排序。相等元素保持原顺序，其他 Vec 别名也会看到变更。最坏耗时 O(n log n)，额外空间 O(n) |
 | `is_sorted_by(values, less) bool` | 检查是否已按同一比较规则排序 |
 | `lower_bound_by(values, value, less) usize` | 在已排序的 Vec 中找第一个不小于目标的位置，没有则返回长度 |
+| `upper_bound_by(values, value, less) usize` | 找第一个大于目标的位置，没有则返回长度 |
+| `equal_range_by(values, value, less) Range` | 返回 `start`、`end`，表示与目标等价的半开区间 |
 | `binary_search_by(values, value, less) option.Option[usize]` | 找到第一个与目标等价的位置，没有则返回 `None` |
+| `sort_by_key(values, key, less)` | 按键原地稳定排序。按输入顺序取键，每个元素只调用一次 `key` |
 
 例如，导入 `std/sort` 后，`sort.sort_by(values, func(a i32, b i32) bool { return a < b; });` 会将 `Vec[i32]` 升序排列。
+
+排序回调执行期间，试图通过别名改变原 Vec 的长度或存储会触发 Panic。排序返回后可以继续追加或删除元素。
+
+## std/algo
+
+按输入顺序处理 `Vec[T]`。Native 和 Python 后端都支持。
+
+| 接口 | 说明 |
+| --- | --- |
+| `map(values, transform)`、`filter(values, keep)` | 返回新 Vec，分别转换或保留元素 |
+| `fold(values, initial, combine)` | 逐元素调用 `combine(累积值, 元素)`，空 Vec 返回 `initial` |
+| `find(values, predicate)`、`find_index(values, predicate)` | 返回第一个匹配的元素或下标，找不到返回 `None` |
+| `any(values, predicate)`、`all(values, predicate)` | 在结果可确定时结束。空 Vec 分别返回 `false`、`true` |
+| `min_by(values, less)`、`max_by(values, less)`、`min_max_by(values, less)` | 按比较函数取最值，相等时保留最先出现的值。空 Vec 返回 `None` |
+
+回调可以替换输入中的现有元素，遍历期间不能改变 Vec 长度或存储。返回的元素遵循普通复制规则，Vec 等共享对象仍指向同一份数据。
+
+## std/deque 和 std/heap
+
+`deque.new[T]()` 创建双端队列。用 `push_front` 或 `push_back` 放入元素，用 `pop_front` 或 `pop_back` 取出元素，空队列返回 `None`。两端添加的摊还成本为 O(1)。`deque.to_vec` 按队列顺序复制元素。 [Deque 接口](../stdlib/deque/README.md)
+
+`heap.new[T](before)` 创建优先队列。比较函数 `before(left, right)` 返回 `true` 时，左侧元素优先弹出。用 `push` 添加，用 `peek` 查看堆顶，用 `pop` 弹出堆顶。比较和元素复制的成本固定时，弹出耗时 O(log n)，`heap.from_vec(values, before)` 批量建堆耗时 O(n)。元素排队期间应保持比较所用的值。两种容器复制后共享原容器。 [Heap 接口](../stdlib/heap/README.md)
 
 ## std/slice
 
@@ -301,6 +374,8 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 ## std/async
 
 异步函数返回 `Task[R,E]`，调用时不执行函数体。`spawn` 把任务加入就绪队列，`run`/`run_until` 推进执行器；`await` 只能写在 async 函数里，等待并驱动目标任务，未 spawn 的任务会直接启动，同一个 Task 可重复等待。`sleep`、`readable` 和 `writable` 返回可等待任务，`cancel`、`shutdown`、`finished`、`join` 和 `join_all` 控制等待与取消。完整规则见[async 与 await](CONCURRENCY.md#async-与-await)。
+
+在 Linux Native，`gather(tasks)` 按输入顺序收集结果，成员失败时取消余下任务并等待清理。`or_throw(await group)` 取得成功结果，或把组返回的有类型错误抛给调用者。 [任务组示例](CONCURRENCY.md#等待一组任务)
 
 ## std/option 和 std/result
 
@@ -557,6 +632,7 @@ HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读�
 | `read_request(reader Reader) Request throws Error` | 读取一个请求，保留后续消息的字节 |
 | `read_response(reader Reader, request_method string) Response throws Error` | 读取一个响应；须传对应请求方法，例如 `"GET"` 或 `"HEAD"` |
 | `read_request_head(reader)`、`read_request_body(reader)` | 只读请求头，再完成同一请求正文；顺序错误报 `ReadOrder` |
+| `read_request_body_part(reader, max_bytes) BodyPart throws Error` | 读已解码的正文片段，最多返回 `max_bytes` 字节 |
 | `read_response_head(reader, request_method)`、`read_response_body(reader)` | 只读响应头，再完成同一响应正文 |
 | `encode_response_head(response, request_method)` | 只编码状态行、头和 Content-Length；调用方随后发送正好 `response.body` 字节 |
 | `parse_request(data Vec[u8]) Request throws Error`、`parse_response(data, request_method)` | 解析完整消息，多余字节报 `TrailingBytes`；另有带 Limits 的 `_limited` 版本 |
@@ -567,7 +643,7 @@ HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读�
 
 `Header` 包含 `name string`、`value Vec[u8]`；`Response.reason`、请求和响应的 `body` 也都是字节。用 `text_header(name, value)` 从文本创建头字段；`header`/`header_values` 按不区分 ASCII 大小写的名称取字节值，`header_text`/`header_text_values` 和 `value_text` 才进行 UTF-8 解码，失败报 `InvalidUtf8`。
 
-解码支持定长和 chunked 正文；响应也支持读到连接关闭。`read_*_head` 返回的对象正文和 trailers 为空，Reader 停留在正文读取阶段；调用方必须用对应的 `read_*_body` 读完正文、改用合并读取，或关闭连接。`encode_response_head` 适合大正文的分段发送，避免把正文复制进编码缓冲区。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
+解码支持定长和 chunked 正文，响应也支持读到连接关闭。`read_*_head` 返回空的正文和 trailers，Reader 停留在正文读取阶段。`Request.trailers` 和 `Response.trailers` 独立保存尾部字段。`encode_request`、`encode_response` 和 `encode_response_head` 使用定长编码，收到非空 trailers 时抛出 `UnsupportedTrailers`。`encode_response_head` 只返回头部，不复制正文。HTTP/1.1 请求要求唯一且合法的 Host，缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
 
 以下只有导入和普通函数声明，接收已连接的阻塞 Socket，处理一个请求后关闭。函数负责关闭，调用方不要再次关闭同一描述符：
 
@@ -596,31 +672,42 @@ func serve_once(socket net.Socket) throws http.Error {
 
 非阻塞写出遇到 WouldBlock 后，不能直接从头重调 write_request/write_response；若需恢复，应先 encode 并保留字节与已写偏移，结合错误中的 completed、`net.poll` 可写事件继续发送。TLS 连接使用下面的 `std/https`；它通过 `reader_external`、`write_request_on` 和 `write_response_on` 使用同一个 HTTP 解析器和读取状态。
 
+读完 `read_request_head` 后，可以用 `read_request_body_part(reader, max_bytes)` 逐段读取定长或 chunked 正文。已解码的字节可以少于上限，函数不会为了填满而再读一次。`max_bytes` 为 0 时抛出 `ReadOrder`。`BodyPart.done` 表示消息结束，此时可取 `trailers`。遇到 `WouldBlock` 时保留 Reader 并重试同一读法。读取同一消息时只能选择逐段或整段接口之一。
+
+发送 chunked 响应时，用 `encode_response_chunked_head(response, request_method)`、`encode_response_chunk_data(data)` 和 `encode_response_chunk_end(trailers)` 依次编码。头部函数要求 `response.body` 和 `response.trailers` 为空，正文和尾部字段分别由后两个函数编码。 [HTTP 帧格式和重试规则](../stdlib/http/README.contract.md)
+
 ## std/http_server
 
-基于 `std/http`、`std/net` 和 Native 异步执行器的 HTTP/1.1 服务器。Python 后端不支持 async。TLS 不在此模块内。
+基于 `std/http`、`std/net` 和 Native 异步执行器的 HTTP/1.1 服务器。Linux Native 提供普通 handler、异步 handler 和流式 handler。
 
 | 接口 | 说明 |
 | --- | --- |
 | `default_config() Config` | 默认限制、backlog、连接数、keep-alive、TCP_NODELAY、超时和大正文阈值 |
 | `listen(address, handler) Server throws os.Error` | 用默认配置监听 |
 | `listen_with(address, handler, config) Server throws os.Error` | 指定限制、backlog、连接数、每连接请求数、超时和时间片 |
+| `listen_async(address, handler)`、`listen_async_with(address, handler, config)` | handler 返回 `Task[http.Response,http.Error]` |
+| `listen_async_with_settings(address, handler, config, settings)` | 用 `default_async_settings()` 取得默认配置，再按字段调整 handler 超时 |
+| `listen_stream(address, handler)`、`listen_stream_with(address, handler, config)` | handler 先收到请求头和 `Stream`，可以逐段读写 |
+| `listen_stream_with_settings(address, handler, config, settings)` | 用 `default_stream_settings()` 取得默认配置，再按字段调整流式超时 |
+| `read(stream, max_bytes)` | 等待读到一段解码后的正文。最后一段的 `done` 为 true，并带尾部字段 |
+| `start(stream, response)` | 发送一份完整的定长响应 |
+| `start_chunked(stream, response)`、`write_chunk(stream, data)`、`finish(stream, trailers)` | 发送 chunked 响应头、正文字节和结束块 |
 | `local_address(server) net.Address throws os.Error` | 查询监听地址 |
 | `active_connections(server) usize`、`accepted_connections(server) u64`、`stats(server) Stats` | 当前/累计连接、成功响应请求数、成功响应字节数（含 100 Continue）、错误、超时和 503 拒绝计数 |
 | `config(server) Config` | 读取配置 |
 | `serve(server) Unit throws os.Error` | async 接受循环；每个连接一个任务 |
 | `stop(server)` | 优雅停止接受；空闲连接立即关闭，在途请求继续到 drain 截止时间 |
-| `abort(server)`、`close(server)` | 立即关闭监听和所有活动连接 |
+| `abort(server)`、`close(server)` | 立即关闭监听并取消活动连接，连接任务负责关闭各自的描述符 |
 | `drain(server, timeout_ms) bool` | 停止并等待所有连接任务退出；正超时到期返回 false |
 | `text_response(status, body)`、`bytes_response(status, body)` | 构造带默认 reason 的响应 |
 
-复制 `Server` 会共享监听 Socket 和计数；任一副本调用 `stop`/`abort`/`close` 都会影响所有副本。服务器状态和连接表不做同步，只能在拥有它的执行器线程里使用。每个 Server 只应调用一次 `serve`。`handler` 的类型是 `func(http.Request) http.Response throws http.Error`，在连接任务中同步执行，抛错时返回 500 并关闭连接。应用自有错误应在 handler 内捕获并返回响应。
+复制 `Server` 会共享监听 Socket 和计数；任一副本调用 `stop`/`abort`/`close` 都会影响所有副本。服务器状态和连接表不做同步，只能在拥有它的执行器线程里使用。每个 Server 只应调用一次 `serve`。同步 handler 类型是 `func(http.Request) http.Response throws http.Error`。异步 handler 用普通函数返回请求任务，任务等待 I/O 时其他连接可以继续。同一连接仍逐个处理请求。handler 抛出 `http.Error` 时返回 500 并关闭连接。应用自有错误应在 handler 内捕获并返回响应。
 
 监听 Socket 和接受的连接都是非阻塞、close-on-exec；读写遇到 `WouldBlock` 时，连接任务挂起等待执行器的可读/可写事件，不阻塞线程。单个 watchdog 任务按 `timer_tick_ms` 扫描连接表，执行 header/body/idle/write 超时和 graceful drain 截止时间；超时用 `CLOCK_MONOTONIC`，只对连接调用 `shutdown`，由连接任务负责关闭描述符。超时按绝对截止时间计算，不会在每次活动时重置。`Expect: 100-continue` 在读取正文前返回 100；不支持的 expectation 返回 417。
 
-响应统一使用 `Content-Length`。服务器会移除 handler 设置的 `Connection` 头，按请求版本和连接令牌决定 keep-alive 或 close；handler 明确要求 close 时关闭连接。HEAD、1xx、204 和 304 不发送正文；HEAD/304 缺少 `Content-Length` 时用 handler 正文长度补齐。普通响应中 handler 设置的 `Content-Length` 会被实际正文长度替换。handler 设置 `Transfer-Encoding`、非空 trailers 或非法状态码时，编码失败并返回 500。协议错误返回 400、408、413、417、431、501 或 505 并关闭；EOF 和 I/O 失败直接关闭。连接数超过 `max_connections` 时，新连接收到 503 后关闭；`max_requests` 到达上限后发送 close。正文超过 `large_body_threshold` 时先用 `encode_response_head` 编码头部再单独写出正文，避免完整复制一次正文。
+普通响应使用 `Content-Length`。服务器会移除 handler 设置的 `Connection` 头，按请求版本和连接令牌决定 keep-alive 或 close；handler 明确要求 close 时关闭连接。HEAD、1xx、204 和 304 不发送正文；HEAD/304 缺少 `Content-Length` 时用 handler 正文长度补齐。普通响应中 handler 设置的 `Content-Length` 会被实际正文长度替换。handler 设置 `Transfer-Encoding`、非空 trailers 或非法状态码时，编码失败并返回 500。协议错误返回 400、408、413、417、431、501 或 505 并关闭；EOF 和 I/O 失败直接关闭。连接数超过 `max_connections` 时，新连接收到 503 后关闭；`max_requests` 到达上限后发送 close。正文超过 `large_body_threshold` 时先用 `encode_response_head` 编码头部再单独写出正文，避免完整复制一次正文。
 
-执行器是单线程的，handler 中的长时间 CPU 计算、阻塞文件 I/O 或阻塞 C 调用会阻塞所有连接。接受 32 个连接或处理 1024 个 keep-alive 响应后，任务让出 1 毫秒，避免繁忙的监听循环或流水线饿死其他描述符。handler 返回完整的 Response；请求正文按 `Config.limits` 全量缓冲，不提供流式/chunked 响应、`Date`/`Server` 头、HTTP/2 或 TLS。完整契约见 [stdlib/http_server/README.md](../stdlib/http_server/README.md)。
+执行器是单线程的，handler 中的长时间 CPU 计算、阻塞文件 I/O 或阻塞 C 调用会阻塞所有连接。接受 32 个连接或处理 1024 个 keep-alive 响应后，任务让出 1 毫秒，避免繁忙的监听循环或流水线饿死其他描述符。普通 handler 返回完整的 Response。请求正文按 `Config.limits` 全量缓冲。完整规则见 [服务器文档](../stdlib/http_server/README.md)。
 
 ```wz
 import "std/http" as http;
@@ -634,6 +721,51 @@ func route(request http.Request) http.Response throws http.Error {
 
 async func main() i32 throws os.Error {
     let listener = server.listen(net.any4(8080), route);
+    await server.serve(listener);
+    return 0;
+}
+```
+
+### 流式读写
+
+流式 handler 收到请求头后开始工作。使用 `read` 时每次指定正数上限，已解码的数据可以少于这个值。定长和 chunked 请求都可逐段读取。`start_chunked` 接收正文和尾部字段为空的响应。客户端若尚有请求体未读完，或任一方发送 `Connection: close`，服务器发完响应后关闭连接。
+
+同一个 `Stream` 同时只允许一个读写操作。重叠操作和 handler 结束后再使用该流都会抛出 `http.Error.ReadOrder`。
+
+`StreamSettings` 的三个时限以毫秒计。读按一次 `read` 调用计时，处理按 handler 开始后或两次 I/O 之间的间隔计时，写按一次公开写调用计时。局部读写进度不会延长当前调用的时限。非正值关闭对应时限。启用优雅停止后，阶段截止时间还受 `drain_timeout_ms` 限制。正文大小上限仍取自 `Config.limits`。
+
+下面的 handler 逐段读完 POST 正文，然后发送两个响应块。
+
+```wz
+package app;
+
+import "std/http" as http;
+import "std/http_server" as server;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/text" as text;
+
+async func reply(stream server.Stream) Unit throws http.Error {
+    for true {
+        let part = await server.read(stream, 4096);
+        if part.done { break; }
+    }
+
+    await server.start_chunked(stream, server.text_response(200, ""));
+    await server.write_chunk(stream, text.bytes("hello "));
+    await server.write_chunk(stream, text.bytes("from Woozy\n"));
+    await server.finish(stream, []);
+}
+
+func route(request http.Request, stream server.Stream) Task[Unit, http.Error] {
+    return reply(stream);
+}
+
+async func main() i32 throws os.Error {
+    let listener = server.listen_stream(net.ip("127.0.0.1", 0), route);
+    defer { server.close(listener); }
+    io.println(server.local_address(listener).port);
     await server.serve(listener);
     return 0;
 }
@@ -1063,6 +1195,24 @@ func main() throws os.Error {
 
 复制 Map/Set 共享同一个容器；keys/values/entries 返回快照，元素仍按原类型的复制规则处理。操作耗时依赖哈希分布，碰撞时会比较键；快照顺序不作保证。多线程读写仍需加锁。
 
+`set.union(left, right)` 返回并集，`set.intersection(left, right)` 返回交集，`set.difference(left, right)` 返回只在 `left` 中出现的键。三者返回独立的 Set，键按普通规则复制。修改结果不会改变输入的成员。
+
+## std/csv
+
+`csv.parse(source)` 把字符串解析成 `Vec[Vec[string]]`，`csv.serialize(rows)` 输出以 LF 分隔的记录。`*_with` 版本可指定 ASCII 分隔符。引号内可包含分隔符和换行，两个相邻的双引号表示一个双引号。字段始终为字符串。空行返回空记录，单个空字段输出为 `""`。
+
+默认限制为每字段 1 MiB、每记录 16 MiB、每记录 16,384 字段。用 `csv.Limits` 和 `parse_limited` 或 `parse_with_limited` 调整。语法和超限错误包含从 0 开始的原始输入字节偏移，以及从 1 开始的记录号和字段号。 [CSV 语法和上限](../stdlib/csv/README.md)
+
+逐字节输入时，用 `csv.parser()` 建立解析器，调用 `parser_feed`，结束时调用 `parser_finish`。成功结束后重复调用 `parser_finish` 返回 `None`，再送入字节会抛出 `FeedAfterEnd`。解析器副本共享进度和错误。 [增量 CSV 接口](../stdlib/csv/README.md)
+
+## std/csv_io
+
+Native 文件和流接口。`read_file(path)` 和 `write_file(path, rows)` 负责打开和关闭文件。也可以把 `io.Reader` 交给 `csv_io.reader`，再用 `csv_io.read_row` 逐条读取。`None` 表示读完。Reader 及其副本在语法错或超限后都会返回同一个错误。
+
+`write_file` 和 `write_file_with` 截断已有文件，以 `0o666` 和进程 umask 创建新文件。写入失败返回 `Error.Io`，文件可能只写了一部分。
+
+用 `csv_io.writer`、`write_row` 或 `write_all` 写入已有的 `io.Writer`，最后调用 `flush`，底层文件由调用者关闭。`write_row` 返回 `Io` 时，当前行已接收，调用 `flush` 继续。`PendingOutput` 表示本次输入尚未接收。`BatchIo` 给出已接收行数，`flush` 成功后从剩余行继续。 [CSV 文件和流](../stdlib/csv_io/README.md)
+
 ## std/json
 
 `parse(source string)` 和 `serialize(value Value)` 都 `throws json.Error`。Value 有 Null、Bool、String、Number、Array 和 Object；Array 存 Vec[Value]，Object 存 Vec[Member]，Member 字段为 name 和 value。
@@ -1087,9 +1237,17 @@ func main() throws os.Error {
 }
 ```
 
-输出完整整数 `9007199254740993`，写回的 JSON 也保留原数字文本。field/index 返回 Option[Value]。解析重复对象键时保留最后一个值，位置保持第一次出现的位置；序列化手工构造的 Member 列表时保留所有成员。
+输出完整整数 `9007199254740993`，写回的 JSON 也保留原数字文本。`field` 和 `index` 返回 `Option[Value]`。重复键按最后一个值读取。解析器保留键第一次出现的位置，手工构造的 Member 列表则按原顺序全部写出。
 
 解析检查数字、控制字符和 Unicode 转义，Syntax(offset) 的位置按码点计数。数组与对象最多嵌套 256 层，超过时抛 DepthLimit；循环容器序列化也会报错。纯 Woozy 容器形成的强引用循环会自动回收；仍可访问的对象保持存活。Error 还有 InvalidNumber 和 NumberRange。
+
+`as_i64` 和 `as_u64` 接受整数形式的 JSON 数字。小数点、指数或类型不匹配时抛出 `InvalidNumber`。整数超出目标类型范围时抛出 `NumberRange`。`as_u64` 把带负号的整数文本视为越界。
+
+`json.serialize_pretty(value)` 每层缩进两个空格，保留成员顺序和数字原文。空数组和空对象仍输出为 `[]` 和 `{}`。结果末尾没有换行。
+
+## std/json_io
+
+Native 文件接口。`read_file(path)` 读取 UTF-8 JSON，`write_file(path, value, mode)` 写紧凑 JSON，`write_file_pretty(path, value, mode)` 写缩进格式。三者负责关闭自己打开的文件。错误为 `Error.Io(os.Error)` 或 `Error.Json(json.Error)`。写入前先完成序列化，编码错误时原文件保持原样。文件写入沿用 `fs.write_text` 的截断方式。
 
 ## 尚未提供
 

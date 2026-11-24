@@ -219,10 +219,14 @@ func value_type(context inout types.Context,
     if depth > 128 {
         throw value_error();
     }
-    if name == "A" || name == "B" {
+    if name == "A" || name == "B" || name == "C" || name == "D" {
         var index usize = 0;
         if name == "B" {
             index = 1;
+        } else if name == "C" {
+            index = 2;
+        } else if name == "D" {
+            index = 3;
         }
         if index >= vec.len(arguments) {
             throw value_error();

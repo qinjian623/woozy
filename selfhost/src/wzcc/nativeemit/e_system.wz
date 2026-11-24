@@ -371,18 +371,31 @@ func e_extra_fs_name(operation u32) string {
         case 213: return "lang_sys_stat_v1";
         case 214: return "lang_sys_flock_v1";
         case 215: return "lang_sys_executable_path_vec_v1";
+        case 216: return "lang_os_openat_v1";
+        case 217: return "lang_os_mkdirat_v1";
+        case 218: return "lang_os_unlinkat_v1";
+        case 219: return "lang_sys_fstatat_v1";
+        case 220: return "lang_sys_readlinkat_v1";
+        case 221: return "lang_sys_symlinkat_v1";
         default: return "";
     }
 }
 
 func e_extra_fs_output(operation u32) bool {
     return operation == 43 || operation == 44 || operation == 45 ||
-        operation == 61 || operation == 74 || operation == 213;
+        operation == 61 || operation == 74 || operation == 213 ||
+        operation == 219;
 }
 
 func e_extra_fs_raw(operation u32) bool {
     return operation == 50 || operation == 51 || operation == 52 ||
-        operation == 75 || operation == 76 || operation == 215;
+        operation == 75 || operation == 76 || operation == 215 ||
+        operation == 220;
+}
+
+func e_extra_fs_byte_path(operation u32) bool {
+    return operation == 213 || (operation >= 216 && operation <= 219) ||
+        operation == 220 || operation == 221;
 }
 
 func e_extra_fs_actual(operation u32, signature model.Type, args Vec[Value],
@@ -396,8 +409,10 @@ func e_extra_fs_actual(operation u32, signature model.Type, args Vec[Value],
             let length = e_text_length(args[index], inout state);
             vec.push(actual, pointer);
             vec.push(actual, length);
-        } else if e_type_kind_is(parameter_type.kind, model.TypeKind.Vec) && operation == 213 {
-            // Only the byte-path stat expands a Vec into borrowed path bytes.
+        } else if e_type_kind_is(parameter_type.kind, model.TypeKind.Vec) && e_extra_fs_byte_path(operation) {
+            // Byte-path operations expand each Vec into a borrowed pointer
+            // and current length. Names and link targets stay raw bytes;
+            // readlinkat's buffer uses that length as the kernel capacity.
             // Field 5 is the element pointer and field 1 the current length.
             // These plain loads use the same descriptor layout without adding
             // a new TBAA dependency to the filesystem route; the five existing
@@ -605,6 +620,13 @@ func e_extra_system_call(instruction nativeir.Instruction,
     switch instruction.system {
         case option.Option.None: throw invalid("system operation missing");
         case option.Option.Some(operation): {
+            if operation == 227 {
+                // Operands are already Vec descriptors; the shared core runtime
+                // owns byte-range validation, alias staging and publication.
+                runtime("lang_io_vec_append_bytes_v1", "void", args, inout state);
+                return option.Option[Value].Some(
+                    e_async_zero(instruction, inout state));
+            }
             if operation >= 85 && operation <= 105 {
                 return e_network_system_call(instruction, args, inout state);
             }
@@ -616,7 +638,9 @@ func e_extra_system_call(instruction nativeir.Instruction,
                 case option.Option.Some(value): return option.Option[Value].Some(value);
                 case option.Option.None: {}
             }
-            if (operation >= 43 && operation <= 76) || (operation >= 213 && operation <= 215) {
+            if ((operation >= 43 && operation <= 76) ||
+                (operation >= 213 && operation <= 219) ||
+                operation == 220 || operation == 221) {
                 return e_extra_fs(instruction, operation, args, inout state);
             }
             return e_process_system_call(instruction, args, inout state);
@@ -1068,6 +1092,25 @@ func e_main_system_call(operation u32, instruction nativeir.Instruction,
         runtime("lang_async_shutdown_v1", "void", actual, inout state);
         return e_async_zero(instruction, inout state);
     }
+    if operation == 222 {
+        runtime("lang_async_scope_begin_v1", "void", args, inout state);
+        return e_async_zero(instruction, inout state);
+    }
+    if operation == 223 {
+        runtime("lang_async_scope_add_v1", "void", args, inout state);
+        return e_async_zero(instruction, inout state);
+    }
+    if operation == 224 {
+        runtime("lang_async_scope_activate_v1", "void", args, inout state);
+        return e_async_zero(instruction, inout state);
+    }
+    if operation == 225 {
+        var actual Vec[Value] = [];
+        return runtime("lang_async_scope_wait_v1", "ptr", actual, inout state);
+    }
+    if operation == 226 {
+        return runtime("lang_async_status_v1", "i32", args, inout state);
+    }
     throw invalid("unknown system operation");
 }
 
@@ -1085,7 +1128,7 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
                     case option.Option.None: {}
                 }
             }
-            if operation >= 138 && operation <= 192 {
+            if (operation >= 138 && operation <= 192) || operation == 227 {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}
@@ -1110,7 +1153,9 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
                     case option.Option.None: {}
                 }
             }
-            if (operation >= 43 && operation <= 84) || (operation >= 213 && operation <= 215) {
+            if ((operation >= 43 && operation <= 84) ||
+                (operation >= 213 && operation <= 219) ||
+                operation == 220 || operation == 221) {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}

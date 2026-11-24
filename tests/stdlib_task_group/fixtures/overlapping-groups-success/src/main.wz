@@ -1,0 +1,37 @@
+// Two live groups share one member; group A enrolls it twice. Both groups
+// must observe the member's single completion and preserve duplicate values.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/result" as result;
+import "std/vec" as vec;
+
+async func shared() i32 {
+    await a.sleep(1);
+    return 7;
+}
+
+async func main() i32 throws os.Error {
+    let member = shared();
+    let group_a = a.gather[i32,Unit]([member, member]);
+    let group_b = a.gather[i32,Unit]([member]);
+
+    let a_values = await group_a;
+    let b_values = await group_b;
+    switch a_values {
+        case result.Result.Ok(values): {
+            io.println(vec.len(values));
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.a");
+    }
+    switch b_values {
+        case result.Result.Ok(values): {
+            io.println(vec.len(values));
+            for item in values { io.println(item); }
+        }
+        case result.Result.Err(error): io.println("unexpected.b");
+    }
+    return 0;
+}
