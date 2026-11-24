@@ -809,7 +809,7 @@ class Analysis {
         parameter_symbols.count(read->symbol.value))
       return false;
     auto local = locals.find(read->symbol.value);
-    if (local == locals.end() ||
+    if (local == locals.end() || local->second.read_only_capture ||
         m.scopes.at(local->second.scope.value).function != fun->symbol)
       return false;
     const auto &receiver_type = ty(m, n(receiver).type);
@@ -832,6 +832,56 @@ class Analysis {
     return full_expression_root &&
            local_index_borrow(receiver, index, allow_vec_element) &&
            !full_effects().count(root.value);
+  }
+
+  // An assignment target's address survives the complete RHS. Borrowing the
+  // local Vec receiver is therefore allowed only when the RHS is syntactically
+  // effect-free and cannot create an owning temporary: calls/callbacks, moves,
+  // writes, inout uses, awaits, short-circuit forms and owning reads stay on
+  // the retained receiver path. `borrowed` mirrors expr_records's temporary
+  // suppression for a receiver that the existing index-read proof borrows.
+  bool effect_free_assignment_rhs(HirNodeId id, bool borrowed) {
+    const auto &x = n(id);
+    switch (x.kind()) {
+    case NodeKind::unit_literal:
+    case NodeKind::bool_literal:
+    case NodeKind::integer_literal:
+    case NodeKind::float_literal:
+    case NodeKind::string_literal:
+    case NodeKind::read:
+    case NodeKind::place:
+    case NodeKind::constant_literal:
+    case NodeKind::unary:
+    case NodeKind::binary:
+    case NodeKind::integer_convert:
+    case NodeKind::field_read:
+    case NodeKind::field_place:
+    case NodeKind::index_read:
+    case NodeKind::index_place:
+      break;
+    default:
+      return false;
+    }
+    if (!borrowed && owned(x.type) && x.kind() != NodeKind::place &&
+        x.kind() != NodeKind::field_place &&
+        x.kind() != NodeKind::index_place && !inert_function_value(x))
+      return false;
+    if (x.kind() == NodeKind::index_read && x.children.size() == 2) {
+      auto receiver = x.children[0];
+      auto index = x.children[1];
+      auto root = borrow_root(receiver);
+      bool can_borrow = root && is_borrowed_param(*root) &&
+                        !expr_consumes_symbol(index, *root);
+      if (!can_borrow && root)
+        can_borrow = local_index_can_borrow(receiver, index, *root, true);
+      return effect_free_assignment_rhs(receiver, can_borrow) &&
+             effect_free_assignment_rhs(index, false);
+    }
+    const bool child_borrowed = borrowed && x.kind() == NodeKind::field_read;
+    for (auto c : x.children)
+      if (!effect_free_assignment_rhs(c, child_borrowed))
+        return false;
+    return true;
   }
 
   // Ascends only through storage places. Index reads are value expressions,
@@ -859,6 +909,15 @@ class Analysis {
       return borrow_root(x.children[0]);
     if (x.kind() == NodeKind::index_place)
       return place_borrow_root(x.children[0]);
+    return {};
+  }
+  // The index place below any field-place chain of an assignment target.
+  std::optional<HirNodeId> indexed_field_place(HirNodeId id) const {
+    const auto &x = n(id);
+    if (x.kind() == NodeKind::index_place)
+      return id;
+    if (x.kind() == NodeKind::field_place && !x.children.empty())
+      return indexed_field_place(x.children[0]);
     return {};
   }
   // Assignment targets keep the old direct-field protection: an indexed
@@ -1076,6 +1135,17 @@ class Analysis {
           safe_borrow_receivers.insert(receiver.value);
         else if (root && local_index_can_borrow(receiver, index, *root, false))
           safe_borrow_receivers.insert(receiver.value);
+      } else if (auto indexed = indexed_field_place(x.children[0])) {
+        const auto &place = n(*indexed);
+        if (place.children.size() == 2) {
+          auto receiver = place.children[0];
+          auto index = place.children[1];
+          auto root = borrow_root(receiver);
+          if (root &&
+              local_index_can_borrow(receiver, index, *root, false) &&
+              effect_free_assignment_rhs(x.children[1], false))
+            safe_borrow_receivers.insert(receiver.value);
+        }
       }
       expr_records(x.children[0], id, live);
       if (n(x.children[0]).kind() == NodeKind::field_place) {

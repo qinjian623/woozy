@@ -1,0 +1,16 @@
+package app;
+struct Pair{x i32;y i32;}
+struct Row{inner Pair;}
+func mutate(values Vec[Row],n i32)i32 {values[0].inner.x=100;return n;}
+func main()i32 {
+    var rows Vec[Row]=[Row(inner:Pair(x:1,y:2)),Row(inner:Pair(x:3,y:4))];
+    rows[0].inner.x=7;
+    if rows[0].inner.x!=7{return 1;}
+    rows[0].inner.y=mutate(rows,5);
+    if rows[0].inner.x!=100{return 2;}
+    if rows[0].inner.y!=5{return 3;}
+    let alias=rows;
+    rows[0].inner.x=alias[1].inner.y+rows[0].inner.y;
+    if alias[0].inner.x!=9{return 4;}
+    return 0;
+}

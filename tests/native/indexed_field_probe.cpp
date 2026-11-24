@@ -48,6 +48,54 @@ HirNodeId find_kind(const hir::HirModule &m, hir::NodeKind kind,
       return HirNodeId{i};
   throw std::runtime_error("probe node missing: " + std::to_string(int(kind)));
 }
+HirNodeId assignment_index_place(const hir::HirModule &m, HirNodeId place) {
+  const auto &node = m.nodes[place.value];
+  if (node.kind() == hir::NodeKind::index_place)
+    return place;
+  if (node.kind() == hir::NodeKind::field_place && !node.children.empty())
+    return assignment_index_place(m, node.children[0]);
+  throw std::runtime_error("assignment index place missing");
+}
+hir::UseKind receiver_use(const hir::HirModule &m, HirNodeId receiver) {
+  for (const auto &use : m.ownership.uses)
+    if (use.consumer == receiver && use.operand == 0)
+      return use.kind;
+  throw std::runtime_error("receiver ownership use missing");
+}
+void collect_assignments(const hir::HirModule &m, HirNodeId id,
+                         std::vector<HirNodeId> &out) {
+  const auto &node = m.nodes[id.value];
+  if (node.kind() == hir::NodeKind::assign)
+    out.push_back(id);
+  for (auto child : node.children)
+    collect_assignments(m, child, out);
+}
+void require_field_receiver_plan(const hir::HirModule &m,
+                                 const std::string &name,
+                                 std::vector<hir::UseKind> expected) {
+  HirNodeId body;
+  bool found_main = false;
+  for (const auto &function : m.functions)
+    if (m.resolved->symbols[function.symbol.value].name == "main") {
+      body = function.body;
+      found_main = true;
+      break;
+    }
+  need(found_main, name + ": main body missing");
+  std::vector<HirNodeId> assignments;
+  collect_assignments(m, body, assignments);
+  need(assignments.size() == expected.size(),
+       name + ": assignment count differs: got " +
+           std::to_string(assignments.size()) + ", expected " +
+           std::to_string(expected.size()));
+  for (size_t i = 0; i < assignments.size(); ++i) {
+    const auto &assign = m.nodes[assignments[i].value];
+    auto indexed = assignment_index_place(m, assign.children[0]);
+    auto receiver = m.nodes[indexed.value].children[0];
+    auto actual = receiver_use(m, receiver);
+    need(actual == expected[i], name + ": receiver use differs");
+  }
+}
 SymbolId symbol_named(const hir::HirModule &m, std::string_view name) {
   for (const auto &s : m.resolved->symbols)
     if (s.name == name)
@@ -156,10 +204,14 @@ int main(int argc, char **argv) {
         root / "tests/native/ownership/indexed-field-generic/lang.toml";
     const auto assign_manifest =
         root / "tests/native/ownership/indexed-field-assign-source/lang.toml";
+    const auto borrow_mixed_manifest =
+        root / "tests/native/ownership/indexed-field-borrow-mixed/lang.toml";
     const auto lifetime_manifest =
         root / "tests/native/ownership/indexed-field-lifetime/lang.toml";
     const auto nested_fields_manifest =
         root / "tests/native/ownership/indexed-field-nested-fields/lang.toml";
+    const auto nested_fallback_manifest =
+        root / "tests/native/ownership/indexed-field-nested-fallback/lang.toml";
     const auto compound_manifest =
         root / "tests/native/ownership/indexed-field-compound/lang.toml";
 
@@ -239,6 +291,9 @@ int main(int argc, char **argv) {
     auto assign_source = checked_module(assign_manifest, sources);
     const auto assign_hir = assign_source.module();
     need(hir::verify(assign_hir).success(), "assign source fixture rejected");
+    require_field_receiver_plan(
+        assign_hir, "pure scalar RHS",
+        {hir::UseKind::borrow, hir::UseKind::borrow});
     std::vector<HirNodeId> assignments;
     for (size_t i = 0; i < assign_hir.nodes.size(); ++i)
       if (assign_hir.nodes[i].kind() == hir::NodeKind::assign)
@@ -379,16 +434,41 @@ int main(int argc, char **argv) {
                move_receiver_cleanup_before_store);
 
     auto nested_fields = checked_module(nested_fields_manifest, sources);
+    require_field_receiver_plan(nested_fields.module(),
+                                "nested pure scalar RHS",
+                                {hir::UseKind::borrow});
     auto nested_fields_lowered = ir::lower(nested_fields);
     need(nested_fields_lowered.success(), diagnostics(nested_fields_lowered));
     const auto nested_fields_native = nested_fields_lowered.value->module();
     need(ir::verify(nested_fields_native).success(),
          "nested field valid control rejected");
-    bad_native(nested_fields_native,
+
+    auto nested_fallback = checked_module(nested_fallback_manifest, sources);
+    require_field_receiver_plan(nested_fallback.module(),
+                                "nested call and owning index RHS fallback",
+                                {hir::UseKind::copy, hir::UseKind::copy});
+    auto nested_fallback_lowered = ir::lower(nested_fallback);
+    need(nested_fallback_lowered.success(),
+         diagnostics(nested_fallback_lowered));
+    const auto nested_fallback_native =
+        nested_fallback_lowered.value->module();
+    need(ir::verify(nested_fallback_native).success(),
+         "nested fallback valid control rejected");
+    bad_native(nested_fallback_native,
                "field-chain address owner cleanup before store",
                move_receiver_cleanup_before_store);
 
+    auto borrow_mixed = checked_module(borrow_mixed_manifest, sources);
+    const auto borrow_mixed_hir = borrow_mixed.module();
+    need(hir::verify(borrow_mixed_hir).success(),
+         "borrow mixed fixture rejected");
+    require_field_receiver_plan(
+        borrow_mixed_hir, "mixed pure, call, and scalar index RHS",
+        {hir::UseKind::borrow, hir::UseKind::copy, hir::UseKind::borrow});
+
     auto compound = checked_module(compound_manifest, sources);
+    require_field_receiver_plan(compound.module(), "call RHS fallback",
+                                {hir::UseKind::copy});
     auto compound_lowered = ir::lower(compound);
     need(compound_lowered.success(), diagnostics(compound_lowered));
     const auto compound_native = compound_lowered.value->module();

@@ -1,0 +1,13 @@
+package app;
+struct Inner{x i32;y i32;}
+struct Box{inner Inner;tag i32;}
+func mutate(values Vec[Box],n i32)i32 {values[0].inner.x=100;return n;}
+func main()i32 {
+    var values Vec[Box]=[Box(inner:Inner(x:1,y:2),tag:3)];
+    values[0].inner.x=mutate(values,7);
+    if values[0].inner.x!=7{return 1;}
+    let nested_vec Vec[Vec[i32]]=[[19]];
+    values[0].inner.y=nested_vec[0][0];
+    if values[0].inner.y!=19||values[0].inner.x!=7{return 2;}
+    return 0;
+}

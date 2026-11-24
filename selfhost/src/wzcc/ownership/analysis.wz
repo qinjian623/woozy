@@ -1193,7 +1193,8 @@ func local_index_borrow(analysis inout Analysis, receiver usize,
         return false;
     }
     let local = analysis.locals[usize(found)].value;
-    if scope_at(analysis, local.scope).function != analysis.function.symbol {
+    if local.read_only_capture ||
+       scope_at(analysis, local.scope).function != analysis.function.symbol {
         return false;
     }
     let receiver_type = type_at(analysis.module, receiver_node.type_id);
@@ -1228,6 +1229,64 @@ func local_index_can_borrow(analysis inout Analysis, receiver usize,
         return false;
     }
     return !ids_contains(full_effects(inout analysis), root);
+}
+
+func effect_free_assignment_rhs(analysis inout Analysis, id usize,
+                                 borrowed bool) bool throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    if !kind_is(kind, hir.NodeKind.UnitLiteral) &&
+       !kind_is(kind, hir.NodeKind.BoolLiteral) &&
+       !kind_is(kind, hir.NodeKind.IntegerLiteral) &&
+       !kind_is(kind, hir.NodeKind.FloatLiteral) &&
+       !kind_is(kind, hir.NodeKind.StringLiteral) &&
+       !kind_is(kind, hir.NodeKind.Read) &&
+       !kind_is(kind, hir.NodeKind.Place) &&
+       !kind_is(kind, hir.NodeKind.ConstantLiteral) &&
+       !kind_is(kind, hir.NodeKind.Unary) &&
+       !kind_is(kind, hir.NodeKind.Binary) &&
+       !kind_is(kind, hir.NodeKind.IntegerConvert) &&
+       !kind_is(kind, hir.NodeKind.FieldRead) &&
+       !kind_is(kind, hir.NodeKind.FieldPlace) &&
+       !kind_is(kind, hir.NodeKind.IndexRead) &&
+       !kind_is(kind, hir.NodeKind.IndexPlace) {
+        return false;
+    }
+    if !borrowed && owned(inout analysis, node.type_id) &&
+       !kind_is(kind, hir.NodeKind.Place) &&
+       !kind_is(kind, hir.NodeKind.FieldPlace) &&
+       !kind_is(kind, hir.NodeKind.IndexPlace) &&
+       !inert_function_value(node) {
+        return false;
+    }
+    if kind_is(kind, hir.NodeKind.IndexRead) &&
+       vec.len(node.children) == 2 {
+        let receiver = child_at(node, 0);
+        let index = child_at(node, 1);
+        var can_borrow = false;
+        switch borrow_root(analysis, receiver) {
+            case option.Option.Some(symbol):
+                can_borrow = is_borrowed_param(analysis, symbol) &&
+                    !expr_consumes_symbol(analysis, index, symbol);
+                if !can_borrow {
+                    can_borrow = local_index_can_borrow(inout analysis,
+                        receiver, index, symbol, true);
+                }
+            case option.Option.None: {}
+        }
+        return effect_free_assignment_rhs(inout analysis, receiver,
+                   can_borrow) &&
+               effect_free_assignment_rhs(inout analysis, index, false);
+    }
+    let child_borrowed = borrowed &&
+        kind_is(kind, hir.NodeKind.FieldRead);
+    for child in node.children {
+        if !effect_free_assignment_rhs(inout analysis, child,
+                                       child_borrowed) {
+            return false;
+        }
+    }
+    return true;
 }
 
 func place_borrow_root(analysis Analysis, id usize) option.Option[usize]
@@ -1273,6 +1332,20 @@ func borrow_root(analysis Analysis, id usize) option.Option[usize]
     }
     if kind_is(kind, hir.NodeKind.IndexPlace) {
         return place_borrow_root(analysis, child_at(node, 0));
+    }
+    return option.Option[usize].None;
+}
+
+func indexed_field_place(analysis Analysis, id usize) option.Option[usize]
+    throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.IndexPlace) {
+        return option.Option[usize].Some(id);
+    }
+    if kind_is(kind, hir.NodeKind.FieldPlace) &&
+       vec.len(node.children) > 0 {
+        return indexed_field_place(analysis, child_at(node, 0));
     }
     return option.Option[usize].None;
 }
@@ -1729,6 +1802,25 @@ func records(analysis inout Analysis, id usize) throws Problem {
                     } else if local_index_can_borrow(inout analysis,
                             receiver, index, symbol, false) {
                         ids_insert(analysis.safe_borrow_receivers, receiver);
+                    }
+                case option.Option.None: {}
+            }
+        } else if kind_is(kind_of(place), hir.NodeKind.FieldPlace) {
+            switch indexed_field_place(analysis, place_id) {
+                case option.Option.Some(indexed):
+                    let indexed_place = node_at(analysis, indexed);
+                    let receiver = child_at(indexed_place, 0);
+                    let index = child_at(indexed_place, 1);
+                    switch borrow_root(analysis, receiver) {
+                        case option.Option.Some(symbol):
+                            if local_index_can_borrow(inout analysis,
+                                    receiver, index, symbol, false) &&
+                               effect_free_assignment_rhs(inout analysis,
+                                    child_at(node, 1), false) {
+                                ids_insert(analysis.safe_borrow_receivers,
+                                    receiver);
+                            }
+                        case option.Option.None: {}
                     }
                 case option.Option.None: {}
             }
