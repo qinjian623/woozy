@@ -57,8 +57,34 @@
       return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
     case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
-    case SystemOperation::text_cursor_at:
-      return runtime("lang_text_cursor_at_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_at: {
+      // Valid UTF-8 has one byte per scalar exactly when it is ASCII.
+      // Endpoints also need no decoding. Keep all other cases, including an
+      // out-of-range index, on the checked runtime path.
+      auto *bytes = builder.CreateExtractValue(args[0], {1});
+      auto *length = builder.CreateExtractValue(args[0], {2});
+      auto *index = args[1];
+      auto *end = builder.CreateICmpEQ(index, length);
+      auto *direct = builder.CreateOr(
+          builder.CreateOr(builder.CreateICmpEQ(index, builder.getInt64(0)), end),
+          builder.CreateAnd(builder.CreateICmpEQ(bytes, length),
+                            builder.CreateICmpULT(index, length)));
+      auto *offset = builder.CreateSelect(end, bytes, index);
+      auto *entry = builder.GetInsertBlock();
+      auto *slow = llvm::BasicBlock::Create(context, "text.offset.runtime", entry->getParent());
+      auto *done = llvm::BasicBlock::Create(context, "text.offset.done", entry->getParent());
+      builder.CreateCondBr(direct, done, slow);
+      builder.SetInsertPoint(slow);
+      auto *decoded = runtime("lang_text_cursor_at_v1", builder.getInt64Ty(),
+                              {pointer(0), index});
+      auto *slow_end = builder.GetInsertBlock();
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+      auto *result = builder.CreatePHI(builder.getInt64Ty(), 2);
+      result->addIncoming(offset, entry);
+      result->addIncoming(decoded, slow_end);
+      return result;
+    }
     case SystemOperation::text_cursor_read_back:
       return runtime("lang_text_cursor_read_back_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_cursor_read: {

@@ -850,11 +850,43 @@ func e_value_system_call(instruction nativeir.Instruction,
                     decoded.reference + ", " + slow_end.reference + " ]",
                     inout state));
             }
-            if operation == 233 || operation == 236 || operation == 240 {
+            if operation == 233 {
+                let bytes = e_extract(args[0], 1, "i64", inout state);
+                let length = e_extract(args[0], 2, "i64", inout state);
+                let index = args[1].reference;
+                let end = c_icmp("eq", "i64", index, length.reference, inout state);
+                let zero = c_icmp("eq", "i64", index, "0", inout state);
+                let ascii = c_icmp("eq", "i64", bytes.reference, length.reference, inout state);
+                let interior = c_icmp("ult", "i64", index, length.reference, inout state);
+                let ascii_interior = c_binop("and", "i1", ascii.reference,
+                    interior.reference, inout state);
+                let endpoint = c_binop("or", "i1", zero.reference, end.reference, inout state);
+                let direct = c_binop("or", "i1", endpoint.reference,
+                    ascii_interior.reference, inout state);
+                let offset = result("i64", "select i1 " + end.reference +
+                    ", i64 " + bytes.reference + ", i64 " + index, inout state);
+                let function_index = current_function(state);
+                let entry = here(state);
+                let slow = new_block(function_index, "text.offset.runtime", inout state);
+                let done = new_block(function_index, "text.offset.done", inout state);
+                c_cond_branch(direct, done, slow, inout state);
+                position(slow, inout state);
                 let receiver_type = value_type(state, instruction.inputs[0]);
                 let address = value_address(receiver_type, args[0], inout state);
-                var name = "lang_text_cursor_at_v1";
-                if operation == 236 { name = "lang_text_count_rune_v1"; }
+                let decoded = runtime("lang_text_cursor_at_v1", "i64",
+                    [address, args[1]], inout state);
+                let slow_end = here(state);
+                c_branch(done, inout state);
+                position(done, inout state);
+                return option.Option[Value].Some(result("i64", "phi i64 [ " +
+                    offset.reference + ", " + entry.reference + " ], [ " +
+                    decoded.reference + ", " + slow_end.reference + " ]",
+                    inout state));
+            }
+            if operation == 236 || operation == 240 {
+                let receiver_type = value_type(state, instruction.inputs[0]);
+                let address = value_address(receiver_type, args[0], inout state);
+                var name = "lang_text_count_rune_v1";
                 if operation == 240 { name = "lang_text_cursor_read_back_v1"; }
                 return option.Option[Value].Some(
                     runtime(name, "i64", [address, args[1]], inout state));
