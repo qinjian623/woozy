@@ -23,10 +23,9 @@ LangText allocate(uint64_t bytes, uint64_t length) noexcept {
   *owner = {1, kTextKind, destroy, nullptr};
   return {reinterpret_cast<const uint8_t *>(owner + 1), bytes, length, owner};
 }
-void copy(uint8_t *to, const uint8_t *from, uint64_t bytes) noexcept {
-  auto *destination = static_cast<volatile uint8_t *>(to);
-  const auto *source = static_cast<const volatile uint8_t *>(from);
-  for (uint64_t i = 0; i < bytes; ++i) destination[i] = source[i];
+void copy(uint8_t *__restrict to, const uint8_t *__restrict from,
+          uint64_t bytes) noexcept {
+  for (uint64_t i = 0; i < bytes; ++i) to[i] = from[i];
 }
 bool scalar(uint32_t rune) noexcept {
   return rune <= 0x10ffff && !(rune >= 0xd800 && rune <= 0xdfff);
