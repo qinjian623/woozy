@@ -65,7 +65,8 @@ pub func is_empty[K hash.Hash,V](values Map[K,V]) bool {
 // Capture the table before calling hash, which can re-enter the Map. Use its
 // result as a separate index so the existing table handle can be borrowed.
 func bucket_index[K hash.Hash](key K, capacity usize) usize {
-    return usize(K.hash(key) % u64(capacity));
+    // Bucket arrays start at INITIAL_CAPACITY and only grow by doubling.
+    return usize(K.hash(key) & u64(capacity - 1));
 }
 
 func find_index[K hash.Hash,V](bucket Vec[Entry[K,V]], key K) option.Option[usize] {
@@ -80,14 +81,13 @@ func find_index[K hash.Hash,V](bucket Vec[Entry[K,V]], key K) option.Option[usiz
 
 func grow[K hash.Hash,V](values Map[K,V], current Vec[Vec[Entry[K,V]]]) {
     let capacity = vec.len(current);
-    // Doubling is representable only up to MAX_USIZE / 2. Keep the request at
-    // MAX_USIZE beyond that point so empty_buckets reaches std/vec's checked
-    // allocation-size Panic; never rehash into a silently wrapped, smaller
-    // bucket array. The current capacity can only get here after the previous
-    // allocation already succeeded, but the arithmetic guard states the
-    // contract directly instead of relying on allocator failure first.
-    var larger = MAX_USIZE;
-    if capacity <= MAX_USIZE / 2 { larger = capacity * 2; }
+    if capacity > MAX_USIZE / 2 {
+        // A Vec of bucket handles cannot hold this many elements. Let Vec
+        // report the same allocation-size Panic before publishing any state.
+        let rejected = empty_buckets[K,V](MAX_USIZE);
+        return;
+    }
+    let larger = capacity * 2;
     let buckets = empty_buckets[K,V](larger);
     let allocated = vec.make[bool](larger, false);
     for var index usize = 0; index < capacity; index += 1 {

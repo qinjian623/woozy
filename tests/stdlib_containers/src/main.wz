@@ -4,6 +4,7 @@ package app;
 
 import "std/box" as box;
 import "std/deque" as deque;
+import "std/hash" as hash;
 import "std/heap" as heap;
 import "std/map" as map;
 import "std/option" as option;
@@ -1167,6 +1168,36 @@ func test_set_algebra() i32 {
     return 0;
 }
 
+struct MapKey {
+    id i32;
+}
+impl hash.Hash for MapKey {
+    // Exercise the unsigned high bits and both colliding and split buckets.
+    func hash(value Self) u64 { return 0xffffffffffffff00 | u64(value.id % 19); }
+    func equals(left Self, right Self) bool { return left.id == right.id; }
+}
+
+func test_map_bucket_growth() i32 {
+    let values = map.new[MapKey,i32]();
+    let alias = values;
+    for var id i32 = 0; id < 100; id += 1 {
+        if !none_i32(map.insert(values, MapKey(id: id), id + 1)) { return 420; }
+    }
+    if map.len(alias) != 100 { return 421; }
+    for var id i32 = 0; id < 100; id += 1 {
+        let key = MapKey(id: id);
+        if !some_i32(map.get(alias, key), id + 1) { return 422; }
+        if id % 2 == 0 {
+            if !some_i32(map.remove(alias, key), id + 1) { return 423; }
+            if map.contains(values, key) { return 424; }
+        } else if !some_i32(map.insert(alias, key, id), id + 1) { return 425; }
+    }
+    if map.len(values) != 50 { return 426; }
+    map.clear(alias);
+    if !map.is_empty(values) { return 427; }
+    return 0;
+}
+
 func main() i32 {
     var failure = test_empty();
     if failure != 0 { return failure; }
@@ -1224,5 +1255,5 @@ func main() i32 {
     if failure != 0 { return failure; }
     failure = test_set_algebra();
     if failure != 0 { return failure; }
-    return 0;
+    return test_map_bucket_growth();
 }
