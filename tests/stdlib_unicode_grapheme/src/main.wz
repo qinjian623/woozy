@@ -73,5 +73,14 @@ func main() i32 {
         let code = check(cases[index]);
         if code != 0 { return i32(100) + i32(index); }
     }
+    // Cross the byte-scan threshold, all four pair offsets, and the tail.
+    for var lead usize = 244; lead < 259; lead += 1 {
+        for var tail usize = 0; tail < 4; tail += 1 {
+            let ascii = text.repeat("a",lead) + "\r\n\0\r\r\n\n\r" +
+                text.repeat("z",tail);
+            if unicode.grapheme_count(ascii) != lead + 6 + tail { return 113; }
+        }
+    }
+    if unicode.grapheme_count(text.repeat("\r\n",134)) != 134 { return 114; }
     return 0;
 }
