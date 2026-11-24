@@ -344,16 +344,26 @@ pub func split_n(value string, separator string, limit usize) Vec[string] {
         if offset < end { vec.push(out,__woozy_text_cursor_slice(value,offset,end)); }
         return out;
     }
-    let pattern = runes(separator);
-    let fallback = match_table(pattern);
     // A matched separator occupies the same cursor distance in either string.
     let width = __woozy_text_cursor_at(separator,separator_length);
-    var cursor = SearchCursor(offset:0,index:0);
     var start u64 = 0;
-    for var pieces usize = 0; pieces+1 < limit; pieces += 1 {
-        if scan_matches(value,pattern,fallback,inout cursor,1,false) == 0 { break; }
-        vec.push(out,__woozy_text_cursor_slice(value,start,cursor.offset-width));
-        start = cursor.offset;
+    if separator_length == 1 {
+        let rune = separator[0];
+        for var pieces usize = 1; pieces < limit; pieces += 1 {
+            let matched = next_scalar(value,rune,start,end);
+            if matched == 0 { break; }
+            vec.push(out,__woozy_text_cursor_slice(value,start,matched-width));
+            start = matched;
+        }
+    } else {
+        let pattern = runes(separator);
+        let fallback = match_table(pattern);
+        var cursor = SearchCursor(offset:0,index:0);
+        for var pieces usize = 1; pieces < limit; pieces += 1 {
+            if scan_matches(value,pattern,fallback,inout cursor,1,false) == 0 { break; }
+            vec.push(out,__woozy_text_cursor_slice(value,start,cursor.offset-width));
+            start = cursor.offset;
+        }
     }
     if start == 0 { vec.push(out,value); }
     else { vec.push(out,__woozy_text_cursor_slice(value,start,end)); }
