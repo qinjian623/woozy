@@ -1,0 +1,343 @@
+// Magnitude-only arbitrary precision helpers for decimal float parsing.
+//
+// The representation is a canonical little-endian base 2^32 vector of u32
+// limbs. Zero is the empty vector and the highest limb is never zero. Values
+// are always nonnegative; the sign of a parsed float is carried separately.
+// Everything here is ordinary Woozy source: no host bigint, no C conversion,
+// and no allocation shortcut that assumes the host word size.
+//
+// This file is private to std/strconv. All names carry the fp_big_ prefix so
+// the module can keep the published strconv.wz interface unchanged.
+package strconv;
+
+import "std/vec" as vec;
+
+const FP_BIG_MASK u64 = 4294967295;
+const FP_BIG_BASE u64 = 4294967296;
+const FP_BIG_DECIMAL_CHUNK u64 = 1000000000;
+
+struct FpBigDivRem {
+    quotient Vec[u32];
+    remainder Vec[u32];
+}
+
+func fp_big_zero() Vec[u32] {
+    return vec.empty[u32]();
+}
+
+func fp_big_from_u64(value u64) Vec[u32] {
+    let out = vec.empty[u32]();
+    var work = value;
+    for work > 0 {
+        vec.push(out, u32(work & FP_BIG_MASK));
+        work = work >> 32;
+    }
+    return out;
+}
+
+func fp_big_trim(values Vec[u32]) {
+    var length = vec.len(values);
+    for length > 0 && values[length - 1] == 0 {
+        length -= 1;
+    }
+    if length != vec.len(values) {
+        vec.resize(values, length, 0);
+    }
+}
+
+func fp_big_copy(source Vec[u32]) Vec[u32] {
+    let out = vec.empty[u32]();
+    vec.reserve(out, vec.len(source));
+    for var index usize = 0; index < vec.len(source); index += 1 {
+        vec.push(out, source[index]);
+    }
+    return out;
+}
+
+func fp_big_limb_at(values Vec[u32], index usize) u32 {
+    if index < vec.len(values) {
+        return values[index];
+    }
+    return 0;
+}
+
+func fp_big_compare(left Vec[u32], right Vec[u32]) i32 {
+    let left_length = vec.len(left);
+    let right_length = vec.len(right);
+    if left_length < right_length {
+        return -1;
+    }
+    if left_length > right_length {
+        return 1;
+    }
+    var index = left_length;
+    for index > 0 {
+        index -= 1;
+        if left[index] < right[index] {
+            return -1;
+        }
+        if left[index] > right[index] {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+func fp_big_is_zero(values Vec[u32]) bool {
+    return vec.len(values) == 0;
+}
+
+func fp_big_is_odd(values Vec[u32]) bool {
+    if vec.len(values) == 0 {
+        return false;
+    }
+    return (values[0] & u32(1)) == u32(1);
+}
+
+func fp_big_bit_length(values Vec[u32]) u64 {
+    let length = vec.len(values);
+    if length == 0 {
+        return 0;
+    }
+    var top = values[length - 1];
+    var bits u64 = 0;
+    for top > 0 {
+        bits += 1;
+        top = top >> 1;
+    }
+    return u64(length - 1) * 32 + bits;
+}
+
+func fp_big_low_u64(values Vec[u32]) u64 {
+    let length = vec.len(values);
+    if length == 0 {
+        return 0;
+    }
+    if length == 1 {
+        return u64(values[0]);
+    }
+    return (u64(values[1]) << 32) | u64(values[0]);
+}
+
+func fp_big_add(left Vec[u32], right Vec[u32]) Vec[u32] {
+    var length = vec.len(left);
+    if vec.len(right) > length {
+        length = vec.len(right);
+    }
+    let out = vec.make[u32](length + 1, 0);
+    var carry u64 = 0;
+    for var index usize = 0; index < length; index += 1 {
+        let sum = u64(fp_big_limb_at(left, index)) +
+        u64(fp_big_limb_at(right, index)) + carry;
+        out[index] = u32(sum & FP_BIG_MASK);
+        carry = sum >> 32;
+    }
+    out[length] = u32(carry);
+    fp_big_trim(out);
+    return out;
+}
+
+// Requires left >= right. The freshly copied left vector is mutated.
+func fp_big_sub_inplace(left Vec[u32], right Vec[u32]) {
+    var borrow u64 = 0;
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        let left_limb = u64(left[index]);
+        let right_limb = u64(fp_big_limb_at(right, index)) + borrow;
+        if left_limb >= right_limb {
+            left[index] = u32(left_limb - right_limb);
+            borrow = 0;
+        } else {
+            left[index] = u32(left_limb + FP_BIG_BASE - right_limb);
+            borrow = 1;
+        }
+    }
+}
+
+func fp_big_sub(left Vec[u32], right Vec[u32]) Vec[u32] {
+    let out = fp_big_copy(left);
+    fp_big_sub_inplace(out, right);
+    fp_big_trim(out);
+    return out;
+}
+
+func fp_big_multiply(left Vec[u32], right Vec[u32]) Vec[u32] {
+    let left_length = vec.len(left);
+    let right_length = vec.len(right);
+    if left_length == 0 || right_length == 0 {
+        return fp_big_zero();
+    }
+    let out = vec.make[u32](left_length + right_length, 0);
+    for var i usize = 0; i < left_length; i += 1 {
+        var carry u64 = 0;
+        let left_limb = u64(left[i]);
+        for var j usize = 0; j < right_length; j += 1 {
+            let index = i + j;
+            let accumulator = left_limb * u64(right[j]) +
+            u64(out[index]) + carry;
+            out[index] = u32(accumulator & FP_BIG_MASK);
+            carry = accumulator >> 32;
+        }
+        out[i + right_length] = u32(carry);
+    }
+    fp_big_trim(out);
+    return out;
+}
+
+// values = values * factor + add. factor is at most 10^9 and add is smaller
+// than factor, so one u64 accumulator is enough for every limb step.
+func fp_big_multiply_add_small(values Vec[u32], factor u64, add u64) {
+    var carry = add;
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        let accumulator = u64(values[index]) * factor + carry;
+        values[index] = u32(accumulator & FP_BIG_MASK);
+        carry = accumulator >> 32;
+    }
+    for carry > 0 {
+        vec.push(values, u32(carry & FP_BIG_MASK));
+        carry = carry >> 32;
+    }
+}
+
+func fp_big_shift_left(values Vec[u32], bits u64) Vec[u32] {
+    let length = vec.len(values);
+    if length == 0 {
+        return fp_big_zero();
+    }
+    let words = usize(bits / 32);
+    let offset = u32(bits % 32);
+    let out = vec.make[u32](length + words + 1, 0);
+    for var index usize = 0; index < length; index += 1 {
+        let value = u64(values[index]);
+        let low = (value << u64(offset)) & FP_BIG_MASK;
+        var high u64 = 0;
+        if offset != 0 {
+            high = (value >> u64(32 - offset)) & FP_BIG_MASK;
+        }
+        out[index + words] = out[index + words] | u32(low);
+        out[index + words + 1] = out[index + words + 1] | u32(high);
+    }
+    fp_big_trim(out);
+    return out;
+}
+
+func fp_big_shift_right_one_inplace(values Vec[u32]) {
+    var carry u32 = 0;
+    var index = vec.len(values);
+    for index > 0 {
+        index -= 1;
+        let current = values[index];
+        values[index] = (current >> 1) | (carry << 31);
+        carry = current & 1;
+    }
+    fp_big_trim(values);
+}
+
+func fp_big_shift_right(values Vec[u32], bits u64) Vec[u32] {
+    let length = vec.len(values);
+    if length == 0 {
+        return fp_big_zero();
+    }
+    let words = usize(bits / 32);
+    if words >= length {
+        return fp_big_zero();
+    }
+    let offset = u32(bits % 32);
+    let out = vec.make[u32](length - words, 0);
+    for var index usize = 0; index < length - words; index += 1 {
+        let low = u64(values[index + words]);
+        var high u64 = 0;
+        if index + words + 1 < length {
+            high = u64(values[index + words + 1]);
+        }
+        var combined u64 = low;
+        if offset != 0 {
+            combined = (low >> u64(offset)) |
+            ((high << u64(32 - offset)) & FP_BIG_MASK);
+        }
+        out[index] = u32(combined & FP_BIG_MASK);
+    }
+    fp_big_trim(out);
+    return out;
+}
+
+// Long division by repeated shifted subtraction. The divisor must be nonzero
+// and canonical, as produced by the helpers above.
+func fp_big_divrem(dividend Vec[u32], divisor Vec[u32]) FpBigDivRem {
+    if fp_big_compare(dividend, divisor) < 0 {
+        return FpBigDivRem(quotient: fp_big_zero(),
+            remainder: fp_big_copy(dividend));
+    }
+    let shift = fp_big_bit_length(dividend) - fp_big_bit_length(divisor);
+    let scaled = fp_big_shift_left(divisor, shift);
+    let remainder = fp_big_copy(dividend);
+    let quotient = vec.make[u32](usize(shift / 32) + 1, 0);
+    var position = shift + 1;
+    for position > 0 {
+        position -= 1;
+        if fp_big_compare(remainder, scaled) >= 0 {
+            fp_big_sub_inplace(remainder, scaled);
+            fp_big_trim(remainder);
+            let word = usize(position / 32);
+            quotient[word] = quotient[word] | (u32(1) << u32(position % 32));
+        }
+        fp_big_shift_right_one_inplace(scaled);
+    }
+    fp_big_trim(quotient);
+    return FpBigDivRem(quotient: quotient, remainder: remainder);
+}
+
+func fp_big_pow2(bits u64) Vec[u32] {
+    return fp_big_shift_left(fp_big_from_u64(1), bits);
+}
+
+// 10^exponent built from exact small multiplications. The parser only calls
+// this after the decimal magnitude check, so exponent stays near the range in
+// which a float can be finite, not the much larger exponent field itself.
+func fp_big_pow10(exponent u64) Vec[u32] {
+    var result = fp_big_from_u64(1);
+    var remaining = exponent;
+    for remaining >= 9 {
+        fp_big_multiply_add_small(result, FP_BIG_DECIMAL_CHUNK, 0);
+        remaining -= 9;
+    }
+    if remaining > 0 {
+        var factor u64 = 1;
+        for var index u64 = 0; index < remaining; index += 1 {
+            factor = factor * 10;
+        }
+        fp_big_multiply_add_small(result, factor, 0);
+    }
+    return result;
+}
+
+// Parses up to `digits` ASCII decimal digits from a range into a magnitude.
+// The decimal point is skipped; callers have already validated every other
+// byte as '0'..'9'. Digits are accumulated nine at a time to keep the limb
+// count small. Stopping after the retained prefix is what bounds the integer
+// arithmetic for very long mantissas.
+func fp_big_parse_decimal_range(data Vec[u8], start usize, end usize,
+    digits usize) Vec[u32] {
+    let out = vec.empty[u32]();
+    var index = start;
+    var remaining = digits;
+    for index < end && remaining > 0 {
+        var group_length usize = 0;
+        var group u64 = 0;
+        for index < end && group_length < 9 && group_length < remaining {
+            let byte = data[index];
+            index += 1;
+            if byte == 46 {
+                continue;
+            }
+            group = group * 10 + u64(byte - 48);
+            group_length += 1;
+        }
+        var factor u64 = 1;
+        for var step usize = 0; step < group_length; step += 1 {
+            factor = factor * 10;
+        }
+        fp_big_multiply_add_small(out, factor, group);
+        remaining -= group_length;
+    }
+    return out;
+}

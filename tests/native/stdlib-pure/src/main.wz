@@ -60,5 +60,17 @@ func main() i32 throws strconv.Error {
     } catch error strconv.Error {
         switch error { case strconv.Error.InvalidSyntax: {} default: return 25; }
     }
+    try {
+        let value = strconv.parse_f32(long_non_ascii);
+        return 26;
+    } catch error strconv.Error {
+        switch error { case strconv.Error.InvalidSyntax: {} default: return 26; }
+    }
+    try {
+        let value = strconv.parse_f64(long_non_ascii);
+        return 27;
+    } catch error strconv.Error {
+        switch error { case strconv.Error.InvalidSyntax: {} default: return 27; }
+    }
     return 0;
 }

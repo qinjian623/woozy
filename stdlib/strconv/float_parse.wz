@@ -1,0 +1,1061 @@
+// Decimal to IEEE-754 parsing for std/strconv.
+//
+// The public parse_f32/parse_f64 wrappers dispatch to the package-private
+// wz_parse_f32/wz_parse_f64 functions below. They reproduce the existing
+// runtime ABI semantics:
+//
+//   * the accepted grammar is the strict language grammar (an optional sign,
+//     decimal digits with an optional decimal point, and an optional decimal
+//     exponent; case-insensitive nan/inf tokens; no hex, whitespace, payloads,
+//     or trailing junk);
+//   * finite values are rounded directly to the destination precision with
+//     round-to-nearest ties-to-even, including subnormals and the overflow and
+//     underflow boundaries;
+//   * signed zero, infinity, and NaN are classified like
+//     runtime/native/numbers.cpp, with overflow of a finite spelling reported
+//     as Error.OutOfRange and underflow to zero accepted as a successful zero.
+//
+// The conversion is pure Woozy code. Short spellings in the Clinger window
+// use one exact power-of-ten multiply or divide. Other spellings with at most
+// 19 accumulated significant digits use the Eisel-Lemire 128-bit path and the
+// private normalized power-of-five table in float_parse_pow5.wz. Inputs with
+// more digits, or a rounding decision the approximation cannot resolve, fall
+// back to the exact integer kernel below (and the magnitude helpers in
+// float_parse_big.wz). No path calls strtod, the C/C++ fast_float library,
+// or any other C/C++ numeric conversion entry point; the Eisel-Lemire source
+// is translated to Woozy above.
+//
+// Eisel-Lemire translation and the normalized 5^q constants are derived from
+// the vendored fast_float sources (pinned commit
+// 8ec59686a1430867ba609c2777ca15143dd81003) under the Boost Software License
+// 1.0. See FAST_FLOAT_PROVENANCE.md, AUTHORS, and LICENSE-BOOST in this
+// directory; the complete vendor copy remains under
+// runtime/native/vendor/fast_float/ in the repository.
+package strconv;
+
+import "std/text" as text;
+import "std/vec" as vec;
+
+const FP_KIND_FINITE i32 = 0;
+const FP_KIND_INFINITY i32 = 1;
+const FP_KIND_NAN i32 = 2;
+
+// After trailing decimal zeros are removed, a value whose decimal magnitude
+// lies outside this window cannot round to a finite f32/f64. The exact kernel
+// is used inside the window so values such as 2.4703282292062327e-324 and
+// 3.4028235e38 are decided by the same ties-to-even path.
+const FP_DECIMAL_MAGNITUDE_LIMIT i64 = 400;
+// Any binary64 rounding midpoint is an integer of at most 54 bits times a
+// power of two. The smallest midpoint exponent is -1075, so a fractional
+// midpoint has at most 768 significant decimal digits; an integral one has at
+// most 309. Retaining 800 significant digits therefore leaves a 32-digit
+// margin: no rounding midpoint lies strictly inside a truncation grid
+// interval. Once trailing zeros are removed, a truncated tail is necessarily
+// nonzero, so replacing it with a final digit 1 keeps the value above the
+// lower grid point and preserves the ties-to-even decision. The full input is
+// still scanned for syntax and for the decimal exponent.
+const FP_RETAINED_DECIMAL_DIGITS usize = 800;
+// The exponent scanner saturates instead of wrapping. A decimal exponent can
+// only cancel the at most `length` mantissa digits by which it is offset, so
+// any magnitude beyond length + FP_DECIMAL_MAGNITUDE_LIMIT + 2 already forces
+// the same zero/out-of-range decision. The bound is derived from the input
+// length on every scan; a fixed clamp could otherwise lose a legal exponent
+// on a very long mantissa. The ceiling only keeps the derived bound and the
+// later i64 arithmetic representable for lengths that cannot be allocated.
+const FP_EXPONENT_LENGTH_CEILING i64 = 2305843009213693951;
+// The Clinger fast path applies one correctly-rounded binary operation to an
+// exactly representable integer mantissa and an exactly representable power
+// of ten. Both limits are powers of two: a mantissa at or below 2^53 (f64) or
+// 2^24 (f32) converts exactly, and 10^k is exact for k <= 22 (f64) or k <= 10
+// (f32) because 5^k still fits in the destination significand.
+const FP_FAST_DECIMAL_DIGITS usize = 19;
+const FP_F64_MANTISSA_LIMIT u64 = 9007199254740992;
+const FP_F32_MANTISSA_LIMIT u64 = 16777216;
+const FP_F64_CLINGER_EXPONENT i64 = 22;
+const FP_F32_CLINGER_EXPONENT i64 = 10;
+
+const FP_F64_PRECISION u32 = 53;
+const FP_F64_BIAS i64 = 1023;
+const FP_F32_PRECISION u32 = 24;
+const FP_F32_BIAS i64 = 127;
+
+// Constant-folded NaNs keep a deterministic sign at both optimization levels.
+// A runtime 0.0/0.0 form does not: the O0 and O2 code paths disagree on its
+// sign, while constant evaluation produces a stable quiet NaN. The language
+// contract does not promise a NaN payload, only NaN classification and sign.
+const FP_NAN_F64 f64 = 0.0 / 0.0;
+const FP_NEGATIVE_NAN_F64 f64 = -(0.0 / 0.0);
+const FP_NAN_F32 f32 = 0.0 / 0.0;
+const FP_NEGATIVE_NAN_F32 f32 = -(0.0 / 0.0);
+
+struct FpNumber {
+    kind i32;
+    negative bool;
+    significand u64;
+    exponent i64;
+}
+
+// Result of the Clinger fast path. ok is false when the exact integer kernel
+// must decide the value.
+struct FpFast {
+    ok bool;
+    value f64;
+}
+
+struct FpU128 {
+    lo u64;
+    hi u64;
+}
+
+// Result of the Eisel-Lemire path. ok is false when the exact integer kernel
+// must decide the value (more than 19 significant digits, or a rounding
+// ambiguity the approximation cannot resolve).
+struct FpEl {
+    ok bool;
+    number FpNumber;
+}
+
+struct FpScan {
+    valid bool;
+    kind i32;
+    negative bool;
+    zero bool;
+    digits_start usize;
+    digits_end usize;
+    total_digits usize;
+    dot_digits usize;
+    first_ordinal usize;
+    last_ordinal usize;
+    exponent i64;
+    // The scanner also accumulates up to FP_FAST_DECIMAL_DIGITS significant
+    // digits for the Clinger path. Extra digits are allowed only when they
+    // are trailing zeros; otherwise fast_ok is false and the exact kernel
+    // consumes the same scan without another pass over the mantissa.
+    fast_mantissa u64;
+    fast_ok bool;
+}
+
+func fp_is_digit(byte u8) bool {
+    return byte >= 48 && byte <= 57;
+}
+
+func fp_ascii_lower(byte u8) u8 {
+    if byte >= 65 && byte <= 90 {
+        return byte + 32;
+    }
+    return byte;
+}
+
+func fp_is_nan_word(data Vec[u8], start usize) bool {
+    return fp_ascii_lower(data[start]) == 110 &&
+    fp_ascii_lower(data[start + 1]) == 97 &&
+    fp_ascii_lower(data[start + 2]) == 110;
+}
+
+func fp_is_inf_word(data Vec[u8], start usize) bool {
+    return fp_ascii_lower(data[start]) == 105 &&
+    fp_ascii_lower(data[start + 1]) == 110 &&
+    fp_ascii_lower(data[start + 2]) == 102;
+}
+
+func fp_invalid_scan() FpScan {
+    return FpScan(valid: false, kind: FP_KIND_FINITE, negative: false,
+        zero: false, digits_start: 0, digits_end: 0,
+        total_digits: 0, dot_digits: 0, first_ordinal: 0,
+        last_ordinal: 0, exponent: 0, fast_mantissa: 0, fast_ok: false);
+}
+
+// Derives the saturation bound for the decimal exponent from the number of
+// bytes that could possibly carry mantissa digits. See the constant comment
+// above for why this bound preserves every zero/out-of-range decision.
+func fp_exponent_limit(length usize) i64 {
+    let len = i64(length);
+    if len < 0 || len > FP_EXPONENT_LENGTH_CEILING {
+        return FP_EXPONENT_LENGTH_CEILING;
+    }
+    return len + FP_DECIMAL_MAGNITUDE_LIMIT + 2;
+}
+
+func fp_exact_number(kind i32, negative bool, significand u64,
+    exponent i64) FpNumber {
+    return FpNumber(kind: kind, negative: negative,
+        significand: significand, exponent: exponent);
+}
+
+// Validates the complete input before any numeric work. This mirrors the
+// runtime scanner rather than accepting the wider fast_float C++ grammar.
+func fp_scan_float(data Vec[u8]) FpScan {
+    let length = vec.len(data);
+    var index usize = 0;
+    var negative = false;
+    if index < length && (data[index] == 43 || data[index] == 45) {
+        negative = data[index] == 45;
+        index += 1;
+    }
+    if length - index == 3 {
+        if fp_is_nan_word(data, index) {
+            return FpScan(valid: true, kind: FP_KIND_NAN, negative: negative,
+                zero: false, digits_start: 0, digits_end: 0,
+                total_digits: 0, dot_digits: 0, first_ordinal: 0,
+                last_ordinal: 0, exponent: 0, fast_mantissa: 0,
+                fast_ok: false);
+        }
+        if fp_is_inf_word(data, index) {
+            return FpScan(valid: true, kind: FP_KIND_INFINITY,
+                negative: negative, zero: false, digits_start: 0,
+                digits_end: 0, total_digits: 0, dot_digits: 0,
+                first_ordinal: 0, last_ordinal: 0, exponent: 0,
+                fast_mantissa: 0, fast_ok: false);
+        }
+    }
+    let body_start = index;
+    var total_digits usize = 0;
+    var dot_ordinal usize = 0;
+    var has_dot = false;
+    var found_nonzero = false;
+    var first_ordinal usize = 0;
+    var last_ordinal usize = 0;
+    // Scans digits, the optional dot, and the significant-digit prefix in one
+    // pass. The prefix is enough for the Clinger path; if any later digit is
+    // nonzero, fast_ok stays false and the exact kernel is used.
+    var fast_digits usize = 0;
+    var fast_mantissa u64 = 0;
+    var fast_ok = true;
+    for index < length {
+        let byte = data[index];
+        if fp_is_digit(byte) {
+            index += 1;
+            total_digits += 1;
+            if byte != 48 {
+                if !found_nonzero {
+                    found_nonzero = true;
+                    first_ordinal = total_digits - 1;
+                }
+                last_ordinal = total_digits;
+            }
+            if found_nonzero && fast_ok {
+                if fast_digits < FP_FAST_DECIMAL_DIGITS {
+                    fast_mantissa = fast_mantissa * 10 + u64(byte - 48);
+                    fast_digits += 1;
+                } else if byte != 48 {
+                    fast_ok = false;
+                }
+            }
+        } else if byte == 46 && !has_dot {
+            has_dot = true;
+            dot_ordinal = total_digits;
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    var dot_digits = total_digits;
+    if has_dot {
+        dot_digits = dot_ordinal;
+    }
+    if total_digits == 0 {
+        return fp_invalid_scan();
+    }
+    let mantissa_end = index;
+    var exponent i64 = 0;
+    if index < length && (data[index] == 101 || data[index] == 69) {
+        index += 1;
+        var exponent_negative = false;
+        if index < length && (data[index] == 43 || data[index] == 45) {
+            exponent_negative = data[index] == 45;
+            index += 1;
+        }
+        let exponent_start = index;
+        let exponent_limit = fp_exponent_limit(length);
+        let exponent_guard = (exponent_limit - 9) / 10;
+        var exponent_magnitude i64 = 0;
+        for index < length && fp_is_digit(data[index]) {
+            if exponent_magnitude > exponent_guard {
+                exponent_magnitude = exponent_limit;
+            } else {
+                exponent_magnitude = exponent_magnitude * 10 +
+                i64(data[index] - 48);
+                if exponent_magnitude > exponent_limit {
+                    exponent_magnitude = exponent_limit;
+                }
+            }
+            index += 1;
+        }
+        if index == exponent_start {
+            return fp_invalid_scan();
+        }
+        if exponent_negative {
+            exponent = -exponent_magnitude;
+        }
+        else {
+            exponent = exponent_magnitude;
+        }
+    }
+    if index != length {
+        return fp_invalid_scan();
+    }
+
+    if !found_nonzero {
+        // The spelling is a (signed) zero regardless of its decimal exponent.
+        return FpScan(valid: true, kind: FP_KIND_FINITE, negative: negative,
+            zero: true, digits_start: body_start,
+            digits_end: mantissa_end, total_digits: total_digits,
+            dot_digits: dot_digits, first_ordinal: 0,
+            last_ordinal: 0, exponent: 0, fast_mantissa: 0,
+            fast_ok: false);
+    }
+
+    return FpScan(valid: true, kind: FP_KIND_FINITE, negative: negative,
+        zero: false, digits_start: body_start,
+        digits_end: mantissa_end, total_digits: total_digits,
+        dot_digits: dot_digits, first_ordinal: first_ordinal,
+        last_ordinal: last_ordinal, exponent: exponent,
+        fast_mantissa: fast_mantissa, fast_ok: fast_ok);
+}
+
+// Rounds numerator/denominator (an exact nonnegative rational) to the IEEE
+// precision selected by width. This is the same integer kernel used by the
+// self-hosted compiler: locate floor(log2(value)), scale the significand,
+// perform one exact division, then apply ties-to-even. Carries out of the
+// precision are absorbed into the exponent, and a subnormal rounding that
+// reaches 2^(precision-1) becomes the minimum normal.
+func fp_round_ratio(negative bool, numerator Vec[u32],
+    denominator Vec[u32], width u32) FpNumber throws Error {
+    if fp_big_is_zero(denominator) {
+        throw Error.InvalidSyntax;
+    }
+    var precision u32 = FP_F64_PRECISION;
+    var bias i64 = FP_F64_BIAS;
+    if width == 32 {
+        precision = FP_F32_PRECISION;
+        bias = FP_F32_BIAS;
+    }
+    if fp_big_is_zero(numerator) {
+        return fp_exact_number(FP_KIND_FINITE, negative, 0, 0);
+    }
+    var e i64 = i64(fp_big_bit_length(numerator)) -
+    i64(fp_big_bit_length(denominator));
+    if e >= 0 {
+        let scaled = fp_big_shift_left(denominator, u64(e));
+        if fp_big_compare(numerator, scaled) < 0 {
+            e -= 1;
+        }
+    } else {
+        let scaled = fp_big_shift_left(numerator, u64(-e));
+        if fp_big_compare(scaled, denominator) < 0 {
+            e -= 1;
+        }
+    }
+    if e > bias {
+        return fp_exact_number(FP_KIND_INFINITY, negative, 0, 0);
+    }
+    let subnormal_exponent i64 = 1 - bias;
+    var floor_e i64 = e;
+    if floor_e < subnormal_exponent {
+        floor_e = subnormal_exponent;
+    }
+    let scale = i64(precision) - 1 - floor_e;
+    var top = numerator;
+    var bottom = denominator;
+    if scale >= 0 {
+        top = fp_big_shift_left(top, u64(scale));
+    } else {
+        bottom = fp_big_shift_left(bottom, u64(-scale));
+    }
+    let parts = fp_big_divrem(top, bottom);
+    var quotient = parts.quotient;
+    let twice_remainder = fp_big_shift_left(parts.remainder, 1);
+    let relation = fp_big_compare(twice_remainder, bottom);
+    var round_up = false;
+    if relation > 0 {
+        round_up = true;
+    } else if relation == 0 && fp_big_is_odd(quotient) {
+        round_up = true;
+    }
+    if round_up {
+        quotient = fp_big_add(quotient, fp_big_from_u64(1));
+    }
+    if fp_big_compare(quotient, fp_big_pow2(u64(precision))) >= 0 {
+        quotient = fp_big_shift_right(quotient, 1);
+        e += 1;
+    }
+    if e > bias {
+        return fp_exact_number(FP_KIND_INFINITY, negative, 0, 0);
+    }
+    let significand = fp_big_low_u64(quotient);
+    var stored_e = e;
+    if stored_e < subnormal_exponent {
+        stored_e = subnormal_exponent;
+    }
+    return fp_exact_number(FP_KIND_FINITE, negative, significand,
+        stored_e - (i64(precision) - 1));
+}
+
+// Exact powers of ten for the Clinger fast path. Every entry is an integer
+// below 2^53 (f64) or 2^24 (f32), so it is represented exactly. The switch
+// avoids loop and polling overhead on the hot path; callers pass only the
+// bounded exponents checked by fp_try_clinger.
+func fp_pow10_f64(exponent i64) f64 {
+    switch exponent {
+        case 0:
+            return 1.0;
+        case 1:
+            return 10.0;
+        case 2:
+            return 100.0;
+        case 3:
+            return 1000.0;
+        case 4:
+            return 10000.0;
+        case 5:
+            return 100000.0;
+        case 6:
+            return 1000000.0;
+        case 7:
+            return 10000000.0;
+        case 8:
+            return 100000000.0;
+        case 9:
+            return 1000000000.0;
+        case 10:
+            return 10000000000.0;
+        case 11:
+            return 100000000000.0;
+        case 12:
+            return 1000000000000.0;
+        case 13:
+            return 10000000000000.0;
+        case 14:
+            return 100000000000000.0;
+        case 15:
+            return 1000000000000000.0;
+        case 16:
+            return 10000000000000000.0;
+        case 17:
+            return 100000000000000000.0;
+        case 18:
+            return 1000000000000000000.0;
+        case 19:
+            return 10000000000000000000.0;
+        case 20:
+            return 100000000000000000000.0;
+        case 21:
+            return 1000000000000000000000.0;
+        case 22:
+            return 10000000000000000000000.0;
+        default:
+            return 1.0;
+    }
+}
+
+func fp_pow10_f32(exponent i64) f32 {
+    switch exponent {
+        case 0:
+            return 1.0;
+        case 1:
+            return 10.0;
+        case 2:
+            return 100.0;
+        case 3:
+            return 1000.0;
+        case 4:
+            return 10000.0;
+        case 5:
+            return 100000.0;
+        case 6:
+            return 1000000.0;
+        case 7:
+            return 10000000.0;
+        case 8:
+            return 100000000.0;
+        case 9:
+            return 1000000000.0;
+        case 10:
+            return 10000000000.0;
+        default:
+            return 1.0;
+    }
+}
+
+// Clinger's fast path for spellings whose significant digits fit in u64 and
+// whose decimal exponent is in the exact power-of-ten window. The mantissa is
+// an integer exactly representable in the destination, and 10^k is also
+// exactly representable, so one IEEE multiply (positive k) or divide
+// (negative k) produces the correctly-rounded result with a single rounding.
+// The f32 form operates entirely in f32; computing it in f64 and narrowing
+// afterwards would introduce a second rounding.
+//
+// A fallback result has ok false and leaves the exact integer kernel to
+// decide the value. The window is far from overflow and underflow: the
+// largest f64 value here is below 1e38, and the smallest is above 1e-23.
+func fp_try_clinger(scanned FpScan, width u32) FpFast {
+    if !scanned.fast_ok {
+        return FpFast(ok: false, value: 0.0);
+    }
+    var decimal_exponent = scanned.exponent +
+    i64(scanned.dot_digits) -
+    i64(scanned.last_ordinal);
+    var mantissa_limit = FP_F64_MANTISSA_LIMIT;
+    var exponent_limit = FP_F64_CLINGER_EXPONENT;
+    if width == 32 {
+        mantissa_limit = FP_F32_MANTISSA_LIMIT;
+        exponent_limit = FP_F32_CLINGER_EXPONENT;
+    }
+    if decimal_exponent < -exponent_limit {
+        return FpFast(ok: false, value: 0.0);
+    }
+    // The scan kept at most 19 significant digits. Any further digits were
+    // zeros, so removing the accumulated trailing zeros recovers the same
+    // trimmed mantissa the exact path would build.
+    var mantissa = scanned.fast_mantissa;
+    if mantissa == 0 {
+        return FpFast(ok: false, value: 0.0);
+    }
+    for mantissa % 10 == 0 {
+        mantissa = mantissa / 10;
+    }
+    if mantissa > mantissa_limit {
+        return FpFast(ok: false, value: 0.0);
+    }
+    // A positive exponent just above the window can be moved back into the
+    // mantissa as trailing zeros. The integer value is unchanged, and the
+    // shifted mantissa is still exactly representable, so this remains a
+    // single-rounding Clinger case rather than a second approximation.
+    for decimal_exponent > exponent_limit &&
+    mantissa <= mantissa_limit / 10 {
+        mantissa = mantissa * 10;
+        decimal_exponent -= 1;
+    }
+    if decimal_exponent > exponent_limit {
+        return FpFast(ok: false, value: 0.0);
+    }
+    if width == 32 {
+        var magnitude = f32(mantissa);
+        if decimal_exponent >= 0 {
+            magnitude = magnitude * fp_pow10_f32(decimal_exponent);
+        } else {
+            magnitude = magnitude / fp_pow10_f32(-decimal_exponent);
+        }
+        if scanned.negative {
+            magnitude = -magnitude;
+        }
+        return FpFast(ok: true, value: f64(magnitude));
+    }
+    var magnitude = f64(mantissa);
+    if decimal_exponent >= 0 {
+        magnitude = magnitude * fp_pow10_f64(decimal_exponent);
+    } else {
+        magnitude = magnitude / fp_pow10_f64(-decimal_exponent);
+    }
+    if scanned.negative {
+        magnitude = -magnitude;
+    }
+    return FpFast(ok: true, value: magnitude);
+}
+
+// Multiplies two u64 values and returns the exact 128-bit product. The four
+// 32-bit partial products stay below the u64 range at every step, so no host
+// 128-bit integer type or C conversion helper is needed.
+func fp_mul64(left u64, right u64) FpU128 {
+    let left_low = left & u64(0xFFFFFFFF);
+    let left_high = left >> 32;
+    let right_low = right & u64(0xFFFFFFFF);
+    let right_high = right >> 32;
+    let low_low = left_low * right_low;
+    let high_low = left_high * right_low;
+    let low_high = left_low * right_high;
+    let middle = high_low + low_high;
+    let middle_carry = middle < high_low;
+    let low = low_low + (middle << 32);
+    var high = left_high * right_high + (middle >> 32);
+    if middle_carry {
+        high += u64(1) << 32;
+    }
+    if low < low_low {
+        high += 1;
+    }
+    return FpU128(lo: low, hi: high);
+}
+
+// Counts leading zero bits in a u64 by binary search. Returns 64 for zero,
+// which the Eisel-Lemire caller has already excluded.
+func fp_clz64(value u64) u32 {
+    if value == 0 {
+        return 64;
+    }
+    var work = value;
+    var count u32 = 0;
+    if (work >> 32) == 0 {
+        count += 32;
+        work = work << 32;
+    }
+    if (work >> 48) == 0 {
+        count += 16;
+        work = work << 16;
+    }
+    if (work >> 56) == 0 {
+        count += 8;
+        work = work << 8;
+    }
+    if (work >> 60) == 0 {
+        count += 4;
+        work = work << 4;
+    }
+    if (work >> 62) == 0 {
+        count += 2;
+        work = work << 2;
+    }
+    if (work >> 63) == 0 {
+        count += 1;
+    }
+    return count;
+}
+
+// floor(log2(5^q)) + q + 63, adjusted so the high word of the normalized
+// 5^q product maps directly onto an IEEE exponent field. The bias keeps the
+// signed right shift non-negative, matching the vendored fast_float helper.
+func fp_el_power(exponent i64) i64 {
+    let biased = (152170 + 65536) * exponent + (2048 * 65536);
+    return (biased >> 16) - 2048 + 63;
+}
+
+// Approximates w * 5^q with a 128-bit product. The high word is used for the
+// value; the low word detects whether the second table word can change the
+// rounding decision. The ten extra low bits are enough for the fast_float
+// proof that no fallback is required for at most 19 significant digits.
+func fp_el_product(exponent i64, value u64, precision u32) FpU128 {
+    let wide = fp_pow5_wide(exponent);
+    var product = fp_mul64(value, wide.hi);
+    let mask u64 = 0xFFFFFFFFFFFFFFFF >> precision;
+    if (product.hi & mask) == mask {
+        let second = fp_mul64(value, wide.lo);
+        let low = product.lo + second.hi;
+        if second.hi > low {
+            product.hi += 1;
+        }
+        product.lo = low;
+    }
+    return product;
+}
+
+// Eisel-Lemire conversion for at most 19 exactly accumulated significant
+// digits. This covers the common short spellings whose decimal exponent is
+// outside Clinger's exact power-of-ten window, and mantissas wider than the
+// destination precision. A negative power2 marks an approximation that the
+// exact integer kernel must re-decide; callers never observe a partial value.
+func fp_try_eisel_lemire(scanned FpScan, width u32) FpEl {
+    let empty = fp_exact_number(FP_KIND_FINITE, scanned.negative, 0, 0);
+    if !scanned.fast_ok {
+        return FpEl(ok: false, number: empty);
+    }
+    let decimal_exponent = scanned.exponent +
+    i64(scanned.dot_digits) - i64(scanned.last_ordinal);
+    var mantissa = scanned.fast_mantissa;
+    // Trailing zeros are not part of the significant span used by the
+    // exponent formula, so remove them without changing the exponent.
+    for mantissa % 10 == 0 && mantissa != 0 {
+        mantissa = mantissa / 10;
+    }
+    if mantissa == 0 {
+        return FpEl(ok: false, number: empty);
+    }
+    var explicit_bits u32 = 52;
+    var minimum_exponent i64 = -1023;
+    var infinite_power i64 = 2047;
+    var bias i64 = 1023;
+    var smallest_exponent i64 = -342;
+    var largest_exponent i64 = 308;
+    var min_round_exponent i64 = -4;
+    var max_round_exponent i64 = 23;
+    if width == 32 {
+        explicit_bits = 23;
+        minimum_exponent = -127;
+        infinite_power = 255;
+        bias = 127;
+        smallest_exponent = -64;
+        largest_exponent = 38;
+        min_round_exponent = -17;
+        max_round_exponent = 10;
+    }
+    if decimal_exponent < smallest_exponent {
+        // Every value below this bound rounds to a signed zero.
+        return FpEl(ok: true, number: fp_exact_number(FP_KIND_FINITE,
+                scanned.negative, 0, 0));
+    }
+    if decimal_exponent > largest_exponent {
+        return FpEl(ok: true, number: fp_exact_number(FP_KIND_INFINITY,
+                scanned.negative, 0, 0));
+    }
+    let leading = fp_clz64(mantissa);
+    let normalized = mantissa << u64(leading);
+    let precision = explicit_bits + 3;
+    let product = fp_el_product(decimal_exponent, normalized, precision);
+    let upper_bit = i64(product.hi >> 63);
+    let shift = upper_bit + 64 - i64(explicit_bits) - 3;
+    var answer_mantissa = product.hi >> u64(shift);
+    var power2 = fp_el_power(decimal_exponent) + upper_bit -
+    i64(leading) - minimum_exponent;
+    if power2 <= 0 {
+        if -power2 + 1 >= 64 {
+            return FpEl(ok: true, number: fp_exact_number(FP_KIND_FINITE,
+                    scanned.negative, 0, 0));
+        }
+        let subnormal_shift = -power2 + 1;
+        answer_mantissa = answer_mantissa >> u64(subnormal_shift);
+        answer_mantissa += answer_mantissa & 1;
+        answer_mantissa = answer_mantissa >> 1;
+        // Whether the rounded mantissa reaches the minimum normal or stays
+        // subnormal, the effective exponent is 1-bias. The stored significand
+        // already carries the implicit bit when it crosses that boundary.
+        return FpEl(ok: true, number: fp_exact_number(FP_KIND_FINITE,
+                scanned.negative, answer_mantissa,
+                1 - bias - i64(explicit_bits)));
+    }
+    // A product ending in ...FFF can hide a carry from the second table word;
+    // the approximation above added it. When the discarded bits are exactly
+    // zero and the candidate is odd, this is the midpoint, so ties-to-even
+    // clears the low bit instead of rounding up.
+    if product.lo <= 1 && decimal_exponent >= min_round_exponent &&
+    decimal_exponent <= max_round_exponent &&
+    (answer_mantissa & 3) == 1 {
+        if (answer_mantissa << u64(shift)) == product.hi {
+            answer_mantissa &= ~u64(1);
+        }
+    }
+    answer_mantissa += answer_mantissa & 1;
+    answer_mantissa = answer_mantissa >> 1;
+    if answer_mantissa >= (u64(2) << u64(explicit_bits)) {
+        answer_mantissa = u64(1) << u64(explicit_bits);
+        power2 += 1;
+    }
+    // fp_scale_* expects the full significand including the implicit bit;
+    // fast_float's packed form omits it. The carry case above already stores
+    // exactly that bit, so OR is a no-op there.
+    answer_mantissa |= u64(1) << u64(explicit_bits);
+    if power2 >= infinite_power {
+        return FpEl(ok: true, number: fp_exact_number(FP_KIND_INFINITY,
+                scanned.negative, 0, 0));
+    }
+    return FpEl(ok: true, number: fp_exact_number(FP_KIND_FINITE,
+            scanned.negative, answer_mantissa,
+            power2 - bias - i64(explicit_bits)));
+}
+
+func fp_exact_from_scan(data Vec[u8], scanned FpScan,
+    width u32) FpNumber throws Error {
+    if scanned.kind != FP_KIND_FINITE {
+        return fp_exact_number(scanned.kind, scanned.negative, 0, 0);
+    }
+    if scanned.zero {
+        return fp_exact_number(FP_KIND_FINITE, scanned.negative, 0, 0);
+    }
+    // value = significant_digits * 10^decimal_exponent.
+    var decimal_exponent = scanned.exponent +
+    i64(scanned.dot_digits) -
+    i64(scanned.last_ordinal);
+    let significant_digits = scanned.last_ordinal - scanned.first_ordinal;
+    let magnitude = decimal_exponent + i64(significant_digits) - 1;
+    if magnitude > FP_DECIMAL_MAGNITUDE_LIMIT {
+        throw Error.OutOfRange;
+    }
+    if magnitude < -FP_DECIMAL_MAGNITUDE_LIMIT {
+        return fp_exact_number(FP_KIND_FINITE, scanned.negative, 0, 0);
+    }
+    var retained_digits = significant_digits;
+    if retained_digits > FP_RETAINED_DECIMAL_DIGITS {
+        retained_digits = FP_RETAINED_DECIMAL_DIGITS;
+    }
+    // The fast scan only records the full body span; locate the first and
+    // last nonzero digits here, where the exact kernel needs them. This keeps
+    // two stores per nonzero digit out of the common path.
+    var range_start = scanned.digits_start;
+    for range_start < scanned.digits_end {
+        let byte = data[range_start];
+        if byte != 46 && byte != 48 {
+            break;
+        }
+        range_start += 1;
+    }
+    var range_end = scanned.digits_end;
+    for range_end > range_start {
+        let byte = data[range_end - 1];
+        if byte != 46 && byte != 48 {
+            break;
+        }
+        range_end -= 1;
+    }
+    var numerator = fp_big_parse_decimal_range(
+        data, range_start, range_end, retained_digits);
+    if retained_digits < significant_digits {
+        // The discarded tail is nonzero because trailing zeros were trimmed.
+        // Append a sticky 1 and shift the decimal exponent to the retained
+        // grid; the 800-digit margin above keeps this inside the same
+        // rounding interval as the exact value.
+        fp_big_multiply_add_small(numerator, 10, 1);
+        decimal_exponent += i64(significant_digits - retained_digits - 1);
+    }
+    var denominator = fp_big_from_u64(1);
+    if decimal_exponent > 0 {
+        numerator = fp_big_multiply(numerator, fp_big_pow10(u64(decimal_exponent)));
+    } else if decimal_exponent < 0 {
+        denominator = fp_big_pow10(u64(-decimal_exponent));
+    }
+    let rounded = fp_round_ratio(scanned.negative, numerator, denominator,
+        width);
+    // A finite spelling that rounds past the largest finite value is an
+    // out-of-range error, not a successful infinity. Explicit inf tokens were
+    // handled by the caller.
+    if rounded.kind == FP_KIND_INFINITY {
+        throw Error.OutOfRange;
+    }
+    return rounded;
+}
+
+// Applies a power-of-two scale to an integer significand. The significand is
+// at most 53 bits (24 for f32), so the integer-to-float conversion is exact.
+// Each scaling step is an exact power-of-two multiplication for a representable
+// result; the final value is the one produced by the rounding kernel.
+// Exact powers of two used by fp_scale_f64. index = exponent + 1074 is in
+// [0, 2045] for every value the rounding kernels return (f64 subnormals use
+// -1074, the largest finite f64 uses 971; f32 maps into the same range).
+// Splitting the index into a 64-bit block and a low bit lets one exact
+// multiplication reconstruct 2^exponent without data-dependent loops.
+func fp_pow2_high(index i64) f64 {
+    switch index {
+        case 0:
+            return 5e-324;
+        case 1:
+            return 9.113902524445497e-305;
+        case 2:
+            return 1.681218273811815e-285;
+        case 3:
+            return 3.10130032290503e-266;
+        case 4:
+            return 5.720889335234188e-247;
+        case 5:
+            return 1.0553178144107943e-227;
+        case 6:
+            return 1.9467177638862437e-208;
+        case 7:
+            return 3.5910604374153675e-189;
+        case 8:
+            return 6.624337284222476e-170;
+        case 9:
+            return 1.221974545399842e-150;
+        case 10:
+            return 2.2541451703578456e-131;
+        case 11:
+            return 4.15816390625796e-112;
+        case 12:
+            return 7.670458539527698e-93;
+        case 13:
+            return 1.4149498560666738e-73;
+        case 14:
+            return 2.61012178719941e-54;
+        case 15:
+            return 4.81482486096809e-35;
+        case 16:
+            return 8.881784197001252e-16;
+        case 17:
+            return 16384.0;
+        case 18:
+            return 3.022314549036573e+23;
+        case 19:
+            return 5.575186299632656e+42;
+        case 20:
+            return 1.0284403483257538e+62;
+        case 21:
+            return 1.8971375900641885e+81;
+        case 22:
+            return 3.499601159652819e+100;
+        case 23:
+            return 6.455624695217272e+119;
+        case 24:
+            return 1.1908525658859223e+139;
+        case 25:
+            return 2.196735251241795e+158;
+        case 26:
+            return 4.052261297735345e+177;
+        case 27:
+            return 7.475102707912205e+196;
+        case 28:
+            return 1.3789130657754968e+216;
+        case 29:
+            return 2.5436456424254815e+235;
+        case 30:
+            return 4.692198018002938e+254;
+        case 31:
+            return 8.65557759812674e+273;
+        default:
+            return 1.0;
+    }
+}
+
+func fp_scale_f64(significand u64, exponent i64) f64 {
+    let index = exponent + 1074;
+    let high = fp_pow2_high(index / 64);
+    // The low six bits are a power of two below 2^64, so an integer shift
+    // builds the exact factor without a second switch or data-dependent loop.
+    let low = f64(u64(1) << u64(index % 64));
+    return f64(significand) * high * low;
+}
+
+func fp_scale_f32(significand u64, exponent i64) f32 {
+    let index = exponent + 1074;
+    let high = fp_pow2_high(index / 64);
+    let low = f64(u64(1) << u64(index % 64));
+    // The exact f64 value of every f32 result is representable, so this
+    // conversion cannot introduce a second rounding.
+    return f32(f64(significand) * high * low);
+}
+func fp_make_nan_f64(negative bool) f64 {
+    if negative {
+        return FP_NEGATIVE_NAN_F64;
+    }
+    return FP_NAN_F64;
+}
+
+func fp_make_nan_f32(negative bool) f32 {
+    if negative {
+        return FP_NEGATIVE_NAN_F32;
+    }
+    return FP_NAN_F32;
+}
+
+func fp_make_infinity_f64(negative bool) f64 {
+    let positive f64 = 1e9999;
+    if negative {
+        return -positive;
+    }
+    return positive;
+}
+
+func fp_make_infinity_f32(negative bool) f32 {
+    let positive f32 = 1e9999;
+    if negative {
+        return -positive;
+    }
+    return positive;
+}
+
+func wz_parse_f64(value string) f64 throws Error {
+    // Legal decimal float spellings, including inf/nan, are ASCII. Rejecting
+    // any other string up front keeps every data[index] below an O(1) byte
+    // read; otherwise a long ASCII prefix followed by a non-ASCII byte could
+    // make the exact scan decode from the string start on every index.
+    if text.byte_len(value) != text.len(value) {
+        throw Error.InvalidSyntax;
+    }
+    let data = text.bytes(value);
+    let scanned = fp_scan_float(data);
+    if !scanned.valid {
+        throw Error.InvalidSyntax;
+    }
+    if scanned.kind == FP_KIND_NAN {
+        return fp_make_nan_f64(scanned.negative);
+    }
+    if scanned.kind == FP_KIND_INFINITY {
+        return fp_make_infinity_f64(scanned.negative);
+    }
+    if scanned.zero {
+        if scanned.negative {
+            return -0.0;
+        }
+        return 0.0;
+    }
+    let fast = fp_try_clinger(scanned, 64);
+    if fast.ok {
+        return fast.value;
+    }
+    let approximate = fp_try_eisel_lemire(scanned, 64);
+    if approximate.ok {
+        if approximate.number.kind == FP_KIND_INFINITY {
+            throw Error.OutOfRange;
+        }
+        if approximate.number.significand == 0 {
+            if approximate.number.negative {
+                return -0.0;
+            }
+            return 0.0;
+        }
+        let magnitude = fp_scale_f64(approximate.number.significand,
+            approximate.number.exponent);
+        if approximate.number.negative {
+            return -magnitude;
+        }
+        return magnitude;
+    }
+    let parsed = fp_exact_from_scan(data, scanned, 64);
+    if parsed.significand == 0 {
+        if parsed.negative {
+            return -0.0;
+        }
+        return 0.0;
+    }
+    let magnitude = fp_scale_f64(parsed.significand, parsed.exponent);
+    if parsed.negative {
+        return -magnitude;
+    }
+    return magnitude;
+}
+
+func wz_parse_f32(value string) f32 throws Error {
+    // Legal decimal float spellings, including inf/nan, are ASCII. Rejecting
+    // any other string up front keeps every data[index] below an O(1) byte
+    // read; otherwise a long ASCII prefix followed by a non-ASCII byte could
+    // make the exact scan decode from the string start on every index.
+    if text.byte_len(value) != text.len(value) {
+        throw Error.InvalidSyntax;
+    }
+    let data = text.bytes(value);
+    let scanned = fp_scan_float(data);
+    if !scanned.valid {
+        throw Error.InvalidSyntax;
+    }
+    if scanned.kind == FP_KIND_NAN {
+        return fp_make_nan_f32(scanned.negative);
+    }
+    if scanned.kind == FP_KIND_INFINITY {
+        return fp_make_infinity_f32(scanned.negative);
+    }
+    if scanned.zero {
+        if scanned.negative {
+            return -0.0;
+        }
+        return 0.0;
+    }
+    let fast = fp_try_clinger(scanned, 32);
+    if fast.ok {
+        return f32(fast.value);
+    }
+    let approximate = fp_try_eisel_lemire(scanned, 32);
+    if approximate.ok {
+        if approximate.number.kind == FP_KIND_INFINITY {
+            throw Error.OutOfRange;
+        }
+        if approximate.number.significand == 0 {
+            if approximate.number.negative {
+                return -0.0;
+            }
+            return 0.0;
+        }
+        let magnitude = fp_scale_f32(approximate.number.significand,
+            approximate.number.exponent);
+        if approximate.number.negative {
+            return -magnitude;
+        }
+        return magnitude;
+    }
+    let parsed = fp_exact_from_scan(data, scanned, 32);
+    if parsed.significand == 0 {
+        if parsed.negative {
+            return -0.0;
+        }
+        return 0.0;
+    }
+    let magnitude = fp_scale_f32(parsed.significand, parsed.exponent);
+    if parsed.negative {
+        return -magnitude;
+    }
+    return magnitude;
+}
