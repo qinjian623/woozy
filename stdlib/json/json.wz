@@ -555,9 +555,7 @@ func write_number(out Vec[u8], token string) Unit throws Error {
         valid = false;
     }
     if !valid { throw Error.InvalidNumber; }
-    for var index usize = 0; index < count; index += 1 {
-        vec.push(out, bytes[index]);
-    }
+    vec.extend(out, bytes);
 }
 
 func write_hex_digit(out Vec[u8], digit u8) {
