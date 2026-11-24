@@ -216,6 +216,13 @@ func check_count() i32 {
         if text.count(value,"a") != 9+tail { return 316; }
         if text.count(value,"\0") != 9 { return 317; }
     }
+    let scalars = "中\0\u{7f}\u{80}😀\u{10ffff}\0\u{80}\u{10ffff}";
+    if text.count(scalars,"\0") != 2 ||
+        text.count(scalars,"\u{7f}") != 1 ||
+        text.count(scalars,"\u{80}") != 2 ||
+        text.count(scalars,"\u{10ffff}") != 2 ||
+        text.count(scalars,"\u{81}") != 0 ||
+        text.count("","\u{10ffff}") != 0 { return 318; }
     return 0;
 }
 
@@ -595,6 +602,23 @@ func check_long_inputs() i32 {
     if !same_strings(text.split_n(ascii, nearly, 3), [ascii]) { return 914; }
     if !some_u(text.find_last(ascii + "b", nearly), 10000) { return 915; }
     if !some_u(text.find_last("中😀中😀中", "中😀中"), 2) { return 916; }
+
+    // Repeated prefixes require bounded work on a miss regardless of the
+    // starting point, separator length, or the backend's character width.
+    let periodic = text.repeat("中😀",12000);
+    let separator = text.repeat("中😀",5000)+"\0";
+    if !none_u(text.find_from(periodic,separator,19)) ||
+        !none_u(text.find_last(periodic,separator)) ||
+        text.count(periodic,separator) != 0 ||
+        !same_strings(text.split(periodic,separator),[periodic]) { return 917; }
+    if !some_u(text.find_from(periodic+"\0",separator,19),14000) {
+        return 918;
+    }
+    let borrowed_pieces = text.split("前é"+separator+"\0後",separator);
+    if !same_strings(borrowed_pieces,["前é","\0後"]) ||
+        text.len(borrowed_pieces[1]) != 2 || borrowed_pieces[1][1] != 0x5f8c {
+        return 919;
+    }
     return 0;
 }
 

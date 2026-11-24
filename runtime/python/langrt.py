@@ -1702,6 +1702,13 @@ def _math_call(name, args):
         return math.inf
 
 
+def _text_cursor_slice(value, start, end):
+    # Python's native string offsets already count Unicode code points.
+    if not 0 <= start <= end <= len(value):
+        raise Panic('String slice out of bounds')
+    return value[start:end]
+
+
 def value_call(operation, args, element=None, tags=None, weak_box=False):
     try:
         if operation.startswith('math_'):
@@ -1725,10 +1732,26 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             if count < 0:
                 raise Panic('String slice out of bounds')
             end = start + count
-            if not 0 <= start <= end <= len(value):
-                raise Panic('String slice out of bounds')
+            part = _text_cursor_slice(value, start, end)
             cursor.items[0] = end
-            return value[start:end]
+            return part
+        if operation == 'text_cursor_at':
+            value, index = args
+            if not 0 <= index <= len(value):
+                raise Panic('String slice out of bounds')
+            return index
+        if operation == 'text_cursor_read':
+            value, index = args
+            if not 0 <= index < len(value):
+                raise Panic('Index out of bounds')
+            return (ord(value[index]) << 32) | 1
+        if operation == 'text_cursor_slice':
+            return _text_cursor_slice(*args)
+        if operation == 'text_count_rune':
+            value, rune = args
+            if not 0 <= rune <= 0x10ffff or 0xd800 <= rune <= 0xdfff:
+                raise Panic('Invalid Unicode scalar')
+            return str.count(value, chr(rune))
         if operation == 'text_len': return len(args[0])
         if operation == 'text_byte_len': return len(args[0].encode('utf-8'))
         if operation == 'text_from_bytes':
@@ -1743,10 +1766,6 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             return tags['Ok'], (chr(rune),)
         if operation == 'text_bytes':
             return Vec.create(element, args[0].encode('utf-8'))
-        # Python text has no persistent UTF-8 byte buffer. Let Woozy use its
-        # byte-scan fallback, which encodes input once per count.
-        if operation == 'text_load8':
-            return tags['None'], ()
         if operation == 'vec_empty': return Vec.create(element, [])
         if operation == 'vec_make':
             result = Vec.create(element, [])

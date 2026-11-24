@@ -103,6 +103,31 @@ uint64_t cursor_value(const LangVec *cursor) {
       const_cast<LangVec *>(cursor), 0));
 }
 
+void expect_text_cursor() {
+  auto text = make(encode({0x61, 0xe9, 0x4e2d, 0x1f600, 0x00}));
+  const auto first = lang_text_cursor_at_v1(&text, 1);
+  const auto middle = lang_text_cursor_at_v1(&text, 2);
+  const auto end = lang_text_cursor_at_v1(&text, text.length);
+  need(first == 1 && middle == 3 && end == text.bytes,
+       "cursor positions respect multibyte code points");
+  need(lang_text_cursor_read_v1(&text, middle) == (uint64_t{0x4e2d} << 32 | 3),
+       "cursor read reports scalar and byte advance");
+  need(lang_text_cursor_read_v1(&text, end - 1) == 1,
+       "cursor read preserves embedded NUL");
+
+  LangText tail{}, empty{};
+  lang_text_cursor_slice_v1(&tail, &text, first, end);
+  lang_text_cursor_slice_v1(&empty, &text, end, end);
+  need(tail.data == text.data + first && tail.owner == text.owner &&
+           tail.length == 4 && tail.bytes == end - first,
+       "cursor slice retains original storage and counts code points");
+  need(empty.length == 0 && !empty.owner, "empty cursor slice owns nothing");
+  drop(text);
+  need(bytes(tail) == encode({0xe9, 0x4e2d, 0x1f600, 0x00}),
+       "cursor slice outlives the source descriptor");
+  drop(tail);
+}
+
 void expect_text_take() {
   const std::string input = encode({0x61, 0x4e2d, 0x1f600, 0x65, 0x301});
   auto text = make(input);
@@ -210,6 +235,7 @@ int main() {
     expect_boundaries(std::string("A\0B", 3), {0, 1, 2, 3},
                       "embedded NUL has ordinary control boundaries");
     expect_boundaries("", {0}, "empty grapheme boundaries");
+    expect_text_cursor();
     expect_text_take();
 
     const std::string nul_input("A\0B", 3);

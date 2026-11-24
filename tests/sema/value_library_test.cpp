@@ -104,6 +104,8 @@ func main() i32 throws text.Error {
     let rune = text.from_rune(0x1f600);
     let codepoints = text.len(decoded);
     let byte_count = text.byte_len(decoded);
+    let chunks = text.split(decoded,"中");
+    let occurrences = text.count(decoded,"中");
     let result_value = result.Result[string,i32].Ok(decoded);
     switch result_value {
         case result.Result.Ok(value): { let kept = value; }

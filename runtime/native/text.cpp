@@ -100,6 +100,16 @@ void output(LangText *out, LangText result, const LangText *a,
   *out = result;
   if (old) lang_handle_release_v1(old);
 }
+bool cursor_boundary(const LangText &text, uint64_t offset) noexcept {
+  return offset <= text.bytes &&
+      (offset == text.bytes || (text.data[offset] & 0xc0) != 0x80);
+}
+LangText cursor_view(const LangText &text, uint64_t start, uint64_t end,
+                     uint64_t length) noexcept {
+  if (start == end) return {};
+  if (text.owner) lang_handle_retain_v1(text.owner);
+  return {text.data + start, end - start, length, text.owner};
+}
 } // namespace
 
 extern "C" void lang_text_concat_v1(LangText *out, const LangText *a,
@@ -142,13 +152,55 @@ extern "C" void lang_text_slice_v1(LangText *out, const LangText *text,
                                     uint64_t start, uint64_t end) noexcept {
   if (!out || !text) panic(10);
   if (start > end || end > text->length) panic(9);
-  LangText result{};
-  if (start != end) {
-    const auto first = offset_for(*text, start), last = offset_for(*text, end);
-    result = {text->data + first, last - first, end - start, text->owner};
-    if (result.owner) lang_handle_retain_v1(result.owner);
+  if (start == end) return output(out, {}, text);
+  const auto first = offset_for(*text, start), last = offset_for(*text, end);
+  output(out, cursor_view(*text, first, last, end - start), text);
+}
+extern "C" uint64_t lang_text_cursor_at_v1(const LangText *text,
+                                            uint64_t index) noexcept {
+  if (!text) panic(10);
+  if (index > text->length) panic(9);
+  return offset_for(*text, index);
+}
+extern "C" uint64_t lang_text_cursor_read_v1(const LangText *text,
+                                              uint64_t cursor) noexcept {
+  if (!text) panic(10);
+  if (cursor >= text->bytes) panic(4);
+  uint32_t rune;
+  auto next = cursor;
+  if (!decode(text->data, text->bytes, next, rune)) panic(4);
+  return (static_cast<uint64_t>(rune) << 32) | (next - cursor);
+}
+extern "C" void lang_text_cursor_slice_v1(LangText *out, const LangText *text,
+                                           uint64_t start, uint64_t end) noexcept {
+  if (!out || !text) panic(10);
+  if (start > end || !cursor_boundary(*text, start) ||
+      !cursor_boundary(*text, end)) panic(9);
+  uint64_t length = end - start;
+  if (text->bytes != text->length) {
+    // The source is already validated UTF-8. Count leading bytes to form an
+    // exact descriptor without revalidating or copying the substring.
+    for (auto offset = start; offset < end; ++offset)
+      length -= (text->data[offset] & 0xc0) == 0x80;
   }
-  output(out, result, text);
+  output(out, cursor_view(*text, start, end, length), text);
+}
+extern "C" uint64_t lang_text_count_rune_v1(const LangText *text,
+                                              uint32_t rune) noexcept {
+  if (!text || !scalar(rune)) panic(10);
+  uint64_t matches = 0;
+  if (rune < 0x80) {
+    // An ASCII byte can only represent a complete scalar in valid UTF-8.
+    for (uint64_t offset = 0; offset < text->bytes; ++offset)
+      matches += text->data[offset] == static_cast<uint8_t>(rune);
+  } else {
+    for (uint64_t offset = 0; offset < text->bytes;) {
+      uint32_t current;
+      if (!decode(text->data, text->bytes, offset, current)) panic(10);
+      matches += current == rune;
+    }
+  }
+  return matches;
 }
 extern "C" void lang_unicode_text_take_v1(LangText *out, const LangText *text,
                                            LangVec *cursor, uint64_t count) noexcept {
@@ -157,26 +209,21 @@ extern "C" void lang_unicode_text_take_v1(LangText *out, const LangText *text,
       cursor->initialized != 1 || !cursor->data) panic(10);
   auto *state = static_cast<uint64_t *>(cursor->data);
   const uint64_t start = *state;
-  LangText result{};
   uint64_t end = start;
   if (text->bytes == text->length) {
     // ASCII: code-point and byte offsets coincide.
     if (start > text->length || count > text->length - start) panic(9);
     end = start + count;
   } else {
-    if (start > text->bytes) panic(9);
+    if (!cursor_boundary(*text, start)) panic(9);
     for (uint64_t i = 0; i < count; ++i) {
       if (end >= text->bytes) panic(9);
       uint32_t rune;
       if (!decode(text->data, text->bytes, end, rune)) panic(10);
     }
   }
-  if (end != start) {
-    result = {text->data + start, end - start, count, text->owner};
-    if (result.owner) lang_handle_retain_v1(result.owner);
-    *state = end;
-  }
-  output(out, result, text);
+  *state = end;
+  output(out, cursor_view(*text, start, end, count), text);
 }
 extern "C" int64_t lang_text_from_utf8_v1(LangText *out,
                                             const uint8_t *data,

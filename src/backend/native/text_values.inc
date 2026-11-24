@@ -55,27 +55,21 @@
       return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
     case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
-    case SystemOperation::text_load8: {
-      auto *bytes = builder.CreateExtractValue(args[0], {1});
-      auto *offset = args[1];
-      auto *present = builder.CreateAnd(
-          builder.CreateICmpUGE(bytes, builder.getInt64(8)),
-          builder.CreateICmpULE(offset, builder.CreateSub(bytes, builder.getInt64(8))));
-      return stdlib_option(i.type, present, [&]() -> llvm::Value * {
-        auto *data = builder.CreateExtractValue(args[0], {0});
-        auto *address = builder.CreateGEP(builder.getInt8Ty(), data, offset);
-        auto *load = builder.CreateLoad(builder.getInt64Ty(), address);
-        load->setAlignment(llvm::Align(1));
-        return load;
-      });
-    }
+    case SystemOperation::text_cursor_at:
+      return runtime("lang_text_cursor_at_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_read:
+      return runtime("lang_text_cursor_read_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_count_rune:
+      return runtime("lang_text_count_rune_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_bytes:
       return runtime("lang_text_bytes_v1", builder.getPtrTy(), {pointer(0)});
+    case SystemOperation::text_cursor_slice:
     case SystemOperation::unicode_text_take: {
       auto *out = storage(lower_type(i.type));
       start_lifetime(out);
-      runtime("lang_unicode_text_take_v1", builder.getVoidTy(),
-              {out, pointer(0), args[1], args[2]});
+      runtime(*i.system == SystemOperation::text_cursor_slice
+                  ? "lang_text_cursor_slice_v1" : "lang_unicode_text_take_v1",
+              builder.getVoidTy(), {out, pointer(0), args[1], args[2]});
       auto *loaded = builder.CreateLoad(lower_type(i.type), out);
       end_lifetime(out);
       return loaded;

@@ -30,10 +30,10 @@ MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. 216-227 are reserved for
-# independent pending operations.
-EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229, 230, 231, 232)
+# independent pending operations, and 230 was retired.
+EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229, 231, 232, 233, 234, 235, 236)
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
-NEW_OPERATIONS = (213, 214, 215, 228, 229, 230, 231, 232)
+NEW_OPERATIONS = (213, 214, 215, 228, 229, 231, 232, 233, 234, 235, 236)
 
 
 def fail(message: str) -> None:
@@ -187,12 +187,18 @@ def validate_registry_entries() -> None:
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
         229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
               '"bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},'),
-        230: ('{SystemOperation::text_load8, "__woozy_text_load8", '
-              '"Option[u64]", {"string", "usize"}, 2, "std/text"},'),
         231: ('{SystemOperation::heap_pin_begin, "__woozy_heap_pin_begin", '
               '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
         232: ('{SystemOperation::heap_pin_end, "__woozy_heap_pin_end", '
               '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
+        233: ('{SystemOperation::text_cursor_at, "__woozy_text_cursor_at", '
+              '"u64", {"string", "usize"}, 2, "std/text"},'),
+        234: ('{SystemOperation::text_cursor_read, "__woozy_text_cursor_read", '
+              '"u64", {"string", "u64"}, 2, "std/text"},'),
+        235: ('{SystemOperation::text_cursor_slice, "__woozy_text_cursor_slice", '
+              '"string", {"string", "u64", "u64"}, 3, "std/text"},'),
+        236: ('{SystemOperation::text_count_rune, "__woozy_text_count_rune", '
+              '"usize", {"string", "u32"}, 2, "std/text"},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -210,15 +216,24 @@ def validate_registry_entries() -> None:
         229: ('OperationSpec(operation: 229, name: "__woozy_vec_try_move_trivial", '
               'result: "bool", parameters: ["Vec[A]", "usize", "usize", "usize"], '
               'owner: "std/vec", type_arity: 1)'),
-        230: ('OperationSpec(operation: 230, name: "__woozy_text_load8", '
-              'result: "Option[u64]", parameters: ["string", "usize"], '
-              'owner: "std/text", type_arity: 0)'),
         231: ('OperationSpec(operation: 231, name: "__woozy_heap_pin_begin", '
               'result: "Unit", parameters: ["Vec[A]"], '
               'owner: "std/heap", type_arity: 1)'),
         232: ('OperationSpec(operation: 232, name: "__woozy_heap_pin_end", '
               'result: "Unit", parameters: ["Vec[A]"], '
               'owner: "std/heap", type_arity: 1)'),
+        233: ('OperationSpec(operation: 233, name: "__woozy_text_cursor_at", '
+              'result: "u64", parameters: ["string", "usize"], '
+              'owner: "std/text", type_arity: 0)'),
+        234: ('OperationSpec(operation: 234, name: "__woozy_text_cursor_read", '
+              'result: "u64", parameters: ["string", "u64"], '
+              'owner: "std/text", type_arity: 0)'),
+        235: ('OperationSpec(operation: 235, name: "__woozy_text_cursor_slice", '
+              'result: "string", parameters: ["string", "u64", "u64"], '
+              'owner: "std/text", type_arity: 0)'),
+        236: ('OperationSpec(operation: 236, name: "__woozy_text_count_rune", '
+              'result: "usize", parameters: ["string", "u32"], '
+              'owner: "std/text", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:
@@ -255,7 +270,7 @@ def validate_oracle(output: str) -> None:
                           if line.split()[1] == f"op.{operation}.none"), "")
         if not module_line.startswith(f"case op.{operation}.module ok "):
             fail(f"oracle: missing successful module case for op.{operation}")
-        if operation in (215, 228, 229, 231, 232):
+        if operation in (215, 228, 229, 231, 232, 233, 234, 235, 236):
             # These signatures contain only builtin types, so no module is
             # required for either spelling.
             if none_line != module_line.replace(".module ", ".none ", 1):
