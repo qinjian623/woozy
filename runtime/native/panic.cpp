@@ -492,6 +492,19 @@ extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {
   if (start > end || end > v->length) vec_panic(9);
   auto *result = lang_vec_new_v1(end-start, v->stride, v->copy, v->drop);
+  const uint64_t count = end - start;
+  // Trivial slices have no element callback, so one overlap-safe byte move can
+  // replace the per-element loop. A non-empty source range still has to stop at
+  // the initialized prefix exactly where lang_vec_at_v1 would panic; empty
+  // ranges read nothing even when start is past that prefix.
+  if (!has_owner_ops(v) && (count == 0 || end <= v->initialized)) {
+    if (count) {
+      const uint64_t bytes = checked_payload_bytes(count, v->stride);
+      copy_bytes(result->data, element(v, start), bytes);
+      result->initialized = count;
+    }
+    return result;
+  }
   // A copy callback may call arbitrary C retain code. Snapshot and retain each
   // source element before publishing the complete result prefix after all
   // callback work. Pin the source only when that callback exists, so a
