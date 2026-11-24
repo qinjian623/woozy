@@ -103,18 +103,16 @@ pub func read_line_bytes(input Reader) option.Option[Vec[u8]] throws os.Error {
     input.cursor[0] = limit;
     try {
         for refill(input) {
-            var index = input.cursor[0];
+            let begin = input.cursor[0];
             let end = input.cursor[1];
-            for index < end {
-                let byte = input.buffer[index];
-                index += 1;
-                if byte == 10 {
-                    input.cursor[0] = index;
-                    let length = vec.len(out);
-                    if length > 0 && out[length-1] == 13 { let removed=vec.pop(out); }
-                    return option.Option[Vec[u8]].Some(out);
-                }
-                vec.push(out,byte);
+            var index = begin;
+            for index < end && input.buffer[index] != 10 { index += 1; }
+            __woozy_io_vec_append_bytes(out,input.buffer,begin,index-begin);
+            if index != end {
+                input.cursor[0] = index + 1;
+                let length = vec.len(out);
+                if length > 0 && out[length-1] == 13 { let removed=vec.pop(out); }
+                return option.Option[Vec[u8]].Some(out);
             }
             input.cursor[0] = end;
         }

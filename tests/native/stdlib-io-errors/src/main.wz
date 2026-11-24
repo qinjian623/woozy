@@ -68,6 +68,31 @@ func lines() i32 throws os.Error {
     os.close(long_pipe.write_end);
     return 0;
 }
+func boundary_lines() i32 throws os.Error {
+    // CR occupies the last byte of the first refill. Its LF is the first
+    // byte of the next refill, so that chunk contributes no line bytes.
+    let first = text.repeat("a",4095);
+    let last = text.repeat("b",8192) + "\r";
+    fs.write_text("boundary-lines",first+"\r\nNEXT\r\n"+last,0o600);
+    let file = os.open("boundary-lines",os.O_RDONLY|os.O_CLOEXEC,0);
+    defer { try { os.close(file); } catch error os.Error {} }
+    let input = io.reader(file);
+    let alias = input;
+    switch io.read_line(input) {
+        case option.Option.Some(line): if line != first { return 30; }
+        case option.Option.None: return 31;
+    }
+    switch io.read_line(alias) {
+        case option.Option.Some(line): if line != "NEXT" { return 32; }
+        case option.Option.None: return 33;
+    }
+    switch io.read_line(input) {
+        case option.Option.Some(line): if line != last { return 34; }
+        case option.Option.None: return 35;
+    }
+    if option.is_some(io.read_line_bytes(alias)) { return 36; }
+    return 0;
+}
 struct FifoInput { name string; data string; }
 func fifo_writer(input FifoInput) i64 {
     try {
@@ -114,6 +139,8 @@ func main() i32 {
     try {
         let file_status = files();
         if file_status != 0 { return file_status; }
-        return lines();
+        let line_status = lines();
+        if line_status != 0 { return line_status; }
+        return boundary_lines();
     } catch error os.Error { return 90; }
 }
