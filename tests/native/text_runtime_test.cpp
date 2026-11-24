@@ -143,6 +143,9 @@ void values() {
     LangText encoded;
     need(lang_text_from_rune_v1(&encoded, rune) == 0 && encoded.length == 1 &&
              lang_text_at_v1(&encoded, 0) == rune, "rune roundtrip differs");
+    need(lang_text_cursor_read_back_v1(&encoded, encoded.bytes) ==
+             ((static_cast<uint64_t>(rune) << 32) | encoded.bytes),
+         "backward cursor differs at a UTF-8 width boundary");
     equal_bytes(encoded, encodings[position++]);
     for (auto other : edges) {
       LangText right;
@@ -229,6 +232,12 @@ void failures() {
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 0);});
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 2);});
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, value.bytes+1);});
+  for (const auto &invalid : std::vector<std::vector<uint8_t>>{
+           {0xc2}, {0x80}, {'A',0x80}, {0xc0,0x80}, {0xe0,0x9f,0xbf},
+           {0xed,0xa0,0x80}, {0xf4,0x90,0x80,0x80}, {0xf8,0x80,0x80,0x80,0x80}}) {
+    LangText malformed{invalid.data(), invalid.size(), 1, nullptr};
+    panic("vec-index", [&]{lang_text_cursor_read_back_v1(&malformed, malformed.bytes);});
+  }
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,3,2);});
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,0,8);});
   panic("allocation-size-overflow", [&]{

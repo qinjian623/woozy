@@ -74,10 +74,9 @@ func match_rune(pattern Vec[u32], fallback Vec[usize], matched usize, rune u32) 
     }
 }
 
-// Save the position just past the last match. After an overlapping match,
-// its longest proper border can begin the next one.
+// Save the position just past the last non-overlapping match.
 func scan_matches(value string, pattern Vec[u32], fallback Vec[usize],
-    cursor inout SearchCursor, limit usize, overlap bool) usize {
+    cursor inout SearchCursor, limit usize) usize {
     let length = len(value);
     let pattern_length = vec.len(pattern);
     var index = cursor.index;
@@ -95,7 +94,6 @@ func scan_matches(value string, pattern Vec[u32], fallback Vec[usize],
             total += 1;
             if total == limit { break; }
             matched = 0;
-            if overlap { matched = fallback[pattern_length-1]; }
         }
     }
     cursor = end;
@@ -123,7 +121,7 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
     let pattern = runes(needle);
     let fallback = match_table(pattern);
     var cursor = SearchCursor(offset:offset,index:start);
-    if scan_matches(value,pattern,fallback,inout cursor,1,false) != 0 {
+    if scan_matches(value,pattern,fallback,inout cursor,1) != 0 {
         return option.Option[usize].Some(cursor.index-needle_length);
     }
     return option.Option[usize].None;
@@ -285,11 +283,45 @@ pub func find_last(value string, needle string) option.Option[usize] {
     let needle_length = len(needle);
     if needle_length == 0 { return option.Option[usize].Some(length); }
     if needle_length > length { return option.Option[usize].None; }
-    let pattern = runes(needle);
+    var offset = __woozy_text_cursor_at(value,length);
+    var index = length;
+    var needle_cursor = __woozy_text_cursor_at(needle,needle_length);
+    let needle_end = needle_cursor;
+    var wanted = __woozy_text_cursor_read_back(needle,needle_cursor);
+    var matched usize = 0;
+    // Read the pattern directly until a partial match needs a fallback.
+    // Keep that mismatching input scalar for the KMP loop below.
+    for index != 0 {
+        let read = __woozy_text_cursor_read_back(value,offset);
+        if (read >> 32) == (wanted >> 32) {
+            matched += 1;
+            if matched == needle_length { return option.Option[usize].Some(index-1); }
+            needle_cursor -= wanted & CURSOR_STEP_MASK;
+            wanted = __woozy_text_cursor_read_back(needle,needle_cursor);
+        } else {
+            if matched != 0 { break; }
+        }
+        index -= 1;
+        offset -= read & CURSOR_STEP_MASK;
+    }
+    if index == 0 { return option.Option[usize].None; }
+    // The first match in reverse order is the last original occurrence,
+    // including when it overlaps an earlier occurrence.
+    let pattern = vec.empty[u32]();
+    vec.reserve(pattern,needle_length);
+    var cursor = needle_end;
+    for cursor != 0 {
+        let read = __woozy_text_cursor_read_back(needle,cursor);
+        vec.push(pattern,u32(read >> 32));
+        cursor -= read & CURSOR_STEP_MASK;
+    }
     let fallback = match_table(pattern);
-    var cursor = SearchCursor(offset:0,index:0);
-    if scan_matches(value,pattern,fallback,inout cursor,~usize(0),true) != 0 {
-        return option.Option[usize].Some(cursor.index-needle_length);
+    for index != 0 {
+        let read = __woozy_text_cursor_read_back(value,offset);
+        index -= 1;
+        matched = match_rune(pattern,fallback,matched,u32(read >> 32));
+        if matched == needle_length { return option.Option[usize].Some(index); }
+        offset -= read & CURSOR_STEP_MASK;
     }
     return option.Option[usize].None;
 }
@@ -304,7 +336,7 @@ pub func count(value string, needle string) usize {
     let pattern = runes(needle);
     let fallback = match_table(pattern);
     var cursor = SearchCursor(offset:0,index:0);
-    return scan_matches(value,pattern,fallback,inout cursor,~usize(0),false);
+    return scan_matches(value,pattern,fallback,inout cursor,~usize(0));
 }
 
 pub func split_n(value string, separator string, limit usize) Vec[string] {
@@ -344,7 +376,7 @@ pub func split_n(value string, separator string, limit usize) Vec[string] {
         let fallback = match_table(pattern);
         var cursor = SearchCursor(offset:0,index:0);
         for var pieces usize = 1; pieces < limit; pieces += 1 {
-            if scan_matches(value,pattern,fallback,inout cursor,1,false) == 0 { break; }
+            if scan_matches(value,pattern,fallback,inout cursor,1) == 0 { break; }
             vec.push(out,__woozy_text_cursor_slice(value,start,cursor.offset-width));
             start = cursor.offset;
         }

@@ -191,14 +191,26 @@ extern "C" uint64_t lang_text_cursor_read_back_v1(const LangText *text,
   if (!text) panic(10);
   if (!end || !cursor_boundary(*text, end)) panic(4);
   auto start = end - 1;
-  while ((text->data[start] & 0xc0) == 0x80) {
-    if (!start || end - start == 4) panic(4);
-    --start;
+  uint8_t lead = text->data[start];
+  if (lead < 0x80) return (static_cast<uint64_t>(lead) << 32) | 1;
+  uint32_t rune = 0;
+  uint32_t width = 1;
+  uint32_t shift = 0;
+  // Assemble continuation bytes as we find the lead instead of decoding them
+  // again forwards. The prefix and scalar checks still reject invalid UTF-8.
+  while ((lead & 0xc0) == 0x80) {
+    if (!start || width == 4) panic(4);
+    rune |= static_cast<uint32_t>(lead & 0x3f) << shift;
+    shift += 6;
+    ++width;
+    lead = text->data[--start];
   }
-  auto next = start;
-  uint32_t rune;
-  if (!decode(text->data, end, next, rune) || next != end) panic(4);
-  return (static_cast<uint64_t>(rune) << 32) | (end - start);
+  // Valid multibyte prefixes are 110, 1110 and 11110.
+  if (width == 1 || (lead >> (7 - width)) != (2u << width) - 2)
+    panic(4);
+  rune |= static_cast<uint32_t>(lead & (0x7fu >> width)) << shift;
+  if (!scalar(rune) || scalar_width(rune) != width) panic(4);
+  return (static_cast<uint64_t>(rune) << 32) | width;
 }
 extern "C" void lang_text_compact_v1(LangText *out, const LangText *text) noexcept {
   if (!out || !text) panic(10);

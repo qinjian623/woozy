@@ -421,6 +421,32 @@ func check_find_last() i32 {
     if !none_u(text.find_last("中😀", "😀中")) { return 212; }
     if !some_u(text.find_last("😀😀", "😀😀"), 0) { return 213; }
     if !some_u(text.find_last("x中y中z", "中"), 3) { return 214; }
+    let values = ["aé中😀aé中😀z", "aabaabaa", "aaaaa", "中\0中\0中", ""];
+    let needles = ["aé中😀", "😀z", "aabaa", "aaa", "\0中", "中\0中", "中x", ""];
+    for value in values {
+        let wrapped = "界" + value + "😀";
+        let view = wrapped[1:text.len(wrapped)-1];
+        let length = text.len(view);
+        for needle in needles {
+            let width = text.len(needle);
+            var expected = option.Option[usize].None;
+            if width <= length {
+                for var start usize = 0; start <= length-width; start += 1 {
+                    if view[start:start+width] == needle {
+                        expected = option.Option[usize].Some(start);
+                    }
+                }
+            }
+            switch expected {
+                case option.Option.Some(start): {
+                    if !some_u(text.find_last(view,needle),start) { return 215; }
+                }
+                case option.Option.None: {
+                    if !none_u(text.find_last(view,needle)) { return 216; }
+                }
+            }
+        }
+    }
     return 0;
 }
 
