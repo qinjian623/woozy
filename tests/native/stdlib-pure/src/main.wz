@@ -57,7 +57,8 @@ func main() i32 throws strconv.Error {
        math.isnan(subnormal) || math.isinf(subnormal) || !math.isfinite(subnormal) ||
        !math.isfinite(-0.0) { return 28; }
     let tiny = math.frexp(-subnormal);
-    let boundary = math.frexp(strconv.parse_f64("2.225073858507201e-308"));
+    let boundary_value = strconv.parse_f64("2.225073858507201e-308");
+    let boundary = math.frexp(boundary_value);
     if tiny.fraction != -0.5 || tiny.exponent != -1073 ||
        boundary.fraction != 0.9999999999999998 || boundary.exponent != -1022 { return 29; }
     let zero = math.frexp(-0.0);
@@ -67,6 +68,24 @@ func main() i32 throws strconv.Error {
        unbounded.fraction != infinity || unbounded.exponent != 0 ||
        !math.isnan(invalid.fraction) || !math.signbit(invalid.fraction) ||
        invalid.exponent != 0 { return 30; }
+    if math.trunc(2.9) != 2.0 || math.trunc(-2.9) != -2.0 ||
+       math.trunc(0.9999999999999999) != 0.0 ||
+       !math.signbit(math.trunc(-0.9999999999999999)) { return 32; }
+    if !math.signbit(math.trunc(-subnormal)) || math.signbit(math.trunc(subnormal)) ||
+       math.trunc(-0.0) != 0.0 || !math.signbit(math.trunc(-0.0)) ||
+       !math.signbit(math.trunc(-boundary_value)) { return 33; }
+    let two52 = math.ldexp(1.0, 52);
+    if math.trunc(two52 - 0.5) != two52 - 1.0 ||
+       math.trunc(-(two52 - 0.5)) != -(two52 - 1.0) ||
+       math.trunc(two52) != two52 ||
+       math.trunc(two52 + 1.0) != two52 + 1.0 { return 34; }
+    if math.trunc(infinity) != infinity || math.trunc(-infinity) != -infinity ||
+       !math.isnan(math.trunc(positive_nan)) ||
+       !math.isnan(math.trunc(negative_nan)) ||
+       !math.signbit(math.trunc(negative_nan)) { return 35; }
+    if math.trunc(max) != max || math.trunc(boundary_value) != 0.0 ||
+       math.trunc(1.0) != 1.0 || math.trunc(-1.0) != -1.0 ||
+       math.trunc(1.9999999999999998) != 1.0 { return 36; }
     if strconv.parse_f64("1.7976931348623158e308") != max { return 23; }
     let long_non_ascii = text.repeat("0", 16384) + "é";
     try {
