@@ -425,11 +425,10 @@ func erase[K hash.Hash](values Set[K], cells Vec[Slot[K]], header Header, positi
     );
 }
 
-func remove_slow[K hash.Hash](values Set[K], key K, header Header, home usize, attempt usize) bool {
+func remove_slow[K hash.Hash](values Set[K], cells Vec[Slot[K]], key K, header Header, home usize, attempt usize) bool {
     if attempt >= MAX_RESTARTS {
         return false;
     }
-    let cells = values.table[0];
     let found_at = probe(cells, key, header, home);
     if values.meta[0].generation != header.generation {
         return remove_retry(values, key, attempt + 1);
@@ -437,7 +436,9 @@ func remove_slow[K hash.Hash](values Set[K], key K, header Header, home usize, a
     if found_at == NO_POSITION {
         return false;
     }
-    erase(values, cells, values.meta[0], found_at);
+    // The generation check proved no metadata write happened, so header still
+    // describes the table that cells points at.
+    erase(values, cells, header, found_at);
     return true;
 }
 
@@ -462,19 +463,20 @@ pub func remove[K hash.Hash](values Set[K], key K) bool {
                     return remove_retry(values, key, 1);
                 }
                 if equal {
-                    let current = values.meta[0];
+                    // The generation check above proves header still names the
+                    // published table, so reuse it for the erase.
                     cells[position] = Slot[K].Tomb;
                     values.meta[0] = Header(
-                        size: current.size - 1,
-                        capacity: current.capacity,
-                        generation: current.generation + 1,
+                        size: header.size - 1,
+                        capacity: header.capacity,
+                        generation: header.generation + 1,
                     );
                     return true;
                 }
-                return remove_slow(values, key, header, home, 1);
+                return remove_slow(values, cells, key, header, home, 1);
             }
         case Slot.Tomb:
-            return remove_slow(values, key, header, home, 1);
+            return remove_slow(values, cells, key, header, home, 1);
     }
 }
 
@@ -500,13 +502,13 @@ func remove_retry[K hash.Hash](values Set[K], key K, attempt usize) bool {
                     return remove_retry(values, key, attempt + 1);
                 }
                 if equal {
-                    erase(values, cells, values.meta[0], position);
+                    erase(values, cells, header, position);
                     return true;
                 }
-                return remove_slow(values, key, header, home, attempt + 1);
+                return remove_slow(values, cells, key, header, home, attempt + 1);
             }
         case Slot.Tomb:
-            return remove_slow(values, key, header, home, attempt + 1);
+            return remove_slow(values, cells, key, header, home, attempt + 1);
     }
 }
 
