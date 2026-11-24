@@ -801,11 +801,12 @@ class Analysis {
   // borrow, or rebind that binding. The binding owns the Vec through the full
   // expression, so the old receiver copy was only an extra non-final handle.
   // Parameters keep their separate rule; fields, computed receivers, other
-  // owning elements and impure indexes stay on the copy path.
+  // owning elements and impure indexes stay on the copy path. Reads can also
+  // borrow pattern and loop bindings, which have no declaration node.
   bool local_index_borrow(HirNodeId receiver, HirNodeId index,
-                          bool allow_vec_element) const {
+                          bool reading) const {
     const auto *read = std::get_if<Read>(&n(receiver).data);
-    if (!read || !declarations.count(read->symbol.value) ||
+    if (!read || (!reading && !declarations.count(read->symbol.value)) ||
         parameter_symbols.count(read->symbol.value))
       return false;
     auto local = locals.find(read->symbol.value);
@@ -820,7 +821,7 @@ class Analysis {
     if (contains_type_parameter(m, element))
       return false;
     if (owned(element) &&
-        !(allow_vec_element && ty(m, element).kind == TypeKind::Vec))
+        !(reading && ty(m, element).kind == TypeKind::Vec))
       return false;
     return pure_integer_index(index);
   }
@@ -828,9 +829,9 @@ class Analysis {
   // Shared read/write gate: a plain local trivial-element Vec receiver may
   // borrow its binding handle for this complete full expression.
   bool local_index_can_borrow(HirNodeId receiver, HirNodeId index,
-                              SymbolId root, bool allow_vec_element) {
+                              SymbolId root, bool reading) {
     return full_expression_root &&
-           local_index_borrow(receiver, index, allow_vec_element) &&
+           local_index_borrow(receiver, index, reading) &&
            !full_effects().count(root.value);
   }
 

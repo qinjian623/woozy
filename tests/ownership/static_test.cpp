@@ -1607,6 +1607,37 @@ void local_index_borrow_tests() {
     }
   }
   need(owning_checked, "owning element index read missing");
+
+  auto pattern_receiver = accepted(
+      "enum E {A(v Vec[i32]);B;} func f() i32 {switch E.A([1]) "
+      "{case E.A(v):return v[0];case E.B:return 0;}}");
+  facts(pattern_receiver);
+  auto pattern_read = only_index_read(pattern_receiver, "f");
+  expect_use(pattern_read, UseKind::borrow, false,
+             "pattern binding index read");
+  need(pattern_read.reader && pattern_read.root &&
+           *pattern_read.root == *pattern_read.reader,
+       "pattern binding index read root is not its binding");
+  auto pattern_move = accepted(
+      "func take(v move Vec[i32]) i32{return 0;} enum E {A(v Vec[i32]);B;} "
+      "func f() i32 {switch E.A([1]) {case E.A(v):return v[0]+take(move v);"
+      "case E.B:return 0;}}");
+  facts(pattern_move);
+  expect_use(only_index_read(pattern_move, "f"), UseKind::copy, true,
+             "pattern binding read with same full-expression move");
+  auto pattern_place = accepted(
+      "enum E {A(v Vec[i32]);B;} func f() i32 {switch E.A([1]) "
+      "{case E.A(v):v[0]=2;return v[0];case E.B:return 0;}}");
+  facts(pattern_place);
+  expect_use(only_index_place(pattern_place, "f"), UseKind::copy, true,
+             "pattern binding index assignment keeps its receiver copy");
+  auto loop_receiver = accepted(
+      "func f() i32 {let rows Vec[Vec[i32]]=[[1]];"
+      "for row in rows {return row[0];}return 0;}");
+  facts(loop_receiver);
+  expect_use(only_index_read(loop_receiver, "f"), UseKind::borrow, false,
+             "loop binding index read");
+
   // A Vec[string] element read acquires an independent owner reference.
   auto string_element =
       accepted("func f() i32 {let v Vec[string]=[\"x\"];let s=v[0];return 0;}");
@@ -1678,8 +1709,8 @@ void local_index_borrow_tests() {
       "struct P {x i32;} func f() i32 {var v Vec[P]=[P(x:1)];var i i32=0;"
       "v[i+0].x=7;return v[0].x;}");
   facts(place_field);
-  expect_use(only_index_place(place_field, "f"), UseKind::copy, true,
-             "indexed field place keeps receiver copy");
+  expect_use(only_index_place(place_field, "f"), UseKind::borrow, false,
+             "indexed field place with pure RHS");
   auto place_owning = accepted(
       "func f() i32 {var v Vec[Vec[i32]]=[[1]];var i i32=0;v[i+0]=[2];return "
       "v[0][0];}");

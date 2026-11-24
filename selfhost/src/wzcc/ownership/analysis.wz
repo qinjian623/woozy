@@ -1176,7 +1176,7 @@ func binary_pure(op hir.BinaryOp) bool {
 }
 
 func local_index_borrow(analysis inout Analysis, receiver usize,
-                        index usize, allow_vec_element bool)
+                        index usize, reading bool)
     bool throws Problem {
     let receiver_node = node_at(analysis, receiver);
     var symbol usize = 0;
@@ -1184,7 +1184,8 @@ func local_index_borrow(analysis inout Analysis, receiver usize,
         case option.Option.Some(value): symbol = value.symbol;
         case option.Option.None: return false;
     }
-    if declaration_lookup(analysis, symbol) < 0 ||
+    // Reads can borrow pattern and loop bindings without a declaration.
+    if (!reading && declaration_lookup(analysis, symbol) < 0) ||
        ids_contains(analysis.parameter_symbols, symbol) {
         return false;
     }
@@ -1208,7 +1209,7 @@ func local_index_borrow(analysis inout Analysis, receiver usize,
     }
     let element_type = type_at(analysis.module, element);
     if owned(inout analysis, element) &&
-       !(allow_vec_element &&
+       !(reading &&
          type_kind_is(element_type.kind, model.TypeKind.Vec)) {
         return false;
     }
@@ -1217,15 +1218,14 @@ func local_index_borrow(analysis inout Analysis, receiver usize,
 
 func local_index_can_borrow(analysis inout Analysis, receiver usize,
                             index usize, root usize,
-                            allow_vec_element bool) bool throws Problem {
+                            reading bool) bool throws Problem {
     var has_root = false;
     switch analysis.full_expression_root {
         case option.Option.Some(_): has_root = true;
         case option.Option.None: {}
     }
     if !has_root ||
-       !local_index_borrow(inout analysis, receiver, index,
-                           allow_vec_element) {
+       !local_index_borrow(inout analysis, receiver, index, reading) {
         return false;
     }
     return !ids_contains(full_effects(inout analysis), root);
