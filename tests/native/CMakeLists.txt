@@ -517,6 +517,11 @@ if(LANG_PYTHON312)
     ${LANG_SOURCE_ROOT}/tests/native/unicode/run_source.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --python ${LANG_PYTHON312})
   set_tests_properties(values.unicode_source PROPERTIES TIMEOUT 300)
+  add_test(NAME values.unicode_grapheme COMMAND ${LANG_PYTHON312}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/unicode-grapheme-results
+    ${LANG_SOURCE_ROOT}/tests/stdlib_unicode_grapheme/run_conformance.py
+    --compiler $<TARGET_FILE:woozyc> --python ${LANG_PYTHON312})
+  set_tests_properties(values.unicode_grapheme PROPERTIES TIMEOUT 300)
 endif()
 
 add_subdirectory(gc_activation)

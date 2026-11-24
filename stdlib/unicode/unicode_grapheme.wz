@@ -1,0 +1,247 @@
+// Extended grapheme cluster boundaries implemented in Woozy.
+//
+// unicode.wz's public boundaries, grapheme_count and graphemes functions call
+// the package-internal wz_grapheme_boundaries below.  It is deliberately not
+// `pub`: other packages use std/unicode.boundaries, and a package-internal
+// helper keeps the public surface unchanged.  The property data lives in
+// unicode_grapheme_tables.wz and is generated from Unicode 18.0.0 by
+// tools/generate_unicode_grapheme_wz.py; do not edit the table by hand.
+//
+// Boundary positions count code points, include 0 and the end of a non-empty
+// string, and return [0] for the empty string.
+package unicode;
+
+import "std/text" as text;
+import "std/vec" as vec;
+
+// UAX #29 extended grapheme cluster boundaries as code-point indexes.
+// The result starts with 0 and ends with the code-point count.  The empty
+// string therefore returns [0].  The public unicode.boundaries function wraps
+// this internal scanner.
+//
+// Two fast paths keep the scan cheap without changing any boundary result:
+//  - pure ASCII text (byte count == code-point count) is resolved directly
+//    from the bytes; only CR LF is a non-boundary pair for ASCII classes;
+//  - ASCII code points inside mixed text skip the generated property tree.
+func wz_grapheme_boundaries(value string) Vec[usize] {
+    let total = text.len(value);
+    let points = vec.empty[usize]();
+    if total == 0 {
+        vec.push(points,0);
+        return points;
+    }
+    vec.reserve(points,total+1);
+    vec.push(points,0);
+    let byte_total = text.byte_len(value);
+
+    // Pure ASCII needs no UTF-8 decoding and no byte copy.  Short inputs use
+    // scalar indexing because the copy costs more than the scan; long inputs
+    // use one byte copy so the loop reads a contiguous Vec.
+    if byte_total == total {
+        if total <= 256 {
+            // Unroll four scalars per loop test.  The only repeated work is
+            // the CR LF join check; every emitted index is still a code-point
+            // offset and no byte copy or temporary Vec is created.
+            var previous = value[0];
+            var index usize = 1;
+            for index+3 < total {
+                let c0 = value[index];
+                if !(previous == 0x0d && c0 == 0x0a) { vec.push(points,index); }
+                let c1 = value[index+1];
+                if !(c0 == 0x0d && c1 == 0x0a) { vec.push(points,index+1); }
+                let c2 = value[index+2];
+                if !(c1 == 0x0d && c2 == 0x0a) { vec.push(points,index+2); }
+                let c3 = value[index+3];
+                if !(c2 == 0x0d && c3 == 0x0a) { vec.push(points,index+3); }
+                previous = c3;
+                index += 4;
+            }
+            for index < total {
+                let current = value[index];
+                if !(previous == 0x0d && current == 0x0a) {
+                    vec.push(points,index);
+                }
+                previous = current;
+                index += 1;
+            }
+        } else {
+            let data = text.bytes(value);
+            for var index usize = 1; index < total; index += 1 {
+                if !(data[index-1] == 0x0d && data[index] == 0x0a) {
+                    vec.push(points,index);
+                }
+            }
+        }
+        vec.push(points,total);
+        return points;
+    }
+
+    let data = text.bytes(value);
+    let data_total = vec.len(data);
+    var offset usize = 0;
+    var index usize = 1;
+    var first u32 = 0;
+    if data[0] < 0x80 {
+        first = grapheme_property_ascii(data[0]);
+        offset = 1;
+    } else {
+        first = grapheme_property(grapheme_decode(data,inout offset));
+    }
+    var left_class u32 = first & 0xff;
+    var left_icb u32 = first >> 8;
+    var state u32 = 0;
+    for offset < data_total {
+        let byte = data[offset];
+        var current u32 = grapheme_other;
+        if byte < 0x80 {
+            current = grapheme_property_ascii(byte);
+            offset = offset+1;
+        } else {
+            current = grapheme_property(grapheme_decode(data,inout offset));
+        }
+        let right_class = current & 0xff;
+        let right_icb = current >> 8;
+        if grapheme_break_step(left_class,right_class,left_icb,right_icb,inout state) {
+            vec.push(points,index);
+        }
+        left_class = right_class;
+        left_icb = right_icb;
+        index += 1;
+    }
+    vec.push(points,index);
+    return points;
+}
+
+// ASCII properties without the generated table.  This is exactly the content
+// of page 0 of unicode_grapheme_tables.wz: C0/DEL are Control, LF and CR have
+// their own classes, and printable ASCII is Other.
+func grapheme_property_ascii(byte u8) u32 {
+    if byte == 0x0a { return grapheme_lf; }
+    if byte == 0x0d { return grapheme_cr; }
+    if byte < 0x20 || byte == 0x7f { return grapheme_control; }
+    return grapheme_other;
+}
+
+// GB1 through GB11 and GB999// GB1 through GB11 and GB999 with the stateful GB9c, GB11 and GB12/13
+// bookkeeping used by utf8proc 2.12.0.  The state stores the effective left
+// bound class in the low byte and Indic_Conjunct_Break state above it.
+func grapheme_break_step(left u32, right u32, left_icb u32, right_icb u32,
+        state inout u32) bool {
+    var state_class u32 = left;
+    var state_icb u32 = left_icb;
+    if state != 0 {
+        state_class = state & 0xff;
+        state_icb = state >> 8;
+    }
+
+    var allowed = grapheme_break_simple(state_class,right);
+    if state_icb == grapheme_icb_linker && right_icb == grapheme_icb_consonant {
+        allowed = false;
+    }
+
+    // GB9c: keep the linker state across intervening InCB Extend characters.
+    if !(state_icb == grapheme_icb_linker && right_icb == grapheme_icb_extend) {
+        state_icb = right_icb;
+    }
+
+    // GB12/13: after an RI pair, force the next boundary by forgetting the
+    // second RI's class.
+    if state_class == grapheme_regional_indicator &&
+            right == grapheme_regional_indicator {
+        state_class = grapheme_other;
+    } else if state_class == grapheme_extended_pictographic {
+        // GB11: Extend sequences stay emoji, and a following ZWJ records
+        // the E_ZWG state needed by the next Extended_Pictographic.
+        if right == grapheme_extend {
+            state_class = grapheme_extended_pictographic;
+        } else if right == grapheme_zwj {
+            state_class = grapheme_e_zwg;
+        } else {
+            state_class = right;
+        }
+    } else {
+        state_class = right;
+    }
+    state = state_class | (state_icb << 8);
+    return allowed;
+}
+
+func grapheme_break_simple(left u32, right u32) bool {
+    if left == grapheme_cr && right == grapheme_lf { return false; }    // GB3
+    if left >= grapheme_cr && left <= grapheme_control { return true; } // GB4
+    if right >= grapheme_cr && right <= grapheme_control { return true; }// GB5
+    if left == grapheme_l &&
+            (right == grapheme_l || right == grapheme_v ||
+             right == grapheme_lv || right == grapheme_lvt) {
+        return false;                                                    // GB6
+    }
+    if (left == grapheme_lv || left == grapheme_v) &&
+            (right == grapheme_v || right == grapheme_t) {
+        return false;                                                    // GB7
+    }
+    if (left == grapheme_lvt || left == grapheme_t) && right == grapheme_t {
+        return false;                                                    // GB8
+    }
+    if right == grapheme_extend || right == grapheme_zwj ||
+            right == grapheme_spacingmark {
+        return false;                                                    // GB9/9a
+    }
+    if left == grapheme_prepend { return false; }                        // GB9b
+    if left == grapheme_e_zwg && right == grapheme_extended_pictographic {
+        return false;                                                    // GB11
+    }
+    if left == grapheme_regional_indicator &&
+            right == grapheme_regional_indicator {
+        return false;                                                    // GB12/13
+    }
+    return true;                                                         // GB999
+}
+
+// Decode one scalar and advance past it.  Strings in Woozy are always valid
+// UTF-8, so callers only pass complete scalar sequences.
+func grapheme_decode(data Vec[u8], offset inout usize) u32 {
+    let first = u32(data[offset]);
+    if first < 0x80 {
+        offset = offset+1;
+        return first;
+    }
+    if first < 0xe0 {
+        let rune = ((first & 0x1f) << 6) | (u32(data[offset+1]) & 0x3f);
+        offset = offset+2;
+        return rune;
+    }
+    if first < 0xf0 {
+        let rune = ((first & 0x0f) << 12) | ((u32(data[offset+1]) & 0x3f) << 6) |
+            (u32(data[offset+2]) & 0x3f);
+        offset = offset+3;
+        return rune;
+    }
+    let rune = ((first & 0x07) << 18) | ((u32(data[offset+1]) & 0x3f) << 12) |
+        ((u32(data[offset+2]) & 0x3f) << 6) | (u32(data[offset+3]) & 0x3f);
+    offset = offset+4;
+    return rune;
+}
+
+// Decode one scalar from valid UTF-8 bytes.  Strings in Woozy are always
+// valid UTF-8, so callers only pass complete scalar sequences.
+func grapheme_rune(data Vec[u8], offset usize) u32 {
+    let first = u32(data[offset]);
+    if first < 0x80 { return first; }
+    if first < 0xe0 {
+        return ((first & 0x1f) << 6) | (u32(data[offset+1]) & 0x3f);
+    }
+    if first < 0xf0 {
+        return ((first & 0x0f) << 12) | ((u32(data[offset+1]) & 0x3f) << 6) |
+            (u32(data[offset+2]) & 0x3f);
+    }
+    return ((first & 0x07) << 18) | ((u32(data[offset+1]) & 0x3f) << 12) |
+        ((u32(data[offset+2]) & 0x3f) << 6) | (u32(data[offset+3]) & 0x3f);
+}
+
+func grapheme_next(data Vec[u8], offset usize) usize {
+    let first = data[offset];
+    if first < 0x80 { return offset+1; }
+    if first < 0xe0 { return offset+2; }
+    if first < 0xf0 { return offset+3; }
+    return offset+4;
+}

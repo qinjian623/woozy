@@ -1,0 +1,77 @@
+// Targeted public-API checks for std/unicode.boundaries and grapheme_count.
+//
+// The exhaustive oracle is GraphemeBreakTest-18.0.0.txt, consumed by
+// run_conformance.py. This source keeps the checked-in regression small and
+// readable: controls, CR LF, Hangul, marks, prepend, ZWJ emoji, regional
+// indicators, Indic conjuncts, unassigned scalars and long repeated input.
+package app;
+
+import "std/text" as text;
+import "std/unicode" as unicode;
+import "std/vec" as vec;
+
+struct Case { name string; value string; spec string; }
+
+func expected(spec string) Vec[usize] {
+    let out = vec.empty[usize]();
+    var value usize = 0;
+    for var index usize = 0; index < text.len(spec); index += 1 {
+        if spec[index] == 0x2c {
+            vec.push(out,value);
+            value = 0;
+        } else {
+            value = value*10 + usize(spec[index] - 0x30);
+        }
+    }
+    vec.push(out,value);
+    return out;
+}
+
+func check(item Case) i32 {
+    let want = expected(item.spec);
+    let got = unicode.boundaries(item.value);
+    if vec.len(got) != vec.len(want) {
+        return 10;
+    }
+    for var index usize = 0; index < vec.len(want); index += 1 {
+        if got[index] != want[index] {
+            return 11;
+        }
+    }
+    if unicode.grapheme_count(item.value) != vec.len(want)-1 {
+        return 12;
+    }
+    let parts = unicode.graphemes(item.value);
+    if vec.len(parts) != vec.len(want)-1 {
+        return 13;
+    }
+    var joined = "";
+    for var index usize = 0; index < vec.len(parts); index += 1 {
+        joined = joined + parts[index];
+    }
+    if joined != item.value {
+        return 14;
+    }
+    return 0;
+}
+
+func main() i32 {
+    let cases = vec.make[Case](12, Case(name: "", value: "", spec: "0"));
+    cases[0] = Case(name: "empty", value: "", spec: "0");
+    cases[1] = Case(name: "ascii", value: "hello world", spec: "0,1,2,3,4,5,6,7,8,9,10,11");
+    cases[2] = Case(name: "crlf", value: "a\r\nb\r\nc", spec: "0,1,3,4,6,7");
+    cases[3] = Case(name: "hangul", value: "\u{1100}\u{1161}\u{11a8}", spec: "0,3");
+    cases[4] = Case(name: "marks", value: "e\u{301}\u{308}", spec: "0,3");
+    cases[5] = Case(name: "prepend", value: "\u{600}\u{915}", spec: "0,2");
+    cases[6] = Case(name: "zwj", value: "\u{1f469}\u{200d}\u{1f469}", spec: "0,3");
+    cases[7] = Case(name: "regional", value: "\u{1f1ef}\u{1f1f5}\u{1f1ef}", spec: "0,2,3");
+    cases[8] = Case(name: "indic", value: "\u{915}\u{94d}\u{937}", spec: "0,3");
+    cases[9] = Case(name: "indic_zwj", value: "\u{915}\u{94d}\u{200d}\u{937}", spec: "0,4");
+    cases[10] = Case(name: "unassigned", value: "\u{323af}\u{323af}", spec: "0,1,2");
+    cases[11] = Case(name: "repeat", value: "\u{1f469}\u{200d}\u{1f467}\u{1f469}\u{200d}\u{1f467}", spec: "0,3,6");
+    for var index usize = 0; index < vec.len(cases); index += 1 {
+        let code = check(cases[index]);
+        if code != 0 { return i32(100) + i32(index); }
+    }
+    return 0;
+}
