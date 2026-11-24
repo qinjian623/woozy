@@ -120,7 +120,58 @@
     case SystemOperation::vec_pop: {
       auto t = element();
       auto *layout = lower_type(t);
-      const bool empty = module.getDataLayout().getTypeAllocSize(layout).getFixedValue() == 0;
+      const auto &slot_layout = module.getDataLayout();
+      const uint64_t bytes = slot_layout.getTypeAllocSize(layout).getFixedValue();
+      // lang_vec_pop_v1 does exactly this for a trivial element: reject the
+      // empty pop before the pin check, acquire-load iterations and panic when
+      // pinned, move the original last slot's typed bytes, publish the shorter
+      // length and initialized=min(original initialized,last), then report
+      // Some. Inline that path only when one typed load/store covers the slot:
+      // non-owning, non-empty (a zero-sized slot has no loadable bytes), an
+      // allocation size equal to the published stride, and ABI alignment within
+      // the 16-byte Vec payload guarantee. Owning elements and every other
+      // shape keep the runtime ABI call, including its GC/callback handling.
+      if (!owning(t) && bytes != 0 && bytes == stride(t) &&
+          slot_layout.getABITypeAlign(layout).value() <= 16) {
+        auto *length = vec_field(args[0], 1, builder.getInt64Ty());
+        // The empty pop reports None before any pin check. The success branch
+        // is stdlib_option's own block, so the moved SSA value is the payload;
+        // no out scratch or lifetime is needed.
+        return stdlib_option(
+            i.type, builder.CreateICmpNE(length, builder.getInt64(0)),
+            [&]() -> llvm::Value * {
+              // Same acquire pin check as the runtime: panic before any element
+              // or header byte changes.
+              auto *iterations = builder.CreateLoad(
+                  builder.getInt64Ty(),
+                  builder.CreateStructGEP(vec_type, args[0], 4));
+              iterations->setAtomic(llvm::AtomicOrdering::Acquire);
+              iterations->setAlignment(llvm::Align(8));
+              vec_memory(iterations, true);
+              guard(builder.CreateICmpNE(iterations, builder.getInt64(0)), 8,
+                    i.source);
+              auto *last = builder.CreateSub(length, builder.getInt64(1));
+              auto *data = vec_field(args[0], 5, builder.getPtrTy());
+              auto *address = builder.CreateGEP(layout, data, last);
+              auto *moved = builder.CreateLoad(layout, address);
+              vec_memory(moved, false);
+              // Publish the shorter prefix before the moved bytes leave the
+              // Vec; pop never shrinks storage.
+              vec_memory(builder.CreateStore(
+                             last,
+                             builder.CreateStructGEP(vec_type, args[0], 1)),
+                         true);
+              auto *initialized = vec_field(args[0], 2, builder.getInt64Ty());
+              auto *kept = builder.CreateSelect(
+                  builder.CreateICmpUGT(initialized, last), last, initialized);
+              vec_memory(builder.CreateStore(
+                             kept,
+                             builder.CreateStructGEP(vec_type, args[0], 2)),
+                         true);
+              return moved;
+            });
+      }
+      const bool empty = bytes == 0;
       auto *out = storage(empty ? builder.getInt8Ty() : layout);
       start_lifetime(out);
       auto *present = runtime("lang_vec_pop_v1", builder.getInt1Ty(), {args[0], out});

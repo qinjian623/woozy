@@ -627,6 +627,40 @@ func e_extra_system_call(instruction nativeir.Instruction,
     }
 }
 
+// ---- trivial Vec pop fast path ---------------------------------------------
+
+// lang_vec_pop_v1 rejects an empty pop before the pin check, acquire-loads
+// iterations and panics when pinned, moves the original last slot's bytes, and
+// publishes the shorter length and initialized=min(original initialized,last).
+// The inline path needs one typed load/store to cover the published slot
+// exactly, so it is limited to the non-owning scalar family, whose LLVM
+// allocation size is its published stride and whose alignment fits the 16-byte
+// Vec payload guarantee.  Owning elements, aggregates, zero-sized slots and C
+// layouts keep the runtime ABI call unchanged.
+func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
+    if owning(element, inout state) { return false; }
+    let value = type_of(state, element);
+    switch value.kind {
+        case model.TypeKind.Unit: return true;
+        case model.TypeKind.Bool: return true;
+        case model.TypeKind.SignedInt: return true;
+        case model.TypeKind.UnsignedInt: return true;
+        case model.TypeKind.Isize: return true;
+        case model.TypeKind.Usize: return true;
+        case model.TypeKind.Float: return true;
+        default: return false;
+    }
+}
+
+// The same acquire load of LangVec.iterations the runtime uses.  The inline pop
+// must not weaken the active-iteration pin check.
+func e_vec_iterations_acquire(vec Value, state inout Emitter) Value throws Error {
+    let address = c_gep(VEC_TYPE, vec, 4, inout state);
+    let suffix = vec_memory(true, inout state);
+    return result("i64", "load atomic i64, ptr " + address.reference +
+        " acquire, align 8" + suffix, inout state);
+}
+
 func e_value_system_call(instruction nativeir.Instruction,
                          args Vec[Value],
                          state inout Emitter) option.Option[Value] throws Error {
@@ -793,6 +827,49 @@ func e_value_system_call(instruction nativeir.Instruction,
                         reference: "0"));
                 }
                 if operation == 40 {
+                    if e_vec_pop_inline(element, inout state) {
+                        let layout = lower_type(element, inout state);
+                        let length = vec_field(args[0], 1, "i64", inout state);
+                        // The empty pop reports None before any pin check.  The
+                        // success branch is the option join's own Some block, so
+                        // the moved SSA value is the payload directly.
+                        let present = c_icmp("ne", "i64", length.reference, "0",
+                            inout state);
+                        let join = e_stdlib_option_begin(instruction.type_id,
+                            present, inout state);
+                        let iterations = e_vec_iterations_acquire(args[0],
+                            inout state);
+                        let pinned = c_icmp("ne", "i64", iterations.reference,
+                            "0", inout state);
+                        guard(pinned, 8, instruction.source, inout state);
+                        let last = c_binop("sub", "i64", length.reference, "1",
+                            inout state);
+                        let data = vec_field(args[0], 5, "ptr", inout state);
+                        let address = result("ptr", "getelementptr " + layout +
+                            ", ptr " + data.reference + ", i64 " +
+                            last.reference, inout state);
+                        let moved = c_load_tagged(layout, address, inout state);
+                        // Publish the shorter prefix before the moved bytes
+                        // leave the Vec; pop never shrinks storage.
+                        let length_field = c_gep(VEC_TYPE, args[0], 1, inout state);
+                        let length_suffix = vec_memory(true, inout state);
+                        append("store i64 " + last.reference + ", ptr " +
+                            length_field.reference + length_suffix, inout state);
+                        let initialized = vec_field(args[0], 2, "i64", inout state);
+                        let clamp = c_icmp("ugt", "i64", initialized.reference,
+                            last.reference, inout state);
+                        let kept = result("i64", "select i1 " + clamp.reference +
+                            ", i64 " + last.reference + ", i64 " +
+                            initialized.reference, inout state);
+                        let initialized_field = c_gep(VEC_TYPE, args[0], 2,
+                            inout state);
+                        let initialized_suffix = vec_memory(true, inout state);
+                        append("store i64 " + kept.reference + ", ptr " +
+                            initialized_field.reference + initialized_suffix,
+                            inout state);
+                        let joined = e_stdlib_finish(join, moved, inout state);
+                        return option.Option[Value].Some(joined);
+                    }
                     let layout = lower_type(element, inout state);
                     let out = element_storage(element, e_zero(layout), inout state);
                     var actual Vec[Value] = [];
