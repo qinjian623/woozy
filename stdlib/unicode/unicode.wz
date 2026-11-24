@@ -225,9 +225,10 @@ pub func graphemes(value string) Vec[string] {
 }
 
 // Pure-ASCII scan: one code point per cluster except CR LF; direct slices, adjacency reload.
+// Reserve exactly one slot per cluster, including one slot per CR LF pair.
 func graphemes_ascii(value string,total usize) Vec[string] {
     let out = vec.empty[string]();
-    if total <= 65536 { vec.reserve(out,total); }
+    vec.reserve(out,count_ascii_graphemes(value,total));
     var start usize = 0;
     for var index usize = 1; index < total; index += 1 {
         if !(value[index-1] == 0x0d && value[index] == 0x0a) {

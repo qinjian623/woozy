@@ -1,0 +1,62 @@
+// Threshold-crossing checks for unicode.graphemes on pure-ASCII input.
+// Exercise the former 65536 reserve cutoff from below, at and above it,
+// including CR LF pairs, lone CR/LF and mixed tails.
+package app;
+
+import "std/text" as text;
+import "std/unicode" as unicode;
+import "std/vec" as vec;
+
+func uniform(value string, part string, want usize) i32 {
+    let parts = unicode.graphemes(value);
+    if vec.len(parts) != want { return 10; }
+    for var index usize = 0; index < want; index += 1 {
+        if parts[index] != part { return 11; }
+    }
+    return 0;
+}
+
+func tail(value string, want usize, first string, last string) i32 {
+    let parts = unicode.graphemes(value);
+    if vec.len(parts) != want { return 20; }
+    if parts[0] != first { return 21; }
+    if parts[want-1] != last { return 22; }
+    var total usize = 0;
+    for var index usize = 0; index < want; index += 1 {
+        total += text.len(parts[index]);
+    }
+    if total != text.len(value) { return 23; }
+    return 0;
+}
+
+func main() i32 {
+    var code = uniform(text.repeat("a",65535),"a",65535);
+    if code != 0 { return 100 + code; }
+    code = uniform(text.repeat("a",65536),"a",65536);
+    if code != 0 { return 200 + code; }
+    code = uniform(text.repeat("a",65537),"a",65537);
+    if code != 0 { return 300 + code; }
+
+    code = uniform(text.repeat("\r\n",32768),"\r\n",32768);
+    if code != 0 { return 400 + code; }
+    code = uniform(text.repeat("\r\n",32769),"\r\n",32769);
+    if code != 0 { return 500 + code; }
+
+    // CR LF straddles the cutoff: the pair is one cluster at exactly 65536
+    // bytes and remains one cluster just above it.
+    let at = text.repeat("a",65534) + "\r\n";
+    code = tail(at,65535,"a","\r\n");
+    if code != 0 { return 600 + code; }
+    let above = text.repeat("a",65535) + "\r\n";
+    code = tail(above,65536,"a","\r\n");
+    if code != 0 { return 700 + code; }
+
+    // Lone CR and LF bytes stay separate clusters at the crossing.
+    let lone = text.repeat("a",65535) + "\r";
+    code = tail(lone,65536,"a","\r");
+    if code != 0 { return 800 + code; }
+    let mixed = text.repeat("a",65534) + "\r\n" + "z";
+    code = tail(mixed,65535,"a","z");
+    if code != 0 { return 900 + code; }
+    return 0;
+}

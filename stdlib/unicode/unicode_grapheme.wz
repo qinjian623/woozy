@@ -155,20 +155,25 @@ func scan_mixed(value string) usize {
     return count;
 }
 
+// ASCII has a boundary between every pair except CR followed by LF.
+func count_ascii_graphemes(value string, total usize) usize {
+    var count = total;
+    var previous u32 = 0;
+    for var index usize = 0; index < total; index += 1 {
+        let current = value[index];
+        if previous == 0x0d && current == 0x0a { count -= 1; }
+        previous = current;
+    }
+    return count;
+}
+
 // Cluster count without materializing boundary positions.
 func wz_grapheme_count(value string) usize {
     let total = text.len(value);
     if total == 0 { return 0; }
     if total == 1 { return 1; }
     if text.byte_len(value) == total {
-        var crlf usize = 0;
-        var previous = value[0];
-        for var index usize = 1; index < total; index += 1 {
-            let current = value[index];
-            if previous == 0x0d && current == 0x0a { crlf += 1; }
-            previous = current;
-        }
-        return total - crlf;
+        return count_ascii_graphemes(value,total);
     }
     return scan_mixed(value);
 }
