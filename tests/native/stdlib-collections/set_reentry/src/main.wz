@@ -28,6 +28,7 @@ const ACTION_ADD i32 = 1;
 const ACTION_REMOVE i32 = 2;
 const ACTION_CLEAR i32 = 3;
 const ACTION_CHAIN_ADD i32 = 4;
+const ACTION_GROW_CLEAR i32 = 5;
 
 func plain(target box.Box[set.Set[Key]], id i32) Key {
     return Key(
@@ -106,6 +107,9 @@ func perform(value Key) {
         set.clear(target);
     } else if value.action == ACTION_CHAIN_ADD {
         set.add(target, chain(value));
+    } else if value.action == ACTION_GROW_CLEAR {
+        set.add(target, plain(value.target, value.action_value));
+        set.clear(target);
     }
 }
 
@@ -975,7 +979,38 @@ func test_drained_churn() i32 {
     return 0;
 }
 
+// The second, nonmatching key clears the set while probing for the third.
+// If it grows first, the cleared table is no longer the one being probed.
+func test_probe_miss_mutation(action i32, inserting bool) i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    set.add(values, colliding(cell, 0));
+    var callback = scripted(cell, 1, action, 6);
+    callback.fingerprint = 0;
+    set.add(values, callback);
+    let query = colliding(cell, 2);
+    set.add(values, query);
+    if !add_range(values, cell, 3, 3) || set.len(values) != 6 {
+        return 123;
+    }
+    box.set(callback.equals_armed, true);
+    if inserting {
+        if !set.add(values, query) || set.len(values) != 1 || !set.contains(values, query) {
+            return 124;
+        }
+    } else if set.contains(values, query) || !set.is_empty(values) {
+        return 125;
+    }
+    return 0;
+}
+
 func main() i32 {
+    for action in [ACTION_CLEAR, ACTION_GROW_CLEAR] {
+        for inserting in [false, true] {
+            let result = test_probe_miss_mutation(action, inserting);
+            if result != 0 { return result; }
+        }
+    }
     var status = test_add_hash_insert();
     if status != 0 {
         return status;
