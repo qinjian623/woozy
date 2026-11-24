@@ -86,6 +86,28 @@ void values() {
   equal_bytes(value, {mixed, mixed + sizeof(mixed)});
   for (uint64_t i = 0; i < 7; ++i)
     need(lang_text_at_v1(&value, i) == runes[i], "dynamic scalar index differs");
+  uint64_t cursor = value.bytes;
+  for (uint64_t i = 7; i > 0; --i) {
+    const uint64_t read = lang_text_cursor_read_back_v1(&value, cursor);
+    need((read >> 32) == runes[i - 1], "backward cursor scalar differs");
+    cursor -= static_cast<uint32_t>(read);
+    need(cursor == lang_text_cursor_at_v1(&value, i - 1),
+         "backward cursor moved by the wrong byte width");
+  }
+  LangText view;
+  lang_text_slice_v1(&view, &value, 1, 6);
+  LangText compacted;
+  lang_text_compact_v1(&compacted, &view);
+  need(compacted.owner && compacted.owner != view.owner &&
+           compacted.length == view.length &&
+           lang_text_compare_v1(&compacted, &view) == 0,
+       "compact reused the old storage or changed the string");
+  lang_text_compact_v1(&view, &view);
+  need(view.owner && view.owner != value.owner &&
+           lang_text_compare_v1(&view, &compacted) == 0,
+       "in-place compact reused the old storage or changed the string");
+  drop(compacted);
+  drop(view);
   for (uint64_t start = 0; start <= 7; ++start)
     for (uint64_t end = start; end <= 7; ++end) {
       LangText slice;
@@ -204,6 +226,9 @@ void failures() {
   LangText value{mixed,13,7,nullptr};
   panic("vec-index", [&]{lang_text_at_v1(&value, 7);});
   panic("vec-index", [&]{lang_text_at_v1(&value, ~uint64_t{0});});
+  panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 0);});
+  panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 2);});
+  panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, value.bytes+1);});
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,3,2);});
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,0,8);});
   panic("allocation-size-overflow", [&]{

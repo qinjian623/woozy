@@ -30,14 +30,14 @@ MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. ID 230 was retired.
-EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 240))
+EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 242))
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
 NEW_OPERATIONS = tuple(operation for operation in EXPECTED_OPERATION_IDS
                        if operation >= 213)
 # Signatures made only of compiler builtins need no standard type module.
 NO_MODULE_OPERATIONS = frozenset({215, 220, 222, 223, 224, 225, 226,
                                   227, 228, 229, 231, 232, 233, 234,
-                                  235, 236, 237, 238, 239})
+                                  235, 236, 237, 238, 239, 240, 241})
 EXPECTED_OWNER_ARITY = {
     213: ("std/os", 0), 214: ("std/os", 0), 215: ("std/os", 0),
     216: ("std/os", 0), 217: ("std/os", 0), 218: ("std/os", 0),
@@ -245,6 +245,10 @@ def validate_registry_entries() -> None:
               '"bool", {"Vec[A]", "usize", "usize"}, 3, "std/vec", 1},'),
         239: ('{SystemOperation::map_probe_requires_copy, "__woozy_map_probe_requires_copy", '
               '"bool", {"Vec[A]"}, 1, "std/map", 1},'),
+        240: ('{SystemOperation::text_cursor_read_back, "__woozy_text_cursor_read_back", '
+              '"u64", {"string", "u64"}, 2, "std/text"},'),
+        241: ('{SystemOperation::text_compact, "__woozy_text_compact", '
+              '"string", {"string"}, 1, "std/text"},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -325,6 +329,12 @@ def validate_registry_entries() -> None:
         239: ('OperationSpec(operation: 239, name: "__woozy_map_probe_requires_copy", '
               'result: "bool", parameters: ["Vec[A]"], '
               'owner: "std/map", type_arity: 1)'),
+        240: ('OperationSpec(operation: 240, name: "__woozy_text_cursor_read_back", '
+              'result: "u64", parameters: ["string", "u64"], '
+              'owner: "std/text", type_arity: 0)'),
+        241: ('OperationSpec(operation: 241, name: "__woozy_text_compact", '
+              'result: "string", parameters: ["string"], '
+              'owner: "std/text", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:

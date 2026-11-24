@@ -184,6 +184,26 @@ extern "C" uint64_t lang_text_cursor_read_v1(const LangText *text,
   if (!decode(text->data, text->bytes, next, rune)) panic(4);
   return (static_cast<uint64_t>(rune) << 32) | (next - cursor);
 }
+extern "C" uint64_t lang_text_cursor_read_back_v1(const LangText *text,
+                                                   uint64_t end) noexcept {
+  if (!text) panic(10);
+  if (!end || !cursor_boundary(*text, end)) panic(4);
+  auto start = end - 1;
+  while ((text->data[start] & 0xc0) == 0x80) {
+    if (!start || end - start == 4) panic(4);
+    --start;
+  }
+  auto next = start;
+  uint32_t rune;
+  if (!decode(text->data, end, next, rune) || next != end) panic(4);
+  return (static_cast<uint64_t>(rune) << 32) | (end - start);
+}
+extern "C" void lang_text_compact_v1(LangText *out, const LangText *text) noexcept {
+  if (!out || !text) panic(10);
+  auto result = allocate(text->bytes, text->length);
+  copy(const_cast<uint8_t *>(result.data), text->data, text->bytes);
+  output(out, result, text);
+}
 extern "C" void lang_text_cursor_slice_v1(LangText *out, const LangText *text,
                                            uint64_t start, uint64_t end) noexcept {
   if (!out || !text) panic(10);

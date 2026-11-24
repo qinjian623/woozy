@@ -57,6 +57,8 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 234, name: "__woozy_text_cursor_read", result: "u64", parameters: ["string", "u64"], owner: "std/text", type_arity: 0),
         OperationSpec(operation: 235, name: "__woozy_text_cursor_slice", result: "string", parameters: ["string", "u64", "u64"], owner: "std/text", type_arity: 0),
         OperationSpec(operation: 236, name: "__woozy_text_count_rune", result: "usize", parameters: ["string", "u32"], owner: "std/text", type_arity: 0),
+        OperationSpec(operation: 240, name: "__woozy_text_cursor_read_back", result: "u64", parameters: ["string", "u64"], owner: "std/text", type_arity: 0),
+        OperationSpec(operation: 241, name: "__woozy_text_compact", result: "string", parameters: ["string"], owner: "std/text", type_arity: 0),
         OperationSpec(operation: 34, name: "__woozy_vec_empty", result: "Vec[A]", parameters: [], owner: "std/vec", type_arity: 1),
         OperationSpec(operation: 35, name: "__woozy_vec_make", result: "Vec[A]", parameters: ["usize", "A"], owner: "std/vec", type_arity: 1),
         OperationSpec(operation: 36, name: "__woozy_vec_len", result: "usize", parameters: ["Vec[A]"], owner: "std/vec", type_arity: 1),

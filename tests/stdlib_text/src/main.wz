@@ -785,6 +785,11 @@ func check_trim() i32 {
             text.trim_end("x"+suffix) != "x" || text.trim_end(suffix) != "" {
             return 714;
         }
+        let body = "中\0😀";
+        let framed = "!" + suffix + body + suffix + "!";
+        if text.trim(framed[1:text.len(framed)-1]) != body {
+            return 715;
+        }
     }
     return 0;
 }

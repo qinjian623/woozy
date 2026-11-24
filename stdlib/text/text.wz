@@ -269,25 +269,9 @@ pub func is_space(rune u32) bool {
 }
 pub func trim(value string) string {
     let length = len(value);
-    if length == 0 { return value; }
-    // End checks use existing code point indexing, so an obvious no-op needs
-    // no bytes(value) scratch. Actual trimming still needs one O(n) byte copy.
-    if !is_space(value[0]) && !is_space(value[length-1]) { return value; }
-    let data = bytes(value);
-    let data_bytes = vec.len(data);
-    var start usize = 0;
-    for start < data_bytes {
-        if !is_space(utf8_decode(data,start)) { break; }
-        start = utf8_next(data,start);
-    }
-    var end usize = data_bytes;
-    for end > start {
-        let previous = utf8_prev(data,end);
-        if !is_space(utf8_decode(data,previous)) { break; }
-        end = previous;
-    }
-    if start == 0 && end == data_bytes { return value; }
-    return text_from_span(data,start,end);
+    let first = trim_start_index(value,length);
+    // Keep changed results independent of storage retained by the input view.
+    return trimmed_slice(value,first,trim_end_index(value,first,length),length,true);
 }
 pub func ascii_lower(value string) string {
     return ascii_shift(value,65,90,97);
@@ -395,11 +379,10 @@ pub func split_lines(value string) Vec[string] {
     return out;
 }
 
-pub func trim_start(value string) string {
-    let length = len(value);
-    if length == 0 { return value; }
+func trim_start_index(value string, length usize) usize {
+    if length == 0 { return 0; }
     let initial = __woozy_text_cursor_read(value,0);
-    if !is_space(u32(initial >> 32)) { return value; }
+    if !is_space(u32(initial >> 32)) { return 0; }
     var offset = initial & CURSOR_STEP_MASK;
     var first usize = 1;
     for first < length {
@@ -408,41 +391,40 @@ pub func trim_start(value string) string {
         offset += read & CURSOR_STEP_MASK;
         first += 1;
     }
-    if first == length { return ""; }
-    // Keep the view when it covers at least as much data as it omits.
-    // A smaller result should not keep a large discarded prefix alive.
-    let suffix = value[first:];
-    let size = byte_len(suffix);
-    if size < byte_len(value)-size { return text_from_buffer(bytes(suffix)); }
-    return suffix;
+    return first;
+}
+
+func trim_end_index(value string, first usize, length usize) usize {
+    if first == length || !is_space(value[length-1]) { return length; }
+    var end = length-1;
+    var offset = __woozy_text_cursor_at(value,end);
+    for end > first {
+        let read = __woozy_text_cursor_read_back(value,offset);
+        if !is_space(u32(read >> 32)) { break; }
+        offset -= read & CURSOR_STEP_MASK;
+        end -= 1;
+    }
+    return end;
+}
+
+func trimmed_slice(value string, first usize, end usize, length usize, compact bool) string {
+    if first == 0 && end == length { return value; }
+    if first == end { return ""; }
+    // A short result should not keep more discarded bytes alive than it uses.
+    let trimmed = value[first:end];
+    if compact { return __woozy_text_compact(trimmed); }
+    let size = byte_len(trimmed);
+    if size < byte_len(value)-size { return __woozy_text_compact(trimmed); }
+    return trimmed;
+}
+
+pub func trim_start(value string) string {
+    let length = len(value);
+    return trimmed_slice(value,trim_start_index(value,length),length,length,false);
 }
 pub func trim_end(value string) string {
     let length = len(value);
-    if length == 0 || !is_space(value[length-1]) { return value; }
-    // Scan disjoint windows. Doubling the width bounds the total cost of
-    // locating their starts by the distance to the cut.
-    var end = length-1;
-    var width usize = 1;
-    for end > 0 {
-        let start = end-width;
-        var offset = __woozy_text_cursor_at(value,start);
-        var cut = start;
-        for var index usize = start; index < end; index += 1 {
-            let read = __woozy_text_cursor_read(value,offset);
-            offset += read & CURSOR_STEP_MASK;
-            if !is_space(u32(read >> 32)) { cut = index+1; }
-        }
-        if cut != start {
-            let prefix = value[0:cut];
-            let size = byte_len(prefix);
-            if size < byte_len(value)-size { return text_from_buffer(bytes(prefix)); }
-            return prefix;
-        }
-        end = start;
-        if width > end/2 { width = end; }
-        else { width *= 2; }
-    }
-    return "";
+    return trimmed_slice(value,0,trim_end_index(value,0,length),length,false);
 }
 pub func strip_prefix(value string, prefix string) option.Option[string] {
     if !starts_with(value,prefix) { return option.Option[string].None; }
@@ -545,11 +527,6 @@ func utf8_next(data Vec[u8], offset usize) usize {
     if first < 0xf0 { return offset+3; }
     return offset+4;
 }
-func utf8_prev(data Vec[u8], end usize) usize {
-    var start = end-1;
-    for start > 0 && (data[start] & 0xc0) == 0x80 { start -= 1; }
-    return start;
-}
 func utf8_decode(data Vec[u8], offset usize) u32 {
     let first = u32(data[offset]);
     if first < 0x80 { return first; }
@@ -562,12 +539,4 @@ func utf8_decode(data Vec[u8], offset usize) u32 {
     }
     return ((first & 0x07) << 18) | ((u32(data[offset+1]) & 0x3f) << 12) |
         ((u32(data[offset+2]) & 0x3f) << 6) | (u32(data[offset+3]) & 0x3f);
-}
-func text_from_span(data Vec[u8], start usize, end usize) string {
-    // Callers pass complete UTF-8 code point spans from an existing string.
-    try {
-        return from_bytes(data[start:end]);
-    } catch error Error {
-        return "";
-    }
 }

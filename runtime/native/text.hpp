@@ -12,7 +12,7 @@ struct LangText {
 
 // Inputs contain valid UTF-8 and an exact Unicode scalar count. Literal
 // storage has no owner. Outputs own one reference and need no NUL terminator.
-// Output storage is uninitialized, except concat/slice may replace an input
+// Output storage is uninitialized, except concat/slice/compact may replace an input
 // descriptor in place; that case releases the overwritten reference.
 extern "C" {
 void lang_text_concat_v1(LangText *out, const LangText *a,
@@ -28,6 +28,9 @@ void lang_text_slice_v1(LangText *out, const LangText *text,
 // A nonempty Native cursor slice retains its original source storage.
 uint64_t lang_text_cursor_at_v1(const LangText *text, uint64_t index) noexcept;
 uint64_t lang_text_cursor_read_v1(const LangText *text, uint64_t cursor) noexcept;
+// Backward read takes the end boundary of a scalar and packs its byte width.
+uint64_t lang_text_cursor_read_back_v1(const LangText *text, uint64_t end) noexcept;
+void lang_text_compact_v1(LangText *out, const LangText *text) noexcept;
 void lang_text_cursor_slice_v1(LangText *out, const LangText *text,
                               uint64_t start, uint64_t end) noexcept;
 uint64_t lang_text_count_rune_v1(const LangText *text, uint32_t rune) noexcept;

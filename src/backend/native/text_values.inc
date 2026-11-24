@@ -59,6 +59,8 @@
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
     case SystemOperation::text_cursor_at:
       return runtime("lang_text_cursor_at_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_read_back:
+      return runtime("lang_text_cursor_read_back_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_cursor_read: {
       // A bounded ASCII lead byte has the same packed result as the runtime
       // decoder and advances by one byte. Check the descriptor byte length
@@ -104,6 +106,14 @@
       return runtime("lang_text_count_rune_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_bytes:
       return runtime("lang_text_bytes_v1", builder.getPtrTy(), {pointer(0)});
+    case SystemOperation::text_compact: {
+      auto *out = storage(lower_type(i.type));
+      start_lifetime(out);
+      runtime("lang_text_compact_v1", builder.getVoidTy(), {out, pointer(0)});
+      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
+      end_lifetime(out);
+      return loaded;
+    }
     case SystemOperation::text_cursor_slice:
     case SystemOperation::unicode_text_take: {
       auto *out = storage(lower_type(i.type));

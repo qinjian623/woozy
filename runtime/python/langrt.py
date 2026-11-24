@@ -1745,6 +1745,13 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             if not 0 <= index < len(value):
                 raise Panic('Index out of bounds')
             return (ord(value[index]) << 32) | 1
+        if operation == 'text_cursor_read_back':
+            value, index = args
+            if not 0 < index <= len(value):
+                raise Panic('Index out of bounds')
+            return (ord(value[index - 1]) << 32) | 1
+        if operation == 'text_compact':
+            return args[0]
         if operation == 'text_cursor_slice':
             return _text_cursor_slice(*args)
         if operation == 'text_count_rune':

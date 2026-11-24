@@ -779,7 +779,7 @@ func e_value_system_call(instruction nativeir.Instruction,
                     actual, inout state);
                 return option.Option[Value].Some(value);
             }
-            if operation == 228 || operation == 235 {
+            if operation == 228 || operation == 235 || operation == 241 {
                 let layout = lower_type(instruction.type_id, inout state);
                 let out = storage(layout, inout state);
                 start_lifetime(out, inout state);
@@ -788,10 +788,14 @@ func e_value_system_call(instruction nativeir.Instruction,
                 var actual Vec[Value] = [];
                 vec.push(actual, out);
                 vec.push(actual, source_address);
-                vec.push(actual, args[1]);
-                vec.push(actual, args[2]);
                 var name = "lang_unicode_text_take_v1";
-                if operation == 235 { name = "lang_text_cursor_slice_v1"; }
+                if operation == 241 {
+                    name = "lang_text_compact_v1";
+                } else {
+                    vec.push(actual, args[1]);
+                    vec.push(actual, args[2]);
+                    if operation == 235 { name = "lang_text_cursor_slice_v1"; }
+                }
                 runtime(name, "void", actual, inout state);
                 let loaded = e_load(layout, out, inout state);
                 end_lifetime(out, inout state);
@@ -846,11 +850,12 @@ func e_value_system_call(instruction nativeir.Instruction,
                     decoded.reference + ", " + slow_end.reference + " ]",
                     inout state));
             }
-            if operation == 233 || operation == 236 {
+            if operation == 233 || operation == 236 || operation == 240 {
                 let receiver_type = value_type(state, instruction.inputs[0]);
                 let address = value_address(receiver_type, args[0], inout state);
                 var name = "lang_text_cursor_at_v1";
                 if operation == 236 { name = "lang_text_count_rune_v1"; }
+                if operation == 240 { name = "lang_text_cursor_read_back_v1"; }
                 return option.Option[Value].Some(
                     runtime(name, "i64", [address, args[1]], inout state));
             }

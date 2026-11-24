@@ -75,7 +75,9 @@ enum class SystemOperation : uint16_t {
   // first <= last rotates toward the end; first > last rotates [last, first]
   // toward the front. One private operation keeps both storage moves bounded.
   vec_rotate_right_one = 238,
-  map_probe_requires_copy = 239
+  map_probe_requires_copy = 239,
+  text_cursor_read_back = 240,
+  text_compact = 241
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -182,7 +184,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 68> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 70> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -196,6 +198,8 @@ inline constexpr std::array<SystemOperationSpec, 68> value_system_operations{{
   {SystemOperation::text_cursor_read, "__woozy_text_cursor_read", "u64", {"string", "u64"}, 2, "std/text"},
   {SystemOperation::text_cursor_slice, "__woozy_text_cursor_slice", "string", {"string", "u64", "u64"}, 3, "std/text"},
   {SystemOperation::text_count_rune, "__woozy_text_count_rune", "usize", {"string", "u32"}, 2, "std/text"},
+  {SystemOperation::text_cursor_read_back, "__woozy_text_cursor_read_back", "u64", {"string", "u64"}, 2, "std/text"},
+  {SystemOperation::text_compact, "__woozy_text_compact", "string", {"string"}, 1, "std/text"},
   {SystemOperation::vec_empty, "__woozy_vec_empty", "Vec[A]", {}, 0, "std/vec", 1},
   {SystemOperation::vec_make, "__woozy_vec_make", "Vec[A]", {"usize", "A"}, 2, "std/vec", 1},
   {SystemOperation::vec_len, "__woozy_vec_len", "usize", {"Vec[A]"}, 1, "std/vec", 1},
