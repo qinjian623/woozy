@@ -30,10 +30,10 @@ MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. 216-227 are reserved for
-# independent pending operations; this branch adds only explicit op 228.
-EXPECTED_OPERATION_IDS = tuple(range(216)) + (228,)
+# independent pending operations.
+EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229)
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
-NEW_OPERATIONS = (213, 214, 215, 228)
+NEW_OPERATIONS = (213, 214, 215, 228, 229)
 
 
 def fail(message: str) -> None:
@@ -185,6 +185,8 @@ def validate_registry_entries() -> None:
               '"i64", {"Vec[u8]", "usize"}, 2},'),
         228: ('{SystemOperation::unicode_text_take, "__woozy_unicode_text_take", '
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
+        229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
+              '"bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -199,6 +201,9 @@ def validate_registry_entries() -> None:
         228: ('OperationSpec(operation: 228, name: "__woozy_unicode_text_take", '
               'result: "string", parameters: ["string", "Vec[u64]", "usize"], '
               'owner: "std/unicode", type_arity: 0)'),
+        229: ('OperationSpec(operation: 229, name: "__woozy_vec_try_move_trivial", '
+              'result: "bool", parameters: ["Vec[A]", "usize", "usize", "usize"], '
+              'owner: "std/vec", type_arity: 1)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:
@@ -235,7 +240,7 @@ def validate_oracle(output: str) -> None:
                           if line.split()[1] == f"op.{operation}.none"), "")
         if not module_line.startswith(f"case op.{operation}.module ok "):
             fail(f"oracle: missing successful module case for op.{operation}")
-        if operation in (215, 228):
+        if operation in (215, 228, 229):
             # These signatures contain only builtin types, so no module is
             # required for either spelling.
             if none_line != module_line.replace(".module ", ".none ", 1):

@@ -125,6 +125,9 @@
       runtime("lang_vec_resize_v1", builder.getVoidTy(), {args[0], args[1], element_storage(element(), args[2])}); break;
     case SystemOperation::vec_clear:
       runtime("lang_vec_clear_v1", builder.getVoidTy(), {args[0]}); break;
+    case SystemOperation::vec_try_move_trivial:
+      return runtime("lang_vec_try_move_trivial_v1", builder.getInt1Ty(),
+                     {args[0], args[1], args[2], args[3]});
     default: fail("invalid verified value operation");
     }
     return builder.getInt8(0);

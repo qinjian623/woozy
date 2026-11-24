@@ -80,6 +80,47 @@ static int test_nullable_callbacks() {
   return 0;
 }
 
+static void test_trivial_range_move() {
+  for (uint64_t stride : {1, 3, 4, 12, 32, 33}) {
+    for (bool right : {false, true}) {
+      constexpr uint64_t length = 49;
+      auto *v = lang_vec_new_v1(length, stride, nullptr, nullptr);
+      std::vector<unsigned char> original(length * stride);
+      for (uint64_t byte = 0; byte < original.size(); ++byte)
+        original[byte] = static_cast<unsigned char>(byte * 13);
+      for (uint64_t i = 0; i < length; ++i)
+        lang_vec_init_v1(v, original.data() + i * stride);
+      const uint64_t destination = right ? 2 : 0;
+      const uint64_t source = right ? 0 : 2;
+      constexpr uint64_t count = length - 2;
+      const auto before = allocation;
+      if (!lang_vec_try_move_trivial_v1(v, destination, source, count) ||
+          !lang_vec_try_move_trivial_v1(v, length, length, 0) ||
+          allocation != before || v->length != length || v->initialized != length)
+        std::abort();
+      for (uint64_t i = 0; i < length; ++i) {
+        const uint64_t expected = i >= destination && i - destination < count
+            ? source + i - destination : i;
+        if (memcmp(lang_vec_at_v1(v, i), original.data() + expected * stride,
+                   stride) != 0)
+          std::abort();
+      }
+      lang_vec_release_v1(v);
+    }
+  }
+
+  drops.clear();
+  auto *owned = lang_vec_new_v1(2, sizeof(int), copy, drop);
+  for (int i : {1, 2}) lang_vec_init_v1(owned, &i);
+  if (lang_vec_try_move_trivial_v1(owned, 1, 0, 1) ||
+      *static_cast<int *>(lang_vec_at_v1(owned, 1)) != 2 ||
+      !drops.empty())
+    std::abort();
+  lang_vec_release_v1(owned);
+  if (drops != std::vector<int>{2, 1}) std::abort();
+  drops.clear();
+}
+
 static void test_freestanding_memory() {
   // Test memset
   char buf[32];
@@ -305,6 +346,7 @@ int main(int argc, char **argv) {
   if (nullable) return nullable;
   int single = test_single_allocation_storage();
   if (single) return single;
+  test_trivial_range_move();
 
   std::puts("reverse-index-and-prefix-ok");
   return 0;

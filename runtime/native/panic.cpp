@@ -181,6 +181,22 @@ void copy_word(void *destination, const void *source) noexcept {
   __builtin_memcpy(destination, &bits, sizeof(bits));
 }
 
+using CopyLane = uint64_t __attribute__((vector_size(16)));
+constexpr uint64_t kCopyBlockBytes = 4 * sizeof(CopyLane);
+
+void copy_block(unsigned char *dst, const unsigned char *src) noexcept {
+  // Load the entire block before any store because the lanes may overlap.
+  CopyLane first, second, third, fourth;
+  __builtin_memcpy(&first, src, sizeof(CopyLane));
+  __builtin_memcpy(&second, src + sizeof(CopyLane), sizeof(CopyLane));
+  __builtin_memcpy(&third, src + 2 * sizeof(CopyLane), sizeof(CopyLane));
+  __builtin_memcpy(&fourth, src + 3 * sizeof(CopyLane), sizeof(CopyLane));
+  __builtin_memcpy(dst, &first, sizeof(CopyLane));
+  __builtin_memcpy(dst + sizeof(CopyLane), &second, sizeof(CopyLane));
+  __builtin_memcpy(dst + 2 * sizeof(CopyLane), &third, sizeof(CopyLane));
+  __builtin_memcpy(dst + 3 * sizeof(CopyLane), &fourth, sizeof(CopyLane));
+}
+
 [[gnu::noinline]]
 void copy_bytes_variable(void *destination, const void *source,
                          uint64_t count) noexcept {
@@ -192,8 +208,15 @@ void copy_bytes_variable(void *destination, const void *source,
   // Disjoint ranges can sweep forward even when the destination is higher;
   // only a higher destination closer than count needs the reverse sweep.
   if (d < s || d - s >= count) {
-    for (uint64_t i = 0; i < count; ++i) dst[i] = src[i];
+    uint64_t i = 0;
+    for (; count - i >= kCopyBlockBytes; i += kCopyBlockBytes)
+      copy_block(dst + i, src + i);
+    for (; i < count; ++i) dst[i] = src[i];
   } else {
+    while (count >= kCopyBlockBytes) {
+      count -= kCopyBlockBytes;
+      copy_block(dst + count, src + count);
+    }
     for (uint64_t i = count; i > 0; --i) dst[i - 1] = src[i - 1];
   }
 }
@@ -491,6 +514,19 @@ extern "C" void lang_vec_set_v1(LangVec *v, uint64_t i, const void *value) noexc
   }
   if (v->drop) v->drop(staged_old.data());
   if (alias) lang_free_v1(alias);
+}
+extern "C" bool lang_vec_try_move_trivial_v1(
+    LangVec *v, uint64_t destination, uint64_t source, uint64_t count) noexcept {
+  const uint64_t limit = v->initialized < v->length ? v->initialized : v->length;
+  if (destination > limit || source > limit ||
+      count > limit - destination || count > limit - source)
+    vec_panic(4);
+  if (has_owner_ops(v)) return false;
+  if (count && destination != source) {
+    (void)checked_payload_bytes(limit, v->stride);
+    copy_bytes(element(v, destination), element(v, source), count * v->stride);
+  }
+  return true;
 }
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {

@@ -890,6 +890,18 @@ func test_vec_api() i32 {
         values[2] != 7 { return 303; }
     vec.clear(values);
     if !vec.is_empty(values) { return 304; }
+
+    let managed = [box.new[i32](1), box.new[i32](3), box.new[i32](4)];
+    let middle = box.new[i32](2);
+    vec.insert(managed, 1, middle);
+    if vec.len(managed) != 4 || box.get(managed[0]) != 1 ||
+        box.get(managed[1]) != 2 || box.get(managed[2]) != 3 ||
+        box.get(managed[3]) != 4 { return 350; }
+    let removed = vec.remove_at(managed, 1);
+    box.set(middle, 20);
+    if box.get(removed) != 20 || vec.len(managed) != 3 ||
+        box.get(managed[0]) != 1 || box.get(managed[1]) != 3 ||
+        box.get(managed[2]) != 4 { return 351; }
     return 0;
 }
 

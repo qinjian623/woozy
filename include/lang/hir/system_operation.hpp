@@ -52,7 +52,8 @@ enum class SystemOperation : uint16_t {
   // Package-private code-point cursor slicing for std/unicode.graphemes.
   // 216-227 are reserved for independent pending operations; the explicit
   // value keeps this operation stable when those entries are appended.
-  unicode_text_take = 228
+  unicode_text_take = 228,
+  vec_try_move_trivial = 229
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -141,7 +142,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 58> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 59> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -160,6 +161,7 @@ inline constexpr std::array<SystemOperationSpec, 58> value_system_operations{{
   {SystemOperation::vec_pop, "__woozy_vec_pop", "Option[A]", {"Vec[A]"}, 1, "std/vec", 1},
   {SystemOperation::vec_resize, "__woozy_vec_resize", "Unit", {"Vec[A]", "usize", "A"}, 3, "std/vec", 1},
   {SystemOperation::vec_clear, "__woozy_vec_clear", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
+  {SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", "bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},
   {SystemOperation::num_parse_i64, "__woozy_num_parse_i64", "Result[i64,i32]", {"string"}, 1, "std/strconv"},
   {SystemOperation::num_format_i64, "__woozy_num_format_i64", "string", {"i64"}, 1, "std/strconv"},
   {SystemOperation::num_parse_u64, "__woozy_num_parse_u64", "Result[u64,i32]", {"string"}, 1, "std/strconv"},

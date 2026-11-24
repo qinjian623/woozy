@@ -36,8 +36,10 @@ pub func insert[T](values Vec[T], index usize, value T) {
         return;
     }
     push(values, value);
-    for var position usize = length; position > index; position -= 1 {
-        values[position] = values[position - 1];
+    if index < length && !__woozy_vec_try_move_trivial[T](values, index + 1, index, length - index) {
+        for var position usize = length; position > index; position -= 1 {
+            values[position] = values[position - 1];
+        }
     }
     values[index] = value;
 }
@@ -59,8 +61,11 @@ pub func remove_at[T](values Vec[T], index usize) T {
         return last;
     }
     let removed = values[index];
-    for var position usize = index; position + 1 < length - 1; position += 1 {
-        values[position] = values[position + 1];
+    let count = length - index - 2;
+    if count != 0 && !__woozy_vec_try_move_trivial[T](values, index, index + 1, count) {
+        for var position usize = index; position + 1 < length - 1; position += 1 {
+            values[position] = values[position + 1];
+        }
     }
     values[length - 2] = last;
     return removed;
