@@ -878,6 +878,12 @@ func test_is_empty_helpers() i32 {
     return 0;
 }
 
+func read_vec_snapshot(table Vec[Vec[i32]], replace func()) i32 {
+    let snapshot = table[0];
+    replace();
+    return snapshot[0];
+}
+
 func test_vec_api() i32 {
     let values = vec.empty[i32]();
     if !vec.is_empty(values) { return 283; }
@@ -908,6 +914,11 @@ func test_vec_api() i32 {
     if box.get(removed) != 20 || vec.len(managed) != 3 ||
         box.get(managed[0]) != 1 || box.get(managed[1]) != 3 ||
         box.get(managed[2]) != 4 { return 351; }
+
+    // A closure can replace a slot without changing an earlier read.
+    let table Vec[Vec[i32]] = [[17]];
+    let replace = func() { table[0] = [42]; };
+    if read_vec_snapshot(table, replace) != 17 || table[0][0] != 42 { return 430; }
     return 0;
 }
 
