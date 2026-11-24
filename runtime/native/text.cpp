@@ -255,8 +255,24 @@ extern "C" int64_t lang_text_from_utf8_v1(LangText *out,
   *out = {};
   if (bytes && !data) return kInvalid;
   auto result = allocate(bytes, 0);
-  copy(const_cast<uint8_t *>(result.data), data, bytes);
-  if (!count(result.data, result.bytes, result.length)) {
+  auto *destination = const_cast<uint8_t *>(result.data);
+  constexpr uint64_t kHighBits = 0x8080808080808080ULL;
+  bool ascii = true;
+  uint64_t offset = 0;
+  for (; bytes - offset >= sizeof(uint64_t); offset += sizeof(uint64_t)) {
+    uint64_t word;
+    __builtin_memcpy(&word, data + offset, sizeof word);
+    __builtin_memcpy(destination + offset, &word, sizeof word);
+    ascii &= (word & kHighBits) == 0;
+  }
+  for (; offset < bytes; ++offset) {
+    const uint8_t byte = data[offset];
+    destination[offset] = byte;
+    ascii &= byte < 0x80;
+  }
+  if (ascii) {
+    result.length = bytes;
+  } else if (!count(result.data, result.bytes, result.length)) {
     if (result.owner) lang_handle_release_v1(result.owner);
     return kInvalid;
   }
