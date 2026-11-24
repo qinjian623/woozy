@@ -11,6 +11,8 @@ func main() i32 throws strconv.Error {
     if text.join(text.split("中,,😀,",","),"|") != "中||😀|" { return 1; }
     if text.replace("😀ab😀","","|") != "|😀|a|b|😀|" || text.repeat("😀x",9) != "😀x😀x😀x😀x😀x😀x😀x😀x😀x" { return 2; }
     if option.unwrap_or(option.map[i32,i32](option.Option[i32].Some(3),twice),0) != 6 { return 3; }
+    let present = option.Option[Vec[i32]].Some([3]);
+    if option.is_none(present) || !option.is_none(option.Option[Vec[i32]].None) { return 31; }
     if result.unwrap_or(result.map[i32,i32,string](result.Result[i32,string].Ok(4),twice),0) != 8 { return 4; }
     if path.clean("a/../b//./c") != "b/c" || path.dir("/a/中.wz") != "/a" { return 5; }
     if path.join("", "file") != "file" || path.join("", "") != "." ||
