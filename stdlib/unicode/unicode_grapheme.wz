@@ -1,9 +1,10 @@
 // Extended grapheme cluster boundaries implemented in Woozy.
 //
-// unicode.wz's public boundaries, grapheme_count and graphemes functions call
-// the package-internal wz_grapheme_boundaries below.  It is deliberately not
-// `pub`: other packages use std/unicode.boundaries, and a package-internal
-// helper keeps the public surface unchanged.  The property data lives in
+// unicode.wz's public boundaries and graphemes functions call the
+// package-internal wz_grapheme_boundaries below; grapheme_count calls
+// wz_grapheme_count.  They are deliberately not `pub`: other packages use the
+// public std/unicode API, and package-internal helpers keep that surface
+// unchanged.  The property data lives in
 // unicode_grapheme_tables.wz and is generated from Unicode 18.0.0 by
 // tools/generate_unicode_grapheme_wz.py; do not edit the table by hand.
 //
@@ -13,6 +14,7 @@ package unicode;
 
 import "std/text" as text;
 import "std/vec" as vec;
+import "std/option" as option;
 
 // UAX #29 extended grapheme cluster boundaries as code-point indexes.
 // The result starts with 0 and ends with the code-point count.  The empty
@@ -80,8 +82,18 @@ func wz_grapheme_boundaries(value string) Vec[usize] {
     let points = vec.empty[usize]();
     vec.reserve(points,total+1);
     vec.push(points,0);
+    let ignored = scan_mixed(value,option.Option[Vec[usize]].Some(points));
+    vec.push(points,total);
+    return points;
+}
+
+// Non-ASCII grapheme scan shared by boundaries and grapheme_count.  It counts
+// clusters starting at 1 and appends only internal boundaries to `points`;
+// callers own the 0 and end sentinels.  Count-only callers pass None.
+func scan_mixed(value string, points option.Option[Vec[usize]]) usize {
     let data = text.bytes(value);
     let data_total = vec.len(data);
+    var count usize = 1;
     var offset usize = 0;
     var index usize = 1;
     var first u32 = 0;
@@ -106,14 +118,43 @@ func wz_grapheme_boundaries(value string) Vec[usize] {
         let right_class = current & 0xff;
         let right_icb = current >> 8;
         if grapheme_break_step(left_class,right_class,left_icb,right_icb,inout state) {
-            vec.push(points,index);
+            count += 1;
+            switch points {
+                case option.Option.Some(out): vec.push(out,index);
+                case option.Option.None: {}
+            }
         }
         left_class = right_class;
         left_icb = right_icb;
         index += 1;
     }
-    vec.push(points,index);
-    return points;
+    return count;
+}
+
+// Cluster count without materializing boundary positions.
+func wz_grapheme_count(value string) usize {
+    let total = text.len(value);
+    if total == 0 { return 0; }
+    if total == 1 { return 1; }
+    if text.byte_len(value) == total {
+        if total <= 256 {
+            var crlf usize = 0;
+            var previous = value[0];
+            for var index usize = 1; index < total; index += 1 {
+                let current = value[index];
+                if previous == 0x0d && current == 0x0a { crlf += 1; }
+                previous = current;
+            }
+            return total - crlf;
+        }
+        let data = text.bytes(value);
+        var crlf usize = 0;
+        for var index usize = 1; index < total; index += 1 {
+            if data[index-1] == 0x0d && data[index] == 0x0a { crlf += 1; }
+        }
+        return total - crlf;
+    }
+    return scan_mixed(value,option.Option[Vec[usize]].None);
 }
 
 // ASCII properties without the generated table.  This is exactly the content

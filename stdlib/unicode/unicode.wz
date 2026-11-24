@@ -204,7 +204,7 @@ func string_from_bytes(data Vec[u8]) string {
 // API delegates to the package-internal Woozy scanner in unicode_grapheme.wz;
 // the native utf8proc builtin is no longer used by this function.
 pub func boundaries(value string) Vec[usize] { return wz_grapheme_boundaries(value); }
-pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-1; }
+pub func grapheme_count(value string) usize { return wz_grapheme_count(value); }
 pub func graphemes(value string) Vec[string] {
     let total = text.len(value);
     if total == 0 { return vec.empty[string](); }
