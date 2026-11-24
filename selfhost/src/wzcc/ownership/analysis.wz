@@ -1206,18 +1206,46 @@ func binary_pure(op hir.BinaryOp) bool {
     }
 }
 
+func value_field_read_root(analysis inout Analysis, id usize)
+    option.Option[usize] throws Problem {
+    let node = node_at(analysis, id);
+    switch node_read(node) {
+        case option.Option.Some(_): return option.Option[usize].Some(id);
+        case option.Option.None: {}
+    }
+    if !kind_is(kind_of(node), hir.NodeKind.FieldRead) ||
+       vec.len(node.children) != 1 {
+        return option.Option[usize].None;
+    }
+    let base = node_at(analysis, child_at(node, 0));
+    let base_type = type_at(analysis.module, base.type_id);
+    if !type_kind_is(base_type.kind, model.TypeKind.NominalStruct) ||
+       !owned(inout analysis, base.type_id) {
+        return option.Option[usize].None;
+    }
+    return value_field_read_root(inout analysis, child_at(node, 0));
+}
+
 func local_index_borrow(analysis inout Analysis, receiver usize,
                         index usize, reading bool)
     bool throws Problem {
     let receiver_node = node_at(analysis, receiver);
+    let field_path = kind_is(kind_of(receiver_node), hir.NodeKind.FieldRead);
     var symbol usize = 0;
-    switch node_read(receiver_node) {
-        case option.Option.Some(value): symbol = value.symbol;
+    switch value_field_read_root(inout analysis, receiver) {
+        case option.Option.Some(root):
+            let root_node = node_at(analysis, root);
+            switch node_read(root_node) {
+                case option.Option.Some(value): symbol = value.symbol;
+                case option.Option.None: return false;
+            }
         case option.Option.None: return false;
     }
     // Reads can borrow pattern and loop bindings without a declaration.
     if (!reading && declaration_lookup(analysis, symbol) < 0) ||
-       ids_contains(analysis.parameter_symbols, symbol) {
+       ids_contains(analysis.parameter_symbols, symbol) ||
+       (field_path &&
+        (!reading || declaration_lookup(analysis, symbol) < 0)) {
         return false;
     }
     let found = local_lookup(analysis, symbol);

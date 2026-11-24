@@ -803,19 +803,44 @@ class Analysis {
     }
   }
 
+  // The root of an ordinary value-struct field path. Only FieldRead nodes over
+  // owning concrete NominalStruct values may be traversed; indexes, C fields,
+  // calls and other computed receivers have no stable inline storage path.
+  std::optional<HirNodeId> value_field_read_root(HirNodeId id) const {
+    const auto &x = n(id);
+    if (std::get_if<Read>(&x.data))
+      return id;
+    if (x.kind() != NodeKind::field_read || x.children.size() != 1)
+      return {};
+    const auto &base = n(x.children[0]);
+    const auto &base_type = ty(m, base.type);
+    if (base_type.kind != TypeKind::NominalStruct || !owned(base.type))
+      return {};
+    return value_field_read_root(x.children[0]);
+  }
+
   // A direct read of a trivial or concrete Vec element, or a direct
   // trivial-element write, of a plain local Vec may borrow the binding's
   // existing handle when the complete full expression cannot move, inout
   // borrow, or rebind that binding. The binding owns the Vec through the full
   // expression, so the old receiver copy was only an extra non-final handle.
-  // Parameters keep their separate rule; fields, computed receivers, other
-  // owning elements and impure indexes stay on the copy path. Reads can also
-  // borrow pattern and loop bindings, which have no declaration node.
+  // A read-only indexed field path of an owning value-struct local borrows the
+  // same root: every component is inline storage and no index/C-field/call or
+  // mutation lies between the root and the Vec field. Parameters keep their
+  // separate rule; computed receivers, other owning elements, field writes and
+  // impure indexes stay on the copy path. Reads can also borrow pattern and
+  // loop bindings for direct Vec receivers, which have no declaration node.
   bool local_index_borrow(HirNodeId receiver, HirNodeId index,
                           bool reading) const {
-    const auto *read = std::get_if<Read>(&n(receiver).data);
+    const bool field_path = n(receiver).kind() == NodeKind::field_read;
+    auto root = value_field_read_root(receiver);
+    if (!root)
+      return false;
+    const auto *read = std::get_if<Read>(&n(*root).data);
     if (!read || (!reading && !declarations.count(read->symbol.value)) ||
-        parameter_symbols.count(read->symbol.value))
+        parameter_symbols.count(read->symbol.value) ||
+        (field_path &&
+         (!reading || !declarations.count(read->symbol.value))))
       return false;
     auto local = locals.find(read->symbol.value);
     if (local == locals.end() || local->second.read_only_capture ||

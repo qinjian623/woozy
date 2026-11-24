@@ -1504,6 +1504,24 @@ void expect_use(const IndexReadRecord &r, UseKind kind, bool temporary,
   need(r.temporary == temporary,
        std::string(what) + ": wrong receiver temporary");
 }
+void expect_field_receiver_use(const HirModule &m, const IndexReadRecord &r,
+                               UseKind kind, bool temporary,
+                               std::string_view what) {
+  need(r.temporary == temporary,
+       std::string(what) + ": wrong receiver temporary");
+  HirNodeId base = r.receiver;
+  while (m.nodes[base.value].kind() == NodeKind::field_read)
+    base = m.nodes[base.value].children[0];
+  need(std::get_if<Read>(&m.nodes[base.value].data) != nullptr,
+       std::string(what) + ": field receiver has no Read root");
+  std::optional<UseKind> actual;
+  for (const auto &u : m.ownership.uses)
+    if (u.consumer == base && u.operand == 0)
+      actual = u.kind;
+  need(actual && *actual == kind,
+       std::string(what) + ": wrong field root use " +
+           (actual ? std::to_string(int(*actual)) : "missing"));
+}
 const CleanupStep *temporary_destroy(const HirModule &m, HirNodeId fe,
                                      HirNodeId producer) {
   for (const auto &f : m.ownership.full_expressions)
@@ -1733,9 +1751,45 @@ void local_index_borrow_tests() {
   auto local_field = accepted(
       "struct S {items Vec[i32];} func f() i32 {let s=S(items:[1]);return s.items[0];}");
   facts(local_field);
-  auto local_field_read = only_index_read(local_field, "f");
-  need(!local_field_read.reader && local_field_read.temporary,
-       "local field receiver keeps its owned temporary");
+  expect_field_receiver_use(local_field, only_index_read(local_field, "f"),
+                            UseKind::borrow, false,
+                            "local value-struct field receiver");
+  auto nested_local_field = accepted(
+      "struct I {items Vec[i32];} struct O {inner I;} func f() i32 {let "
+      "o=O(inner:I(items:[1]));return o.inner.items[0];}");
+  facts(nested_local_field);
+  expect_field_receiver_use(
+      nested_local_field, only_index_read(nested_local_field, "f"),
+      UseKind::borrow, false, "nested local value-struct field receiver");
+  auto local_field_write = accepted(
+      "struct S {items Vec[i32];} func f() i32 {var s=S(items:[1]);"
+      "s.items[0]=2;return s.items[0];}");
+  facts(local_field_write);
+  expect_field_receiver_use(
+      local_field_write, only_index_place(local_field_write, "f"),
+      UseKind::copy, true, "local field receiver write stays owned");
+  auto field_inout = accepted(
+      "struct S {items Vec[i32];} func replace(s inout S) i32 "
+      "{s=S(items:[2]);return 0;} func f() i32 {var s=S(items:[1]);return "
+      "s.items[0]+replace(inout s);}");
+  facts(field_inout);
+  expect_field_receiver_use(field_inout, only_index_read(field_inout, "f"),
+                            UseKind::copy, true,
+                            "field receiver with same full-expression inout");
+  auto field_callback_index = accepted(
+      "struct S {items Vec[i32];} func f() i32 {let s=S(items:[1]);let "
+      "pick=func() i32 {return 0;};return s.items[pick()];}");
+  facts(field_callback_index);
+  expect_field_receiver_use(
+      field_callback_index, only_index_read(field_callback_index, "f"),
+      UseKind::copy, true, "field receiver with callback index");
+  auto field_rebound = accepted(
+      "struct S {items Vec[i32];} func f() i32 {var s=S(items:[1]);"
+      "s=S(items:[2]);return s.items[0];}");
+  facts(field_rebound);
+  expect_field_receiver_use(field_rebound, only_index_read(field_rebound, "f"),
+                            UseKind::borrow, false,
+                            "field receiver after a completed rebind");
   auto computed_receiver = accepted(
       "func make() Vec[i32] {return [1];} func f() i32 {return make()[0];}");
   need(verify(computed_receiver).success(), "computed receiver public verify");

@@ -1,0 +1,30 @@
+package app;
+struct S {items Vec[i32];}
+struct Inner {items Vec[i32];}
+struct Outer {inner Inner;}
+func replace(s inout S) i32 {
+    s = S(items: [7, 8]);
+    return 0;
+}
+func pick() i32 {return 0;}
+func read_field() i32 {
+    let s = S(items: [3, 5]);
+    return s.items[1];
+}
+func read_nested() i32 {
+    let o = Outer(inner: Inner(items: [11]));
+    return o.inner.items[0];
+}
+func main() i32 {
+    if read_field() != 5 {return 1;}
+    if read_nested() != 11 {return 2;}
+    var s = S(items: [1, 2]);
+    let before = s.items[0];
+    if before != 1 {return 3;}
+    let touched = s.items[0] + replace(inout s);
+    if touched != 1 {return 4;}
+    if s.items[0] != 7 {return 5;}
+    let indexed = s.items[pick()];
+    if indexed != 7 {return 6;}
+    return 0;
+}
