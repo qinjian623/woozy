@@ -493,15 +493,18 @@ func e_extra_math(instruction nativeir.Instruction, operation u32,
                   args Vec[Value], state inout Emitter) option.Option[Value] throws Error {
     let name = e_math_name(operation);
     if name == "" { return option.Option[Value].None; }
-    if operation == 135 || operation == 136 {
-        // Match the old runtime predicate's absolute-exponent test inline:
-        // isinf is |bits| == 0x7ff0..., isfinite is |bits| < 0x7ff0...
-        // This keeps NaN, subnormal and signed-zero behavior and adds no ABI.
+    if operation == 134 || operation == 135 || operation == 136 {
+        // Increasing IEEE 754 magnitudes put finite values before infinity
+        // and NaN encodings after it, regardless of sign.
         let bits = result("i64", "bitcast " + typed(args[0]) + " to i64",
             inout state);
         let magnitude = result("i64", "and i64 " + bits.reference +
             ", 9223372036854775807", inout state);
         let infinity = "9218868437227405312";
+        if operation == 134 {
+            return option.Option[Value].Some(result("i1", "icmp ugt " +
+                typed(magnitude) + ", " + infinity, inout state));
+        }
         if operation == 135 {
             return option.Option[Value].Some(result("i1", "icmp eq " +
                 typed(magnitude) + ", " + infinity, inout state));
@@ -648,6 +651,40 @@ func e_extra_system_call(instruction nativeir.Instruction,
     }
 }
 
+// ---- trivial Vec pop fast path ---------------------------------------------
+
+// lang_vec_pop_v1 rejects an empty pop before the pin check, acquire-loads
+// iterations and panics when pinned, moves the original last slot's bytes, and
+// publishes the shorter length and initialized=min(original initialized,last).
+// The inline path needs one typed load/store to cover the published slot
+// exactly, so it is limited to the non-owning scalar family, whose LLVM
+// allocation size is its published stride and whose alignment fits the 16-byte
+// Vec payload guarantee.  Owning elements, aggregates, zero-sized slots and C
+// layouts keep the runtime ABI call unchanged.
+func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
+    if owning(element, inout state) { return false; }
+    let value = type_of(state, element);
+    switch value.kind {
+        case model.TypeKind.Unit: return true;
+        case model.TypeKind.Bool: return true;
+        case model.TypeKind.SignedInt: return true;
+        case model.TypeKind.UnsignedInt: return true;
+        case model.TypeKind.Isize: return true;
+        case model.TypeKind.Usize: return true;
+        case model.TypeKind.Float: return true;
+        default: return false;
+    }
+}
+
+// The same acquire load of LangVec.iterations the runtime uses.  The inline pop
+// must not weaken the active-iteration pin check.
+func e_vec_iterations_acquire(vec Value, state inout Emitter) Value throws Error {
+    let address = c_gep(VEC_TYPE, vec, 4, inout state);
+    let suffix = vec_memory(true, inout state);
+    return result("i64", "load atomic i64, ptr " + address.reference +
+        " acquire, align 8" + suffix, inout state);
+}
+
 func e_value_system_call(instruction nativeir.Instruction,
                          args Vec[Value],
                          state inout Emitter) option.Option[Value] throws Error {
@@ -683,7 +720,7 @@ func e_value_system_call(instruction nativeir.Instruction,
                     actual, inout state);
                 return option.Option[Value].Some(value);
             }
-            if operation == 228 {
+            if operation == 228 || operation == 235 {
                 let layout = lower_type(instruction.type_id, inout state);
                 let out = storage(layout, inout state);
                 start_lifetime(out, inout state);
@@ -694,7 +731,9 @@ func e_value_system_call(instruction nativeir.Instruction,
                 vec.push(actual, source_address);
                 vec.push(actual, args[1]);
                 vec.push(actual, args[2]);
-                runtime("lang_unicode_text_take_v1", "void", actual, inout state);
+                var name = "lang_unicode_text_take_v1";
+                if operation == 235 { name = "lang_text_cursor_slice_v1"; }
+                runtime(name, "void", actual, inout state);
                 let loaded = e_load(layout, out, inout state);
                 end_lifetime(out, inout state);
                 return option.Option[Value].Some(loaded);
@@ -707,26 +746,14 @@ func e_value_system_call(instruction nativeir.Instruction,
                 let length = e_extract(args[0], 1, "i64", inout state);
                 return option.Option[Value].Some(length);
             }
-            if operation == 230 {
-                let offset = args[1];
-                let bytes = e_text_length(args[0], inout state);
-                let has_bytes = result("i1", "icmp uge i64 " + bytes.reference +
-                    ", 8", inout state);
-                let last = result("i64", "sub i64 " + bytes.reference + ", 8",
-                    inout state);
-                let in_range = result("i1", "icmp ule " + typed(offset) + ", " +
-                    last.reference, inout state);
-                let present = result("i1", "and " + typed(has_bytes) + ", " +
-                    in_range.reference, inout state);
-                let join = e_stdlib_option_begin(instruction.type_id, present,
-                    inout state);
-                let data = e_text_pointer(args[0], inout state);
-                let address = result("ptr", "getelementptr inbounds i8, ptr " +
-                    data.reference + ", " + typed(offset), inout state);
-                let loaded = result("i64", "load i64, ptr " + address.reference +
-                    ", align 1", inout state);
-                let joined = e_stdlib_finish(join, loaded, inout state);
-                return option.Option[Value].Some(joined);
+            if operation == 233 || operation == 234 || operation == 236 {
+                let receiver_type = value_type(state, instruction.inputs[0]);
+                let address = value_address(receiver_type, args[0], inout state);
+                var name = "lang_text_cursor_at_v1";
+                if operation == 234 { name = "lang_text_cursor_read_v1"; }
+                if operation == 236 { name = "lang_text_count_rune_v1"; }
+                return option.Option[Value].Some(
+                    runtime(name, "i64", [address, args[1]], inout state));
             }
             if operation == 33 {
                 let receiver_type = value_type(state, instruction.inputs[0]);
@@ -758,6 +785,10 @@ func e_value_system_call(instruction nativeir.Instruction,
             if operation == 229 {
                 let moved = runtime("lang_vec_try_move_trivial_v1", "i1", args, inout state);
                 return option.Option[Value].Some(moved);
+            }
+            if operation == 237 {
+                let extended = runtime("lang_vec_extend_trivial_v1", "i1", args, inout state);
+                return option.Option[Value].Some(extended);
             }
             if operation >= 34 && operation <= 42 {
                 let declared = type_of(state, instruction.type_id);
@@ -824,6 +855,49 @@ func e_value_system_call(instruction nativeir.Instruction,
                         reference: "0"));
                 }
                 if operation == 40 {
+                    if e_vec_pop_inline(element, inout state) {
+                        let layout = lower_type(element, inout state);
+                        let length = vec_field(args[0], 1, "i64", inout state);
+                        // The empty pop reports None before any pin check.  The
+                        // success branch is the option join's own Some block, so
+                        // the moved SSA value is the payload directly.
+                        let present = c_icmp("ne", "i64", length.reference, "0",
+                            inout state);
+                        let join = e_stdlib_option_begin(instruction.type_id,
+                            present, inout state);
+                        let iterations = e_vec_iterations_acquire(args[0],
+                            inout state);
+                        let pinned = c_icmp("ne", "i64", iterations.reference,
+                            "0", inout state);
+                        guard(pinned, 8, instruction.source, inout state);
+                        let last = c_binop("sub", "i64", length.reference, "1",
+                            inout state);
+                        let data = vec_field(args[0], 5, "ptr", inout state);
+                        let address = result("ptr", "getelementptr " + layout +
+                            ", ptr " + data.reference + ", i64 " +
+                            last.reference, inout state);
+                        let moved = c_load_tagged(layout, address, inout state);
+                        // Publish the shorter prefix before the moved bytes
+                        // leave the Vec; pop never shrinks storage.
+                        let length_field = c_gep(VEC_TYPE, args[0], 1, inout state);
+                        let length_suffix = vec_memory(true, inout state);
+                        append("store i64 " + last.reference + ", ptr " +
+                            length_field.reference + length_suffix, inout state);
+                        let initialized = vec_field(args[0], 2, "i64", inout state);
+                        let clamp = c_icmp("ugt", "i64", initialized.reference,
+                            last.reference, inout state);
+                        let kept = result("i64", "select i1 " + clamp.reference +
+                            ", i64 " + last.reference + ", i64 " +
+                            initialized.reference, inout state);
+                        let initialized_field = c_gep(VEC_TYPE, args[0], 2,
+                            inout state);
+                        let initialized_suffix = vec_memory(true, inout state);
+                        append("store i64 " + kept.reference + ", ptr " +
+                            initialized_field.reference + initialized_suffix,
+                            inout state);
+                        let joined = e_stdlib_finish(join, moved, inout state);
+                        return option.Option[Value].Some(joined);
+                    }
                     let layout = lower_type(element, inout state);
                     let out = element_storage(element, e_zero(layout), inout state);
                     var actual Vec[Value] = [];

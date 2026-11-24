@@ -3772,7 +3772,8 @@ class Checker {
   }
   Expr system_call(Ref r, Ref callee, SymbolId target,
                    const SystemOperationSpec &spec) {
-    if (m.resolved->project->module(r.module).logical_path != spec.owner)
+    if (!system_operation_allows_module(
+            spec, m.resolved->project->module(r.module).logical_path))
       unavailable(r, "system operations can only be called from their owner "
                      "std module");
     std::vector<TypeId> type_args;

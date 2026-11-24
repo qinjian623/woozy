@@ -55,27 +55,21 @@
       return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
     case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
-    case SystemOperation::text_load8: {
-      auto *bytes = builder.CreateExtractValue(args[0], {1});
-      auto *offset = args[1];
-      auto *present = builder.CreateAnd(
-          builder.CreateICmpUGE(bytes, builder.getInt64(8)),
-          builder.CreateICmpULE(offset, builder.CreateSub(bytes, builder.getInt64(8))));
-      return stdlib_option(i.type, present, [&]() -> llvm::Value * {
-        auto *data = builder.CreateExtractValue(args[0], {0});
-        auto *address = builder.CreateGEP(builder.getInt8Ty(), data, offset);
-        auto *load = builder.CreateLoad(builder.getInt64Ty(), address);
-        load->setAlignment(llvm::Align(1));
-        return load;
-      });
-    }
+    case SystemOperation::text_cursor_at:
+      return runtime("lang_text_cursor_at_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_read:
+      return runtime("lang_text_cursor_read_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_count_rune:
+      return runtime("lang_text_count_rune_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_bytes:
       return runtime("lang_text_bytes_v1", builder.getPtrTy(), {pointer(0)});
+    case SystemOperation::text_cursor_slice:
     case SystemOperation::unicode_text_take: {
       auto *out = storage(lower_type(i.type));
       start_lifetime(out);
-      runtime("lang_unicode_text_take_v1", builder.getVoidTy(),
-              {out, pointer(0), args[1], args[2]});
+      runtime(*i.system == SystemOperation::text_cursor_slice
+                  ? "lang_text_cursor_slice_v1" : "lang_unicode_text_take_v1",
+              builder.getVoidTy(), {out, pointer(0), args[1], args[2]});
       auto *loaded = builder.CreateLoad(lower_type(i.type), out);
       end_lifetime(out);
       return loaded;
@@ -126,7 +120,58 @@
     case SystemOperation::vec_pop: {
       auto t = element();
       auto *layout = lower_type(t);
-      const bool empty = module.getDataLayout().getTypeAllocSize(layout).getFixedValue() == 0;
+      const auto &slot_layout = module.getDataLayout();
+      const uint64_t bytes = slot_layout.getTypeAllocSize(layout).getFixedValue();
+      // lang_vec_pop_v1 does exactly this for a trivial element: reject the
+      // empty pop before the pin check, acquire-load iterations and panic when
+      // pinned, move the original last slot's typed bytes, publish the shorter
+      // length and initialized=min(original initialized,last), then report
+      // Some. Inline that path only when one typed load/store covers the slot:
+      // non-owning, non-empty (a zero-sized slot has no loadable bytes), an
+      // allocation size equal to the published stride, and ABI alignment within
+      // the 16-byte Vec payload guarantee. Owning elements and every other
+      // shape keep the runtime ABI call, including its GC/callback handling.
+      if (!owning(t) && bytes != 0 && bytes == stride(t) &&
+          slot_layout.getABITypeAlign(layout).value() <= 16) {
+        auto *length = vec_field(args[0], 1, builder.getInt64Ty());
+        // The empty pop reports None before any pin check. The success branch
+        // is stdlib_option's own block, so the moved SSA value is the payload;
+        // no out scratch or lifetime is needed.
+        return stdlib_option(
+            i.type, builder.CreateICmpNE(length, builder.getInt64(0)),
+            [&]() -> llvm::Value * {
+              // Same acquire pin check as the runtime: panic before any element
+              // or header byte changes.
+              auto *iterations = builder.CreateLoad(
+                  builder.getInt64Ty(),
+                  builder.CreateStructGEP(vec_type, args[0], 4));
+              iterations->setAtomic(llvm::AtomicOrdering::Acquire);
+              iterations->setAlignment(llvm::Align(8));
+              vec_memory(iterations, true);
+              guard(builder.CreateICmpNE(iterations, builder.getInt64(0)), 8,
+                    i.source);
+              auto *last = builder.CreateSub(length, builder.getInt64(1));
+              auto *data = vec_field(args[0], 5, builder.getPtrTy());
+              auto *address = builder.CreateGEP(layout, data, last);
+              auto *moved = builder.CreateLoad(layout, address);
+              vec_memory(moved, false);
+              // Publish the shorter prefix before the moved bytes leave the
+              // Vec; pop never shrinks storage.
+              vec_memory(builder.CreateStore(
+                             last,
+                             builder.CreateStructGEP(vec_type, args[0], 1)),
+                         true);
+              auto *initialized = vec_field(args[0], 2, builder.getInt64Ty());
+              auto *kept = builder.CreateSelect(
+                  builder.CreateICmpUGT(initialized, last), last, initialized);
+              vec_memory(builder.CreateStore(
+                             kept,
+                             builder.CreateStructGEP(vec_type, args[0], 2)),
+                         true);
+              return moved;
+            });
+      }
+      const bool empty = bytes == 0;
       auto *out = storage(empty ? builder.getInt8Ty() : layout);
       start_lifetime(out);
       auto *present = runtime("lang_vec_pop_v1", builder.getInt1Ty(), {args[0], out});
@@ -142,9 +187,12 @@
     case SystemOperation::vec_try_move_trivial:
       return runtime("lang_vec_try_move_trivial_v1", builder.getInt1Ty(),
                      {args[0], args[1], args[2], args[3]});
-    case SystemOperation::heap_pin_begin:
+    case SystemOperation::vec_extend_trivial:
+      return runtime("lang_vec_extend_trivial_v1", builder.getInt1Ty(),
+                     {args[0], args[1]});
+    case SystemOperation::vec_pin_begin:
       runtime("lang_vec_begin_v1", builder.getInt64Ty(), {args[0]}); break;
-    case SystemOperation::heap_pin_end:
+    case SystemOperation::vec_pin_end:
       runtime("lang_vec_end_v1", builder.getVoidTy(), {args[0]}); break;
     default: fail("invalid verified value operation");
     }

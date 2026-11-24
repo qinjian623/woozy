@@ -162,7 +162,8 @@ pub func flush(output Writer) throws os.Error {
 // write_byte appends one byte and flushes before appending when the buffer is
 // full. If that flush throws, the byte is not appended: pending still holds
 // exactly the unwritten suffix, so retrying write_byte after flush neither
-// duplicates nor drops the byte. write and write_text inherit this guarantee.
+// duplicates nor drops the byte. A failed write or write_text may already have
+// buffered a prefix, so retrying the entire input can duplicate that prefix.
 pub func write_byte(output Writer, byte u8) throws os.Error {
     if vec.len(output.pending) == 4096 { flush(output); }
     vec.push(output.pending, byte);

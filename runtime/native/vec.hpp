@@ -44,6 +44,9 @@ void *lang_trait_box_target_v1(void *) noexcept;
 void lang_vec_set_v1(LangVec *, uint64_t, const void *) noexcept;
 bool lang_vec_try_move_trivial_v1(LangVec *, uint64_t destination,
                                   uint64_t source, uint64_t count) noexcept;
+// Private std/vec.extend fast path. Returns false for element kinds or states
+// that need the owning element path, so the public loop keeps its semantics.
+bool lang_vec_extend_trivial_v1(LangVec *, LangVec *) noexcept;
 LangVec *lang_vec_slice_v1(LangVec *, uint64_t, uint64_t) noexcept;
 uint64_t lang_vec_begin_v1(LangVec *) noexcept;
 void lang_vec_end_v1(LangVec *) noexcept;

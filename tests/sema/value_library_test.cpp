@@ -61,6 +61,7 @@ struct Fixture {
   }
 };
 const char *program = R"wz(package app;
+import "std/algo" as algo;
 import "std/text" as text;
 import "std/vec" as vec;
 import "std/option" as option;
@@ -91,6 +92,7 @@ func main() i32 throws text.Error {
     vec.reserve[string](values, 4);
     vec.push[string](values, part);
     let length = vec.len[string](values);
+    vec.extend[string](values, values);
     let capacity = vec.capacity[string](values);
     let filled = vec.make[Box[string]](2, Box[string](value: joined));
     vec.resize[string](values, 3, joined);
@@ -104,6 +106,10 @@ func main() i32 throws text.Error {
     let rune = text.from_rune(0x1f600);
     let codepoints = text.len(decoded);
     let byte_count = text.byte_len(decoded);
+    let chunks = text.split(decoded,"中");
+    let occurrences = text.count(decoded,"中");
+    let folded = algo.fold[string,usize](chunks, 0,
+        func(total usize, value string) usize { return total + text.len(value); });
     let result_value = result.Result[string,i32].Ok(decoded);
     switch result_value {
         case result.Result.Ok(value): { let kept = value; }
@@ -162,7 +168,8 @@ void suite(const fs::path &root) {
     if(auto *call=std::get_if<Call>(&node.data);call&&call->system) operations.insert(*call->system);
   for(const auto &spec:value_system_operations)
     if (spec.owner == "std/text" || spec.owner == "std/vec")
-      need(operations.count(spec.operation),"text/Vec operation missing from typed HIR");
+      need(operations.count(spec.operation),
+           "text/Vec operation missing from typed HIR: " + std::string(spec.name));
   bool concrete_string=false;
   for(const auto &node:good.nodes)
     if(auto *call=std::get_if<Call>(&node.data);call&&call->system==SystemOperation::vec_push)

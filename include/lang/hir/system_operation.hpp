@@ -63,12 +63,15 @@ enum class SystemOperation : uint16_t {
   // value keeps this operation stable when those entries are appended.
   unicode_text_take = 228,
   vec_try_move_trivial = 229,
-  text_load8 = 230,
-  // Private std/heap active-iteration pin. The explicit IDs follow the
-  // existing entries so they stay stable; the owner module restriction keeps
-  // these out of public APIs.
-  heap_pin_begin = 231,
-  heap_pin_end = 232
+  // 230 is reserved for the retired private text_load8 operation.
+  // Private Vec active-iteration pin used by callback algorithms.
+  vec_pin_begin = 231,
+  vec_pin_end = 232,
+  text_cursor_at = 233,
+  text_cursor_read = 234,
+  text_cursor_slice = 235,
+  text_count_rune = 236,
+  vec_extend_trivial = 237
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -175,7 +178,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 62> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 66> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -185,7 +188,10 @@ inline constexpr std::array<SystemOperationSpec, 62> value_system_operations{{
   {SystemOperation::text_from_bytes, "__woozy_text_from_bytes", "Result[string,i32]", {"Vec[u8]"}, 1, "std/text"},
   {SystemOperation::text_from_rune, "__woozy_text_from_rune", "Result[string,i32]", {"u32"}, 1, "std/text"},
   {SystemOperation::text_bytes, "__woozy_text_bytes", "Vec[u8]", {"string"}, 1, "std/text"},
-  {SystemOperation::text_load8, "__woozy_text_load8", "Option[u64]", {"string", "usize"}, 2, "std/text"},
+  {SystemOperation::text_cursor_at, "__woozy_text_cursor_at", "u64", {"string", "usize"}, 2, "std/text"},
+  {SystemOperation::text_cursor_read, "__woozy_text_cursor_read", "u64", {"string", "u64"}, 2, "std/text"},
+  {SystemOperation::text_cursor_slice, "__woozy_text_cursor_slice", "string", {"string", "u64", "u64"}, 3, "std/text"},
+  {SystemOperation::text_count_rune, "__woozy_text_count_rune", "usize", {"string", "u32"}, 2, "std/text"},
   {SystemOperation::vec_empty, "__woozy_vec_empty", "Vec[A]", {}, 0, "std/vec", 1},
   {SystemOperation::vec_make, "__woozy_vec_make", "Vec[A]", {"usize", "A"}, 2, "std/vec", 1},
   {SystemOperation::vec_len, "__woozy_vec_len", "usize", {"Vec[A]"}, 1, "std/vec", 1},
@@ -196,8 +202,9 @@ inline constexpr std::array<SystemOperationSpec, 62> value_system_operations{{
   {SystemOperation::vec_resize, "__woozy_vec_resize", "Unit", {"Vec[A]", "usize", "A"}, 3, "std/vec", 1},
   {SystemOperation::vec_clear, "__woozy_vec_clear", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
   {SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", "bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},
-  {SystemOperation::heap_pin_begin, "__woozy_heap_pin_begin", "Unit", {"Vec[A]"}, 1, "std/heap", 1},
-  {SystemOperation::heap_pin_end, "__woozy_heap_pin_end", "Unit", {"Vec[A]"}, 1, "std/heap", 1},
+  {SystemOperation::vec_pin_begin, "__woozy_vec_pin_begin", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
+  {SystemOperation::vec_pin_end, "__woozy_vec_pin_end", "Unit", {"Vec[A]"}, 1, "std/vec", 1},
+  {SystemOperation::vec_extend_trivial, "__woozy_vec_extend_trivial", "bool", {"Vec[A]", "Vec[A]"}, 2, "std/vec", 1},
   {SystemOperation::num_parse_i64, "__woozy_num_parse_i64", "Result[i64,i32]", {"string"}, 1, "std/strconv"},
   {SystemOperation::num_format_i64, "__woozy_num_format_i64", "string", {"i64"}, 1, "std/strconv"},
   {SystemOperation::num_parse_u64, "__woozy_num_parse_u64", "Result[u64,i32]", {"string"}, 1, "std/strconv"},
@@ -430,6 +437,15 @@ inline const SystemOperationSpec *system_operation_spec(std::string_view name) {
   for (const auto &spec : all_system_operations)
     if (spec.name == name) return &spec;
   return nullptr;
+}
+inline bool system_operation_allows_module(const SystemOperationSpec &spec,
+                                          std::string_view logical_path) {
+  if (logical_path == spec.owner) return true;
+  // Internal balanced Vec pins shared by the callback algorithms.
+  return (spec.operation == SystemOperation::vec_pin_begin ||
+          spec.operation == SystemOperation::vec_pin_end) &&
+         (logical_path == "std/algo" || logical_path == "std/heap" ||
+          logical_path == "std/sort");
 }
 // Private runtime handle type spellings. Only the owner std modules may use
 // them in source type syntax; ordinary generic values may contain or pass the

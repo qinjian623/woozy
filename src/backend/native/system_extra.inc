@@ -52,15 +52,17 @@
     using hir::SystemOperation;
     if (auto *value = network_system_call(i,args)) return value;
     const auto operation = *i.system;
-    if (operation == SystemOperation::math_isinf ||
+    if (operation == SystemOperation::math_isnan ||
+        operation == SystemOperation::math_isinf ||
         operation == SystemOperation::math_isfinite) {
-      // Match the old runtime predicate's absolute-exponent test inline:
-      // isinf is |bits| == 0x7ff0..., isfinite is |bits| < 0x7ff0...
-      // This keeps NaN, subnormal and signed-zero behavior and adds no ABI.
+      // Increasing IEEE 754 magnitudes put finite values before infinity
+      // and NaN encodings after it, regardless of sign.
       auto *bits = builder.CreateBitCast(args[0], builder.getInt64Ty());
       auto *magnitude =
           builder.CreateAnd(bits, builder.getInt64(0x7fffffffffffffffULL));
       auto *infinity = builder.getInt64(0x7ff0000000000000ULL);
+      if (operation == SystemOperation::math_isnan)
+        return builder.CreateICmpUGT(magnitude, infinity);
       return operation == SystemOperation::math_isinf
                  ? builder.CreateICmpEQ(magnitude, infinity)
                  : builder.CreateICmpULT(magnitude, infinity);

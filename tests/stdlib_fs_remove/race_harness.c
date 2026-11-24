@@ -153,16 +153,18 @@ int main(int argc, char **argv) {
 
     if (entering) {
       if (syscall_number == SYS_write && registers.rdi == STDOUT_FILENO) {
-        char marker[16];
-        const int read_result =
-            read_string(child, registers.rsi, marker, sizeof marker);
+        char marker[5] = {0};
+        struct iovec local = {marker, 4};
+        struct iovec remote = {(void *)registers.rsi, 4};
+        const int read_result = registers.rdx == 4 &&
+            process_vm_readv(child, &local, 1, &remote, 1, 0) == 4 ? 0 : -1;
         if (debug) {
           fprintf(stderr, "stdout write count=%llu read=%d data=%s\n",
                   (unsigned long long)registers.rdx, read_result,
                   read_result == 0 ? marker : "<unreadable>");
         }
         if (read_result == 0 && registers.rdx == 4 &&
-            strncmp(marker, "ARM\n", 4) == 0) {
+            memcmp(marker, "ARM\n", 4) == 0) {
           armed = 1;
           if (debug) fprintf(stderr, "armed\n");
         }

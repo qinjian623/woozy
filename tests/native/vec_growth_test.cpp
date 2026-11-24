@@ -228,7 +228,8 @@ enum ActionKind {
   act_resize_shrink,
   act_clear,
   act_oom_reserve,
-  act_overflow_reserve
+  act_overflow_reserve,
+  act_extend
 };
 
 struct ChildAction {
@@ -275,6 +276,9 @@ void child_perform(void *raw) {
     lang_vec_reserve_v1(vec, UINT64_MAX / 2);
     break;
   }
+  case act_extend:
+    (void)lang_vec_extend_trivial_v1(action->vec, action->vec);
+    break;
   }
 }
 
@@ -753,6 +757,200 @@ void test_in_capacity_push_overlap() {
   }
 }
 
+uint64_t expected_capacity(uint64_t current, uint64_t minimum) {
+  uint64_t capacity = current ? current : 1;
+  while (capacity < minimum) capacity *= 2;
+  return capacity;
+}
+
+unsigned char *raw_element(LangVec *vec, uint64_t index) {
+  return static_cast<unsigned char *>(vec->data) + index * vec->stride;
+}
+
+void test_resize_fill_crosses_inline_prefix() {
+  // A fill pointer can start in the descriptor bytes and cross into the first
+  // destination element. The full-range overlap test must select the exact
+  // per-element loop; the seeded/doubling path would not re-read the bytes an
+  // earlier iteration rewrote. The Vec is shrunk to zero first so the stale
+  // payload capacity stays inline and the source is entirely in the allocation.
+  for (uint64_t stride : {2ULL, 3ULL, 4ULL, 5ULL, 8ULL, 16ULL}) {
+    for (uint64_t lead : {uint64_t{1}, stride - 1}) {
+      reset_tracking();
+      LangVec *vec = lang_vec_new_v1(4, stride, nullptr, nullptr);
+      unsigned char pattern[16];
+      for (uint64_t b = 0; b < stride; ++b)
+        pattern[b] = static_cast<unsigned char>(0x60 + b * 5);
+      for (uint64_t i = 0; i < 4; ++i) lang_vec_init_v1(vec, pattern);
+      lang_vec_resize_v1(vec, 0, nullptr);
+      CHECK(vec->length == 0 && vec->initialized == 0);
+      CHECK(vec->capacity == 4);
+      auto *payload = static_cast<unsigned char *>(vec->data);
+      CHECK(payload == reinterpret_cast<unsigned char *>(vec) + kVecHeaderBytes);
+      for (uint64_t b = 0; b < 4 * stride; ++b)
+        payload[b] = static_cast<unsigned char>(0x31 + b);
+
+      std::vector<unsigned char> model(lead + 4 * stride);
+      std::memcpy(model.data(), payload - lead, lead);
+      std::memcpy(model.data() + lead, payload, 4 * stride);
+      for (uint64_t index = 0; index < 4; ++index)
+        std::memmove(model.data() + lead + index * stride, model.data(),
+                     stride);
+
+      const uint64_t allocations = g_allocation_calls;
+      lang_vec_resize_v1(vec, 4, payload - lead);
+      CHECK(g_allocation_calls == allocations);
+      CHECK(vec->length == 4 && vec->initialized == 4);
+      CHECK(vec->capacity == 4);
+      CHECK(std::memcmp(payload, model.data() + lead, 4 * stride) == 0);
+      lang_vec_release_v1(vec);
+      CHECK(live_allocations() == 0);
+    }
+  }
+}
+
+void test_resize_grow_trivial_fill() {
+  // Trivial resize growth must reproduce the per-element byte loop for every
+  // stride/length, both in capacity and with a grow-and-snapshot step.
+  for (uint64_t stride : {1ULL, 2ULL, 3ULL, 4ULL, 7ULL, 8ULL, 16ULL, 64ULL}) {
+    unsigned char pattern[64];
+    for (uint64_t i = 0; i < stride; ++i)
+      pattern[i] = static_cast<unsigned char>(0x30 + i * 7);
+    for (uint64_t initial : {0ULL, 1ULL, 2ULL, 3ULL}) {
+      for (uint64_t target : {1ULL, 2ULL, 3ULL, 5ULL, 9ULL, 17ULL}) {
+        if (target <= initial) continue;
+        for (uint64_t extra : {0ULL, 8ULL}) {
+          reset_tracking();
+          LangVec *vec = lang_vec_new_v1(initial, stride, nullptr, nullptr);
+          unsigned char prefix[3 * 64];
+          for (uint64_t i = 0; i < initial; ++i) {
+            for (uint64_t b = 0; b < stride; ++b) prefix[i * stride + b] =
+                static_cast<unsigned char>(i * 13 + b);
+            lang_vec_init_v1(vec, prefix + i * stride);
+          }
+          uint64_t capacity = initial;
+          if (extra) {
+            lang_vec_reserve_v1(vec, initial + extra);
+            capacity = expected_capacity(capacity, initial + extra);
+          }
+          CHECK(vec->capacity == capacity);
+          void *data = vec->data;
+          const uint64_t before_capacity = capacity;
+          lang_vec_resize_v1(vec, target, pattern);
+          CHECK(vec->length == target);
+          CHECK(vec->initialized == target);
+          if (target > capacity)
+            capacity = expected_capacity(capacity, target);
+          CHECK(vec->capacity == capacity);
+          if (target <= before_capacity) CHECK(vec->data == data);
+          for (uint64_t i = 0; i < initial; ++i)
+            CHECK(std::memcmp(raw_element(vec, i), prefix + i * stride,
+                              stride) == 0);
+          for (uint64_t i = initial; i < target; ++i)
+            CHECK(std::memcmp(raw_element(vec, i), pattern, stride) == 0);
+          lang_vec_release_v1(vec);
+          CHECK(live_allocations() == 0);
+        }
+      }
+    }
+  }
+}
+
+void test_resize_grow_trivial_alias_edges() {
+  // In-capacity fill from the initialized prefix: the seeded/doubling path
+  // repeats the snapshot bytes and leaves the source element untouched.
+  for (uint64_t stride : {1ULL, 3ULL, 8ULL, 16ULL}) {
+    reset_tracking();
+    LangVec *vec = lang_vec_new_v1(3, stride, nullptr, nullptr);
+    unsigned char values[3 * 16];
+    for (uint64_t i = 0; i < 3 * stride; ++i)
+      values[i] = static_cast<unsigned char>(0x51 + i);
+    for (uint64_t i = 0; i < 3; ++i)
+      lang_vec_init_v1(vec, values + i * stride);
+    lang_vec_reserve_v1(vec, 8);
+    CHECK(vec->capacity == expected_capacity(3, 8));
+    void *data = vec->data;
+    unsigned char fill[16];
+    std::memcpy(fill, raw_element(vec, 1), stride);
+    lang_vec_resize_v1(vec, 6, raw_element(vec, 1));
+    CHECK(vec->capacity == expected_capacity(3, 8));
+    CHECK(vec->data == data);
+    for (uint64_t i = 0; i < 3; ++i)
+      CHECK(std::memcmp(raw_element(vec, i), values + i * stride, stride) == 0);
+    for (uint64_t i = 3; i < 6; ++i)
+      CHECK(std::memcmp(raw_element(vec, i), fill, stride) == 0);
+    lang_vec_release_v1(vec);
+    CHECK(live_allocations() == 0);
+  }
+
+  // A fill that overlaps its destination, including an unaligned odd offset
+  // in spare capacity, keeps exact per-element sequential semantics.
+  for (uint64_t stride : {2ULL, 3ULL, 5ULL, 8ULL, 16ULL}) {
+    reset_tracking();
+    LangVec *vec = lang_vec_new_v1(2, stride, nullptr, nullptr);
+    for (uint64_t i = 0; i < 2; ++i) {
+      unsigned char value[16];
+      for (uint64_t b = 0; b < stride; ++b)
+        value[b] = static_cast<unsigned char>(0x20 + i * 9 + b);
+      lang_vec_init_v1(vec, value);
+    }
+    lang_vec_reserve_v1(vec, 6);
+    const uint64_t capacity = expected_capacity(2, 6);
+    CHECK(vec->capacity == capacity);
+    std::vector<unsigned char> model(capacity * stride);
+    std::memcpy(model.data(), vec->data, 2 * stride);
+    unsigned char *source = raw_element(vec, 3) + 1;
+    for (uint64_t b = 0; b < stride; ++b)
+      source[b] = static_cast<unsigned char>(0x90 + b * 3);
+    std::memcpy(model.data() + 3 * stride + 1, source, stride);
+    for (uint64_t index = 2; index < 6; ++index)
+      std::memmove(model.data() + index * stride,
+                   model.data() + 3 * stride + 1, stride);
+    const uint64_t allocations = g_allocation_calls;
+    lang_vec_resize_v1(vec, 6, source);
+    CHECK(g_allocation_calls == allocations);
+    CHECK(vec->capacity == capacity);
+    CHECK(std::memcmp(vec->data, model.data(), 6 * stride) == 0);
+    lang_vec_release_v1(vec);
+    CHECK(live_allocations() == 0);
+  }
+
+  // Growing with a fill inside the old buffer snapshots before the realloc.
+  reset_tracking();
+  g_poison_on_free = true;
+  LangVec *vec = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+  for (int i = 0; i < 4; ++i) lang_vec_init_v1(vec, &i);
+  const int saved = *static_cast<int *>(lang_vec_at_v1(vec, 1));
+  void *old_data = vec->data;
+  lang_vec_resize_v1(vec, 9, lang_vec_at_v1(vec, 1));
+  CHECK(vec->data != old_data);
+  CHECK(vec->capacity >= 9);
+  CHECK(*static_cast<int *>(lang_vec_at_v1(vec, 0)) == 0);
+  for (uint64_t i = 4; i < 9; ++i)
+    CHECK(*static_cast<int *>(lang_vec_at_v1(vec, i)) == saved);
+  lang_vec_release_v1(vec);
+  CHECK(live_allocations() == 0);
+  g_poison_on_free = false;
+
+  // Length 0 and 1 edges, including cleared storage that keeps capacity.
+  reset_tracking();
+  unsigned char pattern[4] = {0xA1, 0xB2, 0xC3, 0xD4};
+  LangVec *empty = lang_vec_new_v1(0, 4, nullptr, nullptr);
+  lang_vec_resize_v1(empty, 1, pattern);
+  CHECK(empty->length == 1 && empty->initialized == 1);
+  CHECK(std::memcmp(raw_element(empty, 0), pattern, 4) == 0);
+  lang_vec_resize_v1(empty, 2, pattern);
+  CHECK(empty->length == 2 && empty->initialized == 2);
+  CHECK(std::memcmp(raw_element(empty, 1), pattern, 4) == 0);
+  lang_vec_clear_v1(empty);
+  const uint64_t kept = empty->capacity;
+  lang_vec_resize_v1(empty, 2, pattern);
+  CHECK(empty->capacity == kept);
+  CHECK(std::memcmp(raw_element(empty, 0), pattern, 4) == 0);
+  CHECK(std::memcmp(raw_element(empty, 1), pattern, 4) == 0);
+  lang_vec_release_v1(empty);
+  CHECK(live_allocations() == 0);
+}
+
 void test_terminal_panics() {
   {
     ChildAction action{};
@@ -776,6 +974,8 @@ void test_terminal_panics() {
   CHECK(expect_iteration_panic_without_mutation(act_resize_shrink,
                                                 "active-iteration"));
   CHECK(expect_iteration_panic_without_mutation(act_clear,
+                                                "active-iteration"));
+  CHECK(expect_iteration_panic_without_mutation(act_extend,
                                                 "active-iteration"));
 }
 
@@ -806,6 +1006,9 @@ int main() {
   test_observer_release_order_preserved();
   test_overlapping_trivial_set();
   test_in_capacity_push_overlap();
+  test_resize_grow_trivial_fill();
+  test_resize_grow_trivial_alias_edges();
+  test_resize_fill_crosses_inline_prefix();
   test_terminal_panics();
   if (g_failures) {
     std::fprintf(stderr, "vec-growth: failed (%d checks)\n", g_failures);

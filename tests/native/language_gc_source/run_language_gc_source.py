@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -173,7 +174,6 @@ def inspect_llvm(llvm: str, case: str):
                                poll["inline_word_loads"] == 0),
         "safepoint_functions": poll["functions"] > 0,
         "safepoint_sites": poll["sites"],
-        "modification_window": "lang_gc_program_enter_critical_v1" in llvm,
     }
     if case == "scalar-control":
         checks["no_registration"] = "lang_gc_program_register_v1" not in llvm
@@ -182,6 +182,10 @@ def inspect_llvm(llvm: str, case: str):
         checks["registration"] = "lang_gc_program_register_v1" in llvm
         checks["trace_callback"] = "lang.gc.trace." in llvm
         checks["vec_clear_ops"] = "lang_vec_clear_v1" in llvm
+        # These fixtures modify a whole Vec element. The runtime setter
+        # protects publication; generated stack-slot guards are unrelated.
+        checks["guarded_vec_set"] = bool(re.search(
+            r"\bcall\s+void\s+@lang_vec_set_v1\(", llvm))
     if case == "closure-cycle":
         checks["closure_environment_trace"] = ("lang.gc.trace.e" in llvm and
                                                 "lang.gc.ops.e" in llvm)

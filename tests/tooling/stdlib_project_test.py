@@ -15,6 +15,7 @@ def main():
     parser.add_argument("mode", choices=("native-o0", "native-o2", "python"))
     parser.add_argument("--libxml")
     parser.add_argument("--panic", help="expected Native Panic reason")
+    parser.add_argument("--expect-panic")
     args = parser.parse_args()
     env = dict(os.environ)
     if args.libxml and Path(args.libxml).is_dir():
@@ -39,6 +40,12 @@ def main():
             marker = f"LANG_NATIVE_PANIC:v1:{args.panic}:"
             if result.returncode != 101 or marker not in result.stderr:
                 raise SystemExit(f"Expected {marker}; exit={result.returncode}\n{result.stderr}")
+        elif args.expect_panic:
+            result = subprocess.run(run, cwd=out, env=env, capture_output=True,
+                                    text=True, timeout=45)
+            if (result.returncode != 101 or result.stdout or
+                    args.expect_panic not in result.stderr):
+                raise AssertionError((run, result.returncode, result.stdout, result.stderr))
         else:
             subprocess.run(run, cwd=out, env=env, check=True, timeout=45)
 

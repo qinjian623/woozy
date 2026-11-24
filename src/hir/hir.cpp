@@ -2868,7 +2868,7 @@ class Verifier {
                         }) == 1,
            "system operation builtin identity is ambiguous");
       const auto &mod = m.resolved->project->module(n.source.node.module);
-      need(mod.logical_path == spec->owner && !mod.binding,
+      need(system_operation_allows_module(*spec, mod.logical_path) && !mod.binding,
            std::string("system operation source is outside ") +
                std::string(spec->owner));
       need(c.signature ==

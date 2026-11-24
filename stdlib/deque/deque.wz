@@ -106,6 +106,17 @@ pub func reserve[T](values Deque[T], minimum usize) {
     grow_to(values, state, minimum);
 }
 
+// ring_slot returns the physical slot for a logical offset from head. The
+// ring is nonempty, and both head and offset are below its capacity. When the
+// offset lies beyond the contiguous tail, subtracting that tail wraps it
+// without forming head + offset; otherwise the sum stays below the capacity.
+// Every intermediate value therefore remains representable.
+func ring_slot(head usize, offset usize, ring usize) usize {
+    let tail = ring - head;
+    if offset >= tail { return offset - tail; }
+    return head + offset;
+}
+
 // push_back appends value to the back of the deque.
 pub func push_back[T](values Deque[T], value T) {
     var state = values.cursor[0];
@@ -114,13 +125,8 @@ pub func push_back[T](values Deque[T], value T) {
         state = values.cursor[0];
     }
     let ring = state.capacity;
-    // length < ring after any growth. Subtracting the contiguous tail wraps
-    // the logical index without forming head + length, so it cannot overflow.
-    let tail = ring - state.head;
-    let index = state.length;
-    var position = index;
-    if index >= tail { position -= tail; }
-    else { position = state.head + index; }
+    // length < ring after any growth.
+    let position = ring_slot(state.head, state.length, ring);
     values.slots[position] = option.Option[T].Some(value);
     values.cursor[0] = Cursor(head:state.head,length:state.length + 1,capacity:ring);
 }
@@ -169,13 +175,8 @@ pub func pop_back[T](values Deque[T]) option.Option[T] {
     if state.length == 0 { return option.Option[T].None; }
 
     let ring = state.capacity;
-    let index = state.length - 1;
-    // head and index are each below ring, so head + index is below 2 * ring and
-    // one conditional subtraction lands on the physical slot. Allocated Option
-    // slots hold at least the tag bytes, so the checked Vec size bound keeps
-    // head + index below usize.MAX and the sum cannot wrap before the compare.
-    var position = state.head + index;
-    if position >= ring { position -= ring; }
+    // length - 1 < ring whenever the deque is nonempty.
+    let position = ring_slot(state.head, state.length - 1, ring);
     let stored = values.slots[position];
     values.cursor[0] = Cursor(head:state.head,length:state.length - 1,capacity:ring);
     values.slots[position] = option.Option[T].None;
@@ -195,12 +196,8 @@ pub func peek_front[T](values Deque[T]) option.Option[T] {
 pub func peek_back[T](values Deque[T]) option.Option[T] {
     let state = values.cursor[0];
     if state.length == 0 { return option.Option[T].None; }
-    let tail = state.capacity - state.head;
-    let index = state.length - 1;
-    // index < capacity. Subtract the tail instead of forming head + index.
-    var position = index;
-    if index >= tail { position -= tail; }
-    else { position = state.head + index; }
+    // length - 1 < capacity whenever the deque is nonempty.
+    let position = ring_slot(state.head, state.length - 1, state.capacity);
     return values.slots[position];
 }
 
@@ -209,12 +206,8 @@ pub func peek_back[T](values Deque[T]) option.Option[T] {
 pub func get[T](values Deque[T], index usize) option.Option[T] {
     let state = values.cursor[0];
     if index >= state.length { return option.Option[T].None; }
-    let tail = state.capacity - state.head;
-    // index < length <= capacity. Subtract the tail instead of forming
-    // head + index, which could overflow near usize.MAX.
-    var position = index;
-    if index >= tail { position -= tail; }
-    else { position = state.head + index; }
+    // index < length <= capacity.
+    let position = ring_slot(state.head, index, state.capacity);
     return values.slots[position];
 }
 
@@ -270,13 +263,6 @@ pub func clear[T](values Deque[T]) {
         var count = ring - i;
         if remaining < count { count = remaining; }
         let end = i + count;
-        for end - i >= 4 {
-            slots[i] = option.Option[T].None;
-            slots[i + 1] = option.Option[T].None;
-            slots[i + 2] = option.Option[T].None;
-            slots[i + 3] = option.Option[T].None;
-            i += 4;
-        }
         for i < end {
             slots[i] = option.Option[T].None;
             i += 1;

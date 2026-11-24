@@ -121,6 +121,201 @@ static void test_trivial_range_move() {
   drops.clear();
 }
 
+static void test_trivial_extend() {
+  for (uint64_t stride : {1, 3, 4, 12, 32, 33}) {
+    auto *values = lang_vec_new_v1(3, stride, nullptr, nullptr);
+    auto *extra = lang_vec_new_v1(5, stride, nullptr, nullptr);
+    std::vector<unsigned char> first(3 * stride), second(5 * stride);
+    for (uint64_t byte = 0; byte < first.size(); ++byte)
+      first[byte] = static_cast<unsigned char>(byte * 7 + 1);
+    for (uint64_t byte = 0; byte < second.size(); ++byte)
+      second[byte] = static_cast<unsigned char>(byte * 11 + 3);
+    for (uint64_t i = 0; i < 3; ++i)
+      lang_vec_init_v1(values, first.data() + i * stride);
+    for (uint64_t i = 0; i < 5; ++i)
+      lang_vec_init_v1(extra, second.data() + i * stride);
+    const auto before = allocation;
+    if (!lang_vec_extend_trivial_v1(values, extra) ||
+        values->length != 8 || values->initialized != 8 ||
+        values->capacity != 12 || allocation != before + 1)
+      std::abort();
+    for (uint64_t i = 0; i < 3; ++i)
+      if (memcmp(lang_vec_at_v1(values, i), first.data() + i * stride,
+                 stride) != 0)
+        std::abort();
+    for (uint64_t i = 0; i < 5; ++i)
+      if (memcmp(lang_vec_at_v1(values, 3 + i), second.data() + i * stride,
+                 stride) != 0)
+        std::abort();
+    if (extra->length != 5 || extra->initialized != 5 ||
+        memcmp(lang_vec_at_v1(extra, 0), second.data(), stride) != 0)
+      std::abort();
+    lang_vec_release_v1(extra);
+    lang_vec_release_v1(values);
+
+    // Self extend uses the original count and the payload after growth.
+    auto *self = lang_vec_new_v1(3, stride, nullptr, nullptr);
+    for (uint64_t i = 0; i < 3; ++i)
+      lang_vec_init_v1(self, first.data() + i * stride);
+    if (!lang_vec_extend_trivial_v1(self, self) || self->length != 6 ||
+        self->initialized != 6 || self->capacity != 6)
+      std::abort();
+    for (uint64_t i = 0; i < 6; ++i)
+      if (memcmp(lang_vec_at_v1(self, i), first.data() + (i % 3) * stride,
+                 stride) != 0)
+        std::abort();
+    lang_vec_release_v1(self);
+
+    // Self extend inside existing capacity allocates nothing.
+    auto *roomy = lang_vec_new_v1(2, stride, nullptr, nullptr);
+    for (uint64_t i = 0; i < 2; ++i)
+      lang_vec_init_v1(roomy, first.data() + i * stride);
+    lang_vec_reserve_v1(roomy, 8);
+    const uint64_t roomy_capacity = roomy->capacity;
+    const auto roomy_before = allocation;
+    if (!lang_vec_extend_trivial_v1(roomy, roomy) || roomy->length != 4 ||
+        roomy->initialized != 4 || roomy->capacity != roomy_capacity ||
+        allocation != roomy_before)
+      std::abort();
+    lang_vec_release_v1(roomy);
+  }
+
+  // Empty sources are successful no-ops, even with an active pin.
+  auto *empty = lang_vec_new_v1(0, sizeof(int), nullptr, nullptr);
+  (void)lang_vec_begin_v1(empty);
+  if (!lang_vec_extend_trivial_v1(empty, empty) || empty->length != 0 ||
+      empty->initialized != 0)
+    std::abort();
+  lang_vec_end_v1(empty);
+  lang_vec_release_v1(empty);
+
+  // Managed or partially initialized vectors hand back to the element loop.
+  drops.clear();
+  auto *owned = lang_vec_new_v1(2, sizeof(int), copy, drop);
+  for (int i : {1, 2}) lang_vec_init_v1(owned, &i);
+  auto *trivial = lang_vec_new_v1(1, sizeof(int), nullptr, nullptr);
+  int three = 3;
+  lang_vec_init_v1(trivial, &three);
+  if (lang_vec_extend_trivial_v1(owned, owned) ||
+      lang_vec_extend_trivial_v1(trivial, owned) || owned->length != 2 ||
+      trivial->length != 1 || *static_cast<int *>(lang_vec_at_v1(trivial, 0)) != 3 ||
+      !drops.empty())
+    std::abort();
+  lang_vec_release_v1(trivial);
+  lang_vec_release_v1(owned);
+  drops.clear();
+
+  auto *partial = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+  int four = 4;
+  lang_vec_init_v1(partial, &four);
+  auto *source = lang_vec_new_v1(1, sizeof(int), nullptr, nullptr);
+  lang_vec_init_v1(source, &three);
+  if (lang_vec_extend_trivial_v1(partial, source) ||
+      lang_vec_extend_trivial_v1(source, partial) || partial->length != 4 ||
+      partial->initialized != 1 || source->length != 1)
+    std::abort();
+  lang_vec_release_v1(source);
+  lang_vec_release_v1(partial);
+
+  auto *bytes2 = lang_vec_new_v1(1, 2, nullptr, nullptr);
+  auto *bytes4 = lang_vec_new_v1(1, 4, nullptr, nullptr);
+  unsigned char pair[4] = {1, 2, 3, 4};
+  lang_vec_init_v1(bytes2, pair);
+  lang_vec_init_v1(bytes4, pair);
+  if (lang_vec_extend_trivial_v1(bytes2, bytes4) || bytes2->length != 1)
+    std::abort();
+  lang_vec_release_v1(bytes4);
+  lang_vec_release_v1(bytes2);
+
+  // Internal initialized-prefix edge: initialized > length is not the exact
+  // prefix the single publication produces, so both roles fall back unchanged.
+  auto *long_prefix = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+  for (int i : {11, 22, 33, 44}) lang_vec_init_v1(long_prefix, &i);
+  long_prefix->length = 1;
+  auto *short_source = lang_vec_new_v1(1, sizeof(int), nullptr, nullptr);
+  int five = 5;
+  lang_vec_init_v1(short_source, &five);
+  const auto prefix_allocations = allocation;
+  if (lang_vec_extend_trivial_v1(long_prefix, short_source) ||
+      lang_vec_extend_trivial_v1(short_source, long_prefix) ||
+      long_prefix->length != 1 || long_prefix->initialized != 4 ||
+      short_source->length != 1 || short_source->initialized != 1 ||
+      allocation != prefix_allocations)
+    std::abort();
+  auto *prefix_values = static_cast<int *>(long_prefix->data);
+  for (int i = 0; i < 4; ++i)
+    if (prefix_values[i] != (i + 1) * 11) std::abort();
+  long_prefix->length = 4; // restore before release
+  lang_vec_release_v1(short_source);
+  lang_vec_release_v1(long_prefix);
+
+  // The same raw prefix on a managed Vec stays on the element loop with no
+  // copy or drop callback.
+  drops.clear();
+  auto *owned_prefix = lang_vec_new_v1(4, sizeof(int), copy, drop);
+  for (int i : {11, 22, 33, 44}) lang_vec_init_v1(owned_prefix, &i);
+  owned_prefix->length = 2;
+  auto *owned_source = lang_vec_new_v1(1, sizeof(int), copy, drop);
+  lang_vec_init_v1(owned_source, &five);
+  if (lang_vec_extend_trivial_v1(owned_prefix, owned_source) ||
+      lang_vec_extend_trivial_v1(owned_source, owned_prefix) ||
+      owned_prefix->length != 2 || owned_prefix->initialized != 4 ||
+      owned_source->length != 1 || !drops.empty())
+    std::abort();
+  owned_prefix->length = 4; // restore before release
+  lang_vec_release_v1(owned_source);
+  lang_vec_release_v1(owned_prefix);
+  if (drops != std::vector<int>{5, 44, 33, 22, 11}) std::abort();
+  drops.clear();
+
+  // Final length and byte-size overflow fall back unchanged so the public
+  // loop can raise its Panic at the same per-element step.
+  auto *overflow = lang_vec_new_v1(1, sizeof(int), nullptr, nullptr);
+  int seven = 7;
+  lang_vec_init_v1(overflow, &seven);
+  const uint64_t saved_capacity = overflow->capacity;
+  const void *saved_data = overflow->data;
+  overflow->length = UINT64_MAX;
+  overflow->initialized = UINT64_MAX;
+  if (lang_vec_extend_trivial_v1(overflow, overflow) ||
+      overflow->length != UINT64_MAX ||
+      overflow->initialized != UINT64_MAX ||
+      overflow->capacity != saved_capacity || overflow->data != saved_data)
+    std::abort();
+  overflow->length = 1;
+  overflow->initialized = 1;
+  overflow->stride = UINT64_MAX;
+  if (lang_vec_extend_trivial_v1(overflow, overflow) ||
+      overflow->length != 1 || overflow->initialized != 1 ||
+      overflow->stride != UINT64_MAX || overflow->capacity != saved_capacity ||
+      overflow->data != saved_data)
+    std::abort();
+  overflow->stride = sizeof(int);
+  lang_vec_release_v1(overflow);
+
+  // A failed growth allocation returns false and publishes no Vec change.
+  auto *oom_values = lang_vec_new_v1(1, sizeof(int), nullptr, nullptr);
+  int eight = 8;
+  lang_vec_init_v1(oom_values, &eight);
+  auto *oom_extra = lang_vec_new_v1(2, sizeof(int), nullptr, nullptr);
+  for (int i : {9, 10}) lang_vec_init_v1(oom_extra, &i);
+  const uint64_t oom_capacity = oom_values->capacity;
+  const void *oom_data = oom_values->data;
+  const auto oom_allocations = allocation;
+  fail_at = allocation + 1;
+  const bool oom_result = lang_vec_extend_trivial_v1(oom_values, oom_extra);
+  const auto oom_used = allocation;
+  fail_at = 0;
+  if (oom_result || oom_used != oom_allocations + 1 ||
+      oom_values->length != 1 || oom_values->initialized != 1 ||
+      oom_values->capacity != oom_capacity || oom_values->data != oom_data ||
+      *static_cast<int *>(lang_vec_at_v1(oom_values, 0)) != eight ||
+      oom_extra->length != 2)
+    std::abort();
+  lang_vec_release_v1(oom_extra);
+  lang_vec_release_v1(oom_values);
+}
+
 static void test_freestanding_memory() {
   // Test memset
   char buf[32];
@@ -347,6 +542,7 @@ int main(int argc, char **argv) {
   int single = test_single_allocation_storage();
   if (single) return single;
   test_trivial_range_move();
+  test_trivial_extend();
 
   std::puts("reverse-index-and-prefix-ok");
   return 0;

@@ -898,7 +898,7 @@ def assert_store_case(name, spec, function, lines):
              f"{name}: expected one guarded publication")
         publish_end = pairs[0][1]
     else:
-        need(not pairs, f"{name}: non-strong store has a critical guard")
+        need(not pairs, f"{name}: unguarded store has a critical guard")
         store_rows = [index for index, line in enumerate(lines)
                       if is_store(line)
                       and _store_target(line) == target]
@@ -923,27 +923,94 @@ def assert_store_case(name, spec, function, lines):
             "target": target, "guards": expected, "drops": len(own_drops)}
 
 
+def assert_frame_store_case(name, function, lines):
+    operation, rhs = _binding_store(name, function)
+    temporary = _temporary_stores(name, function, operation, rhs)
+    need(call_indices(lines, "llvm.coro.id"),
+         f"{name}: LLVM function is not a coroutine")
+    # Before coroutine lowering an owning frame slot still spells alloca.
+    # This fixture has only Vec slots, so each NIR store must publish to one
+    # distinct pointer slot inside its own guard.
+    pairs = _guard_pairs(lines)
+    need(len(pairs) == len(temporary) + 1,
+         f"{name}: missing or extra frame store guard")
+    pointer_slots = {match.group(1) for line in lines
+                     if (match := ALLOCA_RE.match(line))
+                     and match.group(2) == "ptr"}
+    published = set()
+    for enter, leave, stores in _store_inside(pairs, lines):
+        need(len(stores) == 1, f"{name}: frame guard must protect one store")
+        store = _store_target(lines[stores[0]])
+        need(store in pointer_slots and store not in published,
+             f"{name}: guard does not publish a distinct pointer slot")
+        need(not any(is_call(line) for line in lines[enter + 1:leave]),
+             f"{name}: call inside frame publication guard")
+        published.add(store)
+    return {"symbol": function["symbol"], "guards": len(pairs)}
+
+
+def _field_target(name, function, operation, lines, base):
+    definitions = {op["result"]: op for op in function["ops"]
+                   if op["result"] is not None}
+    address = definitions[operation["inputs"][0]]
+    depth = 0
+    while address["op"] == "field_address":
+        address = definitions[address["inputs"][0]]
+        depth += 1
+    need(depth > 0, f"{name}: replacement is not a field projection")
+
+    slot_id = address["slot"]
+    if base == "slot":
+        need(address["op"] == "address" and slot_id is not None,
+             f"{name}: field has no NIR slot base")
+        slot = next(s for s in function["slots"] if s["id"] == slot_id)
+        need(not slot["inout"], f"{name}: slot is not local")
+        target = _slot_target(function, slot_id, lines)
+    else:
+        need(base == "vec" and address["op"] == "vec_element_address",
+             f"{name}: field has no NIR Vec element base")
+        gep_bases = {match.group(2) for line in lines
+                     if (match := GEP_RE.match(line))}
+        element_addresses = []
+        for index in call_indices(lines, "lang_vec_at_v1"):
+            result = re.match(r"^\s*(%[-A-Za-z0-9_.$]+)\s*=", lines[index])
+            if result and result.group(1) in gep_bases:
+                element_addresses.append(result.group(1))
+        need(len(element_addresses) == 1,
+             f"{name}: expected one projected LLVM Vec element address")
+        target = element_addresses[0]
+    for _ in range(depth):
+        fields = [match.group(1) for line in lines
+                  if (match := GEP_RE.match(line)) and match.group(2) == target]
+        need(len(fields) == 1,
+             f"{name}: expected one field projected from {target}")
+        target = fields[0]
+    return slot_id, target
+
+
 def assert_replace_case(name, spec, function, lines):
     replaces = [op for op in function["ops"]
                 if op["op"] == "replace_indirect"]
     need(len(replaces) == 1,
          f"{name}: expected one NIR replace_indirect, found {len(replaces)}")
     operation = replaces[0]
-    slot_id = operation.get("slot")
-    if slot_id is None and operation["inputs"]:
-        slot_id = _input_slot(function, operation["inputs"][0])
-    need(slot_id is not None, f"{name}: replace target slot is unknown")
-    target = _inout_target(function, slot_id, lines)
+    field_base = spec.get("field_base")
+    if field_base:
+        slot_id, target = _field_target(name, function, operation, lines,
+                                        field_base)
+    else:
+        slot_id = operation.get("slot")
+        if slot_id is None and operation["inputs"]:
+            slot_id = _input_slot(function, operation["inputs"][0])
+        need(slot_id is not None, f"{name}: replace target slot is unknown")
+        target = _inout_target(function, slot_id, lines)
     expected = spec["guards"]
     rhs = None
-    if "source_bytes" in function:
+    if "source_bytes" in function and not field_base:
         text = _source_part(name, function, operation)
         match = re.fullmatch(rb"value\s*=\s*(.+)", text, re.DOTALL)
         need(match is not None, f"{name}: replace is not the value assignment")
         rhs = (operation["span"][1] + match.start(1), operation["span"][2])
-        slot = next(slot for slot in function["slots"] if slot["id"] == slot_id)
-        need(function["type_guards"].get(slot["type"]) == expected,
-             f"{name}: replace type differs from case expectation")
     temporary = _temporary_stores(name, function, operation, rhs)
     pairs = _publication_pairs(name, function, lines, target, expected, temporary)
 
@@ -993,7 +1060,7 @@ def assert_replace_case(name, spec, function, lines):
              f"{name}: expected one guarded publication")
         publish_end = pairs[0][1]
     else:
-        need(not pairs, f"{name}: non-strong replace has a critical guard")
+        need(not pairs, f"{name}: unguarded replace has a critical guard")
         store_rows = [index for index, line in enumerate(lines)
                       if is_store(line)
                       and _store_target(line) == target
@@ -1018,6 +1085,9 @@ def assert_replace_case(name, spec, function, lines):
              f"{name}: replacement differs from its temporary value")
 
     drops = drop_indices(lines)
+    if field_base:
+        # This function also owns and drops its enclosing local value.
+        drops = [drop for drop in drops if _drop_argument(lines[drop]) == scratch]
     need(len(drops) == spec["drops"],
          f"{name}: expected {spec['drops']} old-owner drop, found {len(drops)}")
     for drop in drops:
@@ -1094,9 +1164,9 @@ def check_engine(label, emitted, directory, manifest_source, cases):
     source_bytes = manifest_source.read_bytes()
     ranges = scan_source_functions(source_bytes)
 
-    # Type IDs are local to each emitter's NIR.  Derive this module's expected
-    # 0/1 guards from the fixture's named user declarations and cases.json,
-    # never from the observed LLVM guard count.
+    # The fixture's extra temporary stores are synchronous locals too. Derive
+    # their expectations from same-type local stores, independently of the
+    # emitted LLVM counts and the guards on indirect heap or inout stores.
     type_guards = {}
     for name, spec in cases["store"].items():
         function = map_source_target(nir, entry, snapshot, ranges, name)
@@ -1119,7 +1189,8 @@ def check_engine(label, emitted, directory, manifest_source, cases):
                  f"{label}: {name} maps to SymbolId {function['symbol']} "
                  f"already used by {seen_symbols.get(function['symbol'])}")
             seen_symbols[function["symbol"]] = name
-            llvm_name = f"lang.fn.{function['symbol']}"
+            prefix = "lang.async" if group == "frame_store" else "lang.fn"
+            llvm_name = f"{prefix}.{function['symbol']}"
             need(llvm_name in llvm,
                  f"{label}: LLVM function {llvm_name} for {name} is missing")
             lines = llvm[llvm_name]
@@ -1132,6 +1203,8 @@ def check_engine(label, emitted, directory, manifest_source, cases):
                 facts[name] = assert_store_case(name, spec, function, lines)
             elif group == "replace":
                 facts[name] = assert_replace_case(name, spec, function, lines)
+            elif group == "frame_store":
+                facts[name] = assert_frame_store_case(name, function, lines)
             elif group == "store_indirect":
                 facts[name] = assert_store_indirect_case(
                     name, spec, function, lines)

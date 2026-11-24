@@ -206,6 +206,16 @@ int64_t lang_sys_readlink_v1(const char *path, uint64_t length, void *buffer,
   return darwin::result(readlink(name.bytes, static_cast<char *>(buffer), capacity));
 }
 
+int64_t lang_sys_readlinkat_v1(int32_t fd, const char *name, uint64_t length,
+                               void *buffer, uint64_t capacity) noexcept {
+  const darwin::Component component(name, length);
+  if (component.status != 0) return component.status;
+  if (capacity == 0) return 0;
+  if (capacity > INT64_MAX) return -22;
+  if (!buffer) return -14;
+  return darwin::result(readlinkat(fd, component.bytes, static_cast<char *>(buffer), capacity));
+}
+
 int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
                             const char *link_path, uint64_t link_length) noexcept {
   const darwin::Path from(target, target_length);
@@ -213,6 +223,16 @@ int64_t lang_sys_symlink_v1(const char *target, uint64_t target_length,
   const darwin::Path to(link_path, link_length);
   if (to.status != 0) return to.status;
   return darwin::result(symlink(from.bytes, to.bytes));
+}
+
+int64_t lang_sys_symlinkat_v1(int32_t fd, const char *target,
+                              uint64_t target_length, const char *name,
+                              uint64_t name_length) noexcept {
+  const darwin::Path from(target, target_length);
+  if (from.status != 0) return from.status;
+  const darwin::Component to(name, name_length);
+  if (to.status != 0) return to.status;
+  return darwin::result(symlinkat(from.bytes, fd, to.bytes));
 }
 
 int64_t lang_sys_link_v1(const char *old_path, uint64_t old_length,

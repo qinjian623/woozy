@@ -240,23 +240,16 @@ bool aliases_payload(LangVec *v, const void *pointer) noexcept {
   return address >= begin && address - begin < v->capacity * v->stride;
 }
 
-// Unlike aliases_payload's one-element probe, this checks a borrowed byte
-// range. An append must stage its source when growth can free any part of the
-// range, including a range that begins before the target payload.
-bool range_aliases_payload(const LangVec *v, const void *pointer,
-                           uint64_t count) noexcept {
-  if (!v->data || !pointer || !v->capacity || !v->stride || !count)
-    return false;
-  const uintptr_t begin = reinterpret_cast<uintptr_t>(v->data);
-  uintptr_t bytes = kMaxU64;
-  if (v->capacity <= kMaxU64 / v->stride)
-    bytes = v->capacity * v->stride;
-  const uintptr_t source = reinterpret_cast<uintptr_t>(pointer);
-  const uintptr_t source_end =
-      count > kMaxU64 - source ? kMaxU64 : source + count;
-  const uintptr_t target_end =
-      bytes > kMaxU64 - begin ? kMaxU64 : begin + bytes;
-  return source < target_end && begin < source_end;
+// True when two byte ranges share at least one byte. Difference arithmetic
+// avoids forming an out-of-range end address; both lengths are already checked.
+bool byte_ranges_overlap(const void *first, uint64_t first_bytes,
+                         const void *second, uint64_t second_bytes) noexcept {
+  if (!first_bytes || !second_bytes) return false;
+  const uintptr_t first_begin = reinterpret_cast<uintptr_t>(first);
+  const uintptr_t second_begin = reinterpret_cast<uintptr_t>(second);
+  return first_begin <= second_begin
+             ? second_begin - first_begin < first_bytes
+             : first_begin - second_begin < second_bytes;
 }
 
 uint64_t grown_capacity(uint64_t current, uint64_t minimum) noexcept {
@@ -305,12 +298,11 @@ class StageBuffer {
   unsigned char *data_ = inline_bytes_;
 };
 
-// Caller has already rejected active iterations and checked for overflow.
-void grow_storage(LangVec *v, uint64_t minimum) noexcept {
-  const uint64_t capacity = grown_capacity(v->capacity, minimum);
-  const uint64_t bytes = checked_payload_bytes(capacity, v->stride);
+// Publish storage only after allocation and copying succeed.
+bool try_replace_storage(LangVec *v, uint64_t capacity,
+                         uint64_t bytes) noexcept {
   void *data = lang_alloc_v1(bytes, 16);
-  if (!data) vec_panic(5);
+  if (!data) return false;
   if (v->initialized) {
     const uint64_t initialized_bytes =
         checked_payload_bytes(v->initialized, v->stride);
@@ -333,6 +325,14 @@ void grow_storage(LangVec *v, uint64_t minimum) noexcept {
     v->capacity = capacity;
     if (old_separate) lang_free_v1(old_data);
   }
+  return true;
+}
+
+// Caller has already rejected active iterations and checked for overflow.
+void grow_storage(LangVec *v, uint64_t minimum) noexcept {
+  const uint64_t capacity = grown_capacity(v->capacity, minimum);
+  const uint64_t bytes = checked_payload_bytes(capacity, v->stride);
+  if (!try_replace_storage(v, capacity, bytes)) vec_panic(5);
 }
 
 // Preserve an argument that points into storage which may be reallocated.
@@ -547,15 +547,61 @@ extern "C" bool lang_vec_try_move_trivial_v1(
   }
   return true;
 }
+extern "C" bool lang_vec_extend_trivial_v1(LangVec *values,
+                                           LangVec *extra) noexcept {
+  // Managed elements and partially initialized vectors keep the public
+  // element loop so its copy callbacks, pin checks and index Panics still run.
+  if (has_owner_ops(values) || has_owner_ops(extra)) return false;
+  // Only an exactly fully initialized pair has the prefix this single
+  // publication produces. A longer initialized prefix is an internal raw
+  // state; copying it and then publishing length would shorten it, so leave
+  // every such state to the public loop.
+  if (values->initialized != values->length ||
+      extra->initialized != extra->length)
+    return false;
+  // A distinct descriptor over the destination payload would be invalidated
+  // by growth and could be overwritten by the copy. Treat that unknown shared
+  // storage as unsupported instead of guessing an owner relationship.
+  if (values != extra &&
+      (aliases_payload(values, extra->data) ||
+       aliases_payload(extra, values->data)))
+    return false;
+  if (values->stride != extra->stride) return false;
+  const uint64_t count = extra->length;
+  // An empty source changes nothing, so it succeeds even while pinned.
+  if (!count) return true;
+  if (__atomic_load_n(&values->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  // Overflow and allocation failure return false before publishing anything,
+  // so the public loop below keeps the original per-element failure order.
+  if (values->length > kMaxU64 - count) return false;
+  const uint64_t length = values->length + count;
+  if (!values->stride || length > kMaxU64 / values->stride) return false;
+  const uint64_t old_length = values->length;
+  if (length > values->capacity) {
+    const uint64_t capacity = grown_capacity(values->capacity, length);
+    if (capacity > kMaxU64 / values->stride ||
+        !try_replace_storage(values, capacity, capacity * values->stride))
+      return false;
+  }
+  // Resolve the source after growth: a self extend reads the current payload,
+  // while an independent source keeps its own storage. One overlap-safe copy
+  // publishes no partial element and invokes no callback.
+  copy_bytes(element(values, old_length), element(extra, 0),
+             count * values->stride);
+  values->initialized = length;
+  values->length = length;
+  return true;
+}
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {
   if (start > end || end > v->length) vec_panic(9);
   const uint64_t count = end - start;
   auto *result = lang_vec_new_v1(count, v->stride, v->copy, v->drop);
   if (!has_owner_ops(result)) {
-    if (start != end) {
-      if (end > v->length || end > v->initialized) vec_panic(4);
-      copy_bytes(result->data, element(v, start), count * v->stride);
+    if (count) {
+      if (end > v->initialized) vec_panic(4);
+      const uint64_t bytes = checked_payload_bytes(count, v->stride);
+      copy_bytes(result->data, element(v, start), bytes);
     }
     result->initialized = count;
     return result;
@@ -695,6 +741,25 @@ extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
     pinned = true;
   }
   if (length > v->capacity) grow_storage(v, length);
+  // Doubling the initialized suffix saves repeated element copies. Keep the
+  // sequential loop when fill overlaps the suffix, even across its first byte.
+  const uint64_t added = length - old_length;
+  if (!has_owner_ops(v) &&
+      !byte_ranges_overlap(element(v, old_length),
+                           checked_payload_bytes(added, v->stride),
+                           source, v->stride)) {
+    copy_bytes(element(v, old_length), source, v->stride);
+    for (uint64_t done = 1; done < added;) {
+      const uint64_t chunk = added - done < done ? added - done : done;
+      copy_bytes(element(v, old_length + done), element(v, old_length),
+                 chunk * v->stride);
+      done += chunk;
+    }
+    v->initialized = length;
+    v->length = length;
+    if (scratch) lang_free_v1(scratch);
+    return;
+  }
   StageBuffer snapshot;
   if (v->copy && !snapshot.reserve(v->stride)) vec_panic(5);
   for (uint64_t index = old_length; index < length; ++index) {
@@ -773,7 +838,7 @@ extern "C" void lang_io_vec_append_bytes_v1(LangVec *v,
       static_cast<const unsigned char *>(source->data) + offset;
   StageBuffer alias;
   if (grow && distinct_source &&
-      range_aliases_payload(v, input, count)) {
+      byte_ranges_overlap(v->data, v->capacity, input, count)) {
     // Growth may release the old target payload. Snapshot the entire source
     // range first so a raw alias that starts before the target stays valid.
     if (!alias.reserve(count)) vec_panic(5);

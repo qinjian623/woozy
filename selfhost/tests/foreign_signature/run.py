@@ -29,14 +29,15 @@ DEFAULT_TIMEOUT = 1800.0
 MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
-# signature checks in the C++ and Wz registries. Local operations fill
-# 216-227 and remote operations continue at 228-232.
-EXPECTED_OPERATION_IDS = tuple(range(233))
+# signature checks in the C++ and Wz registries. ID 230 was retired.
+EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 238))
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
-NEW_OPERATIONS = tuple(range(213, 227)) + (228, 229, 230, 231, 232)
+NEW_OPERATIONS = tuple(operation for operation in EXPECTED_OPERATION_IDS
+                       if operation >= 213)
 # Signatures made only of compiler builtins need no standard type module.
 NO_MODULE_OPERATIONS = frozenset({215, 220, 222, 223, 224, 225, 226,
-                                  228, 229, 231, 232})
+                                  227, 228, 229, 231, 232, 233, 234,
+                                  235, 236, 237})
 EXPECTED_OWNER_ARITY = {
     213: ("std/os", 0), 214: ("std/os", 0), 215: ("std/os", 0),
     216: ("std/os", 0), 217: ("std/os", 0), 218: ("std/os", 0),
@@ -220,16 +221,26 @@ def validate_registry_entries() -> None:
         226: ('{SystemOperation::async_task_status, '
               '"__woozy_async_task_status", "i32",\n'
               '   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},'),
+        227: ('{SystemOperation::io_vec_append_bytes, "__woozy_io_vec_append_bytes",\n'
+              '   "Unit", {"Vec[u8]", "Vec[u8]", "usize", "usize"}, 4, "std/io"},'),
         228: ('{SystemOperation::unicode_text_take, "__woozy_unicode_text_take", '
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
         229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
               '"bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},'),
-        230: ('{SystemOperation::text_load8, "__woozy_text_load8", '
-              '"Option[u64]", {"string", "usize"}, 2, "std/text"},'),
-        231: ('{SystemOperation::heap_pin_begin, "__woozy_heap_pin_begin", '
-              '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
-        232: ('{SystemOperation::heap_pin_end, "__woozy_heap_pin_end", '
-              '"Unit", {"Vec[A]"}, 1, "std/heap", 1},'),
+        231: ('{SystemOperation::vec_pin_begin, "__woozy_vec_pin_begin", '
+              '"Unit", {"Vec[A]"}, 1, "std/vec", 1},'),
+        232: ('{SystemOperation::vec_pin_end, "__woozy_vec_pin_end", '
+              '"Unit", {"Vec[A]"}, 1, "std/vec", 1},'),
+        233: ('{SystemOperation::text_cursor_at, "__woozy_text_cursor_at", '
+              '"u64", {"string", "usize"}, 2, "std/text"},'),
+        234: ('{SystemOperation::text_cursor_read, "__woozy_text_cursor_read", '
+              '"u64", {"string", "u64"}, 2, "std/text"},'),
+        235: ('{SystemOperation::text_cursor_slice, "__woozy_text_cursor_slice", '
+              '"string", {"string", "u64", "u64"}, 3, "std/text"},'),
+        236: ('{SystemOperation::text_count_rune, "__woozy_text_count_rune", '
+              '"usize", {"string", "u32"}, 2, "std/text"},'),
+        237: ('{SystemOperation::vec_extend_trivial, "__woozy_vec_extend_trivial", '
+              '"bool", {"Vec[A]", "Vec[A]"}, 2, "std/vec", 1},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -274,21 +285,36 @@ def validate_registry_entries() -> None:
         226: ('OperationSpec(operation: 226, name: "__woozy_async_task_status", '
               'result: "i32", parameters: ["Task[A,B]"], owner: "std/async", '
               'type_arity: 2)'),
+        227: ('OperationSpec(operation: 227, name: "__woozy_io_vec_append_bytes", '
+              'result: "Unit", parameters: ["Vec[u8]", "Vec[u8]", "usize", "usize"], '
+              'owner: "std/io", type_arity: 0)'),
         228: ('OperationSpec(operation: 228, name: "__woozy_unicode_text_take", '
               'result: "string", parameters: ["string", "Vec[u64]", "usize"], '
               'owner: "std/unicode", type_arity: 0)'),
         229: ('OperationSpec(operation: 229, name: "__woozy_vec_try_move_trivial", '
               'result: "bool", parameters: ["Vec[A]", "usize", "usize", "usize"], '
               'owner: "std/vec", type_arity: 1)'),
-        230: ('OperationSpec(operation: 230, name: "__woozy_text_load8", '
-              'result: "Option[u64]", parameters: ["string", "usize"], '
+        231: ('OperationSpec(operation: 231, name: "__woozy_vec_pin_begin", '
+              'result: "Unit", parameters: ["Vec[A]"], '
+              'owner: "std/vec", type_arity: 1)'),
+        232: ('OperationSpec(operation: 232, name: "__woozy_vec_pin_end", '
+              'result: "Unit", parameters: ["Vec[A]"], '
+              'owner: "std/vec", type_arity: 1)'),
+        233: ('OperationSpec(operation: 233, name: "__woozy_text_cursor_at", '
+              'result: "u64", parameters: ["string", "usize"], '
               'owner: "std/text", type_arity: 0)'),
-        231: ('OperationSpec(operation: 231, name: "__woozy_heap_pin_begin", '
-              'result: "Unit", parameters: ["Vec[A]"], '
-              'owner: "std/heap", type_arity: 1)'),
-        232: ('OperationSpec(operation: 232, name: "__woozy_heap_pin_end", '
-              'result: "Unit", parameters: ["Vec[A]"], '
-              'owner: "std/heap", type_arity: 1)'),
+        234: ('OperationSpec(operation: 234, name: "__woozy_text_cursor_read", '
+              'result: "u64", parameters: ["string", "u64"], '
+              'owner: "std/text", type_arity: 0)'),
+        235: ('OperationSpec(operation: 235, name: "__woozy_text_cursor_slice", '
+              'result: "string", parameters: ["string", "u64", "u64"], '
+              'owner: "std/text", type_arity: 0)'),
+        236: ('OperationSpec(operation: 236, name: "__woozy_text_count_rune", '
+              'result: "usize", parameters: ["string", "u32"], '
+              'owner: "std/text", type_arity: 0)'),
+        237: ('OperationSpec(operation: 237, name: "__woozy_vec_extend_trivial", '
+              'result: "bool", parameters: ["Vec[A]", "Vec[A]"], '
+              'owner: "std/vec", type_arity: 1)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:

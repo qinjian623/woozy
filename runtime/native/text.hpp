@@ -21,6 +21,16 @@ int32_t lang_text_compare_v1(const LangText *a, const LangText *b) noexcept;
 uint32_t lang_text_at_v1(const LangText *text, uint64_t index) noexcept;
 void lang_text_slice_v1(LangText *out, const LangText *text,
                         uint64_t start, uint64_t end) noexcept;
+// Private std/text cursor protocol. Native positions are byte offsets at
+// Unicode boundaries in the same source string. The Python implementation
+// uses scalar offsets. read packs the scalar in the high 32 bits and the
+// forward step in the low 32 bits. Only at/slice accept the end position.
+// A nonempty Native cursor slice retains its original source storage.
+uint64_t lang_text_cursor_at_v1(const LangText *text, uint64_t index) noexcept;
+uint64_t lang_text_cursor_read_v1(const LangText *text, uint64_t cursor) noexcept;
+void lang_text_cursor_slice_v1(LangText *out, const LangText *text,
+                              uint64_t start, uint64_t end) noexcept;
+uint64_t lang_text_count_rune_v1(const LangText *text, uint32_t rune) noexcept;
 // Package-private incremental slicing for std/unicode. cursor is a one-element
 // Vec[u64] holding an opaque backend offset (Native byte offset, Python
 // code-point offset). It advances by count code points and returns a retained

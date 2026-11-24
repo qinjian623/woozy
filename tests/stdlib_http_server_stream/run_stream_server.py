@@ -265,7 +265,8 @@ def _tcp_inode_for(pid, server_port, client_port, timeout=3.0):
                     remote_port = int(fields[2].rsplit(":", 1)[1], 16)
                 except (IndexError, ValueError):
                     continue
-                if local_port == server_port and remote_port == client_port:
+                if (local_port == server_port and remote_port == client_port and
+                        fields[9] != "0"):
                     return fields[9]
         time.sleep(0.01)
     return None

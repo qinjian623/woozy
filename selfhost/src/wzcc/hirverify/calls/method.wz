@@ -1222,7 +1222,7 @@ pub func check_call(state inout hircore.Verifier, node hir.HirNode, call hir.Cal
         hircore.need(builtins == 1,
             "system operation builtin identity is ambiguous");
         let module = hircore.verifier_module(state, node.source.node.module);
-        hircore.need(module.logical_path == spec.owner &&
+        hircore.need(system.allows_module(operation, spec.owner, module.logical_path) &&
              !option.is_some(module.binding),
             "system operation source is outside " + spec.owner);
         let actual_signature = system_operation_signature(inout state,

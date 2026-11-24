@@ -7,7 +7,7 @@
 // existing elements of the Vec being traversed; the extrema helpers retain a
 // copy of each candidate before calling less, so the selected value is the one
 // that existed before that comparison. Callback-invoking traversals use
-// a Vec iteration or a full-range Slice to pin the input. A callback that tries to
+// a Vec iteration or an internal Vec pin. A callback that tries to
 // change its length or storage (push, pop, resize, clear, or a reserve that
 // grows) Panics with active-iteration instead of corrupting or extending
 // traversal. Captured Vec/Box contents remain mutable through normal aliasing.
@@ -20,7 +20,6 @@
 package algo;
 
 import "std/option" as option;
-import "std/slice" as slice;
 import "std/vec" as vec;
 
 // MinMax holds the first comparator-minimum and first comparator-maximum.
@@ -46,7 +45,8 @@ pub func map[T, U](values Vec[T], transform func(T) U) Vec[U] {
 pub func filter[T](values Vec[T], keep func(T) bool) Vec[T] {
     let result = vec.empty[T]();
     let length = vec.len(values);
-    let pinned = slice.view[T](values, 0, length);
+    __woozy_vec_pin_begin[T](values);
+    defer { __woozy_vec_pin_end[T](values); }
     for var index usize = 0; index < length; index += 1 {
         let value = values[index];
         if keep(value) {
@@ -63,18 +63,10 @@ pub func filter[T](values Vec[T], keep func(T) bool) Vec[T] {
 pub func fold[T, A](values Vec[T], initial A, combine func(A, T) A) A {
     var accumulator A = initial;
     let length = vec.len(values);
-    let pinned = slice.view[T](values, 0, length);
-    var index usize = 0;
-    for length - index >= 4 {
+    __woozy_vec_pin_begin[T](values);
+    defer { __woozy_vec_pin_end[T](values); }
+    for var index usize = 0; index < length; index += 1 {
         accumulator = combine(accumulator, values[index]);
-        accumulator = combine(accumulator, values[index + 1]);
-        accumulator = combine(accumulator, values[index + 2]);
-        accumulator = combine(accumulator, values[index + 3]);
-        index += 4;
-    }
-    for index < length {
-        accumulator = combine(accumulator, values[index]);
-        index += 1;
     }
     return accumulator;
 }

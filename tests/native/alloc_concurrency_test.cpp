@@ -3,12 +3,13 @@
 // under test (runtime/native/alloc.cpp) stays free of libc and C++ runtime
 // dependencies.
 //
-// The harness intentionally exercises the shared small-pool state:
+// The harness intentionally exercises the shared pool and direct-cache state:
 //   * several size classes and alignments allocated and freed at once,
 //   * zero-byte payloads and mmap-backed large/over-aligned requests,
 //   * blocks handed to another thread that verifies the exact byte pattern
 //     before freeing them,
 //   * a duplicate-live-address check at peak liveness every round,
+//   * new direct sizes and repeated copies displacing the startup mappings,
 //   * an eviction phase that exceeds the per-class empty-page budget so pages
 //     are unmapped while other threads are still working,
 //   * a final reuse pass that must return addresses observed earlier.
@@ -30,7 +31,7 @@ constexpr uint32_t kMaxThreads = 16;
 constexpr uint32_t kMaxLivePerThread = 2048;
 constexpr uint32_t kRounds = 150;
 constexpr uint32_t kSmallPerRound = 6;
-constexpr uint32_t kLargePerRound = 2;
+constexpr uint32_t kLargePerRound = 3;
 constexpr uint32_t kTransferEvery = 10;
 constexpr uint32_t kEvictPerThread = 64;
 constexpr uint64_t kEvictSize = 4000;
@@ -49,7 +50,7 @@ constexpr uint32_t kSmallAlignCount =
     sizeof(kSmallAligns) / sizeof(kSmallAligns[0]);
 
 constexpr uint64_t kLargeSizes[] = {0,     4081,  4096, 4097,
-                                    8192,  16384, 65536, 100000};
+                                    8192,  16384, 65536, 100000, 170000};
 constexpr uint32_t kLargeSizeCount =
     sizeof(kLargeSizes) / sizeof(kLargeSizes[0]);
 
@@ -190,9 +191,17 @@ static int run_worker(uint32_t tid, uint32_t thread_count,
     }
     for (uint32_t index = 0; index < kLargePerRound; ++index) {
       const uint32_t pick = mix(tid + 1, round + 7, index + 13);
-      record_block(mine, ever, tid, round, kSmallPerRound + index,
-                   kLargeSizes[pick % kLargeSizeCount],
-                   kLargeAligns[(pick >> 8) % kLargeAlignCount], result);
+      if (index == 0) {
+        // Every thread needs this working size at the same time. Rotate
+        // between the former gap and a larger mapping as workloads move.
+        const uint64_t size = round % 2 ? 71093 : 192000;
+        record_block(mine, ever, tid, round, kSmallPerRound + index,
+                     size, 16, result);
+      } else {
+        record_block(mine, ever, tid, round, kSmallPerRound + index,
+                     kLargeSizes[pick % kLargeSizeCount],
+                     kLargeAligns[(pick >> 8) % kLargeAlignCount], result);
+      }
     }
 
     // Checkpoint A: all allocations of this round are live here.
@@ -389,6 +398,13 @@ static int final_reuse_check(const std::unordered_set<uintptr_t> &ever) {
 } // namespace
 
 int main() {
+  for (uint64_t size : {1024u, 1536u, 2560u, 3072u}) {
+    void *startup = lang_alloc_v1(size * 1024 - 64, 16);
+    if (!startup)
+      return 161;
+    lang_free_v1(startup);
+  }
+
   unsigned hardware = std::thread::hardware_concurrency();
   uint32_t thread_count = hardware ? hardware : 4;
   if (thread_count < 4)

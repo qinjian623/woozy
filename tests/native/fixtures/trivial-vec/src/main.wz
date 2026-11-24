@@ -1,4 +1,5 @@
 package app;
+import "std/vec" as vec;
 
 struct Trivial {
     n i32;
@@ -65,5 +66,20 @@ func main() i32 {
     units[1] = u;
     let e Empty = empty_slice[1];
     empties[1] = e;
+
+    // The private native fast path handles trivial self extend and an
+    // independent trivial source, growing capacity through the existing
+    // policy. Managed nested elements take the public element loop.
+    let ints_alias Vec[i32] = ints;
+    vec.extend[i32](ints, ints_alias);
+    if vec.len[i32](ints) != 6 { return 13; }
+    if ints[3] != 7 || ints[5] != 3 { return 14; }
+    vec.extend[i32](ints, int_slice);
+    if vec.len[i32](ints) != 8 { return 15; }
+    if ints[6] != 9 || ints[7] != 3 { return 16; }
+    let nested_self Vec[Vec[i32]] = nested;
+    vec.extend[Vec[i32]](nested, nested_self);
+    if vec.len[Vec[i32]](nested) != 4 { return 17; }
+    if nested[2][0] != 11 || nested[3][0] != 12 { return 18; }
     return 0;
 }

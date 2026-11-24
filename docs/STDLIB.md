@@ -73,7 +73,7 @@ func main() throws os.Error {
 
 Writer 必须显式 `flush`。丢弃 Writer 不会自动写出 pending；只用 `write` 写满 4096 字节也不代表最后一段已经写到文件。`flush` 失败时，已经完成的字节会从 pending 移除，剩余字节保留，错误继续抛出。
 
-`write_byte` 需要先 `flush` 且刷新失败时，本次传入的字节还没进缓冲。恢复写入后可重试该字节。
+`write_byte` 需要先 `flush` 且刷新失败时，本次传入的字节还没进缓冲。恢复写入后可重试该字节。`write` 和 `write_text` 失败前可能已将部分输入放入缓冲，重试整个输入可能重复这些字节。
 
 ## std/os
 

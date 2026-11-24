@@ -30,20 +30,19 @@ and is rejected.  A legitimate following slot/return guard is not rejected.
 
 ### Local store and indirect replace
 
-The NIR store slot ID is mapped to its LLVM slot alloca; the replace target
-input is traced through its NIR ``address`` slot to the real inout argument.
-For every local `store`, a strong-edge slot has exactly one critical pair that
-wraps the publication store to that exact target.  A pair that only wraps an
-active flag, or a publication outside the pair, fails.  The old owner is
-dropped by that same slot address after publication and never inside the pair.
+The NIR store slot ID is mapped to its LLVM alloca. A synchronous local
+publication has no guard, even for a strong-edge value. The owner is still
+dropped through that slot after publication.
 
-For `replace_indirect`, the old value must be loaded from the actual target,
-saved to a distinct scratch address, a non-old value must be published to
-the target inside the pair, and the old scratch must be dropped exactly once
-outside the pair.  Dropping the new target address, dropping the published
-value, losing the old load/save, or accepting an unrelated store/drop/return
-slot fails.  `store_indirect` follows the real pointee and the scalar control
-has no guard.
+For `replace_indirect`, follow the NIR address to its base and verify the LLVM
+publication at the corresponding address. A strong-edge inout destination
+or a projected Vec element field has exactly one pair around the publication.
+A field rooted in a synchronous local alloca has no pair. The old value must
+be loaded from the destination and saved to a distinct scratch address, then
+dropped from scratch exactly once after publication. A pair around an
+unrelated store or an active flag fails. The non-owning `store_indirect`
+control has no guard. An async-owned slot must stay guarded because coroutine
+lowering can move it into the traced frame.
 
 The IR checks identify the publication address and old-value scratch; they do
 not reconstruct the complete new-value SSA graph from NIR.  An unrelated RHS
@@ -85,8 +84,9 @@ The broader GC lifecycle suites remain separate and authoritative:
 - `tests/native/slice_source/`, `tests/native/weak_source/`, and the C cleanup
   runners for Slice/Weak/C-resource behavior and concurrent handshakes.
 
-This directory does not modify or relax any old full-module `critical > 0`
-check.  It only adds exact per-operation checks.
+The activation and lifecycle suites test real heap edges directly. A runtime
+whole-element Vec setter provides its own critical region. Incidental guards
+around local owner slots do not demonstrate protection of that update.
 
 ## Run (after Root authorizes the components)
 
@@ -126,13 +126,6 @@ the `clang++`/`llvm-readelf` invocation names through real soft links. LLVM
 chooses its driver and output format from these names.
 `external_launch_attempts` must be `[]`.
 
-## Current status
-
-The 67 pure controls and the 22-command component run passed. At O0 and O2,
-both the C++ helper and Wz Nativeobs emitter passed all 18 NativeIR/LLVM cases.
-Each emitter's own LLVM was linked into the GC observer; all four observations
-ended with balanced Vec allocations and zero live Vecs or payload bytes.
-
-The public CLI program builds in this suite use the C++ reference compiler.
-The Wz results exercise the Nativeobs component. These results do not establish
-full Wz CLI parity, complete selfhosting, or a build-time speedup.
+The Wz Nativeobs result covers the current production emission functions
+through the test driver. The public CLI build uses the supplied `--cli`
+binary. Nativeobs does not exercise the Wz CLI's build orchestration.

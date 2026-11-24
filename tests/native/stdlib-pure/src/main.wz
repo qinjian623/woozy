@@ -46,6 +46,12 @@ func main() i32 throws strconv.Error {
     let negative_nan = f64(strconv.parse_f32("-nAn"));
     if !math.isnan(positive_nan) || math.signbit(positive_nan) ||
        !math.isnan(negative_nan) || !math.signbit(negative_nan) { return 22; }
+    let infinity = strconv.parse_f64("-inf");
+    let subnormal = strconv.parse_f64("4.9406564584124654e-324");
+    if math.isinf(positive_nan) || math.isfinite(negative_nan) ||
+       math.isnan(infinity) || !math.isinf(infinity) || math.isfinite(infinity) ||
+       math.isnan(subnormal) || math.isinf(subnormal) || !math.isfinite(subnormal) ||
+       !math.isfinite(-0.0) { return 28; }
     if strconv.parse_f64("1.7976931348623158e308") != max { return 23; }
     let long_non_ascii = text.repeat("0", 16384) + "é";
     try {

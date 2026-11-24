@@ -444,17 +444,6 @@ func field_byte_valid(byte u8) bool {
 
 func valid_field_range(data Vec[u8], start usize, end usize) bool {
     var index = start;
-    for index + 8 <= end {
-        if !field_byte_valid(data[index]) ||
-           !field_byte_valid(data[index+1]) ||
-           !field_byte_valid(data[index+2]) ||
-           !field_byte_valid(data[index+3]) ||
-           !field_byte_valid(data[index+4]) ||
-           !field_byte_valid(data[index+5]) ||
-           !field_byte_valid(data[index+6]) ||
-           !field_byte_valid(data[index+7]) { return false; }
-        index += 8;
-    }
     for index < end {
         if !field_byte_valid(data[index]) { return false; }
         index += 1;
@@ -471,17 +460,6 @@ func is_ows(byte u8) bool { return byte == 32 || byte == 9; }
 // Returns end when the byte is absent.
 func find_byte_in(data Vec[u8], byte u8, start usize, end usize) usize {
     var index = start;
-    for index + 8 <= end {
-        if data[index] == byte { return index; }
-        if data[index+1] == byte { return index+1; }
-        if data[index+2] == byte { return index+2; }
-        if data[index+3] == byte { return index+3; }
-        if data[index+4] == byte { return index+4; }
-        if data[index+5] == byte { return index+5; }
-        if data[index+6] == byte { return index+6; }
-        if data[index+7] == byte { return index+7; }
-        index += 8;
-    }
     for index < end {
         if data[index] == byte { return index; }
         index += 1;

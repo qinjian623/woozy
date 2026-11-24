@@ -546,7 +546,8 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
             }
             vec.push(state.frame.values, ValueBinding(
                 value_id: parameter_value.value,
-                type_id: parameter_value.type_id, value: produced));
+                type_id: parameter_value.type_id, value: produced,
+                stack_address: false));
         }
         switch end_address {
             case option.Option.Some(address): end_lifetime(address, inout state);

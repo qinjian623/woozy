@@ -1,0 +1,143 @@
+// Behaviour checks for the integer half of std/strconv. main returns 0 on
+// success and a non-zero code identifying the first failing check.
+package app;
+import "std/strconv" as strconv;
+import "std/text" as text;
+
+// 0 means success, 1 InvalidSyntax, 2 OutOfRange.
+func i64_status(value string) i32 {
+    try {
+        let parsed = strconv.parse_i64(value);
+        return 0;
+    } catch error strconv.Error {
+        switch error {
+            case strconv.Error.InvalidSyntax: return 1;
+            case strconv.Error.OutOfRange: return 2;
+        }
+    }
+}
+
+func u64_status(value string) i32 {
+    try {
+        let parsed = strconv.parse_u64(value);
+        return 0;
+    } catch error strconv.Error {
+        switch error {
+            case strconv.Error.InvalidSyntax: return 1;
+            case strconv.Error.OutOfRange: return 2;
+        }
+    }
+}
+
+func check_boundaries() i32 {
+    try {
+        if strconv.parse_i64("-9223372036854775808") != -9223372036854775808 { return 1; }
+        if strconv.parse_i64("9223372036854775807") != 9223372036854775807 { return 2; }
+        if strconv.parse_u64("18446744073709551615") != 18446744073709551615 { return 3; }
+        if strconv.parse_i64("+9223372036854775807") != 9223372036854775807 { return 4; }
+        if strconv.parse_u64("+18446744073709551615") != 18446744073709551615 { return 5; }
+        if strconv.parse_i64("-0") != 0 || strconv.parse_i64("+0") != 0 { return 6; }
+        if strconv.parse_u64("+0") != 0 { return 7; }
+        if strconv.parse_u64("0000000000000000000000000000000000000000") != 0 { return 8; }
+        if strconv.parse_i64("-0000000000000000000000000000000000000001") != -1 { return 9; }
+        if strconv.parse_i64("+" + text.repeat("0", 100) + "9223372036854775807") !=
+           9223372036854775807 { return 16; }
+        if strconv.parse_i64("-" + text.repeat("0", 100) + "9223372036854775808") !=
+           -9223372036854775808 { return 17; }
+    } catch error strconv.Error { return 10; }
+    if strconv.format_i64(-9223372036854775808) != "-9223372036854775808" { return 11; }
+    if strconv.format_i64(9223372036854775807) != "9223372036854775807" { return 12; }
+    if strconv.format_u64(18446744073709551615) != "18446744073709551615" { return 13; }
+    if strconv.format_i64(0) != "0" || strconv.format_u64(0) != "0" { return 14; }
+    if strconv.format_i64(-1) != "-1" { return 15; }
+    return 0;
+}
+
+// Powers of ten and runs of nines cover every decimal length without relying
+// on the formatter to build the expected text.
+func check_lengths() i32 {
+    var power u64 = 1;
+    for var length usize = 1; length <= 20; length += 1 {
+        let expected = "1" + text.repeat("0", length - 1);
+        try {
+            if strconv.parse_u64(expected) != power { return 20 + i32(length); }
+        } catch error strconv.Error { return 50; }
+        if strconv.format_u64(power) != expected { return 60 + i32(length); }
+        if length < 20 { power *= 10; }
+    }
+    var nines u64 = 0;
+    for var length usize = 1; length <= 19; length += 1 {
+        nines = nines * 10 + 9;
+        let expected = text.repeat("9", length);
+        if strconv.format_u64(nines) != expected { return 90 + i32(length); }
+        try {
+            if strconv.parse_u64(expected) != nines { return 120 + i32(length); }
+        } catch error strconv.Error { return 150; }
+        if length <= 18 {
+            let negative = "-" + expected;
+            if strconv.format_i64(-i64(nines)) != negative { return 160 + i32(length); }
+            if strconv.format_i64(i64(nines)) != expected { return 180 + i32(length); }
+            try {
+                if strconv.parse_i64(negative) != -i64(nines) { return 200 + i32(length); }
+            } catch error strconv.Error { return 230; }
+        }
+    }
+    return 0;
+}
+
+func check_errors() i32 {
+    // No whitespace trim, exactly one optional leading sign, ASCII digits only.
+    let invalid = ["", "+", "-", "++1", "--1", "+-1", "-+1", " 1", "1 ",
+        "\t1", "1\t", "\n1", "1\n", "\r1", "1\r", "\u{000b}1", "1\u{000b}", "\u{000c}1", "1\u{000c}",
+        "1_0", "0x10", "1e3", ".1", "1.", "１", "١", "中", "1中", "中1",
+        "\0", "1\0", "\0" + "1", "+ 1", "- 1", "NaN", "inf"];
+    for value in invalid {
+        if i64_status(value) != 1 { return 1; }
+    }
+    for value in ["-1", "-0", "-9223372036854775808", "-18446744073709551616"] {
+        if u64_status(value) != 1 { return 2; }
+    }
+    let i64_range = ["9223372036854775808", "9999999999999999999",
+        "18446744073709551615", "18446744073709551616",
+        "99999999999999999999", text.repeat("9", 100),
+        "-9223372036854775809", "-9999999999999999999",
+        "-18446744073709551616", "-" + text.repeat("9", 100)];
+    for value in i64_range {
+        if i64_status(value) != 2 { return 3; }
+    }
+    let u64_range = ["18446744073709551616", "99999999999999999999",
+        text.repeat("9", 100), "+18446744073709551616"];
+    for value in u64_range {
+        if u64_status(value) != 2 { return 4; }
+    }
+    // A malformed suffix after an overflowing magnitude is still InvalidSyntax.
+    let mixed = ["1844674407370955161x", "18446744073709551616x",
+        "+18446744073709551616x", "-9223372036854775809x",
+        "9223372036854775808x", "18446744073709551615 ",
+        "18446744073709551615\n", text.repeat("9", 100) + "x",
+        text.repeat("9", 100) + "\0", "18446744073709551616中"];
+    for value in mixed {
+        if i64_status(value) != 1 { return 5; }
+        if u64_status(value) != 1 { return 6; }
+    }
+    let zeros = text.repeat("0", 100);
+    try {
+        if strconv.parse_u64(zeros) != 0 { return 7; }
+        if strconv.parse_i64("-" + zeros) != 0 { return 8; }
+        if strconv.parse_u64(zeros + "18446744073709551615") !=
+           18446744073709551615 { return 9; }
+    } catch error strconv.Error { return 10; }
+    if u64_status(zeros + "18446744073709551616") != 2 { return 11; }
+    if i64_status("+" + zeros + "9223372036854775808") != 2 { return 12; }
+    return 0;
+}
+
+func main() i32 {
+    let boundaries = check_boundaries();
+    if boundaries != 0 { return boundaries; }
+    let lengths = check_lengths();
+    if lengths != 0 { return 1000 + lengths; }
+    let errors = check_errors();
+    if errors != 0 { return 2000 + errors; }
+    return 0;
+}

@@ -73,8 +73,16 @@ pub func remove_at[T](values Vec[T], index usize) T {
 
 // extend appends logical copies of every element in extra. The source length
 // is read once, so extending a Vec with itself appends exactly the original
-// elements; each push performs the active pin check before changing length.
+// elements. Trivial elements use one native overlap-safe copy; the fallback
+// loop below keeps the active pin check before changing length.
 pub func extend[T](values Vec[T], extra Vec[T]) {
+    // The native primitive appends every trivial element with one overlap-safe
+    // copy, including a self extend. Any owning, unknown or partially
+    // initialized case returns false before mutation and keeps the element
+    // loop below, which also reads the source length exactly once.
+    if __woozy_vec_extend_trivial[T](values, extra) {
+        return;
+    }
     let count = len(extra);
     for var index usize = 0; index < count; index += 1 {
         push(values, extra[index]);
