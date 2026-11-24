@@ -426,7 +426,7 @@ func branch_store_fn(fn_value Value, type_name string,
 func branch_bind(value_id usize, type_id usize, item Value,
                  state inout Emitter) {
     vec.push(state.frame.values, ValueBinding(value_id: value_id,
-        type_id: type_id, value: item));
+        type_id: type_id, value: item, stack_address: false));
 }
 
 func branch_receiver_value(fn_value Value, receiver_type usize,

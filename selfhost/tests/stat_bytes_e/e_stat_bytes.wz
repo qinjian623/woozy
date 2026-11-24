@@ -144,7 +144,7 @@ pub func e_stat_bytes_case() EStatBytesCase throws Error {
     vec.clear(state.frame.values);
     let argument = parameter(state, function, 0);
     vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: vec_id,
-        value: argument));
+        value: argument, stack_address: false));
     var inputs Vec[usize] = [];
     vec.push(inputs, 0);
     instruction.inputs = inputs;

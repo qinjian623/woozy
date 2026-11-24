@@ -60,7 +60,7 @@ def command(label, argv, expected=0, input_bytes=None):
                     'stdout_sha256': hashlib.sha256(result.stdout).hexdigest(),
                     'stderr_bytes': len(result.stderr)})
     if result.returncode != expected:
-        raise RuntimeError(f'{label}: {result.returncode}: {result.stderr.decode(errors="replace")}')
+        raise RuntimeError(f'{label}: {result.returncode}: stdout={result.stdout.decode(errors="replace")} stderr={result.stderr.decode(errors="replace")}')
     return result.stdout
 
 

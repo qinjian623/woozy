@@ -34,7 +34,7 @@ func fa_function(state inout Emitter, name string, parameters Vec[string],
     var inputs Vec[usize] = [];
     for var index usize = 0; index < vec.len(parameters); index += 1 {
         vec.push(state.frame.values, ValueBinding(value_id: index, type_id: 0,
-            value: parameter(state, function, index)));
+            value: parameter(state, function, index), stack_address: false));
         vec.push(inputs, index);
     }
     instruction.inputs = inputs;
@@ -107,11 +107,11 @@ pub func e_fs_abi_case() EFsAbiCase throws Error {
     let string_value = e_load(str_layout, string_address, inout state);
     vec.clear(state.frame.values);
     vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: str_id,
-        value: string_value));
+        value: string_value, stack_address: false));
     vec.push(state.frame.values, ValueBinding(value_id: 1, type_id: 0,
-        value: parameter(state, readlink_function, 1)));
+        value: parameter(state, readlink_function, 1), stack_address: false));
     vec.push(state.frame.values, ValueBinding(value_id: 2, type_id: 0,
-        value: parameter(state, readlink_function, 2)));
+        value: parameter(state, readlink_function, 2), stack_address: false));
     var readlink_instruction = nativeir.empty_instruction();
     readlink_instruction.op = nativeir.Op.SystemCall;
     readlink_instruction.type_id = i64_id;

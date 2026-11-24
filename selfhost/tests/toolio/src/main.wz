@@ -117,6 +117,7 @@ func tests(root string,tool string)usize throws os.Error {
 
     var rollback=make_stage(root+"/rollback");defer {toolio.cleanup(rollback);}
     fs.write_text(rollback.directory+"/first","old first",0o751);
+    os.chmod(rollback.directory+"/first",0o751);
     fs.write_text(rollback.directory+"/second","old second",0o600);
     fs.write_text(rollback.path+"/first","new first",0o640);
     require(publish_rejected(inout rollback,"first","second",2),"second rename fails",inout count);

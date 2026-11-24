@@ -63,7 +63,7 @@ func checks(options n.Options) Vec[string] throws n.Error {
     let main = n.new_function("main", n.Signature(result: "i32", parameters: []), "", "", inout state);
     let entry = n.new_block(main, "entry", inout state);
     n.position(entry, inout state);
-    vec.push(state.frame.values, n.ValueBinding(value_id: 0, type_id: 0, value: n.Value(type_name: "i32", reference: "42")));
+    vec.push(state.frame.values, n.ValueBinding(value_id: 0, type_id: 0, value: n.Value(type_name: "i32", reference: "42"), stack_address: false));
     let seed = n.result("i32", "add i32 20, 1", inout state);
     let caller = n.save_cursor(state);
     let helper = n.new_function("twice", signature, "internal", "", inout state);
