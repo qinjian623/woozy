@@ -201,18 +201,68 @@ func byte_zero_flags(x u64) u64 {
     return ~(((x & 0x7f7f7f7f7f7f7f7f) + 0x7f7f7f7f7f7f7f7f) |
         x | 0x7f7f7f7f7f7f7f7f);
 }
+// Pack the UTF-8 bytes of a needle into a little-endian u64.
+// Callers limit the needle width to 2-4 bytes.
+// ASCII code points can be read directly; other scalars are encoded as UTF-8.
+// This keeps the packed counting paths free of a temporary needle byte Vec.
+func pack_short_needle(value string, byte_count usize) u64 {
+    let points = len(value);
+    if points == byte_count {
+        if points == 2 {
+            return (u64(value[0]) & 0xff) |
+                ((u64(value[1]) & 0xff) << 8);
+        }
+        if points == 3 {
+            return (u64(value[0]) & 0xff) |
+                ((u64(value[1]) & 0xff) << 8) |
+                ((u64(value[2]) & 0xff) << 16);
+        }
+        if points == 4 {
+            return (u64(value[0]) & 0xff) |
+                ((u64(value[1]) & 0xff) << 8) |
+                ((u64(value[2]) & 0xff) << 16) |
+                ((u64(value[3]) & 0xff) << 24);
+        }
+        return u64(value[0]) & 0xff;
+    }
+    var packed u64 = 0;
+    var shift usize = 0;
+    for var index usize = 0; index < points; index += 1 {
+        let rune = value[index];
+        if rune < 0x80 {
+            packed = packed | (u64(rune) << shift);
+            shift += 8;
+        } else if rune < 0x800 {
+            packed = packed | (u64(0xc0 | (rune >> 6)) << shift);
+            packed = packed | (u64(0x80 | (rune & 0x3f)) << (shift+8));
+            shift += 16;
+        } else if rune < 0x10000 {
+            packed = packed | (u64(0xe0 | (rune >> 12)) << shift);
+            packed = packed | (u64(0x80 | ((rune >> 6) & 0x3f)) << (shift+8));
+            packed = packed | (u64(0x80 | (rune & 0x3f)) << (shift+16));
+            shift += 24;
+        } else {
+            packed = packed | (u64(0xf0 | (rune >> 18)) << shift);
+            packed = packed | (u64(0x80 | ((rune >> 12) & 0x3f)) << (shift+8));
+            packed = packed | (u64(0x80 | ((rune >> 6) & 0x3f)) << (shift+16));
+            packed = packed | (u64(0x80 | (rune & 0x3f)) << (shift+24));
+            shift += 32;
+        }
+    }
+    return packed;
+}
 // Count nonoverlapping matches of 2-4 byte patterns with a border.
 // Each candidate start is the high bit of its byte. With wrapping u64
 // arithmetic, flags & (~flags+1) selects the earliest one. Clear its span
 // and carry any part that reaches into the next window.
-func count_overlap(value string, pattern Vec[u8], byte_count usize,
+func count_overlap(value string, packed u64, byte_count usize,
     width usize) option.Option[usize] {
-    let first = u64(pattern[0]) * 0x0101010101010101;
-    let second = u64(pattern[1]) * 0x0101010101010101;
+    let first = (packed & 0xff) * 0x0101010101010101;
+    let second = ((packed >> 8) & 0xff) * 0x0101010101010101;
     var third u64 = 0;
     var fourth u64 = 0;
-    if width >= 3 { third = u64(pattern[2]) * 0x0101010101010101; }
-    if width == 4 { fourth = u64(pattern[3]) * 0x0101010101010101; }
+    if width >= 3 { third = ((packed >> 16) & 0xff) * 0x0101010101010101; }
+    if width == 4 { fourth = ((packed >> 24) & 0xff) * 0x0101010101010101; }
     let stride = 9-width;
     let carry_shift = stride*8;
     var span_factor u64 = 0x0101;
@@ -272,9 +322,9 @@ func count_overlap(value string, pattern Vec[u8], byte_count usize,
     }
     return option.Option[usize].Some(total);
 }
-func count_two(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
-    let first = u64(pattern[0]) * 0x0101010101010101;
-    let second = u64(pattern[1]) * 0x0101010101010101;
+func count_two(value string, packed u64, byte_count usize) option.Option[usize] {
+    let first = (packed & 0xff) * 0x0101010101010101;
+    let second = ((packed >> 8) & 0xff) * 0x0101010101010101;
     var total usize = 0;
     var offset usize = 0;
     for byte_count - offset >= 8 {
@@ -301,10 +351,10 @@ func count_two(value string, pattern Vec[u8], byte_count usize) option.Option[us
     }
     return option.Option[usize].Some(total);
 }
-func count_three(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
-    let first = u64(pattern[0]) * 0x0101010101010101;
-    let second = u64(pattern[1]) * 0x0101010101010101;
-    let third = u64(pattern[2]) * 0x0101010101010101;
+func count_three(value string, packed u64, byte_count usize) option.Option[usize] {
+    let first = (packed & 0xff) * 0x0101010101010101;
+    let second = ((packed >> 8) & 0xff) * 0x0101010101010101;
+    let third = ((packed >> 16) & 0xff) * 0x0101010101010101;
     var total usize = 0;
     var offset usize = 0;
     for byte_count - offset >= 8 {
@@ -333,11 +383,11 @@ func count_three(value string, pattern Vec[u8], byte_count usize) option.Option[
     }
     return option.Option[usize].Some(total);
 }
-func count_four(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
-    let first = u64(pattern[0]) * 0x0101010101010101;
-    let second = u64(pattern[1]) * 0x0101010101010101;
-    let third = u64(pattern[2]) * 0x0101010101010101;
-    let fourth = u64(pattern[3]) * 0x0101010101010101;
+func count_four(value string, packed u64, byte_count usize) option.Option[usize] {
+    let first = (packed & 0xff) * 0x0101010101010101;
+    let second = ((packed >> 8) & 0xff) * 0x0101010101010101;
+    let third = ((packed >> 16) & 0xff) * 0x0101010101010101;
+    let fourth = ((packed >> 24) & 0xff) * 0x0101010101010101;
     var total usize = 0;
     var offset usize = 0;
     for byte_count - offset >= 8 {
@@ -369,9 +419,9 @@ func count_four(value string, pattern Vec[u8], byte_count usize) option.Option[u
     return option.Option[usize].Some(total);
 }
 pub func count(value string, needle string) usize {
-    if needle == "" { return len(value)+1; }
-    let value_bytes = byte_len(value);
     let needle_bytes = byte_len(needle);
+    if needle_bytes == 0 { return len(value)+1; }
+    let value_bytes = byte_len(value);
     if needle_bytes > value_bytes { return 0; }
     if needle_bytes == 1 {
         let target = u8(needle[0]);
@@ -409,40 +459,44 @@ pub func count(value string, needle string) usize {
         }
         return total;
     }
-    let pattern = bytes(needle);
     if needle_bytes >= 2 && needle_bytes <= 4 && value_bytes >= 8 {
+        let packed = pack_short_needle(needle,needle_bytes);
         // A border is a proper prefix that is also a suffix; only then can
         // matches overlap, so those patterns use the packed greedy path.
-        var has_border = pattern[0] == pattern[needle_bytes-1];
+        let first_byte = packed & 0xff;
+        let last_byte = (packed >> ((needle_bytes-1)*8)) & 0xff;
+        var has_border = first_byte == last_byte;
         if needle_bytes == 4 &&
-            pattern[0] == pattern[2] && pattern[1] == pattern[3] {
+            first_byte == ((packed >> 16) & 0xff) &&
+            ((packed >> 8) & 0xff) == ((packed >> 24) & 0xff) {
             has_border = true;
         }
         if !has_border {
             if needle_bytes == 2 {
-                switch count_two(value,pattern,value_bytes) {
+                switch count_two(value,packed,value_bytes) {
                     case option.Option.Some(total): return total;
                     case option.Option.None: {}
                 }
             } else if needle_bytes == 3 {
-                switch count_three(value,pattern,value_bytes) {
+                switch count_three(value,packed,value_bytes) {
                     case option.Option.Some(total): return total;
                     case option.Option.None: {}
                 }
             } else {
-                switch count_four(value,pattern,value_bytes) {
+                switch count_four(value,packed,value_bytes) {
                     case option.Option.Some(total): return total;
                     case option.Option.None: {}
                 }
             }
         } else {
-            switch count_overlap(value,pattern,value_bytes,needle_bytes) {
+            switch count_overlap(value,packed,value_bytes,needle_bytes) {
                 case option.Option.Some(total): return total;
                 case option.Option.None: {}
             }
         }
     }
     let haystack = bytes(value);
+    let pattern = bytes(needle);
     let pattern_bytes = vec.len(pattern);
     let haystack_bytes = vec.len(haystack);
     let fallback = match_table(pattern);

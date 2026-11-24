@@ -254,6 +254,65 @@ func check_multi_counts() i32 {
     return 0;
 }
 
+func check_packed_needle_boundaries() i32 {
+    let patterns = [
+        "\u{7f}a", "a\u{7f}", "\u{7f}\0", "\0\u{7f}",
+        "\u{7f}\u{7f}", "\u{7f}a\u{7f}",
+        "\u{80}", "\u{7ff}", "\u{80}a", "a\u{80}",
+        "\u{80}\0", "\0\u{80}", "\u{80}\u{7f}", "\u{7f}\u{80}",
+        "\u{80}\u{80}", "\u{80}\u{7ff}", "\u{7ff}\u{80}",
+        "\u{7ff}\u{7ff}", "a\u{80}a", "\0\u{80}\0",
+        "\u{800}", "\u{ffff}", "\u{800}a", "a\u{800}",
+        "\u{800}\0", "\0\u{800}", "\u{ffff}a", "a\u{ffff}",
+        "\u{ffff}\0", "\0\u{ffff}", "\u{800}\u{7f}", "\u{7f}\u{800}",
+        "\u{7f}\0\u{7f}\0", "\u{7f}\u{7f}\u{7f}\u{7f}",
+        "\u{80}\0\u{7f}", "\u{7f}\0\u{80}", "\u{7ff}\0\u{7f}",
+        "\u{10000}", "\u{10ffff}"
+    ];
+    let tails = ["", "x", "xy", "xyz", "\u{7f}", "\u{80}", "\u{7ff}",
+        "\u{800}", "\u{ffff}", "\u{10000}", "\u{10ffff}", "\0", "中", "😀"];
+    for pattern in patterns {
+        for tail in tails {
+            for var start usize = 0; start < 12; start += 1 {
+                let value = text.repeat("x",start) + pattern + tail;
+                if text.count(value,pattern) != scalar_count(value,pattern) {
+                    return 1201;
+                }
+                let adjacent = pattern + pattern + pattern + tail;
+                if text.count(adjacent,pattern) != scalar_count(adjacent,pattern) {
+                    return 1202;
+                }
+            }
+        }
+    }
+
+    let overlap_needles = ["\u{7f}\u{7f}\u{7f}", "\u{80}\u{80}",
+        "\u{7ff}\u{7ff}", "a\u{80}a", "\0\u{80}\0", "a\u{7ff}a"];
+    let overlap_units = ["\u{7f}", "\u{80}", "\u{7ff}", "a\u{80}",
+        "a\u{7ff}", "\0\u{80}"];
+    for needle in overlap_needles {
+        for unit in overlap_units {
+            let unit_length = text.len(unit);
+            for var length usize = 8; length <= 48; length += 1 {
+                let value = text.repeat(unit,length/unit_length+1);
+                let trimmed = value[0:length];
+                if text.count(trimmed,needle) != scalar_count(trimmed,needle) {
+                    return 1203;
+                }
+            }
+        }
+    }
+
+    let runs = ["\u{7f}a","\u{80}","\u{7ff}","\u{800}","\u{ffff}",
+        "\u{10000}","\u{10ffff}","\u{80}\u{80}","\u{80}\u{7ff}",
+        "\u{7ff}\u{80}","a\u{80}a","a\u{7ff}a","a\0\u{80}","\0\u{800}"];
+    for pattern in runs {
+        let value = text.repeat(pattern,5000);
+        if text.count(value,pattern) != 5000 { return 1204; }
+    }
+    return 0;
+}
+
 func check_split_n() i32 {
     if vec.len(text.split_n("a,b", ",", 0)) != 0 { return 401; }
     if vec.len(text.split_n("", "", 0)) != 0 { return 402; }
@@ -442,6 +501,8 @@ func main() i32 {
     code = check_word_counts();
     if code != 0 { return code; }
     code = check_multi_counts();
+    if code != 0 { return code; }
+    code = check_packed_needle_boundaries();
     if code != 0 { return code; }
     code = check_split_n();
     if code != 0 { return code; }
