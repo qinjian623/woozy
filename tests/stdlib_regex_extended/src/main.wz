@@ -870,6 +870,15 @@ func check_runner_scratch_reuse() bool throws regex.Error {
         }
     }
 
+    // Separate runs must not share a seed frontier across the separator.
+    let repeat = regex.compile("中+");
+    let apart = "中a中";
+    let runs = regex.find_all(repeat, apart);
+    if vec.len(runs) != 2 { return false; }
+    if runs[0].start != 0 || runs[0].end != 1 { return false; }
+    if runs[1].start != 2 || runs[1].end != 3 { return false; }
+    if !same_strings(regex.split(repeat, apart), ["", "a", ""]) { return false; }
+
     // A complete scan without a match leaves the input as one piece.
     let absent = regex.compile("zzz");
     if !same_strings(regex.split(absent, mixed), [mixed]) { return false; }
