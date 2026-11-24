@@ -206,14 +206,14 @@ func string_from_bytes(data Vec[u8]) string {
 pub func boundaries(value string) Vec[usize] { return wz_grapheme_boundaries(value); }
 pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-1; }
 pub func graphemes(value string) Vec[string] {
+    let total = text.len(value);
+    if total == 0 { return vec.empty[string](); }
+    if text.byte_len(value) == total {
+        return graphemes_ascii(value,total);
+    }
     let points = boundaries(value);
     if vec.len(points) < 2 { return vec.empty[string](); }
-    // Keep the old O(1)-per-slice path where it is already optimal or where
-    // cursor setup would dominate: inputs with at most four clusters (the old
-    // path then performs only a handful of prefix scans), and pure ASCII.
-    var use_slices = vec.len(points) <= 5;
-    if !use_slices { use_slices = text.byte_len(value) == text.len(value); }
-    if use_slices {
+    if vec.len(points) <= 5 {
         let out = vec.empty[string]();
         for var index usize = 1; index < vec.len(points); index += 1 {
             vec.push(out,value[points[index-1]:points[index]]);
@@ -221,6 +221,21 @@ pub func graphemes(value string) Vec[string] {
         return out;
     }
     return graphemes_cursor(value,points);
+}
+
+// Pure-ASCII scan: one code point per cluster except CR LF; direct slices, adjacency reload.
+func graphemes_ascii(value string,total usize) Vec[string] {
+    let out = vec.empty[string]();
+    if total <= 65536 { vec.reserve(out,total); }
+    var start usize = 0;
+    for var index usize = 1; index < total; index += 1 {
+        if !(value[index-1] == 0x0d && value[index] == 0x0a) {
+            vec.push(out,value[start:index]);
+            start = index;
+        }
+    }
+    vec.push(out,value[start:total]);
+    return out;
 }
 
 // Absolute string slices rescan the prefix to find each code-point offset.

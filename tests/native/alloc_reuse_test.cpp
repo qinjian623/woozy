@@ -221,8 +221,30 @@ static int test_reuse_without_mmap() {
   for (uint32_t index = 0; index < kCount; ++index)
     lang_free_v1(warm[index]);
 
+  // Keep two exact-size direct mappings warm across the filter.  The one-slot
+  // allocator can only return the first; the two-slot allocator returns both.
+  constexpr uint64_t kDirectSizes[] = {512 * 1024, 768 * 1024};
+  for (uint64_t size : kDirectSizes) {
+    void *pointer = lang_alloc_v1(size, 16);
+    if (!pointer)
+      return 49;
+    fill(pointer, size, 0x5a);
+    lang_free_v1(pointer);
+  }
+
   if (!deny_mmap())
     return 77;
+
+  for (uint32_t index = 0; index < 2; ++index) {
+    const uint64_t size = kDirectSizes[index];
+    void *pointer = lang_alloc_v1(size, 16);
+    if (!pointer)
+      return 59;
+    fill(pointer, size, static_cast<uint8_t>(0x61 + index));
+    if (!matches(pointer, size, static_cast<uint8_t>(0x61 + index)))
+      return 60;
+    lang_free_v1(pointer);
+  }
 
   // The old allocator has no free storage here and calls mmap for every one
   // of these requests; the reuse allocator must satisfy them from warm pages.
@@ -293,8 +315,9 @@ static int wait_for_test_child(pid_t child) {
   return 72;
 }
 
-// Prime the direct cache and permit only enough address space for the next
-// request. That request must still succeed when the cached mapping is evicted.
+// Prime two distinct exact-size direct mappings and permit only enough
+// address space for the next request. It must still succeed after dropping
+// every retained mapping; dropping only slot zero leaves the second resident.
 static int test_pressure_child(uint64_t size, uint64_t slack) {
   char statm[128]{};
   const int fd = open("/proc/self/statm", O_RDONLY);
@@ -310,11 +333,14 @@ static int test_pressure_child(uint64_t size, uint64_t slack) {
     return 82;
   const auto before = static_cast<rlim_t>(pages) * page_size;
 
-  void *warm = lang_alloc_v1(512 * 1024, 16);
-  if (!warm)
-    return 83;
-  *static_cast<volatile unsigned char *>(warm) = 7;
-  lang_free_v1(warm);
+  constexpr uint64_t kWarmSizes[] = {512 * 1024, 768 * 1024};
+  for (uint64_t warm_size : kWarmSizes) {
+    void *warm = lang_alloc_v1(warm_size, 16);
+    if (!warm)
+      return 83;
+    *static_cast<volatile unsigned char *>(warm) = 7;
+    lang_free_v1(warm);
+  }
 
   rlimit limit{};
   if (getrlimit(RLIMIT_AS, &limit) != 0)
@@ -368,7 +394,11 @@ int main(int argc, char **argv) {
     return run_reuse_without_mmap_isolated();
 #if defined(__x86_64__) && defined(__linux__)
   // Keep these first: the 4000-byte class must be cold in its isolated child.
-  int pressure = run_pressure_isolated(4000, 80 * 1024);
+  // The 1 MiB target needs both retained direct mappings released; the base's
+  // one slot is enough, but a slot-zero-only drop leaves the 768 KiB mapping.
+  int pressure = run_pressure_isolated(1024 * 1024, 1280 * 1024);
+  if (!pressure)
+    pressure = run_pressure_isolated(4000, 80 * 1024);
   if (!pressure)
     pressure = run_pressure_isolated(262144, 320 * 1024);
   if (pressure)
