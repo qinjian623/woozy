@@ -204,6 +204,17 @@ extern "C" void lang_gc_program_leave_critical_v1(int32_t entered) noexcept {
   leave_critical_hook(entered);
 }
 
+extern "C" void lang_gc_program_poll_request_v1(void) noexcept {
+  // The no-request path is the same one-load fast path as the generated
+  // safepoint. Do not call the controller here: this site may be a collapsed
+  // store guard, and pressure collection is not part of the old pair.
+  if (!lang_gc_world_poll_required_v1())
+    return;
+  if (!lang::native::gc_program::enabled() || main_after_finish())
+    return;
+  lang_gc_world_poll_v1();
+}
+
 extern "C" int32_t lang_gc_program_thread_enter_v1(void) noexcept {
   return thread_enter_hook();
 }

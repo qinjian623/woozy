@@ -174,6 +174,16 @@ void lang_gc_program_leave_safe_v1(int32_t entered) LANG_GC_PROGRAM_NOEXCEPT;
 int32_t lang_gc_program_enter_critical_v1(void) LANG_GC_PROGRAM_NOEXCEPT;
 void lang_gc_program_leave_critical_v1(int32_t entered) LANG_GC_PROGRAM_NOEXCEPT;
 
+// Request-only safepoint used by the O2 backend after LLVM has collapsed an
+// adjacent generated enter/leave critical pair whose guarded store is gone.
+// With no pending world request this performs one atomic load and returns; it
+// does not gettid, take the registry lock, consult pressure, or collect. With a
+// request it applies the normal program enabled/main-after-finish guards and
+// then the ordinary world poll, preserving registration, SAFE/critical/fork
+// nesting, and parking behavior. It never starts a pressure-triggered
+// collection at the call site.
+void lang_gc_program_poll_request_v1(void) LANG_GC_PROGRAM_NOEXCEPT;
+
 // Runtime thread-runner hooks. enter returns 1 only when this call created the
 // registration; leave unregisters only that registration.
 int32_t lang_gc_program_thread_enter_v1(void) LANG_GC_PROGRAM_NOEXCEPT;
