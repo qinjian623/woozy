@@ -24,8 +24,8 @@ func wz_normalize(value string, form Form) string {
 // build a second Vec[u32] that this loop copies into the buffer, so using the
 // package-private utf8_rune/utf8_next helpers avoids that extra pass.
 func wz_normalize_impl(value string, compat bool, compose bool) string {
+    if wz_normalize_is_identity(value,compat,compose) { return value; }
     let data = text.bytes(value);
-    if wz_normalize_is_identity(data,compat,compose) { return value; }
     let buffer = vec.empty[u32]();
     vec.reserve(buffer,text.len(value));
     let total = vec.len(data);
@@ -58,12 +58,9 @@ func wz_normalize_impl(value string, compat bool, compose bool) string {
 // all combining classes to be zero is sufficient for NFC/NFKC identity.
 // For NFD/NFKD, no decomposition mapping and nondecreasing nonzero classes
 // are sufficient because decomposition does not compose.
-func wz_normalize_is_identity(data Vec[u8], compat bool, compose bool) bool {
-    let total = vec.len(data);
-    var offset usize = 0;
+func wz_normalize_is_identity(value string, compat bool, compose bool) bool {
     var previous_class u32 = 0;
-    for offset < total {
-        let rune = utf8_rune(data,offset);
+    for rune in value {
         if compose {
             if wz_normalize_ccc(rune) != 0 { return false; }
             if compat {
@@ -84,7 +81,6 @@ func wz_normalize_is_identity(data Vec[u8], compat bool, compose bool) bool {
             if current_class != 0 && previous_class > current_class { return false; }
             previous_class = current_class;
         }
-        offset = utf8_next(data,offset);
     }
     return true;
 }
