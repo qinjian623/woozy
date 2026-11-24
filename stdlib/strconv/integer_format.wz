@@ -2,15 +2,31 @@ package strconv;
 import "std/text" as text;
 import "std/vec" as vec;
 
-// A u64 holds at most 20 decimal digits; the extra byte is for a minus sign.
-const FORMAT_BUFFER usize = 21;
-
 func format_decimal(magnitude u64, negative bool) string {
-    // Fill the buffer from the end so digits come out most-significant first.
-    // Two decimal digits are produced per iteration, which halves the number
-    // of divisions and collector polls while preserving the exact value.
-    let buffer = vec.make[u8](FORMAT_BUFFER, 0);
-    var begin usize = FORMAT_BUFFER;
+    // Count the exact output size first, four decimal digits per radix-10000
+    // unit, then finish the bounded tail. This avoids both a fixed maximum
+    // buffer and compacting the finished digits down to the front.
+    var digits usize = 1;
+    var counted = magnitude;
+    for counted >= 10000 {
+        counted /= 10000;
+        digits += 4;
+    }
+    if counted >= 1000 {
+        digits += 3;
+    } else if counted >= 100 {
+        digits += 2;
+    } else if counted >= 10 {
+        digits += 1;
+    }
+    var length = digits;
+    if negative {
+        length += 1;
+    }
+    let buffer = vec.make[u8](length, 0);
+    // Keep the existing radix-100 formatting, but write straight into the
+    // exact-size result so no copy or resize is needed afterward.
+    var begin usize = length;
     var remaining = magnitude;
     for remaining >= 100 {
         let pair = remaining % 100;
@@ -31,13 +47,6 @@ func format_decimal(magnitude u64, negative bool) string {
         begin -= 1;
         buffer[begin] = 45;
     }
-    // Move the occupied suffix to the front in place. Destination indices are
-    // never above source indices, so this overlapping forward copy is safe.
-    let length = FORMAT_BUFFER - begin;
-    for var index usize = 0; index < length; index += 1 {
-        buffer[index] = buffer[begin + index];
-    }
-    vec.resize(buffer, length, 0);
     try { return text.from_bytes(buffer); }
     catch error text.Error {
         // The bytes above are decimal ASCII digits and an optional minus.
