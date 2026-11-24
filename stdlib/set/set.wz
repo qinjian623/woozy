@@ -97,6 +97,11 @@ func probe[K hash.Hash](cells Vec[Slot[K]], key K, header Header, home usize) us
 pub func contains[K hash.Hash](values Set[K], key K) bool {
     let hashed = K.hash(key);
     let header = values.meta[0];
+    // An empty table cannot contain any key. This also avoids probing a
+    // table made entirely of tombstones after a full drain.
+    if header.size == 0 {
+        return false;
+    }
     let home = usize(hashed & u64(header.capacity - 1));
     let position = header.base + home;
     switch values.cells[position] {
@@ -481,6 +486,10 @@ func remove_slow[K hash.Hash](values Set[K], key K, header Header, home usize, a
 pub func remove[K hash.Hash](values Set[K], key K) bool {
     let hashed = K.hash(key);
     let header = values.meta[0];
+    // An empty table has no slot to delete.
+    if header.size == 0 {
+        return false;
+    }
     let home = usize(hashed & u64(header.capacity - 1));
     let position = header.base + home;
     switch values.cells[position] {

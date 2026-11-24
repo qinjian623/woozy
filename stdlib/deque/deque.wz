@@ -141,11 +141,16 @@ pub func pop_front[T](values Deque[T]) option.Option[T] {
 
     let ring = state.capacity;
     let position = state.head;
-    // Copy the owned slot first, then clear it. The returned value is a
+    // Copy the owned slot before changing the cursor. The returned value is a
     // normal owned copy that can outlive this deque and all its aliases.
     let stored = values.slots[position];
+    var head = position + 1;
+    if head == ring { head = 0; }
+    values.cursor[0] = Cursor(head:head,length:state.length - 1,capacity:ring);
+    // Publish the reduced length before releasing the old slot. The slot is
+    // still retained if a collector runs here, and aliases observe one
+    // completed pop because the dead slot is outside the live range.
     values.slots[position] = option.Option[T].None;
-    values.cursor[0] = Cursor(head:(position + 1) % ring,length:state.length - 1,capacity:ring);
     return stored;
 }
 
@@ -155,10 +160,17 @@ pub func pop_back[T](values Deque[T]) option.Option[T] {
     if state.length == 0 { return option.Option[T].None; }
 
     let ring = state.capacity;
-    let position = (state.head + state.length - 1) % ring;
+    let tail = ring - state.head;
+    let index = state.length - 1;
+    // The logical index is below the capacity. If it lies beyond the
+    // contiguous tail, subtracting that tail wraps it without a modulo and
+    // without forming head + index, which could overflow near usize.MAX.
+    var position = index;
+    if index >= tail { position -= tail; }
+    else { position = state.head + index; }
     let stored = values.slots[position];
-    values.slots[position] = option.Option[T].None;
     values.cursor[0] = Cursor(head:state.head,length:state.length - 1,capacity:ring);
+    values.slots[position] = option.Option[T].None;
     return stored;
 }
 

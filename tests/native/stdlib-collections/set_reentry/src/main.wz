@@ -832,6 +832,149 @@ func test_add_tomb_match() i32 {
     return 0;
 }
 
+// Drain a table to all tombstones, then exercise misses and refill.  The
+// empty-table fast path must reject misses without probing every tomb and
+// must still allow the table to be reused.
+func test_drained_i32() i32 {
+    let values = set.new[i32]();
+    for var i i32 = 0; i < 512; i += 1 {
+        if !set.add(values, i) {
+            return 100;
+        }
+    }
+    for var i i32 = 0; i < 512; i += 1 {
+        if !set.remove(values, i) {
+            return 101;
+        }
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 102;
+    }
+    for var i i32 = 512; i < 1024; i += 1 {
+        if set.contains(values, i) || set.remove(values, i) {
+            return 103;
+        }
+    }
+    for var i i32 = 1000; i < 1512; i += 1 {
+        if !set.add(values, i) {
+            return 104;
+        }
+    }
+    if set.len(values) != 512 {
+        return 105;
+    }
+    for var i i32 = 1000; i < 1512; i += 1 {
+        if !set.contains(values, i) {
+            return 106;
+        }
+    }
+    return 0;
+}
+
+func test_drained_strings() i32 {
+    let values = set.new[string]();
+    let keys Vec[string] = [
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+        "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi",
+        "rho", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
+    ];
+    for key in keys {
+        if !set.add(values, key) {
+            return 107;
+        }
+    }
+    for key in keys {
+        if !set.remove(values, key) {
+            return 108;
+        }
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 109;
+    }
+    let misses Vec[string] = [
+        "missing-alpha", "missing-beta", "missing-gamma", "missing-delta",
+        "missing-epsilon", "missing-zeta", "missing-eta", "missing-theta",
+        "missing-iota", "missing-kappa", "missing-lambda", "missing-mu",
+        "missing-nu", "missing-xi", "missing-omicron", "missing-pi",
+    ];
+    for key in misses {
+        if set.contains(values, key) || set.remove(values, key) {
+            return 110;
+        }
+    }
+    for key in keys {
+        if !set.add(values, key) {
+            return 111;
+        }
+    }
+    if set.len(values) != 24 {
+        return 112;
+    }
+    return 0;
+}
+
+func test_drained_colliding() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    for var id i32 = 0; id < 256; id += 1 {
+        if !set.add(values, flip_plain(cell, id)) {
+            return 113;
+        }
+    }
+    for var id i32 = 0; id < 256; id += 1 {
+        if !set.remove(values, flip_plain(cell, id)) {
+            return 114;
+        }
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 115;
+    }
+    for var id i32 = 256; id < 512; id += 1 {
+        if set.contains(values, flip_plain(cell, id)) ||
+        set.remove(values, flip_plain(cell, id)) {
+            return 116;
+        }
+    }
+    for var id i32 = 0; id < 256; id += 1 {
+        if !set.add(values, flip_plain(cell, id)) {
+            return 117;
+        }
+    }
+    if set.len(values) != 256 {
+        return 118;
+    }
+    return 0;
+}
+
+// Repeated insert/drain/miss cycles over constant-hash keys: every round ends
+// with a tombstone-only table and the next round must refill it correctly.
+func test_drained_churn() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    for var round i32 = 0; round < 16; round += 1 {
+        for var id i32 = 0; id < 128; id += 1 {
+            if !set.add(values, flip_plain(cell, id)) {
+                return 119;
+            }
+        }
+        for var id i32 = 0; id < 128; id += 1 {
+            if !set.remove(values, flip_plain(cell, id)) {
+                return 120;
+            }
+        }
+        if set.len(values) != 0 {
+            return 121;
+        }
+        for var id i32 = 128; id < 256; id += 1 {
+            if set.contains(values, flip_plain(cell, id)) ||
+            set.remove(values, flip_plain(cell, id)) {
+                return 122;
+            }
+        }
+    }
+    return 0;
+}
+
 func main() i32 {
     var status = test_add_hash_insert();
     if status != 0 {
@@ -910,6 +1053,22 @@ func main() i32 {
         return status;
     }
     status = test_remove_flip_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_drained_i32();
+    if status != 0 {
+        return status;
+    }
+    status = test_drained_strings();
+    if status != 0 {
+        return status;
+    }
+    status = test_drained_colliding();
+    if status != 0 {
+        return status;
+    }
+    status = test_drained_churn();
     if status != 0 {
         return status;
     }

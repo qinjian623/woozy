@@ -276,6 +276,102 @@ func test_deque_release_on_clear() i32 {
     return 0;
 }
 
+// pop_back must release the ring slot even when the back element sits just
+// past a wrapped head. The returned value is still an owning copy.
+func test_deque_release_on_pop_back() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let queue = deque.with_capacity[box.Box[i32]](9);
+    for var index usize = 0; index < 8; index += 1 {
+        deque.push_back(queue, box.new[i32](i32(index)));
+        let removed = deque.pop_front(queue);
+    }
+    if deque.len(queue) != 0 { return 390; }
+    let filler = box.new[i32](7);
+    deque.push_back(queue, filler);
+    {
+        let cell = box.new[i32](19);
+        link = weak.downgrade[box.Box[i32]](cell);
+        deque.push_back(queue, cell);
+        switch weak.upgrade(link) {
+            case option.Option.Some(value): {
+                if box.get(value) != 19 { return 391; }
+            }
+            case option.Option.None: return 392;
+        }
+        switch deque.pop_back(queue) {
+            case option.Option.Some(item): {
+                if box.get(item) != 19 { return 393; }
+            }
+            case option.Option.None: return 394;
+        }
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 395;
+        case option.Option.None: {}
+    }
+    if deque.len(queue) != 1 { return 396; }
+    switch deque.peek_front(queue) {
+        case option.Option.Some(item): {
+            if box.get(item) != 7 { return 397; }
+        }
+        case option.Option.None: return 398;
+    }
+    return 0;
+}
+
+// Exercise exact-capacity fills and wrapped heads on non-power-of-two rings.
+func check_deque_capacity_wrap(capacity usize) i32 {
+    let queue = deque.with_capacity[i32](capacity);
+    let alias = queue;
+    if deque.capacity(queue) != capacity { return 400; }
+    for var index usize = 0; index < capacity; index += 1 {
+        deque.push_back(queue, i32(index));
+    }
+    if deque.len(alias) != capacity { return 401; }
+    for var index usize = 0; index < capacity; index += 1 {
+        if !some_i32(deque.get(alias, index), i32(index)) { return 402; }
+    }
+    if !some_i32(deque.peek_back(alias), i32(capacity - 1)) { return 403; }
+    for var index usize = 0; index + 1 < capacity; index += 1 {
+        if !some_i32(deque.pop_front(queue), i32(index)) { return 404; }
+    }
+    if !some_i32(deque.peek_front(alias), i32(capacity - 1)) { return 405; }
+    if !some_i32(deque.peek_back(queue), i32(capacity - 1)) { return 406; }
+    for var index usize = 0; index + 1 < capacity; index += 1 {
+        deque.push_front(alias, i32(1000 + index));
+    }
+    if deque.len(queue) != capacity { return 407; }
+    for var index usize = 0; index + 1 < capacity; index += 1 {
+        let expected = i32(1000 + (capacity - 2 - index));
+        if !some_i32(deque.get(alias, index), expected) { return 408; }
+    }
+    if !some_i32(deque.get(queue, capacity - 1), i32(capacity - 1)) { return 409; }
+
+    // Make the ring full with a nonzero head, then remove the wrapped back.
+    if !some_i32(deque.pop_front(alias), i32(1000 + (capacity - 2))) {
+        return 410;
+    }
+    deque.push_back(queue, 777);
+    if deque.len(alias) != capacity { return 411; }
+    if !some_i32(deque.peek_back(queue), 777) { return 412; }
+    if !some_i32(deque.pop_back(alias), 777) { return 413; }
+    if !some_i32(deque.pop_back(queue), i32(capacity - 1)) { return 414; }
+    for var index usize = 0; index + 2 < capacity; index += 1 {
+        if !some_i32(deque.pop_back(alias), i32(1000 + index)) { return 415; }
+    }
+    if !deque.is_empty(queue) { return 416; }
+    return 0;
+}
+
+func test_deque_capacity_wraps() i32 {
+    let capacities Vec[usize] = [9, 10, 11, 13, 17, 31, 33];
+    for capacity in capacities {
+        let failure = check_deque_capacity_wrap(capacity);
+        if failure != 0 { return failure; }
+    }
+    return 0;
+}
+
 func test_heap_order() i32 {
     let numbers Vec[i32] = [5, 1, 9, 3, 9, 0, -2, 7];
     let priority = heap.new[i32](before_i32);
@@ -1081,6 +1177,10 @@ func main() i32 {
     failure = test_deque_release_on_pop();
     if failure != 0 { return failure; }
     failure = test_deque_release_on_clear();
+    if failure != 0 { return failure; }
+    failure = test_deque_release_on_pop_back();
+    if failure != 0 { return failure; }
+    failure = test_deque_capacity_wraps();
     if failure != 0 { return failure; }
     failure = test_heap_order();
     if failure != 0 { return failure; }
