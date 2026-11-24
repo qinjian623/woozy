@@ -240,6 +240,18 @@ bool aliases_payload(LangVec *v, const void *pointer) noexcept {
   return address >= begin && address - begin < v->capacity * v->stride;
 }
 
+// True when two byte ranges share at least one byte. Difference arithmetic
+// avoids forming an out-of-range end address; both lengths are already checked.
+bool byte_ranges_overlap(const void *first, uint64_t first_bytes,
+                         const void *second, uint64_t second_bytes) noexcept {
+  if (!first_bytes || !second_bytes) return false;
+  const uintptr_t first_begin = reinterpret_cast<uintptr_t>(first);
+  const uintptr_t second_begin = reinterpret_cast<uintptr_t>(second);
+  return first_begin <= second_begin
+             ? second_begin - first_begin < first_bytes
+             : first_begin - second_begin < second_bytes;
+}
+
 uint64_t grown_capacity(uint64_t current, uint64_t minimum) noexcept {
   uint64_t capacity = current ? current : 1;
   while (capacity < minimum) {
@@ -680,6 +692,25 @@ extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
     pinned = true;
   }
   if (length > v->capacity) grow_storage(v, length);
+  // Doubling the initialized suffix saves repeated element copies. Keep the
+  // sequential loop when fill overlaps the suffix, even across its first byte.
+  const uint64_t added = length - old_length;
+  if (!has_owner_ops(v) &&
+      !byte_ranges_overlap(element(v, old_length),
+                           checked_payload_bytes(added, v->stride),
+                           source, v->stride)) {
+    copy_bytes(element(v, old_length), source, v->stride);
+    for (uint64_t done = 1; done < added;) {
+      const uint64_t chunk = added - done < done ? added - done : done;
+      copy_bytes(element(v, old_length + done), element(v, old_length),
+                 chunk * v->stride);
+      done += chunk;
+    }
+    v->initialized = length;
+    v->length = length;
+    if (scratch) lang_free_v1(scratch);
+    return;
+  }
   StageBuffer snapshot;
   if (v->copy && !snapshot.reserve(v->stride)) vec_panic(5);
   for (uint64_t index = old_length; index < length; ++index) {
