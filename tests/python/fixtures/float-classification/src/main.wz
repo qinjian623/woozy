@@ -1,0 +1,12 @@
+package app;
+
+import "std/math" as math;
+
+func classify(value f64) i32 {
+    if math.isnan(value) { return 1; }
+    if math.isinf(value) { return 2; }
+    if math.isfinite(value) { return 3; }
+    return 0;
+}
+
+func main() i32 { return classify(1.0) - 3; }
