@@ -144,6 +144,7 @@ MODE_MARKERS=(
   "slice-copy-snapshot:VEC_GRAPH_SLICE_COPY_SNAPSHOT_OK"
   "resize-fill-alias-snapshot:VEC_GRAPH_RESIZE_FILL_ALIAS_SNAPSHOT_OK"
   "self-set-pre-copied:VEC_GRAPH_SELF_SET_PRE_COPIED_OK"
+  "rotate-multichunk-gc:VEC_GRAPH_ROTATE_MULTICHUNK_GC_OK"
   "disabled-fast:VEC_GRAPH_DISABLED_FAST_OK"
 )
 

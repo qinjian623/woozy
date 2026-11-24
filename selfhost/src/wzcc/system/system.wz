@@ -70,6 +70,7 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 231, name: "__woozy_vec_pin_begin", result: "Unit", parameters: ["Vec[A]"], owner: "std/vec", type_arity: 1),
         OperationSpec(operation: 232, name: "__woozy_vec_pin_end", result: "Unit", parameters: ["Vec[A]"], owner: "std/vec", type_arity: 1),
         OperationSpec(operation: 237, name: "__woozy_vec_extend_trivial", result: "bool", parameters: ["Vec[A]", "Vec[A]"], owner: "std/vec", type_arity: 1),
+        OperationSpec(operation: 238, name: "__woozy_vec_rotate_right_one", result: "bool", parameters: ["Vec[A]", "usize", "usize"], owner: "std/vec", type_arity: 1),
         OperationSpec(operation: 77, name: "__woozy_num_parse_i64", result: "Result[i64,i32]", parameters: ["string"], owner: "std/strconv", type_arity: 0),
         OperationSpec(operation: 81, name: "__woozy_num_format_i64", result: "string", parameters: ["i64"], owner: "std/strconv", type_arity: 0),
         OperationSpec(operation: 78, name: "__woozy_num_parse_u64", result: "Result[u64,i32]", parameters: ["string"], owner: "std/strconv", type_arity: 0),

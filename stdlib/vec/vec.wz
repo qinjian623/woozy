@@ -37,10 +37,18 @@ pub func insert[T](values Vec[T], index usize, value T) {
     }
     push(values, value);
     if index == length { return; }
-    if !__woozy_vec_try_move_trivial[T](values, index + 1, index, length - index) {
-        for var position usize = length; position > index; position -= 1 {
-            values[position] = values[position - 1];
-        }
+    if __woozy_vec_try_move_trivial[T](values, index + 1, index, length - index) {
+        values[index] = value;
+        return;
+    }
+    // Owning elements move as bytes, so no retain/drop pair runs per shifted
+    // slot. The appended value is the carried element; each bounded chunk
+    // leaves the Vec with exactly the original owners before it releases the
+    // graph-critical region. Allocation failure or unsupported backends return
+    // false without rotating, preserving the pure source shift below.
+    if __woozy_vec_rotate_right_one[T](values, index, length) { return; }
+    for var position usize = length; position > index; position -= 1 {
+        values[position] = values[position - 1];
     }
     values[index] = value;
 }

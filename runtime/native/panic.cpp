@@ -607,6 +607,47 @@ extern "C" bool lang_vec_extend_trivial_v1(LangVec *values,
   values->length = length;
   return true;
 }
+extern "C" bool lang_vec_rotate_right_one_v1(
+    LangVec *v, uint64_t first, uint64_t last) noexcept {
+  // last is the final initialized slot in the rotated range. The caller has
+  // already appended the new owning value, so every slot through last exists.
+  if (first > last || last >= v->length || last >= v->initialized)
+    vec_panic(4);
+  // Trivial elements keep the existing try_move_trivial path in std/vec.
+  if (!has_owner_ops(v)) return false;
+  if (first == last) return true;
+  // The public insert path already checked this before its push. Keep the
+  // private operation safe for direct runtime callers too.
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  // The carry is the new element at `last`; keeping it outside the Vec while
+  // slots move lets every CriticalGuard exit observe each owner exactly once.
+  StageBuffer carry;
+  if (!carry.reserve(v->stride)) return false;
+  copy_bytes(carry.data(), element(v, last), v->stride);
+  // Bound one graph-critical publication window to a small byte range. Each
+  // iteration rotates one chunk right: the overlap-safe move replaces the
+  // current hole with the preceding element, then the carried element fills
+  // the new hole before the guard is released. Thus every exit sees a complete
+  // initialized prefix and the exact original owner multiset, never a partial
+  // element. No copy/drop callback or allocation runs inside the guard.
+  constexpr uint64_t kRotationChunkBytes = 4096;
+  uint64_t chunk = kRotationChunkBytes / v->stride;
+  if (!chunk) chunk = 1;
+  uint64_t hole = last;
+  while (hole > first) {
+    uint64_t count = hole - first;
+    if (count > chunk) count = chunk;
+    const uint64_t start = hole - count;
+    const uint64_t bytes = checked_payload_bytes(count, v->stride);
+    {
+      lang::native::gc_program::CriticalGuard guard;
+      copy_bytes(element(v, start + 1), element(v, start), bytes);
+      copy_bytes(element(v, start), carry.data(), v->stride);
+    }
+    hole = start;
+  }
+  return true;
+}
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {
   if (start > end || end > v->length) vec_panic(9);

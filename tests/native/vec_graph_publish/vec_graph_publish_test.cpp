@@ -854,6 +854,209 @@ int mode_self_set_pre_copied() {
 }
 
 // ---------------------------------------------------------------------------
+// 11. Multi-chunk owning rotation: every critical exit publishes a complete
+//     initialized prefix with the exact original edge multiplicities. A real
+//     world stop parks the rotator at each exit so the collector side sees the
+//     same stable graph. Rotation itself invokes no copy/drop callback.
+
+constexpr uint64_t kRotateSlots = 1200;
+constexpr uint64_t kRotateChunkBytes = 4096;
+constexpr uint64_t kRotateOwners = 8;
+
+LangVec *g_rotate_outer = nullptr;
+LangVec *g_rotate_owners[kRotateOwners] = {};
+LangVec *g_rotate_original[kRotateSlots] = {};
+LangVec *g_rotate_drop_order[kRotateSlots] = {};
+uint64_t g_rotate_expected_chunks = 0;
+uint64_t g_rotate_exits = 0;
+uint64_t g_rotate_copies = 0;
+uint64_t g_rotate_drops = 0;
+std::atomic<uint64_t> g_rotate_exit_ready{0};
+std::atomic<uint64_t> g_rotate_stop_checks{0};
+bool g_rotate_armed = false;
+bool g_rotate_require_stop = false;
+int32_t (*g_rotate_saved_enter_critical)(void) noexcept = nullptr;
+void (*g_rotate_saved_leave_critical)(int32_t) noexcept = nullptr;
+
+uint64_t rotate_chunk_elements() {
+  const uint64_t stride = g_rotate_outer->stride;
+  const uint64_t chunk = kRotateChunkBytes / stride;
+  return chunk ? chunk : 1;
+}
+
+// Check the exact rotation state after `completed` guarded chunks. The carried
+// element starts outside the Vec, so after each chunk the range [hole, last]
+// is one right rotation of the original bytes, and every slot is initialized.
+void rotate_check_expected(uint64_t completed) {
+  CHECK(g_rotate_outer != nullptr);
+  CHECK(g_rotate_outer->length == kRotateSlots);
+  CHECK(g_rotate_outer->initialized == kRotateSlots);
+  CHECK(g_rotate_outer->data != nullptr);
+  const uint64_t first = 0;
+  const uint64_t last = kRotateSlots - 1;
+  const uint64_t span = last - first;
+  const uint64_t covered = completed * rotate_chunk_elements();
+  const uint64_t hole = covered >= span ? first : last - covered;
+  for (uint64_t index = 0; index < kRotateSlots; ++index) {
+    LangVec *expected = nullptr;
+    if (index < hole)
+      expected = g_rotate_original[index];
+    else if (index == hole)
+      expected = g_rotate_original[last];
+    else
+      expected = g_rotate_original[index - 1];
+    CHECK(expected != nullptr);
+    CHECK(slot_value(g_rotate_outer, index) == expected);
+  }
+  // Repeated references must stay repeated after a pure byte rotation: every
+  // distinct owner still occupies exactly its original number of slots.
+  for (uint64_t owner_index = 0; owner_index < kRotateOwners; ++owner_index) {
+    uint64_t expected_edges = 0;
+    uint64_t actual_edges = 0;
+    for (uint64_t index = 0; index < kRotateSlots; ++index) {
+      if (g_rotate_original[index] == g_rotate_owners[owner_index])
+        ++expected_edges;
+      if (slot_value(g_rotate_outer, index) == g_rotate_owners[owner_index])
+        ++actual_edges;
+    }
+    CHECK(actual_edges == expected_edges);
+  }
+}
+
+int32_t rotate_enter_critical_hook() noexcept {
+  return g_rotate_saved_enter_critical ? g_rotate_saved_enter_critical() : 0;
+}
+
+void rotate_leave_critical_hook(int32_t entered) noexcept {
+  if (g_rotate_armed && entered) {
+    CHECK(g_rotate_exits < g_rotate_expected_chunks);
+    ++g_rotate_exits;
+    rotate_check_expected(g_rotate_exits);
+    if (g_rotate_require_stop) {
+      // Publish that this guarded chunk is complete, then wait until the real
+      // stopper has installed its request. The actual critical leave below
+      // parks this thread, so the collector observes the same stable graph.
+      g_rotate_exit_ready.store(g_rotate_exits, std::memory_order_release);
+      while (!lang_gc_world_request_pending_v1())
+        std::this_thread::yield();
+    }
+  }
+  if (g_rotate_saved_leave_critical)
+    g_rotate_saved_leave_critical(entered);
+}
+
+void rotate_copy(void *slot) noexcept {
+  ++g_rotate_copies;
+  LangVec *target = *static_cast<LangVec **>(slot);
+  CHECK(g_rotate_outer->initialized == g_rotate_outer->length);
+  if (target) lang_vec_retain_v1(target);
+}
+
+void rotate_drop(void *slot) noexcept {
+  LangVec *target = *static_cast<LangVec **>(slot);
+  CHECK(g_rotate_outer->length == 0);
+  CHECK(g_rotate_outer->initialized == 0);
+  CHECK(g_rotate_outer->data == nullptr);
+  CHECK(g_rotate_outer->capacity == 0);
+  CHECK(g_rotate_outer->refs == 0);
+  if (g_rotate_drops < kRotateSlots)
+    g_rotate_drop_order[g_rotate_drops] = target;
+  ++g_rotate_drops;
+  lang_vec_release_v1(target);
+}
+
+int mode_rotate_multichunk_gc() {
+  CHECK(lang_gc_program_init_v1() == LANG_GC_PROGRAM_OK);
+  const uint64_t base = gc_test_alloc_live();
+
+  for (auto *&owner : g_rotate_owners) owner = new_inner();
+  g_rotate_outer = lang_vec_new_v1(kRotateSlots, sizeof(LangVec *),
+                                   rotate_copy, rotate_drop);
+  // Pre-retain every edge, including the repeated references, then transfer
+  // the bytes. Each distinct owner ends with exactly its slot multiplicity.
+  for (uint64_t index = 0; index < kRotateSlots; ++index) {
+    LangVec *owner = g_rotate_owners[index % kRotateOwners];
+    g_rotate_original[index] = owner;
+    lang_vec_retain_v1(owner);
+    lang_vec_init_v1(g_rotate_outer, &owner);
+  }
+  for (auto *owner : g_rotate_owners) lang_vec_release_v1(owner);
+  CHECK(g_rotate_outer->length == kRotateSlots);
+  CHECK(g_rotate_outer->initialized == kRotateSlots);
+  for (auto *owner : g_rotate_owners)
+    CHECK(owner->refs == kRotateSlots / kRotateOwners);
+
+  const uint64_t span = kRotateSlots - 1;
+  const uint64_t chunk = rotate_chunk_elements();
+  CHECK(chunk < span / 2); // the range crosses at least two full chunks
+  g_rotate_expected_chunks = (span + chunk - 1) / chunk;
+  CHECK(g_rotate_expected_chunks >= 3);
+  rotate_check_expected(0);
+
+  g_rotate_saved_enter_critical = hooks_v1.enter_critical;
+  g_rotate_saved_leave_critical = hooks_v1.leave_critical;
+  CHECK(g_rotate_saved_enter_critical != nullptr);
+  CHECK(g_rotate_saved_leave_critical != nullptr);
+  hooks_v1.enter_critical = &rotate_enter_critical_hook;
+  hooks_v1.leave_critical = &rotate_leave_critical_hook;
+
+  g_rotate_exits = 0;
+  g_rotate_copies = 0;
+  g_rotate_drops = 0;
+  g_rotate_exit_ready.store(0, std::memory_order_relaxed);
+  g_rotate_stop_checks.store(0, std::memory_order_relaxed);
+  g_rotate_armed = true;
+  g_rotate_require_stop = true;
+
+  std::thread stopper([] {
+    CHECK(lang_gc_world_register_v1());
+    for (uint64_t exit_index = 1; exit_index <= g_rotate_expected_chunks;
+         ++exit_index) {
+      while (g_rotate_exit_ready.load(std::memory_order_acquire) != exit_index)
+        std::this_thread::yield();
+      CHECK(lang_gc_world_stop_v1(5000000000LL) == 0);
+      // The rotator is parked in the outermost leave after the guarded chunk.
+      rotate_check_expected(exit_index);
+      g_rotate_stop_checks.fetch_add(1, std::memory_order_release);
+      lang_gc_world_resume_v1();
+    }
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(lang_vec_rotate_right_one_v1(g_rotate_outer, 0, kRotateSlots - 1));
+  g_rotate_require_stop = false;
+  g_rotate_armed = false;
+  hooks_v1.enter_critical = g_rotate_saved_enter_critical;
+  hooks_v1.leave_critical = g_rotate_saved_leave_critical;
+  stopper.join();
+
+  CHECK(g_rotate_exits == g_rotate_expected_chunks);
+  CHECK(g_rotate_stop_checks.load(std::memory_order_acquire) ==
+        g_rotate_expected_chunks);
+  rotate_check_expected(g_rotate_expected_chunks);
+  CHECK(g_rotate_copies == 0);
+  CHECK(g_rotate_drops == 0);
+
+  lang_vec_release_v1(g_rotate_outer);
+  CHECK(g_rotate_copies == 0);
+  CHECK(g_rotate_drops == kRotateSlots);
+  // Final release drops highest slot first from the fully rotated order
+  // [original[last], original[0], ..., original[last-1]]. Repeated references
+  // therefore stay at their exact multiplicity and every edge drops once.
+  for (uint64_t drop_index = 0; drop_index < kRotateSlots; ++drop_index) {
+    const uint64_t slot_index = kRotateSlots - 1 - drop_index;
+    LangVec *expected = slot_index == 0
+                            ? g_rotate_original[kRotateSlots - 1]
+                            : g_rotate_original[slot_index - 1];
+    CHECK(g_rotate_drop_order[drop_index] == expected);
+  }
+  CHECK(gc_test_alloc_live() == base);
+  CHECK(lang_gc_program_finish_v1() == LANG_GC_PROGRAM_OK);
+  std::puts("VEC_GRAPH_ROTATE_MULTICHUNK_GC_OK");
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // 10. Default disabled path: no gettid, no registry, owning Vec still correct.
 
 uint64_t g_fast_copies = 0;
@@ -920,6 +1123,8 @@ int main(int argc, char **argv) {
     return mode_resize_fill_alias_snapshot();
   if (std::strcmp(argv[1], "self-set-pre-copied") == 0)
     return mode_self_set_pre_copied();
+  if (std::strcmp(argv[1], "rotate-multichunk-gc") == 0)
+    return mode_rotate_multichunk_gc();
   if (std::strcmp(argv[1], "disabled-fast") == 0)
     return mode_disabled_fast();
   std::fprintf(stderr, "unknown mode: %s\n", argv[1]);

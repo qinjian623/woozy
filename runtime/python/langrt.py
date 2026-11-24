@@ -1790,6 +1790,7 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             args[0].end()
             return None
         if operation == 'vec_try_move_trivial': return False
+        if operation == 'vec_rotate_right_one': return False
         if operation == 'vec_extend_trivial':
             values, extra = args
             if (sys.implementation.name != 'cpython' or
