@@ -179,6 +179,8 @@ extern "C" uint64_t lang_text_cursor_read_v1(const LangText *text,
                                               uint64_t cursor) noexcept {
   if (!text) panic(10);
   if (cursor >= text->bytes) panic(4);
+  const uint8_t lead = text->data[cursor];
+  if (lead < 0x80) return (static_cast<uint64_t>(lead) << 32) | 1;
   uint32_t rune;
   auto next = cursor;
   if (!decode(text->data, text->bytes, next, rune)) panic(4);

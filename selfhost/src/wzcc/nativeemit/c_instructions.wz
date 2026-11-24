@@ -350,7 +350,9 @@ func c_emit_iteration_begin(instruction nativeir.Instruction,
     var length = c_int("i64", 0);
     switch kind.kind {
         case model.TypeKind.String: {
-            length = c_extract("i64", collection, 2, inout state);
+            // The hidden index is a UTF-8 byte cursor, so the loop bound is
+            // the checked byte length, not the scalar count.
+            length = c_extract("i64", collection, 1, inout state);
         }
         case model.TypeKind.Slice: {
             // A Slice already owns an iteration pin for its whole lifetime.
@@ -383,7 +385,12 @@ func c_emit_iteration_read(instruction nativeir.Instruction, args Vec[Value],
     let kind = type_of(state, collection_type);
     switch kind.kind {
         case model.TypeKind.String: {
-            return runtime("lang_text_at_v1", "i32", [entry.address, index],
+            // Reading does not advance the byte cursor; next owns the step.
+            let packed = runtime("lang_text_cursor_read_v1", "i64",
+                [entry.address, index], inout state);
+            let scalar = c_binop("lshr", "i64", packed.reference, "32",
+                inout state);
+            return result("i32", "trunc i64 " + scalar.reference + " to i32",
                 inout state);
         }
         case model.TypeKind.Slice: {
@@ -626,7 +633,57 @@ func emit_value_instruction(instruction nativeir.Instruction, args Vec[Value],
         case nativeir.Op.IterationNext: {
             let index_address = c_slot_iteration_index(instruction.slot, state);
             let index = c_load("i64", index_address, inout state);
-            let next = c_binop("add", "i64", index.reference, "1", inout state);
+            let collection_type = c_native_slot_type(instruction.slot, state);
+            let kind = type_of(state, collection_type);
+            var width = c_int("i64", 1);
+            switch kind.kind {
+                case model.TypeKind.String: {
+                    // The hidden index is a byte offset for a String loop.
+                    // Derive the width from the checked UTF-8 lead byte; next
+                    // must not depend on a read having cached a width.
+                    let entry = c_slot_storage(instruction.slot, state);
+                    let collection_layout = lower_type(collection_type, inout state);
+                    let collection = c_load(collection_layout, entry.address,
+                        inout state);
+                    let bytes = c_extract("i64", collection, 1, inout state);
+                    let scalars = c_extract("i64", collection, 2, inout state);
+                    let data = c_extract("ptr", collection, 0, inout state);
+                    // A finished or untested next still advances without a
+                    // read outside the string's byte range.
+                    let function_index = current_function(state);
+                    let before = here(state);
+                    let inside = new_block(function_index, "text.iter.next.read", inout state);
+                    let done = new_block(function_index, "text.iter.next.done", inout state);
+                    let bounded = c_icmp("ult", "i64", index.reference, bytes.reference, inout state);
+                    let nonascii = c_icmp("ne", "i64", bytes.reference, scalars.reference, inout state);
+                    let needs_width = c_binop("and", "i1", bounded.reference, nonascii.reference, inout state);
+                    c_cond_branch(needs_width, inside, done, inout state);
+                    position(inside, inout state);
+                    let address = result("ptr", "getelementptr i8, ptr " +
+                        data.reference + ", i64 " + index.reference, inout state);
+                    let byte = c_load("i8", address, inout state);
+                    let ascii = c_icmp("ult", "i8", byte.reference,
+                        c_int("i8", 128).reference, inout state);
+                    let two = c_icmp("ult", "i8", byte.reference,
+                        c_int("i8", 224).reference, inout state);
+                    let three = c_icmp("ult", "i8", byte.reference,
+                        c_int("i8", 240).reference, inout state);
+                    let tail = result("i64", "select i1 " + three.reference +
+                        ", i64 3, i64 4", inout state);
+                    let middle = result("i64", "select i1 " + two.reference +
+                        ", i64 2, i64 " + tail.reference, inout state);
+                    let step = result("i64", "select i1 " + ascii.reference +
+                        ", i64 1, i64 " + middle.reference, inout state);
+                    c_branch(done, inout state);
+                    position(done, inout state);
+                    width = result("i64", "phi i64 [ 1, " + before.reference +
+                        " ], [ " + step.reference + ", " + inside.reference + " ]",
+                        inout state);
+                }
+                default: {}
+            }
+            let next = c_binop("add", "i64", index.reference, width.reference,
+                inout state);
             c_store(next, index_address, inout state);
             return c_none_result();
         }

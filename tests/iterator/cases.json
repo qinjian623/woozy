@@ -1,8 +1,8 @@
 {
   "schema": "compiler-dev/iterator-fixtures/1",
   "contract": "compiler-dev/1",
-  "case_count": 22,
-  "accept_count": 15,
+  "case_count": 23,
+  "accept_count": 16,
   "reject_count": 7,
   "policy": {
     "check": "accepted fixtures must pass check on native and python; rejected fixtures must fail both with the recorded code and leave no program.",
@@ -225,6 +225,16 @@
       "source": "tests/iterator/fixtures/reject-element-write/src/main.wz",
       "expected_code": "E_TYPE_MISMATCH",
       "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "string-cursor",
+      "kind": "accept",
+      "purpose": "built-in string for-in advances over ASCII, NUL and 1..4-byte UTF-8, including a sliced owner, with continue/break/return/throw",
+      "manifest": "tests/iterator/fixtures/string-cursor/lang.toml",
+      "source": "tests/iterator/fixtures/string-cursor/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §7.1 Vec/Slice/string 遍历、§9 defer/清理"
     }
   ]
 }

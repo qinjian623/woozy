@@ -1849,7 +1849,7 @@ class Emitter {
       auto collection_type = current_function->slots.at(i.slot.value).type;
       auto *collection = builder.CreateLoad(lower_type(collection_type), slots.at(i.slot.value));
       auto *length = type(collection_type).kind == hir::TypeKind::String
-                         ? builder.CreateExtractValue(collection, {2})
+                         ? builder.CreateExtractValue(collection, {1})
                          : type(collection_type).kind == hir::TypeKind::Slice
                                ? runtime("lang_slice_length_v1", builder.getInt64Ty(),
                                          {slots.at(i.slot.value)})
@@ -1862,12 +1862,57 @@ class Emitter {
                                builder.CreateLoad(builder.getInt64Ty(), iteration_lengths.at(i.slot.value))); break;
     case ir::Op::iteration_next: {
       auto *index = iteration_indices.at(i.slot.value);
-      builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), index), builder.getInt64(1)), index); break;
+      llvm::Value *current = builder.CreateLoad(builder.getInt64Ty(), index);
+      if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::String) {
+        // The hidden index is a byte offset for a String iteration. Derive
+        // the scalar's width from its checked UTF-8 lead byte so next does not
+        // depend on whether read ran or on any cached read result.
+        auto collection_type = current_function->slots.at(i.slot.value).type;
+        auto *collection = builder.CreateLoad(lower_type(collection_type), slots.at(i.slot.value));
+        auto *bytes = builder.CreateExtractValue(collection, {1});
+        auto *scalars = builder.CreateExtractValue(collection, {2});
+        auto *data = builder.CreateExtractValue(collection, {0});
+        auto *before = builder.GetInsertBlock();
+        auto *inside = llvm::BasicBlock::Create(context, "text.iter.next.read", before->getParent());
+        auto *done = llvm::BasicBlock::Create(context, "text.iter.next.done", before->getParent());
+        // NativeIR next may execute without a preceding successful test.
+        // Keep advancing a finished index without reading past the string.
+        auto *needs_width = builder.CreateAnd(builder.CreateICmpULT(current, bytes),
+                                              builder.CreateICmpNE(bytes, scalars));
+        builder.CreateCondBr(needs_width, inside, done);
+        builder.SetInsertPoint(inside);
+        auto *byte = builder.CreateLoad(
+            builder.getInt8Ty(),
+            builder.CreateGEP(builder.getInt8Ty(), data, current));
+        auto *width = builder.CreateSelect(
+            builder.CreateICmpULT(byte, builder.getInt8(0x80)),
+            builder.getInt64(1),
+            builder.CreateSelect(
+                builder.CreateICmpULT(byte, builder.getInt8(0xe0)),
+                builder.getInt64(2),
+                builder.CreateSelect(
+                    builder.CreateICmpULT(byte, builder.getInt8(0xf0)),
+                    builder.getInt64(3), builder.getInt64(4))));
+        builder.CreateBr(done);
+        builder.SetInsertPoint(done);
+        auto *step = builder.CreatePHI(builder.getInt64Ty(), 2);
+        step->addIncoming(builder.getInt64(1), before);
+        step->addIncoming(width, inside);
+        current = builder.CreateAdd(current, step);
+      } else {
+        current = builder.CreateAdd(current, builder.getInt64(1));
+      }
+      builder.CreateStore(current, index); break;
     }
     case ir::Op::iteration_read: {
       auto *index = builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value));
       if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::String) {
-        v = runtime("lang_text_at_v1", builder.getInt32Ty(), {slots.at(i.slot.value), index});
+        // Reading does not advance the byte cursor, so repeated reads observe
+        // the same scalar and next remains responsible for the sole step.
+        auto *packed = runtime("lang_text_cursor_read_v1", builder.getInt64Ty(),
+                               {slots.at(i.slot.value), index});
+        v = builder.CreateTrunc(builder.CreateLShr(packed, builder.getInt64(32)),
+                                builder.getInt32Ty());
       } else if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::Slice) {
         auto *address = runtime("lang_slice_at_v1", builder.getPtrTy(),
                                 {slots.at(i.slot.value), index});

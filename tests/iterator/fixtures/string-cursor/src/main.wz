@@ -1,0 +1,82 @@
+package app;
+import "std/text" as text;
+
+enum Failure { Stop; }
+
+func sum_ascii() i32 {
+    let value string = "ABC\0XYZ";
+    var total i32 = 0;
+    for rune in value { total += i32(rune); }
+    if total != 65 + 66 + 67 + 0 + 88 + 89 + 90 { return 1; }
+    return 0;
+}
+
+func sum_mixed() i32 {
+    let value string = "A😀中\0éB";
+    var total i32 = 0;
+    var count i32 = 0;
+    for rune in value {
+        total += i32(rune);
+        count += 1;
+    }
+    if count != 6 { return 10; }
+    if total != 65 + 128512 + 20013 + 0 + 233 + 66 { return 11; }
+    return 0;
+}
+
+func sum_slice() i32 {
+    let source = "x" + text.repeat("中😀A", 3) + "y";
+    let part string = source[1:10];
+    var total i32 = 0;
+    for rune in part { total += i32(rune); }
+    if total != 3 * (20013 + 128512 + 65) { return 20; }
+    return 0;
+}
+
+func run_control() i32 {
+    let value string = "A中B😀C";
+    var seen i32 = 0;
+    var total i32 = 0;
+    for rune in value {
+        seen += 1;
+        if rune == 0x4E2D { continue; }
+        if rune == 0x1F600 { break; }
+        total += i32(rune);
+    }
+    if seen != 4 { return 30; }
+    if total != 65 + 66 { return 31; }
+    return 0;
+}
+
+func find_b() i32 {
+    let value string = "A中B😀C";
+    for rune in value {
+        if rune == 66 { return 40; }
+    }
+    return 41;
+}
+
+func fail_at_emoji() i32 throws Failure {
+    let value string = "A中😀B";
+    for rune in value {
+        if rune == 0x1F600 { throw Failure.Stop; }
+    }
+    return 42;
+}
+
+func main() i32 {
+    if sum_ascii() != 0 { return sum_ascii(); }
+    if sum_mixed() != 0 { return sum_mixed(); }
+    if sum_slice() != 0 { return sum_slice(); }
+    if run_control() != 0 { return run_control(); }
+    if find_b() != 40 { return 50; }
+    var caught i32 = 0;
+    try {
+        let ignored = fail_at_emoji();
+        if ignored == 42 { return 51; }
+    } catch error Failure {
+        caught = 1;
+    }
+    if caught != 1 { return 52; }
+    return 0;
+}
