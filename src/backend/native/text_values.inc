@@ -57,8 +57,47 @@
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
     case SystemOperation::text_cursor_at:
       return runtime("lang_text_cursor_at_v1", builder.getInt64Ty(), {pointer(0), args[1]});
-    case SystemOperation::text_cursor_read:
-      return runtime("lang_text_cursor_read_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_read: {
+      // A bounded ASCII lead byte has the same packed result as the runtime
+      // decoder and advances by one byte. Check the descriptor byte length
+      // before touching data; every other case keeps the runtime call and its
+      // exact panic and UTF-8 decoding behavior.
+      auto *bytes = builder.CreateExtractValue(args[0], {1});
+      auto *cursor = args[1];
+      if (cursor->getType() != builder.getInt64Ty())
+        cursor = builder.CreateIntCast(cursor, builder.getInt64Ty(), false);
+      auto *function = builder.GetInsertBlock()->getParent();
+      auto *inspect =
+          llvm::BasicBlock::Create(context, "text.read.inspect", function);
+      auto *slow =
+          llvm::BasicBlock::Create(context, "text.read.runtime", function);
+      auto *done =
+          llvm::BasicBlock::Create(context, "text.read.done", function);
+      builder.CreateCondBr(
+          builder.CreateICmpULT(cursor, bytes), inspect, slow);
+      builder.SetInsertPoint(inspect);
+      auto *data = builder.CreateExtractValue(args[0], {0});
+      auto *byte = builder.CreateLoad(
+          builder.getInt8Ty(),
+          builder.CreateGEP(builder.getInt8Ty(), data, cursor));
+      auto *packed = builder.CreateOr(
+          builder.CreateShl(
+              builder.CreateZExt(byte, builder.getInt64Ty()),
+              builder.getInt64(32)),
+          builder.getInt64(1));
+      builder.CreateCondBr(
+          builder.CreateICmpULT(byte, builder.getInt8(0x80)), done, slow);
+      builder.SetInsertPoint(slow);
+      auto *decoded = runtime("lang_text_cursor_read_v1",
+                              builder.getInt64Ty(), {pointer(0), args[1]});
+      auto *slow_end = builder.GetInsertBlock();
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+      auto *result = builder.CreatePHI(builder.getInt64Ty(), 2);
+      result->addIncoming(packed, inspect);
+      result->addIncoming(decoded, slow_end);
+      return result;
+    }
     case SystemOperation::text_count_rune:
       return runtime("lang_text_count_rune_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_bytes:

@@ -798,11 +798,51 @@ func e_value_system_call(instruction nativeir.Instruction,
                 let length = e_extract(args[0], 1, "i64", inout state);
                 return option.Option[Value].Some(length);
             }
-            if operation == 233 || operation == 234 || operation == 236 {
+            if operation == 234 {
+                // A bounded ASCII lead byte has the same packed result as the
+                // runtime decoder and advances by one byte. Check the
+                // descriptor byte length before touching data; every other
+                // case keeps the runtime call and its exact panic and UTF-8
+                // decoding behavior.
+                let bytes = e_extract(args[0], 1, "i64", inout state);
+                let bounded = c_icmp("ult", "i64", args[1].reference,
+                    bytes.reference, inout state);
+                let function_index = current_function(state);
+                let inspect = new_block(function_index, "text.read.inspect", inout state);
+                let slow = new_block(function_index, "text.read.runtime", inout state);
+                let done = new_block(function_index, "text.read.done", inout state);
+                c_cond_branch(bounded, inspect, slow, inout state);
+                position(inspect, inout state);
+                let data = e_extract(args[0], 0, "ptr", inout state);
+                let element = result("ptr", "getelementptr i8, ptr " +
+                    data.reference + ", i64 " + args[1].reference, inout state);
+                let byte = c_load("i8", element, inout state);
+                let scalar = result("i64", "zext i8 " + byte.reference +
+                    " to i64", inout state);
+                let shifted = c_binop("shl", "i64", scalar.reference, "32",
+                    inout state);
+                let packed = c_binop("or", "i64", shifted.reference, "1",
+                    inout state);
+                let ascii = c_icmp("ult", "i8", byte.reference, "128",
+                    inout state);
+                c_cond_branch(ascii, done, slow, inout state);
+                position(slow, inout state);
+                let receiver_type = value_type(state, instruction.inputs[0]);
+                let address = value_address(receiver_type, args[0], inout state);
+                let decoded = runtime("lang_text_cursor_read_v1", "i64",
+                    [address, args[1]], inout state);
+                let slow_end = here(state);
+                c_branch(done, inout state);
+                position(done, inout state);
+                return option.Option[Value].Some(result("i64", "phi i64 [ " +
+                    packed.reference + ", " + inspect.reference + " ], [ " +
+                    decoded.reference + ", " + slow_end.reference + " ]",
+                    inout state));
+            }
+            if operation == 233 || operation == 236 {
                 let receiver_type = value_type(state, instruction.inputs[0]);
                 let address = value_address(receiver_type, args[0], inout state);
                 var name = "lang_text_cursor_at_v1";
-                if operation == 234 { name = "lang_text_cursor_read_v1"; }
                 if operation == 236 { name = "lang_text_count_rune_v1"; }
                 return option.Option[Value].Some(
                     runtime(name, "i64", [address, args[1]], inout state));
