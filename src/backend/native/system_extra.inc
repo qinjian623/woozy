@@ -52,6 +52,19 @@
     using hir::SystemOperation;
     if (auto *value = network_system_call(i,args)) return value;
     const auto operation = *i.system;
+    if (operation == SystemOperation::math_isinf ||
+        operation == SystemOperation::math_isfinite) {
+      // Match the old runtime predicate's absolute-exponent test inline:
+      // isinf is |bits| == 0x7ff0..., isfinite is |bits| < 0x7ff0...
+      // This keeps NaN, subnormal and signed-zero behavior and adds no ABI.
+      auto *bits = builder.CreateBitCast(args[0], builder.getInt64Ty());
+      auto *magnitude =
+          builder.CreateAnd(bits, builder.getInt64(0x7fffffffffffffffULL));
+      auto *infinity = builder.getInt64(0x7ff0000000000000ULL);
+      return operation == SystemOperation::math_isinf
+                 ? builder.CreateICmpEQ(magnitude, infinity)
+                 : builder.CreateICmpULT(magnitude, infinity);
+    }
     if (operation >= SystemOperation::math_fabs && operation <= SystemOperation::math_signbit) {
       const auto *spec = hir::system_operation_spec(operation);
       const auto name = "lang_"+std::string(spec->name.substr(8))+"_v1";
