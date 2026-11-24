@@ -215,6 +215,17 @@ ILLEGAL = [
     ("[" * 257 + "]" * 257, "depth", True),
 ]
 
+# Exercise the large-object duplicate index without making the literal list
+# unreadable, and keep one error case for both indexed and escaped key paths.
+LEGAL.append("{" + ",".join(f'"k{index}":{index}' for index in range(64)) +
+             ',"k1":999,"k63":1000}')
+_INDEX_ERROR_PREFIX = "{" + ",".join(f'"k{index}":{index}'
+                                     for index in range(20)) + ',"bad" '
+ILLEGAL.append((_INDEX_ERROR_PREFIX + "1}", "syntax"))
+_ESCAPED_ERROR_PREFIX = (
+    '{"key\\nA":1,"key\\u00e9":2,"key\\nA":3,"key\\u00e9" ')
+ILLEGAL.append((_ESCAPED_ERROR_PREFIX + "4}", "syntax"))
+
 
 def make_oracle(out, python, env, cli):
     source_dir = out / "json-oracle-src"

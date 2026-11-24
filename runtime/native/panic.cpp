@@ -171,8 +171,19 @@ uint64_t checked_payload_bytes(uint64_t capacity, uint64_t stride) noexcept {
 
 // Overlap-safe byte copy without libc. Structural moves still transfer element
 // ownership bit-for-bit; this helper never invokes copy or drop callbacks.
-void copy_bytes(void *destination, const void *source, uint64_t count) noexcept {
-  if (!count) return;
+// One scalar slot covers the common element strides. Both halves of each
+// memcpy name a distinct object, so the load completes before any store and a
+// partial overlap between destination and source keeps memmove semantics.
+template <typename Word>
+void copy_word(void *destination, const void *source) noexcept {
+  Word bits;
+  __builtin_memcpy(&bits, source, sizeof(bits));
+  __builtin_memcpy(destination, &bits, sizeof(bits));
+}
+
+[[gnu::noinline]]
+void copy_bytes_variable(void *destination, const void *source,
+                         uint64_t count) noexcept {
   auto *dst = static_cast<unsigned char *>(destination);
   const auto *src = static_cast<const unsigned char *>(source);
   if (dst == src) return;
@@ -180,6 +191,17 @@ void copy_bytes(void *destination, const void *source, uint64_t count) noexcept 
     for (uint64_t i = 0; i < count; ++i) dst[i] = src[i];
   } else {
     for (uint64_t i = count; i > 0; --i) dst[i - 1] = src[i - 1];
+  }
+}
+
+void copy_bytes(void *destination, const void *source, uint64_t count) noexcept {
+  switch (count) {
+  case 0: return;
+  case 1: return copy_word<uint8_t>(destination, source);
+  case 2: return copy_word<uint16_t>(destination, source);
+  case 4: return copy_word<uint32_t>(destination, source);
+  case 8: return copy_word<uint64_t>(destination, source);
+  default: return copy_bytes_variable(destination, source, count);
   }
 }
 
@@ -274,6 +296,29 @@ void *protect_alias(LangVec *v, const void *value) noexcept {
   if (!scratch) vec_panic(5);
   copy_bytes(scratch, value, v->stride);
   return scratch;
+}
+
+// Push transfers an already pre-copied value, so no element copy callback runs.
+// The slot bytes are complete before the length publication below.
+void append_value(LangVec *v, const void *value, uint64_t length) noexcept {
+  copy_bytes(element(v, v->length), value, v->stride);
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    if (v->initialized < length) v->initialized = length;
+    v->length = length;
+  } else {
+    if (v->initialized < length) v->initialized = length;
+    v->length = length;
+  }
+}
+
+[[gnu::noinline]]
+void grow_and_append(LangVec *v, const void *value, uint64_t length) noexcept {
+  // A self-aliased value may live in the separate buffer that growth frees.
+  void *scratch = protect_alias(v, value);
+  grow_storage(v, length);
+  append_value(v, scratch ? scratch : value, length);
+  if (scratch) lang_free_v1(scratch);
 }
 
 // Stage removed owning values by moving their bytes into independent storage.
@@ -520,23 +565,8 @@ extern "C" void lang_vec_push_v1(LangVec *v, const void *value) noexcept {
   if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
   if (v->length == kMaxU64) vec_panic(6);
   const uint64_t length = v->length + 1;
-  void *scratch = nullptr;
-  if (length > v->capacity) {
-    // A self-aliased value may live in a separate buffer that growth frees.
-    scratch = protect_alias(v, value);
-    grow_storage(v, length);
-  }
-  // Push is a transfer of an already pre-copied value: no copy callback.
-  copy_bytes(element(v, v->length), scratch ? scratch : value, v->stride);
-  if (has_owner_ops(v)) {
-    lang::native::gc_program::CriticalGuard guard;
-    if (v->initialized < length) v->initialized = length;
-    v->length = length;
-  } else {
-    if (v->initialized < length) v->initialized = length;
-    v->length = length;
-  }
-  if (scratch) lang_free_v1(scratch);
+  if (length > v->capacity) return grow_and_append(v, value, length);
+  append_value(v, value, length);
 }
 extern "C" bool lang_vec_pop_v1(LangVec *v, void *out) noexcept {
   // An empty pop performs no structural change and leaves out untouched.

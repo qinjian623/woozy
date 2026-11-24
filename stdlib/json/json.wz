@@ -28,6 +28,11 @@ import "std/vec" as vec;
 
 const MAX_DEPTH usize = 256;
 const PRETTY_INDENT usize = 2;
+// Objects with at least this many parsed members switch to a local
+// open-addressed index for duplicate-name lookup. Smaller objects keep the
+// linear scan.
+const OBJECT_INDEX_MEMBER_THRESHOLD usize = 16;
+const INDEX_EMPTY usize = ~usize(0);
 
 pub enum Error {
     Syntax(offset usize);
@@ -305,6 +310,73 @@ func parse_array(source Vec[u8], cursor inout usize, depth usize) Value throws E
     throw Error.Syntax(cursor);
 }
 
+// Local FNV-1a/avalanche hash for the object-member index. It is not a
+// security boundary and is only used to reduce duplicate-key comparisons.
+func key_hash(value string) u64 {
+    var state u64 = 14695981039346656037;
+    var count u64 = 0;
+    for rune in value {
+        state = (state ^ u64(rune)) * 1099511628211;
+        count += 1;
+    }
+    state = (state ^ count) * 1099511628211;
+    state ^= state >> 33;
+    state *= 0xff51afd7ed558ccd;
+    state ^= state >> 33;
+    state *= 0xc4ceb9fe1a85ec53;
+    state ^= state >> 33;
+    return state;
+}
+
+func index_grow(table inout Vec[usize], members Vec[Member], count usize) {
+    let larger = vec.make[usize](vec.len(table) * 2, INDEX_EMPTY);
+    let mask = vec.len(larger) - 1;
+    for var index usize = 0; index < count; index += 1 {
+        let key = members[index].name;
+        var slot = usize(key_hash(key)) & mask;
+        for true {
+            if larger[slot] == INDEX_EMPTY {
+                larger[slot] = index;
+                break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    table = larger;
+}
+
+func index_insert(table inout Vec[usize], members Vec[Member], count inout usize, key string, member_index usize) {
+    if vec.len(table) == 0 {
+        table = vec.make[usize](32, INDEX_EMPTY);
+    }
+    if (count + 1) * 2 > vec.len(table) {
+        index_grow(inout table, members, count);
+    }
+    let mask = vec.len(table) - 1;
+    var slot = usize(key_hash(key)) & mask;
+    for true {
+        if table[slot] == INDEX_EMPTY {
+            table[slot] = member_index;
+            count += 1;
+            return;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+func index_find(table Vec[usize], members Vec[Member], key string) usize {
+    if vec.len(table) == 0 { return INDEX_EMPTY; }
+    let mask = vec.len(table) - 1;
+    var slot = usize(key_hash(key)) & mask;
+    for true {
+        let at = table[slot];
+        if at == INDEX_EMPTY { return INDEX_EMPTY; }
+        if members[at].name == key { return at; }
+        slot = (slot + 1) & mask;
+    }
+    return INDEX_EMPTY;
+}
+
 func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws Error {
     cursor += 1;
     let members = vec.empty[Member]();
@@ -316,7 +388,12 @@ func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws 
         cursor += 1;
         return Value.Object(members);
     }
+    var table = vec.empty[usize]();
+    var indexed_count usize = 0;
+    var indexed = false;
+    var parsed_members usize = 0;
     for true {
+        parsed_members += 1;
         if cursor >= vec.len(source) || source[cursor] != 34 {
             throw Error.Syntax(cursor);
         }
@@ -328,15 +405,35 @@ func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws 
         cursor += 1;
         skip_whitespace(source, inout cursor);
         let member_value = parse_value(source, inout cursor, depth + 1);
+        if !indexed && parsed_members >= OBJECT_INDEX_MEMBER_THRESHOLD {
+            table = vec.make[usize](32, INDEX_EMPTY);
+            var count usize = 0;
+            for var index usize = 0; index < vec.len(members); index += 1 {
+                index_insert(inout table, members, inout count, members[index].name, index);
+            }
+            indexed_count = count;
+            indexed = true;
+        }
         var replaced = false;
-        for var index usize = 0; index < vec.len(members); index += 1 {
-            if members[index].name == name {
-                members[index].value = member_value;
+        if indexed {
+            let found = index_find(table, members, name);
+            if found != INDEX_EMPTY {
+                members[found].value = member_value;
                 replaced = true;
-                break;
+            }
+        } else {
+            for var index usize = 0; index < vec.len(members); index += 1 {
+                if members[index].name == name {
+                    members[index].value = member_value;
+                    replaced = true;
+                    break;
+                }
             }
         }
         if !replaced {
+            if indexed {
+                index_insert(inout table, members, inout indexed_count, name, vec.len(members));
+            }
             vec.push(members, Member(name: name, value: member_value));
         }
         skip_whitespace(source, inout cursor);

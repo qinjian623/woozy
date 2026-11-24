@@ -701,6 +701,58 @@ void test_observer_release_order_preserved() {
   CHECK(live_allocations() == 0);
 }
 
+void test_overlapping_trivial_set() {
+  for (uint64_t stride : {1, 2, 3, 4, 8, 16}) {
+    reset_tracking();
+    unsigned char initial[16];
+    for (uint64_t i = 0; i < stride; ++i)
+      initial[i] = static_cast<unsigned char>(i + 1);
+    LangVec *vec = lang_vec_new_v1(3, stride, nullptr, nullptr);
+    for (int i = 0; i < 3; ++i) lang_vec_init_v1(vec, initial);
+    auto *middle = static_cast<unsigned char *>(lang_vec_at_v1(vec, 1));
+    for (int offset : {-1, 1}) {
+      unsigned char expected[16];
+      std::memcpy(expected, middle + offset, stride);
+      lang_vec_set_v1(vec, 1, middle + offset);
+      CHECK(std::memcmp(middle, expected, stride) == 0);
+    }
+    lang_vec_release_v1(vec);
+    CHECK(live_allocations() == 0);
+  }
+}
+
+void test_in_capacity_push_overlap() {
+  // An in-capacity push also copies a source whose range overlaps the append
+  // slot. The bytes after the initialized prefix are unspecified, so the
+  // expectation is the snapshot taken before the push, not a formula.
+  for (uint64_t stride : {2, 4, 8, 16}) {
+    reset_tracking();
+    unsigned char initial[16];
+    for (uint64_t i = 0; i < stride; ++i)
+      initial[i] = static_cast<unsigned char>(0x40 + i);
+    LangVec *vec = lang_vec_new_v1(1, stride, nullptr, nullptr);
+    lang_vec_init_v1(vec, initial);
+    lang_vec_reserve_v1(vec, 4); // spare capacity: no growth during the push
+    CHECK(vec->length == 1);
+    CHECK(vec->capacity == 4);
+    auto *payload = static_cast<unsigned char *>(vec->data);
+    auto *target = payload + stride;
+    auto *source = target - stride / 2;
+    unsigned char expected[16];
+    std::memcpy(expected, source, stride);
+    const uint64_t allocations = g_allocation_calls;
+    lang_vec_push_v1(vec, source);
+    CHECK(vec->length == 2);
+    CHECK(vec->initialized == 2);
+    CHECK(vec->capacity == 4);
+    CHECK(g_allocation_calls == allocations); // within capacity: no growth
+    CHECK(std::memcmp(target, expected, stride) == 0);
+    CHECK(std::memcmp(payload, initial, stride) == 0);
+    lang_vec_release_v1(vec);
+    CHECK(live_allocations() == 0);
+  }
+}
+
 void test_terminal_panics() {
   {
     ChildAction action{};
@@ -752,6 +804,8 @@ int main() {
   test_self_alias_push_and_fill_at_growth();
   test_noop_reserve_during_iteration();
   test_observer_release_order_preserved();
+  test_overlapping_trivial_set();
+  test_in_capacity_push_overlap();
   test_terminal_panics();
   if (g_failures) {
     std::fprintf(stderr, "vec-growth: failed (%d checks)\n", g_failures);

@@ -234,5 +234,77 @@ func main() i32 throws json.Error {
         if json.serialize(json.Value.Number(token)) != token { return 73; }
     }
     if json.serialize_pretty(json.Value.Number("1e+10")) != "1e+10" { return 74; }
+
+    // Large objects use a local index for duplicate-name lookup. The index
+    // must keep the first position and the last value, and a syntax error
+    // after it must still report a source offset.
+    let indexed_parts = vec.empty[string]();
+    for var index usize = 0; index < 64; index += 1 {
+        vec.push(indexed_parts,
+                 "\"k" + strconv.format_u64(u64(index)) + "\":" +
+                 strconv.format_u64(u64(index)));
+    }
+    vec.push(indexed_parts, "\"k1\":999");
+    vec.push(indexed_parts, "\"k63\":1000");
+    let indexed_doc = "{" + text.join(indexed_parts, ",") + "}";
+    let indexed_value = json.parse(indexed_doc);
+    switch indexed_value {
+        case json.Value.Object(entries): {
+            if vec.len(entries) != 64 { return 75; }
+            if entries[0].name != "k0" { return 76; }
+            if entries[1].name != "k1" { return 77; }
+            if entries[63].name != "k63" { return 78; }
+        }
+        case _: return 79;
+    }
+    switch json.field(indexed_value, "k1") {
+        case option.Option.Some(number): if json.as_i64(number) != 999 { return 80; }
+        case option.Option.None: return 81;
+    }
+    switch json.field(indexed_value, "k63") {
+        case option.Option.Some(number): if json.as_i64(number) != 1000 { return 82; }
+        case option.Option.None: return 83;
+    }
+
+    let index_error_parts = vec.empty[string]();
+    for var index usize = 0; index < 20; index += 1 {
+        vec.push(index_error_parts,
+                 "\"k" + strconv.format_u64(u64(index)) + "\":" +
+                 strconv.format_u64(u64(index)));
+    }
+    let index_error_prefix = "{" + text.join(index_error_parts, ",") + ",\"bad\" ";
+    if parse_error(index_error_prefix + "1}") !=
+       "syntax:" + strconv.format_u64(u64(text.len(index_error_prefix))) { return 84; }
+
+    // Escaped duplicate names must still report the source code-point offset
+    // after the last decoded key.
+    let escaped_error_prefix =
+        "{\"key\\nA\":1,\"key\\u00e9\":2,\"key\\nA\":3,\"key\\u00e9\" ";
+    if parse_error(escaped_error_prefix + "4}") !=
+       "syntax:" + strconv.format_u64(u64(text.len(escaped_error_prefix))) { return 85; }
+
+    // The indexed path also hashes non-ASCII names; equality still decides
+    // duplicates, and the first position stays in place.
+    let unicode_parts = vec.empty[string]();
+    for var index usize = 0; index < 20; index += 1 {
+        vec.push(unicode_parts,
+                 "\"é" + strconv.format_u64(u64(index)) + "\":" +
+                 strconv.format_u64(u64(index)));
+    }
+    vec.push(unicode_parts, "\"😀\":77");
+    vec.push(unicode_parts, "\"é1\":999");
+    let unicode_value = json.parse("{" + text.join(unicode_parts, ",") + "}");
+    switch unicode_value {
+        case json.Value.Object(entries): {
+            if vec.len(entries) != 21 { return 86; }
+            if entries[1].name != "é1" { return 87; }
+            if entries[20].name != "😀" { return 88; }
+        }
+        case _: return 89;
+    }
+    switch json.field(unicode_value, "é1") {
+        case option.Option.Some(number): if json.as_i64(number) != 999 { return 90; }
+        case option.Option.None: return 91;
+    }
     return 0;
 }
