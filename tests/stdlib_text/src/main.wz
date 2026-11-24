@@ -777,6 +777,15 @@ func check_trim() i32 {
             return 713;
         }
     }
+    let prefix = text.repeat("中😀", 29);
+    for width in [usize(1), usize(3), usize(4), usize(7), usize(8),
+        usize(15), usize(16), usize(65)] {
+        let suffix = text.repeat("\u{3000} ", width);
+        if text.trim_end(prefix+suffix) != prefix ||
+            text.trim_end("x"+suffix) != "x" || text.trim_end(suffix) != "" {
+            return 714;
+        }
+    }
     return 0;
 }
 

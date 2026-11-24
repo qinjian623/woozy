@@ -417,17 +417,32 @@ pub func trim_start(value string) string {
     return suffix;
 }
 pub func trim_end(value string) string {
-    if len(value) == 0 || !is_space(value[len(value)-1]) { return value; }
-    let data = bytes(value);
-    let data_bytes = vec.len(data);
-    var end usize = data_bytes;
+    let length = len(value);
+    if length == 0 || !is_space(value[length-1]) { return value; }
+    // Scan disjoint windows. Doubling the width bounds the total cost of
+    // locating their starts by the distance to the cut.
+    var end = length-1;
+    var width usize = 1;
     for end > 0 {
-        let start = utf8_prev(data,end);
-        if !is_space(utf8_decode(data,start)) { break; }
+        let start = end-width;
+        var offset = __woozy_text_cursor_at(value,start);
+        var cut = start;
+        for var index usize = start; index < end; index += 1 {
+            let read = __woozy_text_cursor_read(value,offset);
+            offset += read & CURSOR_STEP_MASK;
+            if !is_space(u32(read >> 32)) { cut = index+1; }
+        }
+        if cut != start {
+            let prefix = value[0:cut];
+            let size = byte_len(prefix);
+            if size < byte_len(value)-size { return text_from_buffer(bytes(prefix)); }
+            return prefix;
+        }
         end = start;
+        if width > end/2 { width = end; }
+        else { width *= 2; }
     }
-    if end == data_bytes { return value; }
-    return text_from_span(data,0,end);
+    return "";
 }
 pub func strip_prefix(value string, prefix string) option.Option[string] {
     if !starts_with(value,prefix) { return option.Option[string].None; }
