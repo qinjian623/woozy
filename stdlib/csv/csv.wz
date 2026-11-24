@@ -1,0 +1,677 @@
+// Strict, bounded CSV parsing and writing for UTF-8 strings.
+//
+// This module is pure: it imports no std/io or std/os and is usable on both
+// Native and Python. Native stream and file adapters live in std/csv_io.
+//
+// The default dialect is comma separated with double-quote quoting. Fields are
+// returned exactly as text; this module never parses numbers or booleans.
+// Records may end in LF, CRLF, or a lone CR. A newline inside a quoted field
+// is data and is preserved byte for byte. A doubled quote inside a quoted
+// field is one quote.
+//
+// Rows are Vec[string]. An empty stream has no rows, a blank line is a row
+// with zero fields, and a lone empty field is written as "" so it cannot be
+// confused with a blank line. Every written row ends in LF. These choices make
+// parse(serialize(rows)) preserve both blank rows and empty fields.
+//
+// Errors use a zero-based byte offset into the original encoded input and
+// one-based row and field (column) numbers. A field starts at column 1, the
+// next one at 2. Malformed input includes an unterminated quoted field, a
+// quote inside an unquoted field, and any non-delimiter text after a closing
+// quote. Invalid UTF-8 reports the first offending byte inside the field.
+// Every parse error, including a limit error, is terminal for a Parser and
+// every copy of it; callers must not resume that parser. parser_finish marks a
+// successful parse complete and is idempotent: later calls return None. Feeding
+// a byte after that success throws Error.FeedAfterEnd(offset) at the current end
+// offset and leaves the finished state unchanged. A sticky parse error is
+// reported by parser_error and rethrown by parser_feed/parser_finish on every
+// alias.
+//
+// Limits are maximums, not sentinels: a value exactly equal to a limit is
+// accepted and the next byte/field is rejected. zero forbids that item (a
+// blank line with zero fields is still allowed). max_field_bytes counts
+// decoded field bytes; max_row_bytes counts original encoded row bytes
+// including delimiters and quotes but excluding the LF/CRLF/CR terminator;
+// max_row_fields counts fields in one row. Field and offset buffers, the row
+// field vector, and row-byte growth are checked before they grow.
+//
+// serialize is infallible: composing valid UTF-8 strings and ASCII punctuation
+// cannot produce invalid UTF-8, so it encodes once into Vec[u8] and converts
+// once. If that internal invariant is ever broken, the conversion Panics
+// rather than silently returning corrupt text. serialize_with validates its
+// delimiter and therefore throws Error.InvalidDelimiter.
+package csv;
+
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// DELIMITER is a string so default calls match parse_with/serialize_with.
+// The byte constants used internally are deliberately private.
+pub const DELIMITER string = ",";
+pub const DEFAULT_MAX_FIELD_BYTES usize = 1048576;
+pub const DEFAULT_MAX_ROW_BYTES usize = 16777216;
+pub const DEFAULT_MAX_ROW_FIELDS usize = 16384;
+
+const DELIMITER_BYTE u8 = 44;
+const QUOTE u8 = 34;
+
+pub enum Error {
+    Syntax(offset usize, row usize, column usize);
+    FieldTooLarge(offset usize, row usize, column usize, limit usize);
+    RowTooLarge(offset usize, row usize, column usize, limit usize);
+    TooManyFields(offset usize, row usize, column usize, limit usize);
+    InvalidDelimiter(value string);
+    // FeedAfterEnd reports parser_feed after parser_finish succeeded. offset is
+    // the number of bytes already consumed by the parser.
+    FeedAfterEnd(offset usize);
+}
+
+pub struct Limits {
+    pub max_field_bytes usize;
+    pub max_row_bytes usize;
+    pub max_row_fields usize;
+}
+
+// Defaults allow large text fields and wide exports while still bounding a
+// malformed or hostile stream: 1 MiB per field, 16 MiB per encoded row, and
+// 16384 fields per row.
+pub func default_limits() Limits {
+    return Limits(max_field_bytes: DEFAULT_MAX_FIELD_BYTES,
+        max_row_bytes: DEFAULT_MAX_ROW_BYTES,
+        max_row_fields: DEFAULT_MAX_ROW_FIELDS);
+}
+
+pub func limits(max_field_bytes usize, max_row_bytes usize,
+    max_row_fields usize) Limits {
+    return Limits(max_field_bytes: max_field_bytes,
+        max_row_bytes: max_row_bytes, max_row_fields: max_row_fields);
+}
+
+const MODE_FIELD usize = 0;
+const MODE_UNQUOTED usize = 1;
+const MODE_QUOTED usize = 2;
+const MODE_AFTER_QUOTE usize = 3;
+
+const S_MODE usize = 0;
+const S_OFFSET usize = 1;
+const S_ROW usize = 2;
+const S_COLUMN usize = 3;
+// S_FIELD_OFFSET is the absolute input offset of the first field content byte.
+const S_FIELD_OFFSET usize = 4;
+const S_RECORD_STARTED usize = 5;
+const S_SKIP_LF usize = 6;
+const S_ROW_BYTES usize = 7;
+const S_FINISHED usize = 8;
+const S_COUNT usize = 9;
+
+const NO_INVALID_UTF8 usize = 18446744073709551615;
+
+// Parser keeps mutable state in Vec handles so copies share one parser
+// position, the finished flag, and the first terminal error, just like copies
+// of io.Reader share its cursor.
+pub struct Parser {
+    delimiter u8;
+    quote u8;
+    limits Limits;
+    field Vec[u8];
+    // offsets is populated lazily, only when a quoted field contains a doubled
+    // quote. It maps each decoded field byte to its original input offset.
+    offsets Vec[usize];
+    row Vec[Vec[string]];
+    status Vec[usize];
+    failure Vec[Error];
+}
+
+func parser_byte(delimiter u8, constraints Limits) Parser {
+    return Parser(delimiter: delimiter, quote: QUOTE, limits: constraints,
+        field: vec.empty[u8](), offsets: vec.empty[usize](),
+        row: vec.make[Vec[string]](1, vec.empty[string]()),
+        status: vec.make[usize](S_COUNT, 0), failure: vec.empty[Error]());
+}
+
+// parser returns a Parser for the default comma dialect and default limits.
+pub func parser() Parser {
+    return parser_byte(DELIMITER_BYTE, default_limits());
+}
+
+// parser_limited returns a default-dialect Parser with explicit limits.
+pub func parser_limited(constraints Limits) Parser {
+    return parser_byte(DELIMITER_BYTE, constraints);
+}
+
+// parser_with returns a Parser for one ASCII delimiter with default limits.
+pub func parser_with(delimiter string) Parser throws Error {
+    return parser_byte(delimiter_byte(delimiter), default_limits());
+}
+
+// parser_with_limited combines a custom delimiter with explicit limits.
+pub func parser_with_limited(delimiter string, constraints Limits) Parser
+    throws Error {
+    return parser_byte(delimiter_byte(delimiter), constraints);
+}
+
+func parser_fail(p Parser, problem Error) Error {
+    if vec.len(p.failure) == 0 {
+        vec.push(p.failure, problem);
+    }
+    return p.failure[0];
+}
+
+func parser_syntax(p Parser, offset usize, row usize, column usize) Error {
+    return parser_fail(p, Error.Syntax(offset, row + 1, column + 1));
+}
+
+func parser_field_limit(p Parser, offset usize, column usize) Error {
+    return parser_fail(p, Error.FieldTooLarge(offset, p.status[S_ROW] + 1,
+        column + 1, p.limits.max_field_bytes));
+}
+
+func parser_row_limit(p Parser, offset usize) Error {
+    return parser_fail(p, Error.RowTooLarge(offset, p.status[S_ROW] + 1,
+        p.status[S_COLUMN] + 1, p.limits.max_row_bytes));
+}
+
+func parser_field_count_limit(p Parser, offset usize) Error {
+    let column = vec.len(p.row[0]) + 1;
+    return parser_fail(p, Error.TooManyFields(offset, p.status[S_ROW] + 1,
+        column, p.limits.max_row_fields));
+}
+
+// parser_error returns the sticky first Syntax or limit error, if any. A
+// FeedAfterEnd misuse is not stored here because it does not change a finished
+// parser.
+pub func parser_error(p Parser) option.Option[Error] {
+    if vec.len(p.failure) == 0 {
+        return option.Option[Error].None;
+    }
+    return option.Option[Error].Some(p.failure[0]);
+}
+
+// first_invalid_utf8 returns the index of the first byte that makes the field
+// invalid, or NO_INVALID_UTF8 when the field is complete UTF-8.
+func first_invalid_utf8(data Vec[u8]) usize {
+    let length = vec.len(data);
+    var index usize = 0;
+    for index < length {
+        let first = data[index];
+        if first <= 0x7f {
+            index += 1;
+            continue;
+        }
+        var needed usize = 0;
+        var second_min u8 = 0x80;
+        var second_max u8 = 0xbf;
+        if first >= 0xc2 && first <= 0xdf {
+            needed = 2;
+        } else if first == 0xe0 {
+            needed = 3;
+            second_min = 0xa0;
+        } else if first >= 0xe1 && first <= 0xec {
+            needed = 3;
+        } else if first == 0xed {
+            needed = 3;
+            second_max = 0x9f;
+        } else if first >= 0xee && first <= 0xef {
+            needed = 3;
+        } else if first == 0xf0 {
+            needed = 4;
+            second_min = 0x90;
+        } else if first >= 0xf1 && first <= 0xf3 {
+            needed = 4;
+        } else if first == 0xf4 {
+            needed = 4;
+            second_max = 0x8f;
+        } else {
+            return index;
+        }
+        if index + needed > length {
+            return index;
+        }
+        let second = data[index + 1];
+        if second < second_min || second > second_max {
+            return index + 1;
+        }
+        for var offset usize = 2; offset < needed; offset += 1 {
+            if (data[index + offset] & 0xc0) != 0x80 {
+                return index + offset;
+            }
+        }
+        index += needed;
+    }
+    return NO_INVALID_UTF8;
+}
+
+func parser_add_byte(p Parser, byte u8, offset usize) throws Error {
+    if vec.len(p.field) >= p.limits.max_field_bytes {
+        throw parser_field_limit(p, offset, p.status[S_COLUMN]);
+    }
+    if vec.len(p.offsets) != 0 {
+        vec.push(p.offsets, offset);
+    }
+    vec.push(p.field, byte);
+}
+
+func parser_add_escaped_quote(p Parser, offset usize) throws Error {
+    if vec.len(p.field) >= p.limits.max_field_bytes {
+        throw parser_field_limit(p, offset - 1, p.status[S_COLUMN]);
+    }
+    if vec.len(p.offsets) != vec.len(p.field) {
+        for var index usize = 0; index < vec.len(p.field); index += 1 {
+            vec.push(p.offsets, p.status[S_FIELD_OFFSET] + index);
+        }
+    }
+    // The decoded quote starts at the first of the two raw quote bytes.
+    vec.push(p.offsets, offset - 1);
+    vec.push(p.field, QUOTE);
+}
+
+func parser_field(p Parser, field Vec[u8]) string throws Error {
+    try {
+        return text.from_bytes(field);
+    } catch error text.Error {
+        let bad = first_invalid_utf8(field);
+        var offset = p.status[S_FIELD_OFFSET];
+        if bad != NO_INVALID_UTF8 {
+            if vec.len(p.offsets) == vec.len(field) {
+                offset = p.offsets[bad];
+            } else {
+                offset += bad;
+            }
+        }
+        throw parser_syntax(p, offset, p.status[S_ROW], p.status[S_COLUMN]);
+    }
+}
+
+func parser_push_field(p Parser, offset usize, field Vec[u8]) throws Error {
+    if vec.len(p.row[0]) >= p.limits.max_row_fields {
+        throw parser_field_count_limit(p, offset);
+    }
+    vec.push(p.row[0], parser_field(p, field));
+    vec.clear(p.field);
+    vec.clear(p.offsets);
+}
+
+func parser_blank(p Parser) bool {
+    return p.status[S_MODE] == MODE_FIELD &&
+        vec.len(p.row[0]) == 0 && vec.len(p.field) == 0 &&
+        p.status[S_RECORD_STARTED] == 0;
+}
+
+func parser_finish_record(p Parser, offset usize, field Vec[u8]) Vec[string] throws Error {
+    if !parser_blank(p) {
+        parser_push_field(p, offset, field);
+    }
+    let completed = p.row[0];
+    p.row[0] = vec.empty[string]();
+    p.status[S_ROW] = p.status[S_ROW] + 1;
+    p.status[S_COLUMN] = 0;
+    p.status[S_MODE] = MODE_FIELD;
+    p.status[S_RECORD_STARTED] = 0;
+    p.status[S_FIELD_OFFSET] = p.status[S_OFFSET];
+    p.status[S_ROW_BYTES] = 0;
+    return completed;
+}
+
+func parser_next_field(p Parser, offset usize, field Vec[u8]) throws Error {
+    parser_push_field(p, offset, field);
+    // A delimiter proves that another field follows, even if it is empty.
+    if vec.len(p.row[0]) >= p.limits.max_row_fields {
+        throw parser_field_count_limit(p, offset);
+    }
+    p.status[S_MODE] = MODE_FIELD;
+    p.status[S_COLUMN] = p.status[S_COLUMN] + 1;
+    p.status[S_RECORD_STARTED] = 1;
+    p.status[S_FIELD_OFFSET] = p.status[S_OFFSET];
+}
+
+// parser_feed consumes one byte and returns a completed row when the byte is a
+// record terminator. The parser accepts only the strict forms described above.
+// After a successful parser_finish, it throws Error.FeedAfterEnd(offset)
+// without changing the finished parser. A sticky parse error takes precedence.
+pub func parser_feed(p Parser, byte u8) option.Option[Vec[string]] throws Error {
+    parser_check_feed(p);
+    return parser_feed_byte(p, byte, p.field);
+}
+
+func parser_check_feed(p Parser) throws Error {
+    if vec.len(p.failure) != 0 {
+        throw p.failure[0];
+    }
+    if p.status[S_FINISHED] != 0 {
+        throw Error.FeedAfterEnd(p.status[S_OFFSET]);
+    }
+}
+
+// field is normally the accumulated buffer. The chunk scanner may pass a
+// complete field directly when this byte finishes it.
+func parser_feed_byte(p Parser, byte u8, field Vec[u8])
+    option.Option[Vec[string]] throws Error {
+    let offset = p.status[S_OFFSET];
+    p.status[S_OFFSET] = offset + 1;
+    if p.status[S_SKIP_LF] != 0 {
+        p.status[S_SKIP_LF] = 0;
+        if byte == 10 {
+            return option.Option[Vec[string]].None;
+        }
+    }
+    let mode = p.status[S_MODE];
+    // A record terminator is not part of the row byte count. CRLF inside a
+    // quoted field reaches the data path below and both bytes are counted.
+    if byte == 13 && mode != MODE_QUOTED {
+        p.status[S_SKIP_LF] = 1;
+        return option.Option[Vec[string]].Some(
+            parser_finish_record(p, offset, field));
+    }
+    if byte == 10 && mode != MODE_QUOTED {
+        return option.Option[Vec[string]].Some(
+            parser_finish_record(p, offset, field));
+    }
+    if p.status[S_ROW_BYTES] >= p.limits.max_row_bytes {
+        throw parser_row_limit(p, offset);
+    }
+    p.status[S_ROW_BYTES] = p.status[S_ROW_BYTES] + 1;
+    if byte == p.delimiter {
+        if mode == MODE_QUOTED {
+            parser_add_byte(p, byte, offset);
+            return option.Option[Vec[string]].None;
+        }
+        parser_next_field(p, offset, field);
+        return option.Option[Vec[string]].None;
+    }
+    if byte == p.quote {
+        if mode == MODE_FIELD {
+            p.status[S_MODE] = MODE_QUOTED;
+            p.status[S_RECORD_STARTED] = 1;
+            p.status[S_FIELD_OFFSET] = offset + 1;
+            return option.Option[Vec[string]].None;
+        }
+        if mode == MODE_UNQUOTED {
+            throw parser_syntax(p, offset, p.status[S_ROW],
+                p.status[S_COLUMN]);
+        }
+        if mode == MODE_QUOTED {
+            p.status[S_MODE] = MODE_AFTER_QUOTE;
+            return option.Option[Vec[string]].None;
+        }
+        // A second quote after the closing quote is an escaped quote.
+        parser_add_escaped_quote(p, offset);
+        p.status[S_MODE] = MODE_QUOTED;
+        return option.Option[Vec[string]].None;
+    }
+    if mode == MODE_AFTER_QUOTE {
+        throw parser_syntax(p, offset, p.status[S_ROW], p.status[S_COLUMN]);
+    }
+    if mode == MODE_FIELD {
+        p.status[S_FIELD_OFFSET] = offset;
+        p.status[S_MODE] = MODE_UNQUOTED;
+        p.status[S_RECORD_STARTED] = 1;
+    }
+    parser_add_byte(p, byte, offset);
+    return option.Option[Vec[string]].None;
+}
+
+// parser_finish ends the input and returns the final unterminated record, if
+// any. On success the parser becomes terminal: repeated calls return None, and
+// parser_feed throws Error.FeedAfterEnd. A sticky parse error is rethrown.
+pub func parser_finish(p Parser) option.Option[Vec[string]] throws Error {
+    switch parser_error(p) {
+        case option.Option.Some(problem): throw problem;
+        case option.Option.None: {}
+    }
+    if p.status[S_FINISHED] != 0 {
+        return option.Option[Vec[string]].None;
+    }
+    p.status[S_SKIP_LF] = 0;
+    if p.status[S_MODE] == MODE_QUOTED {
+        throw parser_syntax(p, p.status[S_OFFSET],
+            p.status[S_ROW], p.status[S_COLUMN]);
+    }
+    var last = option.Option[Vec[string]].None;
+    if !parser_blank(p) {
+        last = option.Option[Vec[string]].Some(
+            parser_finish_record(p, p.status[S_OFFSET], p.field));
+    }
+    p.status[S_FINISHED] = 1;
+    return last;
+}
+
+func delimiter_byte(value string) u8 throws Error {
+    let data = text.bytes(value);
+    if vec.len(data) != 1 {
+        throw Error.InvalidDelimiter(value);
+    }
+    let byte = data[0];
+    if byte == QUOTE || byte == 10 || byte == 13 || byte == 0 ||
+        !((byte >= 32 && byte <= 126) || byte == 9) {
+        throw Error.InvalidDelimiter(value);
+    }
+    return byte;
+}
+
+// Consume [cursor, end) up to and including the first completed row. On a
+// normal return cursor is the first unread index. An empty range consumes no
+// bytes but still reports a sticky parser error. end must be within data.
+pub func parser_feed_chunk(p Parser, data Vec[u8], cursor inout usize,
+    end usize) option.Option[Vec[string]] throws Error {
+    if vec.len(p.failure) != 0 { throw p.failure[0]; }
+    if cursor > end || end > vec.len(data) {
+        // Use the standard bounds Panic before consuming any input.
+        let rejected = data[vec.len(data)];
+    }
+    if cursor == end {
+        return option.Option[Vec[string]].None;
+    }
+    if p.status[S_FINISHED] != 0 {
+        throw Error.FeedAfterEnd(p.status[S_OFFSET]);
+    }
+    let delimiter = p.delimiter;
+    let quote = p.quote;
+    for cursor < end {
+        let start = cursor;
+        let mode = p.status[S_MODE];
+        let offset = p.status[S_OFFSET];
+        let row_bytes = p.status[S_ROW_BYTES];
+        let field_bytes = vec.len(p.field);
+        var stop = start;
+        // Leave the byte that would exceed either limit for the usual
+        // transition, which determines the exact error and its precedence.
+        var count = end - start;
+        let row_room = p.limits.max_row_bytes - row_bytes;
+        let field_room = p.limits.max_field_bytes - field_bytes;
+        if row_room < count { count = row_room; }
+        if field_room < count { count = field_room; }
+        if mode == MODE_QUOTED {
+            for stop < start + count && data[stop] != quote { stop += 1; }
+        } else if mode != MODE_AFTER_QUOTE && p.status[S_SKIP_LF] == 0 {
+            for stop < start + count {
+                let byte = data[stop];
+                if byte == delimiter || byte == quote || byte == 10 || byte == 13 {
+                    break;
+                }
+                stop += 1;
+            }
+        }
+        var field = p.field;
+        if stop != start {
+            if mode == MODE_FIELD {
+                p.status[S_FIELD_OFFSET] = offset;
+                p.status[S_MODE] = MODE_UNQUOTED;
+                p.status[S_RECORD_STARTED] = 1;
+            }
+            p.status[S_OFFSET] = offset + (stop - start);
+            p.status[S_ROW_BYTES] = row_bytes + (stop - start);
+
+            // With no buffered prefix, a whole field needs only one copy.
+            // A quoted span is whole only if the closing quote fits in the
+            // row limit and the following byte is a delimiter or terminator.
+            var boundary = stop;
+            if mode == MODE_QUOTED && field_bytes == 0 && end - stop >= 2 &&
+                stop - start < row_room && data[stop] == quote {
+                boundary = stop + 1;
+            }
+            var complete = false;
+            if field_bytes == 0 && boundary < end &&
+                (mode != MODE_QUOTED || boundary != stop) {
+                let next = data[boundary];
+                complete = next == delimiter || next == 10 || next == 13;
+            }
+            if complete {
+                field = data[start:stop];
+                if boundary != stop {
+                    p.status[S_MODE] = MODE_AFTER_QUOTE;
+                    p.status[S_ROW_BYTES] += 1;
+                    p.status[S_OFFSET] += 1;
+                }
+            } else {
+                let mapped = vec.len(p.offsets) != 0;
+                for var index = start; index < stop; index += 1 {
+                    vec.push(p.field, data[index]);
+                    if mapped { vec.push(p.offsets, offset + (index - start)); }
+                }
+            }
+            if complete { cursor = boundary; }
+            else { cursor = stop; }
+        }
+        if cursor < end {
+            let byte = data[cursor];
+            cursor += 1;
+            switch parser_feed_byte(p, byte, field) {
+                case option.Option.Some(row): return option.Option[Vec[string]].Some(row);
+                case option.Option.None: {}
+            }
+        }
+    }
+    return option.Option[Vec[string]].None;
+}
+
+func parse_state(value string, parser Parser) Vec[Vec[string]] throws Error {
+    let rows = vec.empty[Vec[string]]();
+    let data = text.bytes(value);
+    let end = vec.len(data);
+    var cursor usize = 0;
+    for cursor < end {
+        switch parser_feed_chunk(parser, data, inout cursor, end) {
+            case option.Option.Some(row): vec.push(rows, row);
+            case option.Option.None: {}
+        }
+    }
+    switch parser_finish(parser) {
+        case option.Option.Some(row): vec.push(rows, row);
+        case option.Option.None: {}
+    }
+    return rows;
+}
+
+pub func parse(value string) Vec[Vec[string]] throws Error {
+    return parse_state(value, parser());
+}
+
+pub func parse_limited(value string, constraints Limits)
+    Vec[Vec[string]] throws Error {
+    return parse_state(value, parser_limited(constraints));
+}
+
+// parse_with uses a single ASCII delimiter. Tab and printable ASCII are
+// accepted, except the quote, CR, and LF. The quote remains a double quote.
+pub func parse_with(value string, delimiter string)
+    Vec[Vec[string]] throws Error {
+    return parse_state(value, parser_with(delimiter));
+}
+
+pub func parse_with_limited(value string, delimiter string,
+    constraints Limits) Vec[Vec[string]] throws Error {
+    return parse_state(value, parser_with_limited(delimiter, constraints));
+}
+
+// Encoder holds a delimiter already validated by encoder or encoder_with.
+pub struct Encoder {
+    delimiter u8;
+}
+
+// encoder returns an Encoder for the default comma delimiter.
+pub func encoder() Encoder {
+    return Encoder(delimiter: DELIMITER_BYTE);
+}
+
+// encoder_with validates one ASCII delimiter and returns an Encoder for it.
+pub func encoder_with(delimiter string) Encoder throws Error {
+    return Encoder(delimiter: delimiter_byte(delimiter));
+}
+
+func field_needs_quote(value string, delimiter u8) bool {
+    let data = text.bytes(value);
+    for byte in data {
+        if byte == delimiter || byte == QUOTE || byte == 10 || byte == 13 {
+            return true;
+        }
+    }
+    return false;
+}
+
+func encode_field(out Vec[u8], value string, delimiter u8, lone bool) {
+    let data = text.bytes(value);
+    let quoted = (lone && vec.len(data) == 0) ||
+        field_needs_quote(value, delimiter);
+    if quoted {
+        vec.push(out, QUOTE);
+        for byte in data {
+            if byte == QUOTE {
+                vec.push(out, QUOTE);
+            }
+            vec.push(out, byte);
+        }
+        vec.push(out, QUOTE);
+    } else {
+        for byte in data {
+            vec.push(out, byte);
+        }
+    }
+}
+
+// encode_row appends one encoded row, including its LF, to out. The caller
+// owns out and may reuse it for several rows.
+pub func encode_row(state Encoder, out Vec[u8], row Vec[string]) {
+    let count = vec.len(row);
+    if count == 0 {
+        vec.push(out, 10);
+        return;
+    }
+    for var index usize = 0; index < count; index += 1 {
+        if index != 0 {
+            vec.push(out, state.delimiter);
+        }
+        encode_field(out, row[index], state.delimiter, count == 1);
+    }
+    vec.push(out, 10);
+}
+
+func encoded_text(out Vec[u8]) string {
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        // encode_row only copies complete UTF-8 strings and ASCII punctuation.
+        // Reaching this branch means that invariant was broken. Force a Panic
+        // instead of returning an invalid string or swallowing the error.
+        let impossible = out[vec.len(out)];
+        vec.push(out, impossible);
+        return "";
+    }
+}
+
+func serialize_encoded(rows Vec[Vec[string]], state Encoder) string {
+    let out = vec.empty[u8]();
+    for row in rows {
+        encode_row(state, out, row);
+    }
+    return encoded_text(out);
+}
+
+pub func serialize(rows Vec[Vec[string]]) string {
+    return serialize_encoded(rows, encoder());
+}
+
+pub func serialize_with(rows Vec[Vec[string]], delimiter string)
+    string throws Error {
+    return serialize_encoded(rows, encoder_with(delimiter));
+}

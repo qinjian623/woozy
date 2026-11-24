@@ -1,0 +1,477 @@
+// Pure behaviour checks for std/csv. main returns 0 on success and a unique
+// non-zero code identifying the first failing check. This project contains no
+// std/io or std/os import, so the same source runs on Native and Python.
+package app;
+
+import "std/csv" as csv;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func same_row(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_rows(left Vec[Vec[string]], right Vec[Vec[string]]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if !same_row(left[index], right[index]) { return false; }
+    }
+    return true;
+}
+
+func expect_syntax(value string, offset usize, row usize, column usize) bool {
+    try {
+        let rows = csv.parse(value);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.Syntax(actual_offset, actual_row, actual_column):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_field_limit(value string, constraints csv.Limits, offset usize,
+    row usize, column usize, limit usize) bool {
+    try {
+        let rows = csv.parse_limited(value, constraints);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.FieldTooLarge(actual_offset, actual_row,
+                actual_column, actual_limit):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column && actual_limit == limit;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_row_limit(value string, constraints csv.Limits, offset usize,
+    row usize, column usize, limit usize) bool {
+    try {
+        let rows = csv.parse_limited(value, constraints);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.RowTooLarge(actual_offset, actual_row,
+                actual_column, actual_limit):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column && actual_limit == limit;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_field_count_limit(value string, constraints csv.Limits,
+    offset usize, row usize, column usize, limit usize) bool {
+    try {
+        let rows = csv.parse_limited(value, constraints);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.TooManyFields(actual_offset, actual_row,
+                actual_column, actual_limit):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column && actual_limit == limit;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func rejects_delimiter(value string) bool {
+    try {
+        let rows = csv.parse_with("a,b", value);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.InvalidDelimiter(actual): return actual == value;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func check_layout() i32 throws csv.Error {
+    if vec.len(csv.parse("")) != 0 { return 10; }
+    if !same_rows(csv.parse("\n"), [[]]) { return 11; }
+    if !same_rows(csv.parse("\n\n"), [[], []]) { return 12; }
+    if !same_rows(csv.parse(",\n"), [["", ""]]) { return 13; }
+    if !same_rows(csv.parse("a,\n,\nb\n"),
+                   [["a", ""], ["", ""], ["b"]]) { return 14; }
+    if !same_rows(csv.parse("a,b"), [["a", "b"]]) { return 15; }
+    if !same_rows(csv.parse("a,b\n"), [["a", "b"]]) { return 16; }
+    if !same_rows(csv.parse("a,b\r\nc,d\r\n"),
+                   [["a", "b"], ["c", "d"]]) { return 17; }
+    if !same_rows(csv.parse("a\rb\r"), [["a"], ["b"]]) { return 18; }
+    if !same_rows(csv.parse("\"\""), [[""]]) { return 19; }
+    if !same_rows(csv.parse("\"\"\n"), [[""]]) { return 20; }
+    if !same_rows(csv.parse("a,b\n\n"), [["a", "b"], []]) { return 21; }
+    return 0;
+}
+
+func check_quotes() i32 throws csv.Error {
+    if !same_rows(csv.parse("\"a,b\",c\n"), [["a,b", "c"]]) { return 30; }
+    if !same_rows(csv.parse("\"a\"\"b\",c\n"), [["a\"b", "c"]]) { return 31; }
+    if !same_rows(csv.parse("\"a\nb\",c\n"), [["a\nb", "c"]]) { return 32; }
+    if !same_rows(csv.parse("\"a\r\nb\",c\r\n"),
+                   [["a\r\nb", "c"]]) { return 33; }
+    if !same_rows(csv.parse("\"中😀,\"\"x\"\"\"\n"),
+                   [["中😀,\"x\""]]) { return 34; }
+    if !same_rows(csv.parse("\"a\0b\"\n"), [["a\0b"]]) { return 35; }
+    if !same_rows(csv.parse("\"\"\"\"\n"), [["\""]]) { return 36; }
+    return 0;
+}
+
+func check_text_only() i32 throws csv.Error {
+    if !same_rows(csv.parse("001,1.50,true,-0\n"),
+                   [["001", "1.50", "true", "-0"]]) { return 40; }
+    if !same_rows(csv.parse("true,false\n"),
+                   [["true", "false"]]) { return 41; }
+    return 0;
+}
+
+func check_malformed() i32 throws csv.Error {
+    if !expect_syntax("\"a", 2, 1, 1) { return 50; }
+    if !expect_syntax("a\"b", 1, 1, 1) { return 51; }
+    if !expect_syntax("\"a\"x", 3, 1, 1) { return 52; }
+    if !expect_syntax("a,b\nc\"d\n", 5, 2, 1) { return 53; }
+    if !expect_syntax("\"a\" ,b\n", 3, 1, 1) { return 54; }
+    if !expect_syntax("\"a\r\n", 4, 1, 1) { return 55; }
+    if !expect_syntax("a,\"b\"c\n", 5, 1, 2) { return 56; }
+    return 0;
+}
+
+func check_limits() i32 throws csv.Error {
+    if csv.DELIMITER != "," { return 160; }
+    if csv.DEFAULT_MAX_FIELD_BYTES != 1048576 ||
+       csv.DEFAULT_MAX_ROW_BYTES != 16777216 ||
+       csv.DEFAULT_MAX_ROW_FIELDS != 16384 { return 161; }
+    let defaults = csv.default_limits();
+    if defaults.max_field_bytes != 1048576 ||
+       defaults.max_row_bytes != 16777216 ||
+       defaults.max_row_fields != 16384 { return 162; }
+
+    // Field bytes: below, exactly at, and one past the limit.
+    let field = csv.limits(4, 100, 4);
+    if !same_rows(csv.parse_limited("abc", field), [["abc"]]) { return 163; }
+    if !same_rows(csv.parse_limited("abcd", field), [["abcd"]]) { return 164; }
+    if !expect_field_limit("abcde", field, 4, 1, 1, 4) { return 165; }
+    // Escaped quotes shrink the decoded field: three decoded bytes are legal
+    // under a three-byte field limit, and the fourth reports its raw offset.
+    if !same_rows(csv.parse_with_limited("\"a\"\"b\"", ",", csv.limits(3, 100, 4)),
+                   [["a\"b"]]) { return 166; }
+    if !expect_field_limit("\"a\"\"b\"", csv.limits(2, 100, 4),
+                           4, 1, 1, 2) { return 167; }
+
+    // Row bytes count original encoded bytes, including quoted CR/LF, but not
+    // the terminating newline.
+    let row = csv.limits(100, 5, 4);
+    if !same_rows(csv.parse_limited("a,bcd", row), [["a", "bcd"]]) {
+        return 168;
+    }
+    if !expect_row_limit("a,bcde", row, 5, 1, 2, 5) { return 169; }
+    let quoted = csv.limits(100, 6, 4);
+    if !same_rows(csv.parse_limited("\"a\r\nb\"", quoted), [["a\r\nb"]]) {
+        return 170;
+    }
+    if !expect_row_limit("\"a\r\nb\"", csv.limits(100, 5, 4),
+                         5, 1, 1, 5) { return 171; }
+
+    // Fields (columns): exactly the configured count is accepted. A delimiter
+    // proves that another field follows, so it fails before buffering it.
+    let columns = csv.limits(100, 100, 2);
+    if !same_rows(csv.parse_limited("a,b", columns), [["a", "b"]]) {
+        return 172;
+    }
+    if !same_rows(csv.parse_limited("a,b\n", columns), [["a", "b"]]) {
+        return 173;
+    }
+    if !expect_field_count_limit("a,b,c", columns, 3, 1, 3, 2) {
+        return 174;
+    }
+    if !expect_field_count_limit("a,b,", columns, 3, 1, 3, 2) {
+        return 175;
+    }
+    if !expect_field_count_limit("a,", csv.limits(100, 100, 1),
+                                 1, 1, 2, 1) { return 176; }
+    if !same_rows(csv.parse_limited("\n", csv.limits(100, 100, 0)), [[]]) {
+        return 177;
+    }
+    if !expect_field_count_limit("a\n", csv.limits(100, 100, 0),
+                                 1, 1, 1, 0) { return 178; }
+    return 0;
+}
+
+func check_custom_delimiter() i32 throws csv.Error {
+    if !same_rows(csv.parse_with("a;\"b;c\"\n", ";"),
+                   [["a", "b;c"]]) { return 60; }
+    let encoded = csv.serialize_with([["a", "b;c"]], ";");
+    if encoded != "a;\"b;c\"\n" { return 61; }
+    if !same_rows(csv.parse_with(encoded, ";"), [["a", "b;c"]]) {
+        return 62;
+    }
+    if !same_rows(csv.parse_with("a\tb\n", "\t"), [["a", "b"]]) {
+        return 63;
+    }
+    if !rejects_delimiter("") || !rejects_delimiter("\"") ||
+       !rejects_delimiter("ab") || !rejects_delimiter("中") ||
+       !rejects_delimiter("\n") || !rejects_delimiter("\r") {
+        return 64;
+    }
+    return 0;
+}
+
+func check_serialize() i32 throws csv.Error {
+    if csv.serialize([]) != "" { return 70; }
+    if csv.serialize([[]]) != "\n" { return 71; }
+    if csv.serialize([[""]]) != "\"\"\n" { return 72; }
+    if csv.serialize([["", ""]]) != ",\n" { return 73; }
+    if csv.serialize([["a", ""]]) != "a,\n" { return 74; }
+    if csv.serialize([["", "a"]]) != ",a\n" { return 75; }
+    if csv.serialize([["a,b"]]) != "\"a,b\"\n" { return 76; }
+    if csv.serialize([["a\"b"]]) != "\"a\"\"b\"\n" { return 77; }
+    if csv.serialize([["a\r\nb", "c"]]) != "\"a\r\nb\",c\n" { return 78; }
+    if csv.serialize([["中😀", "x\0y"]]) != "中😀,x\0y\n" { return 79; }
+
+    let rows = [[], [""], ["", ""], ["a,b", "c\"d", "x\ny"],
+        ["中😀", ""]];
+    let first = csv.serialize(rows);
+    let second = csv.serialize(rows);
+    if first != second { return 80; }
+    if !same_rows(csv.parse(first), rows) { return 81; }
+    let samples = ["", "a", "a,b", "a\"b", "a\nb", "a\r\nb",
+        "a\rb", "中😀", "\0", " ", ",", "\""];
+    for value in samples {
+        let variants = [[value], [value, ""], ["", value], [value, value]];
+        for row in variants {
+            if !same_rows(csv.parse(csv.serialize([row])), [row]) {
+                return 82;
+            }
+        }
+    }
+    if csv.serialize([["a", "b"]]) !=
+        csv.serialize_with([["a", "b"]], csv.DELIMITER) { return 83; }
+    return 0;
+}
+
+func same_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func feed_none(p csv.Parser, byte u8) bool throws csv.Error {
+    switch csv.parser_feed(p, byte) {
+        case option.Option.Some(row): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func feed_row(p csv.Parser, byte u8, expected Vec[string]) bool
+    throws csv.Error {
+    switch csv.parser_feed(p, byte) {
+        case option.Option.Some(row): return same_row(row, expected);
+        case option.Option.None: return false;
+    }
+}
+
+func finish_row(p csv.Parser, expected Vec[string]) bool throws csv.Error {
+    switch csv.parser_finish(p) {
+        case option.Option.Some(row): return same_row(row, expected);
+        case option.Option.None: return false;
+    }
+}
+
+func finish_none(p csv.Parser) bool throws csv.Error {
+    switch csv.parser_finish(p) {
+        case option.Option.Some(row): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func expect_finish_syntax(p csv.Parser, offset usize, row usize,
+    column usize) bool {
+    try {
+        let last = csv.parser_finish(p);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.Syntax(actual_offset, actual_row, actual_column):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_feed_syntax(p csv.Parser, byte u8, offset usize, row usize,
+    column usize) bool {
+    try {
+        let last = csv.parser_feed(p, byte);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.Syntax(actual_offset, actual_row, actual_column):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_feed_field_limit(p csv.Parser, byte u8, offset usize,
+    row usize, column usize, limit usize) bool {
+    try {
+        let last = csv.parser_feed(p, byte);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.FieldTooLarge(actual_offset, actual_row,
+                actual_column, actual_limit):
+                return actual_offset == offset && actual_row == row &&
+                    actual_column == column && actual_limit == limit;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func expect_feed_after_end(p csv.Parser, byte u8, offset usize) bool {
+    try {
+        let last = csv.parser_feed(p, byte);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.FeedAfterEnd(actual): return actual == offset;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func error_is_syntax(p csv.Parser, offset usize, row usize,
+    column usize) bool {
+    switch csv.parser_error(p) {
+        case option.Option.Some(problem): {
+            switch problem {
+                case csv.Error.Syntax(actual_offset, actual_row,
+                    actual_column):
+                    return actual_offset == offset && actual_row == row &&
+                        actual_column == column;
+                default: return false;
+            }
+        }
+        case option.Option.None: return false;
+    }
+    return false;
+}
+
+func rejects_parser_delimiter(value string) bool {
+    try {
+        let p = csv.parser_with(value);
+    } catch error csv.Error {
+        switch error {
+            case csv.Error.InvalidDelimiter(actual): return actual == value;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func check_incremental() i32 throws csv.Error {
+    let explicit = csv.limits(7, 8, 9);
+    if explicit.max_field_bytes != 7 || explicit.max_row_bytes != 8 ||
+       explicit.max_row_fields != 9 { return 180; }
+
+    // parser() keeps one position, one completed-row buffer, and one finished
+    // flag across aliases.
+    let p = csv.parser();
+    let alias = p;
+    if !feed_none(p, u8(97)) { return 181; }
+    if !feed_none(alias, u8(44)) { return 182; }
+    if !feed_none(p, u8(98)) { return 183; }
+    if !feed_row(alias, u8(10), ["a", "b"]) { return 184; }
+    if !feed_none(p, u8(99)) { return 185; }
+    if !finish_row(alias, ["c"]) { return 186; }
+    if !finish_none(p) { return 187; }
+    if !finish_none(alias) { return 188; }
+    if !expect_feed_after_end(p, u8(100), 5) { return 189; }
+    if !expect_feed_after_end(alias, u8(100), 5) { return 190; }
+    if !finish_none(alias) { return 191; }
+    switch csv.parser_error(p) {
+        case option.Option.Some(problem): return 192;
+        case option.Option.None: {}
+    }
+
+    // A parse error is sticky on every alias and outranks feed-after-end.
+    let bad = csv.parser();
+    let bad_alias = bad;
+    if !feed_none(bad, u8(34)) { return 193; }
+    if !feed_none(bad_alias, u8(97)) { return 194; }
+    if !expect_finish_syntax(bad_alias, 2, 1, 1) { return 195; }
+    if !expect_finish_syntax(bad, 2, 1, 1) { return 196; }
+    if !expect_feed_syntax(bad, u8(98), 2, 1, 1) { return 197; }
+    if !error_is_syntax(bad_alias, 2, 1, 1) { return 198; }
+
+    // parser_with uses default limits; parser_with_limited uses exactly the
+    // supplied limits.
+    let semi = csv.parser_with(";");
+    if !feed_none(semi, u8(97)) { return 199; }
+    if !feed_none(semi, u8(59)) { return 200; }
+    if !feed_none(semi, u8(98)) { return 201; }
+    if !feed_row(semi, u8(10), ["a", "b"]) { return 202; }
+    if !rejects_parser_delimiter("") || !rejects_parser_delimiter("\"") ||
+       !rejects_parser_delimiter("ab") { return 203; }
+
+    let bounded = csv.parser_with_limited(";", csv.limits(2, 100, 2));
+    if !feed_none(bounded, u8(97)) { return 204; }
+    if !feed_none(bounded, u8(98)) { return 205; }
+    if !expect_feed_field_limit(bounded, u8(99), 2, 1, 1, 2) {
+        return 206;
+    }
+    let plain = csv.parser_limited(csv.limits(2, 100, 2));
+    if !feed_none(plain, u8(97)) { return 207; }
+    if !feed_none(plain, u8(98)) { return 208; }
+    if !feed_row(plain, u8(10), ["ab"]) { return 209; }
+
+    // encoder()/encoder_with append the same rows that serialize emits.
+    let default_out = vec.empty[u8]();
+    csv.encode_row(csv.encoder(), default_out, ["a,b", ""]);
+    if !same_bytes(default_out, text.bytes("\"a,b\",\n")) { return 210; }
+    let custom_out = vec.empty[u8]();
+    csv.encode_row(csv.encoder_with(";"), custom_out, ["a;b", ""]);
+    if !same_bytes(custom_out, text.bytes("\"a;b\";\n")) { return 211; }
+    if csv.serialize([["a,b", ""]]) != "\"a,b\",\n" { return 212; }
+
+    // Empty input reaches EOF at offset zero and stays finished.
+    let empty = csv.parser();
+    if !finish_none(empty) { return 213; }
+    if !finish_none(empty) { return 214; }
+    if !expect_feed_after_end(empty, u8(120), 0) { return 215; }
+    return 0;
+}
+
+func main() i32 throws csv.Error {
+    var result = check_layout();
+    if result != 0 { return result; }
+    result = check_quotes();
+    if result != 0 { return result; }
+    result = check_text_only();
+    if result != 0 { return result; }
+    result = check_malformed();
+    if result != 0 { return result; }
+    result = check_limits();
+    if result != 0 { return result; }
+    result = check_custom_delimiter();
+    if result != 0 { return result; }
+    result = check_serialize();
+    if result != 0 { return result; }
+    return check_incremental();
+}

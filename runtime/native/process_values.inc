@@ -165,7 +165,18 @@ extern "C" int64_t lang_process_args_bytes_v1(LangVec **out) noexcept {
 }
 extern "C" int64_t lang_process_args_v1(LangVec **out) noexcept {
   if(!out)return -14;
-  LangVec *raw;lang_process_args_bytes_v1(&raw);auto status=to_texts(out,raw);lang_vec_release_v1(raw);return status;
+  auto *result=lang_vec_new_v1(startup_argc,sizeof(LangText),retain_text,drop_text);
+  auto *values=static_cast<LangText *>(result->data);
+  for(uint64_t i=0;i<startup_argc;++i) {
+    const auto *argument=startup_argv[i];
+    if(lang_text_from_utf8_v1(&values[i],reinterpret_cast<const uint8_t *>(argument),size(argument))<0) {
+      lang_vec_release_v1(result);
+      return -84;
+    }
+    // Final release drops only the successfully initialized prefix.
+    ++result->initialized;
+  }
+  *out=result;return 0;
 }
 extern "C" int64_t lang_process_environment_bytes_v1(LangVec **out) noexcept {
   if(!out)return -14;

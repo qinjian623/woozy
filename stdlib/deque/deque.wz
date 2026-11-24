@@ -1,0 +1,247 @@
+// Double-ended queue backed by a ring buffer.
+//
+// Copies share both the cursor and the ring. The cursor holds plain integers,
+// and growth resizes the same ring Vec so aliases see the new capacity.
+// The length of the ring Vec[Option[T]] is its capacity. The cursor records
+// the front slot and the number of live elements. Empty slots contain None.
+// Pushing copies the value and popping returns an owned copy.
+//
+// push_front/push_back are amortized O(1): a full ring grows by doubling and
+// may move the wrapped tail, so n pushes cost O(n) total. pop_front,
+// pop_back, peek_front, peek_back, get and is_empty are O(1). to_vec copies
+// the live range front-to-back into a new Vec in O(length). clear is O(length)
+// and keeps the allocated ring for reuse. Popping an empty deque returns
+// option.Option.None; it never panics or throws.
+package deque;
+
+import "std/option" as option;
+import "std/vec" as vec;
+
+const INITIAL_CAPACITY usize = 8;
+const MAX_USIZE usize = ~usize(0);
+
+struct Cursor {
+    head usize;
+    length usize;
+    capacity usize;
+}
+
+pub struct Deque[T] {
+    slots Vec[option.Option[T]];
+    cursor Vec[Cursor];
+}
+
+// new creates an empty deque with an initial ring of eight slots.
+pub func new[T]() Deque[T] {
+    return with_capacity[T](INITIAL_CAPACITY);
+}
+
+// with_capacity creates an empty deque whose ring has at least minimum slots.
+// Values below the default initial capacity still allocate the default ring.
+pub func with_capacity[T](minimum usize) Deque[T] {
+    var capacity = INITIAL_CAPACITY;
+    if minimum > capacity { capacity = minimum; }
+    let slots = vec.make[option.Option[T]](capacity, option.Option[T].None);
+    return Deque[T](slots:slots,
+                    cursor:vec.make[Cursor](1,Cursor(head:0,length:0,capacity:capacity)));
+}
+
+// len returns the number of stored elements.
+pub func len[T](values Deque[T]) usize {
+    return values.cursor[0].length;
+}
+
+// capacity returns the current ring size. It does not shrink when elements are
+// removed.
+pub func capacity[T](values Deque[T]) usize {
+    return values.cursor[0].capacity;
+}
+
+// is_empty reports whether the deque has no elements.
+pub func is_empty[T](values Deque[T]) bool {
+    return values.cursor[0].length == 0;
+}
+
+func grow_to[T](values Deque[T], state Cursor, minimum usize) {
+    let slots = values.slots;
+    let before = state.capacity;
+    var capacity = before;
+    for capacity < minimum {
+        if capacity > MAX_USIZE / 2 {
+            capacity = minimum;
+        } else {
+            capacity *= 2;
+        }
+    }
+    vec.resize(slots, capacity, option.Option[T].None);
+
+    // The wrapped tail belongs at the end of the larger ring so the prefix
+    // can stay at zero. Keep the old cursor until the moved values exist.
+    var head = state.head;
+    if state.length > before - head {
+        head = capacity - (before - state.head);
+        var i = before;
+        for i > state.head {
+            i -= 1;
+            slots[head + (i - state.head)] = slots[i];
+        }
+    }
+    values.cursor[0] = Cursor(head:head,length:state.length,capacity:capacity);
+    if head != state.head {
+        var end = before;
+        if head < end { end = head; }
+        for var i = state.head; i < end; i += 1 {
+            slots[i] = option.Option[T].None;
+        }
+    }
+}
+
+// reserve grows the ring when it cannot hold minimum elements. Existing
+// elements keep their order. Capacity is never reduced. A request too large
+// for Vec storage follows std/vec's checked allocation path and Panics; it
+// does not loop on a wrapped capacity.
+pub func reserve[T](values Deque[T], minimum usize) {
+    let state = values.cursor[0];
+    if state.capacity >= minimum { return; }
+    grow_to(values, state, minimum);
+}
+
+// push_back appends value to the back of the deque.
+pub func push_back[T](values Deque[T], value T) {
+    var state = values.cursor[0];
+    if state.length == state.capacity {
+        grow_to(values, state, state.length + 1);
+        state = values.cursor[0];
+    }
+    let ring = state.capacity;
+    let position = (state.head + state.length) % ring;
+    values.slots[position] = option.Option[T].Some(value);
+    values.cursor[0] = Cursor(head:state.head,length:state.length + 1,capacity:ring);
+}
+
+// push_front inserts value at the front of the deque.
+pub func push_front[T](values Deque[T], value T) {
+    var state = values.cursor[0];
+    if state.length == state.capacity {
+        grow_to(values, state, state.length + 1);
+        state = values.cursor[0];
+    }
+    let ring = state.capacity;
+    // Moving backward from head may wrap through slot zero. capacity is never
+    // zero here because grow_to allocates a nonempty ring.
+    let position = (state.head + ring - 1) % ring;
+    values.slots[position] = option.Option[T].Some(value);
+    values.cursor[0] = Cursor(head:position,length:state.length + 1,capacity:ring);
+}
+
+// pop_front removes and returns the front element, or None when empty.
+pub func pop_front[T](values Deque[T]) option.Option[T] {
+    let state = values.cursor[0];
+    if state.length == 0 { return option.Option[T].None; }
+
+    let ring = state.capacity;
+    let position = state.head;
+    // Copy the owned slot first, then clear it. The returned value is a
+    // normal owned copy that can outlive this deque and all its aliases.
+    let stored = values.slots[position];
+    values.slots[position] = option.Option[T].None;
+    values.cursor[0] = Cursor(head:(position + 1) % ring,length:state.length - 1,capacity:ring);
+    return stored;
+}
+
+// pop_back removes and returns the back element, or None when empty.
+pub func pop_back[T](values Deque[T]) option.Option[T] {
+    let state = values.cursor[0];
+    if state.length == 0 { return option.Option[T].None; }
+
+    let ring = state.capacity;
+    let position = (state.head + state.length - 1) % ring;
+    let stored = values.slots[position];
+    values.slots[position] = option.Option[T].None;
+    values.cursor[0] = Cursor(head:state.head,length:state.length - 1,capacity:ring);
+    return stored;
+}
+
+// peek_front returns a normal owned copy of the front element without
+// removing it.
+pub func peek_front[T](values Deque[T]) option.Option[T] {
+    let state = values.cursor[0];
+    if state.length == 0 { return option.Option[T].None; }
+    return values.slots[state.head];
+}
+
+// peek_back returns a normal owned copy of the back element without removing
+// it.
+pub func peek_back[T](values Deque[T]) option.Option[T] {
+    let state = values.cursor[0];
+    if state.length == 0 { return option.Option[T].None; }
+    let position = (state.head + state.length - 1) % state.capacity;
+    return values.slots[position];
+}
+
+// get returns a normal owned copy at logical index, counting from the front.
+// An out-of-range index returns None.
+pub func get[T](values Deque[T], index usize) option.Option[T] {
+    let state = values.cursor[0];
+    if index >= state.length { return option.Option[T].None; }
+    let position = (state.head + index) % state.capacity;
+    return values.slots[position];
+}
+
+// to_vec returns a snapshot of the live elements in front-to-back order. The
+// returned Vec is a distinct container, so later pushes, pops or clear on the
+// deque do not change it. Elements themselves are copied by the ordinary
+// language rules, so nested Vec, Box or other reference values still refer to
+// the same inner objects as the deque slots.
+pub func to_vec[T](values Deque[T]) Vec[T] {
+    let state = values.cursor[0];
+    let slots = values.slots;
+    let out = vec.empty[T]();
+    vec.reserve(out, state.length);
+    let ring = state.capacity;
+    for var index usize = 0; index < state.length; index += 1 {
+        let position = (state.head + index) % ring;
+        let stored = slots[position];
+        switch stored {
+            case option.Option.Some(value): vec.push(out, value);
+            case option.Option.None: {
+                // The live range never contains None. If the private ring
+                // invariant is ever broken, Panic through the checked Vec
+                // index instead of silently returning a shorter snapshot.
+                let rejected = slots[ring];
+                return out;
+            }
+        }
+    }
+    return out;
+}
+
+// clear removes all elements and keeps the allocated ring for reuse. Only
+// the live logical range is visited, so the cost is O(len), not O(capacity).
+pub func clear[T](values Deque[T]) {
+    let state = values.cursor[0];
+    let slots = values.slots;
+    let ring = state.capacity;
+    var i = state.head;
+    var remaining = state.length;
+    // Clear one contiguous segment at a time, starting with the head.
+    for remaining != 0 {
+        var count = ring - i;
+        if remaining < count { count = remaining; }
+        let end = i + count;
+        for end - i >= 4 {
+            slots[i] = option.Option[T].None;
+            slots[i + 1] = option.Option[T].None;
+            slots[i + 2] = option.Option[T].None;
+            slots[i + 3] = option.Option[T].None;
+            i += 4;
+        }
+        for i < end {
+            slots[i] = option.Option[T].None;
+            i += 1;
+        }
+        remaining -= count;
+        i = 0;
+    }
+    values.cursor[0] = Cursor(head:0,length:0,capacity:ring);
+}
