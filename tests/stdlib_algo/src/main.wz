@@ -129,6 +129,60 @@ func test_map() i32 {
     return 0;
 }
 
+func test_map_replacements_and_owned_output() i32 {
+    // transform sees each element just before its call. Replacing a later
+    // element through an alias must affect that later call, not a snapshot.
+    let values = vec.make[i32](4, 0);
+    values[0] = 1;
+    values[1] = 2;
+    values[2] = 3;
+    values[3] = 4;
+    let alias = values;
+    let seen = vec.empty[i32]();
+    let replace_later = func(value i32) i32 {
+        vec.push(seen, value);
+        if value == 1 { alias[2] = 30; }
+        if value == 30 { alias[3] = 40; }
+        return value * 10;
+    };
+    let replaced = algo.map[i32, i32](values, replace_later);
+    if !same_i32(replaced, [10, 20, 300, 400]) { return 150; }
+    if !same_i32(seen, [1, 2, 30, 40]) { return 151; }
+    if !same_i32(values, [1, 2, 30, 40]) { return 152; }
+
+    // Owning transform results are independent new values even when transform
+    // also mutates the shared payload of the input element it was given.
+    let owned = vec.empty[OwnItem]();
+    vec.push(owned, own_item(1, 10));
+    vec.push(owned, own_item(2, 20));
+    let own_seen = vec.empty[i32]();
+    let mapped_owned = algo.map[OwnItem, OwnItem](owned,
+        func(item OwnItem) OwnItem {
+            vec.push(own_seen, item.key);
+            let output = own_item(item.key * 10,
+                item.payload[0] + i32(vec.len(own_seen)));
+            if item.key == 1 {
+                owned[1] = own_item(9, 90);
+                item.payload[0] = 11;
+            }
+            return output;
+        });
+    if vec.len(mapped_owned) != 2 { return 153; }
+    if mapped_owned[0].key != 10 || mapped_owned[0].payload[0] != 11 {
+        return 154;
+    }
+    if mapped_owned[1].key != 90 || mapped_owned[1].payload[0] != 92 {
+        return 155;
+    }
+    if owned[0].key != 1 || owned[0].payload[0] != 11 { return 156; }
+    if owned[1].key != 9 || owned[1].payload[0] != 90 { return 157; }
+    mapped_owned[0].payload[0] = 77;
+    if mapped_owned[1].payload[0] != 92 { return 158; }
+    if owned[0].payload[0] != 11 { return 159; }
+    if !same_i32(own_seen, [1, 9]) { return 160; }
+    return 0;
+}
+
 func test_filter() i32 {
     let empty = vec.empty[i32]();
     let empty_calls = vec.make[i32](1, 0);
@@ -725,6 +779,8 @@ func test_owning_extrema() i32 {
 
 func main() i32 {
     var failure = test_map();
+    if failure != 0 { return failure; }
+    failure = test_map_replacements_and_owned_output();
     if failure != 0 { return failure; }
     failure = test_filter();
     if failure != 0 { return failure; }

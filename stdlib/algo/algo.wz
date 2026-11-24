@@ -29,12 +29,17 @@ pub struct MinMax[T] {
 }
 
 // map returns a new Vec containing transform(value) for every value, in input
-// order. An empty input produces an empty Vec without calling transform.
+// order. An empty input produces an empty Vec without calling transform. The
+// input is pinned while transform runs, and each element is read just before
+// its call, so replacements of later elements remain visible.
 pub func map[T, U](values Vec[T], transform func(T) U) Vec[U] {
     let result = vec.empty[U]();
     vec.reserve(result, vec.len(values));
-    for value in values {
-        vec.push(result, transform(value));
+    __woozy_vec_pin_begin[T](values);
+    defer { __woozy_vec_pin_end[T](values); }
+    let length = vec.len(values);
+    for var index usize = 0; index < length; index += 1 {
+        vec.push(result, transform(values[index]));
     }
     return result;
 }
