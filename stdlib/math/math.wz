@@ -2,7 +2,10 @@ package math;
 pub struct Fraction { pub fraction f64; pub exponent i32; }
 pub const PI f64 = 3.141592653589793238462643383279502884;
 pub const E f64 = 2.718281828459045235360287471352662498;
-pub func fabs(value0 f64) f64 { return __woozy_math_fabs(value0); }
+pub func fabs(value0 f64) f64 {
+    return __woozy_math_f64_from_bits(
+        __woozy_num_f64_bits(value0) & 0x7fffffffffffffff);
+}
 pub func floor(value0 f64) f64 { return __woozy_math_floor(value0); }
 pub func ceil(value0 f64) f64 { return __woozy_math_ceil(value0); }
 pub func trunc(value0 f64) f64 { return __woozy_math_trunc(value0); }
@@ -21,7 +24,11 @@ pub func log(value0 f64) f64 { return __woozy_math_log(value0); }
 pub func log2(value0 f64) f64 { return __woozy_math_log2(value0); }
 pub func log10(value0 f64) f64 { return __woozy_math_log10(value0); }
 pub func log1p(value0 f64) f64 { return __woozy_math_log1p(value0); }
-pub func copysign(value0 f64, value1 f64) f64 { return __woozy_math_copysign(value0, value1); }
+pub func copysign(value0 f64, value1 f64) f64 {
+    return __woozy_math_f64_from_bits(
+        (__woozy_num_f64_bits(value0) & 0x7fffffffffffffff) |
+        (__woozy_num_f64_bits(value1) & 0x8000000000000000));
+}
 pub func hypot(value0 f64, value1 f64) f64 { return __woozy_math_hypot(value0, value1); }
 pub func atan2(value0 f64, value1 f64) f64 { return __woozy_math_atan2(value0, value1); }
 pub func pow(value0 f64, value1 f64) f64 { return __woozy_math_pow(value0, value1); }

@@ -276,6 +276,7 @@ def ieee(pattern, bits):
 
 
 _IEEE_PACK = {32: struct.Struct('>f').pack, 64: struct.Struct('>d').pack}
+_F64_UNPACK = struct.Struct('>d').unpack
 
 
 def _float_bits(value, bits):
@@ -286,6 +287,14 @@ def _float_bits(value, bits):
     """
     try:
         return int.from_bytes(_IEEE_PACK[bits](value), 'big')
+    except (MemoryError, OverflowError):
+        raise Panic('value library allocation failed') from None
+
+
+def _float_from_bits(bits):
+    """Decode one exact binary64 payload without numeric conversion."""
+    try:
+        return _F64_UNPACK(bits.to_bytes(8, 'big'))[0]
     except (MemoryError, OverflowError):
         raise Panic('value library allocation failed') from None
 

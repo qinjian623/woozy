@@ -83,6 +83,11 @@
                         : builder.getInt64Ty();
       return builder.CreateBitCast(args[0], width);
     }
+    if (operation == SystemOperation::math_f64_from_bits) {
+      // std/math reconstructs fabs/copysign from the exact private f64 view.
+      // A bitcast preserves every payload bit, including signaling NaNs.
+      return builder.CreateBitCast(args[0], builder.getDoubleTy());
+    }
     if (operation >= SystemOperation::math_fabs && operation <= SystemOperation::math_signbit) {
       const auto *spec = hir::system_operation_spec(operation);
       const auto name = "lang_"+std::string(spec->name.substr(8))+"_v1";

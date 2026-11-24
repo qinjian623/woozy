@@ -67,6 +67,95 @@ func read_symbol(state EmitState, symbol usize) string {
     return symbol_name(symbol);
 }
 
+func exact_unsigned_width(type_value model.Type) u32 {
+    if !kind_is(type_value.kind, model.TypeKind.UnsignedInt) {
+        return 0;
+    }
+    if type_value.bits == 32 || type_value.bits == 64 {
+        return type_value.bits;
+    }
+    return 0;
+}
+
+func literal_proven_width(type_value model.Type,
+                          literal hir.IntegerLiteral) u32 {
+    let width = exact_unsigned_width(type_value);
+    if width == 0 {
+        return 0;
+    }
+    // The HIR stores the canonical mathematical value and the target
+    // two's-complement pattern. Only an exact nonnegative unsigned literal
+    // inside its own width is canonical for a direct bit operation.
+    if literal.decimal != u64_text(literal.bits) {
+        return 0;
+    }
+    if width < 64 && (literal.bits >> u64(width)) != 0 {
+        return 0;
+    }
+    return width;
+}
+
+func leaf_unsigned_width(state EmitState,
+                         node hir.HirNode) u32 throws Failure {
+    let type_value = type_of(state.module, node.type_id);
+    switch node.data {
+        case hir.NodeData.IntegerLiteral(payload):
+            return literal_proven_width(type_value, payload);
+        case hir.NodeData.ConstantLiteral(payload):
+            switch payload.value.data {
+                case hir.ConstantData.IntegerLiteral(literal):
+                    return literal_proven_width(
+                        type_of(state.module, payload.value.type_id), literal);
+                default: return 0;
+            }
+        case hir.NodeData.Call(payload): {
+            var is_system = false;
+            switch payload.kind {
+                case hir.CalleeKind.System: is_system = true;
+                default: {}
+            }
+            if !is_system {
+                return 0;
+            }
+            var operation u32 = 0;
+            switch payload.system {
+                case option.Option.Some(value): operation = value;
+                case option.Option.None: return 0;
+            }
+            var width u32 = 0;
+            if operation == 242 {
+                width = 32;
+            } else if operation == 243 {
+                width = 64;
+            }
+            if width != 0 && exact_unsigned_width(type_value) == width {
+                return width;
+            }
+            return 0;
+        }
+        default: return 0;
+    }
+}
+
+func proven_unsigned_width(state EmitState, id usize) u32 {
+    if id >= vec.len(state.proven_widths) {
+        return 0;
+    }
+    return u32(state.proven_widths[id]);
+}
+
+func child_unsigned_width(state EmitState, id usize) u32 throws Failure {
+    let node = node_at(state, id);
+    switch node.data {
+        case hir.NodeData.Binary(_):
+            // The child Binary was emitted first and recorded its width, or
+            // left zero. Never recurse through the child tree here.
+            return proven_unsigned_width(state, id);
+        default:
+            return leaf_unsigned_width(state, node);
+    }
+}
+
 func binary_text(state EmitState, op hir.BinaryOp, left string, right string,
                  operand usize) string throws Failure {
     let type_value = type_of(state.module, operand);
@@ -737,6 +826,8 @@ func system_call_expression(state inout EmitState, node hir.HirNode, id usize,
         call_text = "_rt._float_bits(" + args[0] + ", 32)";
     } else if spec.operation == 243 {
         call_text = "_rt._float_bits(" + args[0] + ", 64)";
+    } else if spec.operation == 244 {
+        call_text = "_rt._float_from_bits(" + args[0] + ")";
     } else {
         call_text = "_rt.value_call(" +
             python_string_literal(substring_from(spec.name, 8)) + ", " +
@@ -1137,8 +1228,42 @@ func expression_inner(state inout EmitState, id usize,
             let left = expression(inout state, node.children[0], inout suite);
             let right = expression(inout state, node.children[1], inout suite);
             let left_type = node_at(state, node.children[0]).type_id;
-            let operation = binary_text(state, payload.op, left, right,
-                left_type);
+            var bitwise = false;
+            switch payload.op {
+                case hir.BinaryOp.BitAnd: bitwise = true;
+                case hir.BinaryOp.BitOr: bitwise = true;
+                case hir.BinaryOp.BitXor: bitwise = true;
+                default: {}
+            }
+            var width u32 = 0;
+            if bitwise {
+                width = exact_unsigned_width(
+                    type_of(state.module, node.type_id));
+                if width != 0 &&
+                   (child_unsigned_width(state, node.children[0]) != width ||
+                    child_unsigned_width(state, node.children[1]) != width) {
+                    width = 0;
+                }
+            }
+            var operation = "";
+            if width != 0 {
+                if id < vec.len(state.proven_widths) {
+                    state.proven_widths[id] = u8(width);
+                }
+                switch payload.op {
+                    case hir.BinaryOp.BitAnd:
+                        operation = "(" + left + " & " + right + ")";
+                    case hir.BinaryOp.BitOr:
+                        operation = "(" + left + " | " + right + ")";
+                    case hir.BinaryOp.BitXor:
+                        operation = "(" + left + " ^ " + right + ")";
+                    default: {}
+                }
+            }
+            if operation == "" {
+                operation = binary_text(state, payload.op, left, right,
+                    left_type);
+            }
             return value_save(inout state, inout suite, operation, id);
         }
         case hir.NodeData.IntegerConvert(payload): {

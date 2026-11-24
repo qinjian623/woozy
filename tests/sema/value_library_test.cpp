@@ -230,6 +230,7 @@ void suite(const fs::path &root) {
   deny(root/"stdlib","package app; func main() i32 { let n=__woozy_text_len(\"a\"); return 0; }","E_CAPABILITY_UNAVAILABLE");
   deny(root/"stdlib","package app; func main() i32 { let bits=__woozy_num_f32_bits(f32(1.0)); return 0; }","E_CAPABILITY_UNAVAILABLE");
   deny(root/"stdlib","package app; func main() i32 { let bits=__woozy_num_f64_bits(1.0); return 0; }","E_CAPABILITY_UNAVAILABLE");
+  deny(root/"stdlib","package app; func main() i32 { let value=__woozy_math_f64_from_bits(u64(0)); return 0; }","E_CAPABILITY_UNAVAILABLE");
   Fixture malformed;
   malformed.write("stdlib/vec/vec.wz","package vec; pub func bad() { __woozy_vec_empty[i32,i32](); }");
   auto arity=malformed.check("package app; import \"std/vec\" as vec; func main() i32 { vec.bad(); return 0; }",malformed.path/"stdlib");

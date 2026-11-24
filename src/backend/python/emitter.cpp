@@ -132,6 +132,9 @@ class Emitter {
   std::set<uint64_t> temporary_ids;
   std::set<SymbolId> owned_bindings;
   std::set<uint64_t> value_types;
+  // Proven unsigned width for an emitted eligible Binary node; zero is
+  // unknown/non-bitwise. HIR node IDs index this immutable module once.
+  std::vector<uint8_t> proven_widths;
   bool owned(TypeId id) const {
     // Function/Weak are owning reference values. The shared classifier still
     // reports their stage-A result until its reference-values branch lands, so
@@ -775,6 +778,60 @@ class Emitter {
                        !capture_locals.contains(s);
     return name(s) + (owner ? ".value" : "");
   }
+  static unsigned exact_unsigned_width(const Type &type) {
+    if (type.kind != TypeKind::UnsignedInt)
+      return 0;
+    return type.bits == 32 || type.bits == 64 ? type.bits : 0;
+  }
+  static unsigned literal_width(const Type &type, const IntegerLiteral &literal) {
+    const auto width = exact_unsigned_width(type);
+    if (!width || literal.decimal.empty() || literal.decimal.front() == '-')
+      return 0;
+    // IntegerLiteral carries the canonical mathematical value and the target
+    // two's-complement pattern. Only an exact nonnegative built-in unsigned
+    // literal within its own width is canonical for the direct operation.
+    if (literal.decimal != std::to_string(literal.bits))
+      return 0;
+    if (width < 64 && (literal.bits >> width) != 0)
+      return 0;
+    return width;
+  }
+  unsigned leaf_unsigned_width(const HirNode &n) const {
+    const auto &t = type(n.type);
+    switch (n.kind()) {
+    case NodeKind::integer_literal:
+      return literal_width(t, std::get<IntegerLiteral>(n.data));
+    case NodeKind::constant_literal: {
+      const auto &value = std::get<ConstantLiteral>(n.data).value;
+      if (const auto *literal = std::get_if<IntegerLiteral>(&value.data))
+        return literal_width(type(value.type), *literal);
+      return 0;
+    }
+    case NodeKind::call: {
+      const auto &call = std::get<Call>(n.data);
+      if (call.kind != CalleeKind::system || !call.system)
+        return 0;
+      unsigned width = 0;
+      if (*call.system == SystemOperation::num_f32_bits)
+        width = 32;
+      else if (*call.system == SystemOperation::num_f64_bits)
+        width = 64;
+      return width && exact_unsigned_width(t) == width ? width : 0;
+    }
+    default:
+      return 0;
+    }
+  }
+  unsigned proven_unsigned_width(HirNodeId id) const {
+    return id.value < proven_widths.size() ? proven_widths[id.value] : 0;
+  }
+  unsigned child_unsigned_width(HirNodeId id) const {
+    const auto &n = node(id);
+    // A Binary child was emitted before this parent and either recorded its
+    // proven width or left zero. Never recurse through the child tree.
+    return n.kind() == NodeKind::binary ? proven_unsigned_width(id)
+                                        : leaf_unsigned_width(n);
+  }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
     const auto &operand_type = type(operand);
@@ -1151,8 +1208,28 @@ class Emitter {
     case NodeKind::binary: {
       auto a = expression(n.children[0], suite);
       auto b = expression(n.children[1], suite);
-      return value_save(suite,
-          binary(std::get<Binary>(n.data).op, a, b, node(n.children[0]).type), id);
+      const auto op = std::get<Binary>(n.data).op;
+      const bool bitwise = op == BinaryOp::bit_and ||
+                           op == BinaryOp::bit_or || op == BinaryOp::bit_xor;
+      unsigned width = 0;
+      if (bitwise) {
+        width = exact_unsigned_width(type(n.type));
+        if (width != 0 &&
+            child_unsigned_width(n.children[0]) == width &&
+            child_unsigned_width(n.children[1]) == width) {
+          if (id.value < proven_widths.size())
+            proven_widths[id.value] = static_cast<uint8_t>(width);
+        } else {
+          width = 0;
+        }
+      }
+      if (width != 0) {
+        const char *symbol = op == BinaryOp::bit_and   ? " & "
+                             : op == BinaryOp::bit_or  ? " | "
+                                                       : " ^ ";
+        return value_save(suite, "(" + a + symbol + b + ")", id);
+      }
+      return value_save(suite, binary(op, a, b, node(n.children[0]).type), id);
     }
     case NodeKind::integer_convert: {
       auto value = expression(n.children[0], suite);
@@ -1269,6 +1346,9 @@ class Emitter {
           break;
         case SystemOperation::num_f64_bits:
           call = "_rt._float_bits(" + args.at(0) + ", 64)";
+          break;
+        case SystemOperation::math_f64_from_bits:
+          call = "_rt._float_from_bits(" + args.at(0) + ")";
           break;
         default:
           call = "_rt.value_call(" + string_literal(spec->name.substr(8)) +
@@ -2339,7 +2419,9 @@ class Emitter {
 
 public:
   Emitter(const HirModule &module, std::stop_token token, bool retry = false)
-      : m(module), stop(token), fallback(retry) {}
+      : m(module), stop(token), fallback(retry) {
+    proven_widths.assign(module.nodes.size(), 0);
+  }
   Output generate(SymbolId entry, const Options &options) {
     check_cancelled(stop);
     if (m.config.backend != Backend::python || m.config.word_bits != 64)

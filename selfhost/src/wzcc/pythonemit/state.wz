@@ -142,6 +142,9 @@ struct EmitState {
     owned_bindings Vec[u64];
     value_types Vec[u64];
     specs Vec[system.OperationSpec];
+    // Proven unsigned width (0, 32 or 64) for an emitted eligible Binary,
+    // indexed by the verified immutable HIR node ID.
+    proven_widths Vec[u8];
 }
 
 func new_emitter(module hir.HirModule, fallback bool) EmitState {
@@ -154,7 +157,8 @@ func new_emitter(module hir.HirModule, fallback bool) EmitState {
         adapters: [], bound_adapter_keys: [], bound_adapter_values: [],
         bound_adapter_count: 0, held_subjects: [], printer: printer(),
         symbols: [], temporary_ids: [], owned_bindings: [], value_types: [],
-        specs: system.operations());
+        specs: system.operations(),
+        proven_widths: vec.make[u8](vec.len(module.nodes), 0));
 }
 
 func node_at(state EmitState, id usize) hir.HirNode throws Failure {

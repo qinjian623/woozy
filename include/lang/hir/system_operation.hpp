@@ -79,10 +79,12 @@ enum class SystemOperation : uint16_t {
   text_cursor_read_back = 240,
   text_compact = 241,
   // Same-width IEEE-754 bit reinterpretation used by std/strconv's Ryu
-  // formatter and std/math's classifiers. These are not public numeric conversion
-  // APIs.
+  // formatter and std/math's classifiers. The inverse f64 view is private to
+  // std/math so sign operations can reconstruct an exact IEEE bit pattern.
+  // These are not public numeric conversion APIs.
   num_f32_bits = 242,
-  num_f64_bits = 243
+  num_f64_bits = 243,
+  math_f64_from_bits = 244
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -189,7 +191,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 72> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 73> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -230,6 +232,7 @@ inline constexpr std::array<SystemOperationSpec, 72> value_system_operations{{
   {SystemOperation::num_format_f64, "__woozy_num_format_f64", "string", {"f64"}, 1, "std/strconv"},
   {SystemOperation::num_f32_bits, "__woozy_num_f32_bits", "u32", {"f32"}, 1, "std/strconv"},
   {SystemOperation::num_f64_bits, "__woozy_num_f64_bits", "u64", {"f64"}, 1, "std/strconv"},
+  {SystemOperation::math_f64_from_bits, "__woozy_math_f64_from_bits", "f64", {"u64"}, 1, "std/math"},
   {SystemOperation::math_fabs, "__woozy_math_fabs", "f64", {"f64"}, 1, "std/math"},
   {SystemOperation::math_floor, "__woozy_math_floor", "f64", {"f64"}, 1, "std/math"},
   {SystemOperation::math_ceil, "__woozy_math_ceil", "f64", {"f64"}, 1, "std/math"},

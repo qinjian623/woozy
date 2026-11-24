@@ -30,7 +30,7 @@ MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. ID 230 was retired.
-EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 244))
+EXPECTED_OPERATION_IDS = tuple(range(230)) + tuple(range(231, 245))
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
 NEW_OPERATIONS = tuple(operation for operation in EXPECTED_OPERATION_IDS
                        if operation >= 213)
@@ -38,7 +38,7 @@ NEW_OPERATIONS = tuple(operation for operation in EXPECTED_OPERATION_IDS
 NO_MODULE_OPERATIONS = frozenset({215, 220, 222, 223, 224, 225, 226,
                                   227, 228, 229, 231, 232, 233, 234,
                                   235, 236, 237, 238, 239, 240, 241,
-                                  242, 243})
+                                  242, 243, 244})
 EXPECTED_OWNER_ARITY = {
     213: ("std/os", 0), 214: ("std/os", 0), 215: ("std/os", 0),
     216: ("std/os", 0), 217: ("std/os", 0), 218: ("std/os", 0),
@@ -254,6 +254,8 @@ def validate_registry_entries() -> None:
               '"u32", {"f32"}, 1, "std/strconv"},'),
         243: ('{SystemOperation::num_f64_bits, "__woozy_num_f64_bits", '
               '"u64", {"f64"}, 1, "std/strconv"},'),
+        244: ('{SystemOperation::math_f64_from_bits, '
+              '"__woozy_math_f64_from_bits", "f64", {"u64"}, 1, "std/math"},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -346,6 +348,9 @@ def validate_registry_entries() -> None:
         243: ('OperationSpec(operation: 243, name: "__woozy_num_f64_bits", '
               'result: "u64", parameters: ["f64"], '
               'owner: "std/strconv", type_arity: 0)'),
+        244: ('OperationSpec(operation: 244, name: "__woozy_math_f64_from_bits", '
+              'result: "f64", parameters: ["u64"], '
+              'owner: "std/math", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:

@@ -17,4 +17,11 @@ func check_negation(value f64) f64 { return -value; }
 func check_fabs(value f64) f64 { return math.fabs(value); }
 func check_copysign(value f64, sign f64) f64 { return math.copysign(value, sign); }
 
-func main() i32 { return classify(1.0) - 3; }
+func check_unknown_or(left u64, right u64) u64 { return left | right; }
+
+func main() i32 {
+    if classify(1.0) != 3 { return 1; }
+    if !math.signbit(math.copysign(1.0, -0.0)) { return 2; }
+    if math.signbit(math.fabs(-0.0)) { return 3; }
+    return 0;
+}

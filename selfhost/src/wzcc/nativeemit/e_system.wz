@@ -578,6 +578,12 @@ func e_extra_float_bits(instruction nativeir.Instruction, operation u32,
         return option.Option[Value].Some(result("i64", "bitcast " +
             typed(args[0]) + " to i64", inout state));
     }
+    if operation == 244 {
+        // std/math's sign operations reconstruct f64 from the exact private
+        // bit view. The bitcast keeps signed zero and every NaN payload bit.
+        return option.Option[Value].Some(result("double", "bitcast " +
+            typed(args[0]) + " to double", inout state));
+    }
     return option.Option[Value].None;
 }
 
@@ -1664,7 +1670,7 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
             if ((operation >= 43 && operation <= 84) ||
                 (operation >= 213 && operation <= 219) ||
                 operation == 220 || operation == 221 ||
-                operation == 242 || operation == 243) {
+                (operation >= 242 && operation <= 244)) {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}
