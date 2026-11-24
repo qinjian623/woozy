@@ -1790,9 +1790,37 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             args[0].end()
             return None
         if operation == 'vec_try_move_trivial': return False
-        # Private std/vec.extend fast path. Python keeps the public per-element
-        # loop, whose observable semantics match this handoff.
-        if operation == 'vec_extend_trivial': return False
+        if operation == 'vec_extend_trivial':
+            values, extra = args
+            if (sys.implementation.name != 'cpython' or
+                    not (3, 12) <= sys.version_info[:2] <= (3, 14) or
+                    values.element.kind != 'trivial' or extra.element.kind != 'trivial' or
+                    values.element.stride != extra.element.stride or
+                    type(values.items) is not list or type(extra.items) is not list):
+                return False
+            count = len(extra.items)
+            if not count:
+                return True
+            if values.iterations:
+                raise Panic('Vec length changes during iteration')
+            length = len(values.items) + count
+            stride = values.element.stride
+            if stride <= 0 or length >= sys.maxsize or length > _MAX_COUNT // stride:
+                return False
+            capacity = values.capacity or 1
+            while capacity < length:
+                capacity = length if capacity > _MAX_COUNT // 2 else capacity * 2
+            if capacity > min(_MAX_COUNT, sys.maxsize) // stride:
+                return False
+            try:
+                reserved = (_allocate_elements([None] * capacity)
+                            if capacity > values.capacity else values._reserved)
+                # CPython exact-list extend allocates before copying, including self-extend.
+                values.items.extend(extra.items)
+            except (MemoryError, OverflowError):
+                return False
+            values.capacity, values._reserved = capacity, reserved
+            return True
         if operation == 'weak_empty': return Weak()
         if operation == 'weak_downgrade':
             # Box is a canonical wrapper around one private Vec cell.  The

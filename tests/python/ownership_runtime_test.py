@@ -73,6 +73,43 @@ class Runtime(unittest.TestCase):
         v.release()
         v.release()
 
+    @unittest.skipUnless(sys.implementation.name == "cpython" and
+                         (3, 12) <= sys.version_info[:2] <= (3, 14),
+                         "fast path supports CPython 3.12 through 3.14")
+    def test_extend_trivial(self):
+        scalar = rt.ValueType(stride=4)
+        values = rt.Vec.create(scalar, [1, 2])
+        extra = rt.Vec.create(scalar, [3, 4, 5])
+        empty = rt.Vec.create(scalar, [])
+        self.assertTrue(rt.value_call('vec_extend_trivial', (values, extra)))
+        self.assertEqual(values.items, [1, 2, 3, 4, 5])
+        self.assertEqual(values.capacity, 8)
+        self.assertTrue(rt.value_call('vec_extend_trivial', (extra, extra)))
+        self.assertEqual(extra.items, [3, 4, 5, 3, 4, 5])
+        self.assertEqual(extra.capacity, 6)
+        values.begin()
+        self.assertTrue(rt.value_call('vec_extend_trivial', (values, empty)))
+        with self.assertRaises(rt.Panic):
+            rt.value_call('vec_extend_trivial', (values, extra))
+        values.end()
+        mismatch = rt.Vec.create(rt.ValueType(stride=8), [1])
+        owned = rt.Vec.create(rt.ValueType(kind='vec'), [])
+        self.assertFalse(rt.value_call('vec_extend_trivial', (values, mismatch)))
+        self.assertFalse(rt.value_call('vec_extend_trivial', (values, owned)))
+        class ListSubclass(list):
+            pass
+        mismatch.items = ListSubclass(mismatch.items)
+        mismatch.element = scalar
+        self.assertFalse(rt.value_call('vec_extend_trivial', (values, mismatch)))
+        before = (values.items[:], values.capacity, values._reserved)
+        with patch.object(rt, '_allocate_elements', side_effect=MemoryError):
+            self.assertFalse(rt.value_call('vec_extend_trivial', (values, extra)))
+        self.assertEqual(values.items, before[0])
+        self.assertEqual(values.capacity, before[1])
+        self.assertIs(values._reserved, before[2])
+        for value in (values, extra, empty, mismatch, owned):
+            value.release()
+
     def test_slice_and_shared_nested_elements(self):
         scalar = rt.ValueType()
         reference = rt.ValueType('vec')

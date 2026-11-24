@@ -445,7 +445,7 @@ func ascii_shift(value string, source_first u8, source_last u8,
     return text_from_buffer(out);
 }
 func append_bytes(out Vec[u8], source Vec[u8]) {
-    for byte in source { vec.push(out,byte); }
+    vec.extend(out,source);
 }
 func append_span(out Vec[u8], data Vec[u8], start usize, end usize) {
     for var index usize = start; index < end; index += 1 {
@@ -453,7 +453,7 @@ func append_span(out Vec[u8], data Vec[u8], start usize, end usize) {
     }
 }
 func append_text(out Vec[u8], value string) {
-    for byte in bytes(value) { vec.push(out,byte); }
+    vec.extend(out,bytes(value));
 }
 func text_from_buffer(data Vec[u8]) string {
     // Callers only concatenate valid UTF-8 spans from existing strings.
