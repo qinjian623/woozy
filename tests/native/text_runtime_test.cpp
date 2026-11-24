@@ -94,6 +94,15 @@ void values() {
     need(cursor == lang_text_cursor_at_v1(&value, i - 1),
          "backward cursor moved by the wrong byte width");
   }
+  cursor = 0;
+  for (uint64_t i = 0; i < 7; ++i) {
+    const uint64_t read = lang_text_cursor_read_v1(&value, cursor);
+    need((read >> 32) == runes[i], "forward cursor scalar differs");
+    cursor += static_cast<uint32_t>(read);
+    need(cursor == lang_text_cursor_at_v1(&value, i + 1),
+         "forward cursor moved by the wrong byte width");
+  }
+  need(cursor == value.bytes, "forward cursor did not reach the byte end");
   LangText view;
   lang_text_slice_v1(&view, &value, 1, 6);
   LangText compacted;
@@ -146,6 +155,9 @@ void values() {
     need(lang_text_cursor_read_back_v1(&encoded, encoded.bytes) ==
              ((static_cast<uint64_t>(rune) << 32) | encoded.bytes),
          "backward cursor differs at a UTF-8 width boundary");
+    need(lang_text_cursor_read_v1(&encoded, 0) ==
+             ((static_cast<uint64_t>(rune) << 32) | encoded.bytes),
+         "forward cursor differs at a UTF-8 width boundary");
     equal_bytes(encoded, encodings[position++]);
     for (auto other : edges) {
       LangText right;
@@ -229,6 +241,9 @@ void failures() {
   LangText value{mixed,13,7,nullptr};
   panic("vec-index", [&]{lang_text_at_v1(&value, 7);});
   panic("vec-index", [&]{lang_text_at_v1(&value, ~uint64_t{0});});
+  panic("vec-index", [&]{lang_text_cursor_read_v1(&value, value.bytes);});
+  panic("vec-index", [&]{lang_text_cursor_read_v1(&value, value.bytes+1);});
+  panic("vec-index", [&]{lang_text_cursor_read_v1(&value, ~uint64_t{0});});
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 0);});
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, 2);});
   panic("vec-index", [&]{lang_text_cursor_read_back_v1(&value, value.bytes+1);});
@@ -237,6 +252,20 @@ void failures() {
            {0xed,0xa0,0x80}, {0xf4,0x90,0x80,0x80}, {0xf8,0x80,0x80,0x80,0x80}}) {
     LangText malformed{invalid.data(), invalid.size(), 1, nullptr};
     panic("vec-index", [&]{lang_text_cursor_read_back_v1(&malformed, malformed.bytes);});
+  }
+  // Forward reads start at a lead byte.  The 0b11 cases are the false accepts
+  // of an AND-of-raw-bytes continuation check; truncated and out-of-range
+  // sequences must also stay on the runtime Panic path.
+  for (const auto &invalid : std::vector<std::vector<uint8_t>>{
+           {0xc2}, {0x80}, {0xc0,0x80}, {0xe2,0x82},
+           {0xe0,0x9f,0xbf}, {0xed,0xa0,0x80}, {0xed,0xbf,0xbf},
+           {0xe4,0xc0,0xad}, {0xe4,0xb8,0xe0},
+           {0xf4,0x90,0x80,0x80}, {0xf5,0x80,0x80,0x80},
+           {0xf8,0x80,0x80,0x80,0x80}, {0xf0,0x9f,0x98},
+           {0xf0,0x9f,0xc0,0x80}, {0xf0,0x9f,0x98,0xff},
+           {0xf0,0x9f,0x00,0x80}}) {
+    LangText malformed{invalid.data(), invalid.size(), 1, nullptr};
+    panic("vec-index", [&]{lang_text_cursor_read_v1(&malformed, 0);});
   }
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,3,2);});
   panic("vec-slice", [&]{LangText out;lang_text_slice_v1(&out,&value,0,8);});

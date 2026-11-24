@@ -737,6 +737,145 @@ func e_vec_iterations_acquire(vec Value, state inout Emitter) Value throws Error
         " acquire, align 8" + suffix, inout state);
 }
 
+// ---- text cursor read fast path --------------------------------------------
+
+// Read continuation byte `index` of the scalar whose lead byte starts at
+// `cursor`, zero-extended to i32.  The caller has already bounded the load.
+func e_text_read_byte(data Value, cursor Value, index usize,
+                      state inout Emitter) Value throws Error {
+    let offset = c_binop("add", "i64", cursor.reference, number(index), inout state);
+    let address = result("ptr", "getelementptr i8, ptr " + data.reference +
+        ", i64 " + offset.reference, inout state);
+    let byte = c_load("i8", address, inout state);
+    return result("i32", "zext i8 " + byte.reference + " to i32", inout state);
+}
+
+// The runtime packs a read as (scalar << 32) | byte width.
+func e_text_read_pack(rune Value, width usize, state inout Emitter) Value throws Error {
+    let widened = result("i64", "zext i32 " + rune.reference + " to i64", inout state);
+    let shifted = c_binop("shl", "i64", widened.reference, "32", inout state);
+    return c_binop("or", "i64", shifted.reference, number(width), inout state);
+}
+
+func e_text_ready(code Value, remaining Value, low string, high string,
+                  room usize, state inout Emitter) Value throws Error {
+    let start = c_icmp("uge", "i32", code.reference, low, inout state);
+    let end = c_icmp("ule", "i32", code.reference, high, inout state);
+    let lead_tag = c_binop("and", "i1", start.reference, end.reference, inout state);
+    let space = c_icmp("uge", "i64", remaining.reference, number(room), inout state);
+    return c_binop("and", "i1", lead_tag.reference, space.reference, inout state);
+}
+
+// Decode one scalar of a constant `width` (2..4) at the current block.  A
+// continuation byte has tag 0b10, so (byte ^ 0x80) has both top bits clear;
+// OR-ing the XOR results keeps them clear only when every byte is a
+// continuation.  ANDing the raw bytes would accept 0b11 next to 0b10.  The
+// remaining checks match decode() in the runtime, so an accepted scalar has
+// exactly the runtime's packed result and every other input stays on the
+// runtime call, including its Panic.
+func e_text_decode(width usize, data Value, cursor Value, code Value,
+                   done BlockRef, slow BlockRef,
+                   state inout Emitter) Value throws Error {
+    var mask = "31";
+    var minimum = "128";
+    if width == 3 { mask = "15"; minimum = "2048"; }
+    if width == 4 { mask = "7"; minimum = "65536"; }
+    var rune = c_binop("and", "i32", code.reference, mask, inout state);
+    let first = e_text_read_byte(data, cursor, 1, inout state);
+    let lead_shift = c_binop("shl", "i32", rune.reference, "6", inout state);
+    let first_bits = c_binop("and", "i32", first.reference, "63", inout state);
+    rune = c_binop("or", "i32", lead_shift.reference, first_bits.reference, inout state);
+    var marks = c_binop("xor", "i32", first.reference, "128", inout state);
+    for var index usize = 2; index < width; index += 1 {
+        let byte = e_text_read_byte(data, cursor, index, inout state);
+        let shifted = c_binop("shl", "i32", rune.reference, "6", inout state);
+        let bits = c_binop("and", "i32", byte.reference, "63", inout state);
+        rune = c_binop("or", "i32", shifted.reference, bits.reference, inout state);
+        let mark = c_binop("xor", "i32", byte.reference, "128", inout state);
+        marks = c_binop("or", "i32", marks.reference, mark.reference, inout state);
+    }
+    let tags = c_binop("and", "i32", marks.reference, "192", inout state);
+    let valid_tags = c_icmp("eq", "i32", tags.reference, "0", inout state);
+    let minimum_ok = c_icmp("uge", "i32", rune.reference, minimum, inout state);
+    let maximum_ok = c_icmp("ule", "i32", rune.reference, "1114111", inout state);
+    let surrogate_offset = c_binop("sub", "i32", rune.reference, "55296", inout state);
+    let not_surrogate = c_icmp("uge", "i32", surrogate_offset.reference,
+        "2048", inout state);
+    let scalar_ok = c_binop("and", "i1", maximum_ok.reference,
+        not_surrogate.reference, inout state);
+    let range_ok = c_binop("and", "i1", minimum_ok.reference,
+        scalar_ok.reference, inout state);
+    let valid = c_binop("and", "i1", valid_tags.reference, range_ok.reference, inout state);
+    let packed = e_text_read_pack(rune, width, inout state);
+    c_cond_branch(valid, done, slow, inout state);
+    return packed;
+}
+
+func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
+                        state inout Emitter) Value throws Error {
+    let bytes = e_extract(args[0], 1, "i64", inout state);
+    let function_index = current_function(state);
+    let inspect = new_block(function_index, "text.read.inspect", inout state);
+    let second_lead = new_block(function_index, "text.read.second", inout state);
+    let third_lead = new_block(function_index, "text.read.third", inout state);
+    let fourth_lead = new_block(function_index, "text.read.fourth", inout state);
+    let two = new_block(function_index, "text.read.two", inout state);
+    let three = new_block(function_index, "text.read.three", inout state);
+    let four = new_block(function_index, "text.read.four", inout state);
+    let slow = new_block(function_index, "text.read.runtime", inout state);
+    let done = new_block(function_index, "text.read.done", inout state);
+    let bounded = c_icmp("ult", "i64", args[1].reference, bytes.reference, inout state);
+    c_cond_branch(bounded, inspect, slow, inout state);
+
+    position(inspect, inout state);
+    let data = e_extract(args[0], 0, "ptr", inout state);
+    let element = result("ptr", "getelementptr i8, ptr " + data.reference +
+        ", i64 " + args[1].reference, inout state);
+    let byte = c_load("i8", element, inout state);
+    let scalar = result("i64", "zext i8 " + byte.reference + " to i64", inout state);
+    let shifted = c_binop("shl", "i64", scalar.reference, "32", inout state);
+    let packed = c_binop("or", "i64", shifted.reference, "1", inout state);
+    let ascii = c_icmp("ult", "i8", byte.reference, "128", inout state);
+    c_cond_branch(ascii, done, second_lead, inout state);
+
+    // Lead ranges are the ones decode() accepts.  0xf5..0xff are not scalar
+    // prefixes, so the four-byte class ends the chain and the rest is slow.
+    position(second_lead, inout state);
+    let remaining = c_binop("sub", "i64", bytes.reference, args[1].reference, inout state);
+    let code = result("i32", "zext i8 " + byte.reference + " to i32", inout state);
+    let second_ready = e_text_ready(code, remaining, "194", "223", 2, inout state);
+    c_cond_branch(second_ready, two, third_lead, inout state);
+    position(third_lead, inout state);
+    let third_ready = e_text_ready(code, remaining, "224", "239", 3, inout state);
+    c_cond_branch(third_ready, three, fourth_lead, inout state);
+    position(fourth_lead, inout state);
+    let fourth_ready = e_text_ready(code, remaining, "240", "244", 4, inout state);
+    c_cond_branch(fourth_ready, four, slow, inout state);
+
+    position(two, inout state);
+    let two_packed = e_text_decode(2, data, args[1], code, done, slow, inout state);
+    position(three, inout state);
+    let three_packed = e_text_decode(3, data, args[1], code, done, slow, inout state);
+    position(four, inout state);
+    let four_packed = e_text_decode(4, data, args[1], code, done, slow, inout state);
+
+    position(slow, inout state);
+    let receiver_type = value_type(state, instruction.inputs[0]);
+    let address = value_address(receiver_type, args[0], inout state);
+    let decoded = runtime("lang_text_cursor_read_v1", "i64",
+        [address, args[1]], inout state);
+    let slow_end = here(state);
+    c_branch(done, inout state);
+
+    position(done, inout state);
+    return result("i64", "phi i64 [ " + packed.reference + ", " +
+        inspect.reference + " ], [ " + two_packed.reference + ", " +
+        two.reference + " ], [ " + three_packed.reference + ", " +
+        three.reference + " ], [ " + four_packed.reference + ", " +
+        four.reference + " ], [ " + decoded.reference + ", " +
+        slow_end.reference + " ]", inout state);
+}
+
 func e_value_system_call(instruction nativeir.Instruction,
                          args Vec[Value],
                          state inout Emitter) option.Option[Value] throws Error {
@@ -810,45 +949,8 @@ func e_value_system_call(instruction nativeir.Instruction,
                 return option.Option[Value].Some(length);
             }
             if operation == 234 {
-                // A bounded ASCII lead byte has the same packed result as the
-                // runtime decoder and advances by one byte. Check the
-                // descriptor byte length before touching data; every other
-                // case keeps the runtime call and its exact panic and UTF-8
-                // decoding behavior.
-                let bytes = e_extract(args[0], 1, "i64", inout state);
-                let bounded = c_icmp("ult", "i64", args[1].reference,
-                    bytes.reference, inout state);
-                let function_index = current_function(state);
-                let inspect = new_block(function_index, "text.read.inspect", inout state);
-                let slow = new_block(function_index, "text.read.runtime", inout state);
-                let done = new_block(function_index, "text.read.done", inout state);
-                c_cond_branch(bounded, inspect, slow, inout state);
-                position(inspect, inout state);
-                let data = e_extract(args[0], 0, "ptr", inout state);
-                let element = result("ptr", "getelementptr i8, ptr " +
-                    data.reference + ", i64 " + args[1].reference, inout state);
-                let byte = c_load("i8", element, inout state);
-                let scalar = result("i64", "zext i8 " + byte.reference +
-                    " to i64", inout state);
-                let shifted = c_binop("shl", "i64", scalar.reference, "32",
-                    inout state);
-                let packed = c_binop("or", "i64", shifted.reference, "1",
-                    inout state);
-                let ascii = c_icmp("ult", "i8", byte.reference, "128",
-                    inout state);
-                c_cond_branch(ascii, done, slow, inout state);
-                position(slow, inout state);
-                let receiver_type = value_type(state, instruction.inputs[0]);
-                let address = value_address(receiver_type, args[0], inout state);
-                let decoded = runtime("lang_text_cursor_read_v1", "i64",
-                    [address, args[1]], inout state);
-                let slow_end = here(state);
-                c_branch(done, inout state);
-                position(done, inout state);
-                return option.Option[Value].Some(result("i64", "phi i64 [ " +
-                    packed.reference + ", " + inspect.reference + " ], [ " +
-                    decoded.reference + ", " + slow_end.reference + " ]",
-                    inout state));
+                return option.Option[Value].Some(
+                    e_text_cursor_read(instruction, args, inout state));
             }
             if operation == 233 {
                 let bytes = e_extract(args[0], 1, "i64", inout state);

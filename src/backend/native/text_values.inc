@@ -88,21 +88,28 @@
     case SystemOperation::text_cursor_read_back:
       return runtime("lang_text_cursor_read_back_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_cursor_read: {
-      // A bounded ASCII lead byte has the same packed result as the runtime
-      // decoder and advances by one byte. Check the descriptor byte length
-      // before touching data; every other case keeps the runtime call and its
-      // exact panic and UTF-8 decoding behavior.
+      // A bounded lead byte whose continuation bytes and scalar value are the
+      // ones the runtime decoder accepts produces the runtime's packed result
+      // inline. Bounds, overlong, surrogate and range checks repeat that
+      // decoder exactly; every other case, including a truncated tail at the
+      // end of the text, keeps the runtime call and its panic behavior.
       auto *bytes = builder.CreateExtractValue(args[0], {1});
       auto *cursor = args[1];
       if (cursor->getType() != builder.getInt64Ty())
         cursor = builder.CreateIntCast(cursor, builder.getInt64Ty(), false);
       auto *function = builder.GetInsertBlock()->getParent();
-      auto *inspect =
-          llvm::BasicBlock::Create(context, "text.read.inspect", function);
-      auto *slow =
-          llvm::BasicBlock::Create(context, "text.read.runtime", function);
-      auto *done =
-          llvm::BasicBlock::Create(context, "text.read.done", function);
+      auto create = [&](const char *name) {
+        return llvm::BasicBlock::Create(context, name, function);
+      };
+      auto *inspect = create("text.read.inspect");
+      auto *second_lead = create("text.read.second");
+      auto *third_lead = create("text.read.third");
+      auto *fourth_lead = create("text.read.fourth");
+      auto *two = create("text.read.two");
+      auto *three = create("text.read.three");
+      auto *four = create("text.read.four");
+      auto *slow = create("text.read.runtime");
+      auto *done = create("text.read.done");
       builder.CreateCondBr(
           builder.CreateICmpULT(cursor, bytes), inspect, slow);
       builder.SetInsertPoint(inspect);
@@ -116,15 +123,82 @@
               builder.getInt64(32)),
           builder.getInt64(1));
       builder.CreateCondBr(
-          builder.CreateICmpULT(byte, builder.getInt8(0x80)), done, slow);
+          builder.CreateICmpULT(byte, builder.getInt8(0x80)), done, second_lead);
+      builder.SetInsertPoint(second_lead);
+      // The four-byte lead range ends the chain because 0xf5..0xff are not
+      // scalar prefixes; anything left over belongs to the runtime.
+      auto *remaining = builder.CreateSub(bytes, cursor);
+      auto *code = builder.CreateZExt(byte, builder.getInt32Ty());
+      auto classify = [&](llvm::BasicBlock *from, llvm::BasicBlock *target,
+                          uint32_t low, uint32_t high, uint64_t need,
+                          llvm::BasicBlock *otherwise) {
+        builder.SetInsertPoint(from);
+        auto *ready = builder.CreateAnd(
+            builder.CreateAnd(
+                builder.CreateICmpUGE(code, builder.getInt32(low)),
+                builder.CreateICmpULE(code, builder.getInt32(high))),
+            builder.CreateICmpUGE(remaining, builder.getInt64(need)));
+        builder.CreateCondBr(ready, target, otherwise);
+      };
+      classify(second_lead, two, 0xc2, 0xdf, 2, third_lead);
+      classify(third_lead, three, 0xe0, 0xef, 3, fourth_lead);
+      classify(fourth_lead, four, 0xf0, 0xf4, 4, slow);
+      auto decode = [&](llvm::BasicBlock *target, uint32_t width) {
+        builder.SetInsertPoint(target);
+        auto *rune = builder.CreateAnd(
+            code, builder.getInt32((1u << (7 - width)) - 1));
+        // A continuation byte has tag 0b10, so (byte ^ 0x80) has both top
+        // bits clear. OR the XOR results: the tag pair stays clear only when
+        // every byte is a continuation. ANDing the raw bytes would instead
+        // accept 0b11 next to 0b10.
+        llvm::Value *marks = nullptr;
+        for (uint32_t index = 1; index < width; ++index) {
+          auto *address = builder.CreateGEP(
+              builder.getInt8Ty(), data,
+              builder.CreateAdd(cursor, builder.getInt64(index)));
+          auto *value = builder.CreateZExt(
+              builder.CreateLoad(builder.getInt8Ty(), address),
+              builder.getInt32Ty());
+          rune = builder.CreateOr(
+              builder.CreateShl(rune, builder.getInt32(6)),
+              builder.CreateAnd(value, builder.getInt32(0x3f)));
+          auto *mark = builder.CreateXor(value, builder.getInt32(0x80));
+          marks = marks ? builder.CreateOr(marks, mark) : mark;
+        }
+        auto *minimum = builder.getInt32(
+            width == 2 ? 0x80 : width == 3 ? 0x800 : 0x10000);
+        auto *valid = builder.CreateAnd(
+            builder.CreateICmpEQ(
+                builder.CreateAnd(marks, builder.getInt32(0xc0)),
+                builder.getInt32(0)),
+            builder.CreateAnd(
+                builder.CreateICmpUGE(rune, minimum),
+                builder.CreateAnd(
+                    builder.CreateICmpULE(rune, builder.getInt32(0x10ffff)),
+                    builder.CreateICmpUGE(
+                        builder.CreateSub(rune, builder.getInt32(0xd800)),
+                        builder.getInt32(0x800)))));
+        auto *decoded = builder.CreateOr(
+            builder.CreateShl(builder.CreateZExt(rune, builder.getInt64Ty()),
+                              builder.getInt64(32)),
+            builder.getInt64(width));
+        builder.CreateCondBr(valid, done, slow);
+        return decoded;
+      };
+      auto *two_packed = decode(two, 2);
+      auto *three_packed = decode(three, 3);
+      auto *four_packed = decode(four, 4);
       builder.SetInsertPoint(slow);
       auto *decoded = runtime("lang_text_cursor_read_v1",
                               builder.getInt64Ty(), {pointer(0), args[1]});
       auto *slow_end = builder.GetInsertBlock();
       builder.CreateBr(done);
       builder.SetInsertPoint(done);
-      auto *result = builder.CreatePHI(builder.getInt64Ty(), 2);
+      auto *result = builder.CreatePHI(builder.getInt64Ty(), 5);
       result->addIncoming(packed, inspect);
+      result->addIncoming(two_packed, two);
+      result->addIncoming(three_packed, three);
+      result->addIncoming(four_packed, four);
       result->addIncoming(decoded, slow_end);
       return result;
     }
