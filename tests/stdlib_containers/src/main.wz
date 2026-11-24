@@ -1250,6 +1250,12 @@ func test_map_contains_reentry() i32 {
     return 0;
 }
 
+func insert_map_weak_value(values map.Map[ReentrantMapKey,Vec[i32]], key ReentrantMapKey) Weak[Vec[i32]] {
+    let sample Vec[i32] = [23];
+    map.insert(values, key, sample);
+    return weak.downgrade[Vec[i32]](sample);
+}
+
 // A read has already captured the table when its hash callback clears the map.
 func test_map_hash_snapshot() i32 {
     let values = map.new[ReentrantMapKey,Vec[i32]]();
@@ -1266,10 +1272,14 @@ func test_map_hash_snapshot() i32 {
     }
     if !map.is_empty(values) || calls[0] != 1 { return 163; }
 
-    map.insert(values, entry, before);
+    let retired = insert_map_weak_value(values, entry);
     if !map.contains(values, query) { return 164; }
     if !map.is_empty(values) || calls[0] != 2 { return 165; }
-    return 0;
+    // The finished probe has released the old table and its only value.
+    switch weak.upgrade(retired) {
+        case option.Option.Some(found): return 166;
+        case option.Option.None: return 0;
+    }
 }
 
 func main() i32 {
