@@ -170,6 +170,31 @@ func c_emit_vec_init(instruction nativeir.Instruction, args Vec[Value],
     return object;
 }
 
+// Reuse the ordinary Vec read emission only for a concrete non-owning element
+// whose LLVM allocation size equals the published runtime stride. The direct
+// path repeats both the length and initialized-prefix guards; owned, empty and
+// other layouts keep the runtime accessor and copy.
+func c_vec_read_value(vec Value, element_type usize, index Value, source model.Span,
+                      direct bool, state inout Emitter) Value throws Error {
+    if direct {
+        c_emit_vec_check(vec, index, source, inout state);
+        let data = vec_field(vec, 5, "ptr", inout state);
+        let element_type_name = lower_type(element_type, inout state);
+        let address = result("ptr", "getelementptr " + element_type_name +
+            ", ptr " + data.reference + ", i64 " + index.reference, inout state);
+        return c_load_tagged(element_type_name, address, inout state);
+    }
+    let address = runtime("lang_vec_at_v1", "ptr", [vec, index], inout state);
+    let loaded_type = lower_type(element_type, inout state);
+    let loaded = c_load(loaded_type, address, inout state);
+    return copy_value(element_type, loaded, inout state);
+}
+
+func c_direct_vec_element(type_id usize, state inout Emitter) bool throws Error {
+    // stride() uses the LLVM allocation size except for empty layouts.
+    return !owning(type_id, inout state) && !b_empty_size_id(type_id, inout state);
+}
+
 func c_emit_vec_read(instruction nativeir.Instruction, args Vec[Value],
                      state inout Emitter) Value throws Error {
     let index_type = value_type(state, instruction.inputs[1]);
@@ -206,18 +231,9 @@ func c_emit_vec_read(instruction nativeir.Instruction, args Vec[Value],
         }
         default: {}
     }
-    if !owning(element_type, inout state) {
-        c_emit_vec_check(args[0], index, instruction.source, inout state);
-        let data = vec_field(args[0], 5, "ptr", inout state);
-        let element_type_name = lower_type(element_type, inout state);
-        let address = result("ptr", "getelementptr " + element_type_name +
-            ", ptr " + data.reference + ", i64 " + index.reference, inout state);
-        return c_load_tagged(element_type_name, address, inout state);
-    }
-    let address = runtime("lang_vec_at_v1", "ptr", [args[0], index], inout state);
-    let loaded_type = lower_type(instruction.type_id, inout state);
-    let loaded = c_load(loaded_type, address, inout state);
-    return copy_value(instruction.type_id, loaded, inout state);
+    let direct = !owning(element_type, inout state);
+    return c_vec_read_value(args[0], element_type, index, instruction.source,
+        direct, inout state);
 }
 
 func c_emit_vec_set(instruction nativeir.Instruction, args Vec[Value],
@@ -406,11 +422,14 @@ func c_emit_iteration_read(instruction nativeir.Instruction, args Vec[Value],
         }
         default: {}
     }
+    if vec.len(kind.type_args) == 0 {
+        throw invalid("Vec iteration has no element type");
+    }
+    let element_type = kind.type_args[0];
     let collection = c_load("ptr", entry.address, inout state);
-    let address = runtime("lang_vec_at_v1", "ptr", [collection, index], inout state);
-    let loaded_type = lower_type(instruction.type_id, inout state);
-    let loaded = c_load(loaded_type, address, inout state);
-    return copy_value(instruction.type_id, loaded, inout state);
+    let direct = c_direct_vec_element(element_type, inout state);
+    return c_vec_read_value(collection, element_type, index, instruction.source,
+        direct, inout state);
 }
 
 func c_emit_trait_object(instruction nativeir.Instruction, args Vec[Value],

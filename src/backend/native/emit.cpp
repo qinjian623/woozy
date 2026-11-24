@@ -1224,12 +1224,38 @@ class Emitter {
                                  builder.CreateICmpUGE(index, init));
     guard(bad, 4, source);
   }
+  // A direct payload read is equivalent to lang_vec_at_v1 only for a concrete
+  // non-owning element with a nonzero LLVM allocation size that equals the
+  // published runtime stride. The direct path must repeat both the length and
+  // initialized-prefix guards; every other element keeps the runtime accessor.
+  bool direct_vec_element(TypeId element) {
+    if (owning(element)) return false;
+    auto *layout = lower_type(element);
+    if (!layout->isSized()) return false;
+    const auto size = module.getDataLayout().getTypeAllocSize(layout);
+    return !size.isScalable() && size.getFixedValue() != 0 &&
+           stride(element) == size.getFixedValue();
+  }
+  llvm::Value *vec_read_value(llvm::Value *vec, TypeId element,
+                              llvm::Value *index, SourceSpan source,
+                              bool direct) {
+    if (direct) {
+      emit_vec_check(vec, index, source);
+      auto *data = vec_field(vec, 5, builder.getPtrTy());
+      auto *address = builder.CreateGEP(lower_type(element), data, index);
+      auto *loaded = builder.CreateLoad(lower_type(element), address);
+      vec_memory(loaded, false);
+      return loaded;
+    }
+    auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
+    return copy_value(element,
+                      builder.CreateLoad(lower_type(element), address));
+  }
   // A vec_check emitted immediately before an element address proves the same
   // receiver/index bounds at the same source location. No instruction can
-  // intervene, so a trivial element with a nonzero layout whose allocation
-  // stride equals the runtime stride can address the data field directly
-  // instead of repeating the runtime bounds check. Slice, owning and
-  // unknown-size elements keep the general accessor.
+  // intervene, so a direct-read element can address the data field instead of
+  // repeating the runtime bounds check. Slice, owning and unknown-size
+  // elements keep the general accessor.
   bool reusable_vec_check(const ir::Instruction &i) {
     const auto *check = previous_instruction;
     if (!check || check->op != ir::Op::vec_check) return false;
@@ -1238,13 +1264,7 @@ class Emitter {
     const auto &receiver = type(value_types.at(i.inputs[0]));
     if (receiver.kind != hir::TypeKind::Vec || receiver.type_args.empty())
       return false;
-    auto element = receiver.type_args[0];
-    if (owning(element)) return false;
-    auto *layout = lower_type(element);
-    if (!layout->isSized()) return false;
-    const auto size = module.getDataLayout().getTypeAllocSize(layout);
-    return !size.isScalable() && size.getFixedValue() != 0 &&
-           stride(element) == size.getFixedValue();
+    return direct_vec_element(receiver.type_args[0]);
   }
   llvm::Value *system_call(const ir::Instruction &i,
                            llvm::ArrayRef<llvm::Value *> args) {
@@ -1948,8 +1968,9 @@ class Emitter {
         v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
       } else {
         auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
-        auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
-        v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
+        auto element = type(collection_type).type_args[0];
+        v = vec_read_value(vec, element, index, i.source,
+                           direct_vec_element(element));
       }
       break;
     }
@@ -2037,16 +2058,9 @@ class Emitter {
                                 {slice_address, index});
         auto *loaded = builder.CreateLoad(lower_type(element_type), address);
         v = owning(element_type) ? copy_value(i.type, loaded) : loaded;
-      } else if (!owning(element_type)) {
-        emit_vec_check(args[0], index, i.source);
-        auto *data = vec_field(args[0], 5, builder.getPtrTy());
-        auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
-        auto *loaded = builder.CreateLoad(lower_type(element_type), elem_addr);
-        vec_memory(loaded, false);
-        v = loaded;
       } else {
-        auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
-        v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
+        v = vec_read_value(args[0], element_type, index, i.source,
+                           !owning(element_type));
       }
       break;
     }

@@ -1,5 +1,26 @@
 package app;
 
+struct Empty {}
+struct Item { data i32; flag bool; }
+
+func check_element_layouts() bool {
+    let items = [Item(data: 11, flag: true), Item(data: 19, flag: false)];
+    var sum i32 = 0;
+    for item in items {
+        if item.flag { sum += item.data; }
+    }
+    if sum != 11 { return false; }
+
+    let empties = [Empty(), Empty()];
+    var count i32 = 0;
+    for ignored in empties { count += 1; }
+    if count != 2 { return false; }
+
+    let nested = [[3], [7]];
+    for row in nested { row[0] += 1; }
+    return nested[0][0] == 4 && nested[1][0] == 8;
+}
+
 func main() i32 {
     let values Vec[i32] = [1, 2, 3];
     let alias = values;
@@ -9,5 +30,6 @@ func main() i32 {
         sum += value;
     }
     if values[1] != 20 { return 1; }
+    if !check_element_layouts() { return 2; }
     return sum - 24;
 }
