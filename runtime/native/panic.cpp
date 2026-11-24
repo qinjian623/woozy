@@ -181,6 +181,15 @@ void copy_word(void *destination, const void *source) noexcept {
   __builtin_memcpy(destination, &bits, sizeof(bits));
 }
 
+template <typename Word>
+void fill_words(void *destination, const void *source, uint64_t count) noexcept {
+  Word bits;
+  __builtin_memcpy(&bits, source, sizeof(bits));
+  auto *out = static_cast<unsigned char *>(destination);
+  for (uint64_t index = 0; index < count; ++index)
+    __builtin_memcpy(out + index * sizeof(bits), &bits, sizeof(bits));
+}
+
 using CopyLane = uint64_t __attribute__((vector_size(16)));
 constexpr uint64_t kCopyBlockBytes = 4 * sizeof(CopyLane);
 
@@ -741,19 +750,27 @@ extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
     pinned = true;
   }
   if (length > v->capacity) grow_storage(v, length);
-  // Doubling the initialized suffix saves repeated element copies. Keep the
-  // sequential loop when fill overlaps the suffix, even across its first byte.
+  // Fill scalar widths directly and double copied chunks for other widths.
+  // Preserve sequential behavior when the fill overlaps the suffix.
   const uint64_t added = length - old_length;
   if (!has_owner_ops(v) &&
       !byte_ranges_overlap(element(v, old_length),
                            checked_payload_bytes(added, v->stride),
                            source, v->stride)) {
-    copy_bytes(element(v, old_length), source, v->stride);
-    for (uint64_t done = 1; done < added;) {
-      const uint64_t chunk = added - done < done ? added - done : done;
-      copy_bytes(element(v, old_length + done), element(v, old_length),
-                 chunk * v->stride);
-      done += chunk;
+    void *destination = element(v, old_length);
+    switch (v->stride) {
+    case 1: fill_words<uint8_t>(destination, source, added); break;
+    case 2: fill_words<uint16_t>(destination, source, added); break;
+    case 4: fill_words<uint32_t>(destination, source, added); break;
+    case 8: fill_words<uint64_t>(destination, source, added); break;
+    default:
+      copy_bytes(destination, source, v->stride);
+      for (uint64_t done = 1; done < added;) {
+        const uint64_t chunk = added - done < done ? added - done : done;
+        copy_bytes(element(v, old_length + done), element(v, old_length),
+                   chunk * v->stride);
+        done += chunk;
+      }
     }
     v->initialized = length;
     v->length = length;

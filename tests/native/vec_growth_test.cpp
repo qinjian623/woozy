@@ -812,7 +812,8 @@ void test_resize_grow_trivial_fill() {
   // Trivial resize growth must reproduce the per-element byte loop for every
   // stride/length, both in capacity and with a grow-and-snapshot step.
   for (uint64_t stride : {1ULL, 2ULL, 3ULL, 4ULL, 7ULL, 8ULL, 16ULL, 64ULL}) {
-    unsigned char pattern[64];
+    alignas(8) unsigned char unaligned_pattern[65];
+    unsigned char *pattern = unaligned_pattern + 1;
     for (uint64_t i = 0; i < stride; ++i)
       pattern[i] = static_cast<unsigned char>(0x30 + i * 7);
     for (uint64_t initial : {0ULL, 1ULL, 2ULL, 3ULL}) {
