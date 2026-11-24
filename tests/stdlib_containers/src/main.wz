@@ -968,6 +968,69 @@ func test_heap_from_vec() i32 {
     return 0;
 }
 
+// A heap with fewer than two elements has no parent to sift. from_vec must not
+// call the comparator for such inputs, and pop must not compare when removing
+// the last slot leaves a single root item. The root replacement still runs, so
+// the remaining item and its copy/drop ownership are unchanged.
+func test_heap_skip_leaf_sift() i32 {
+    let calls = vec.make[usize](1, 0);
+    let count = func(left i32, right i32) bool {
+        calls[0] += 1;
+        return left > right;
+    };
+    let empty_source = vec.empty[i32]();
+    let empty = heap.from_vec[i32](empty_source, count);
+    if calls[0] != 0 || !heap.is_empty(empty) { return 440; }
+
+    let one_source Vec[i32] = [42];
+    let one = heap.from_vec[i32](one_source, count);
+    if calls[0] != 0 { return 441; }
+    if heap.len(one) != 1 || !some_i32(heap.peek(one), 42) { return 442; }
+    if !some_i32(heap.pop(one), 42) || !heap.is_empty(one) { return 443; }
+    if calls[0] != 0 { return 444; }
+
+    // Two items before pop means the last item replaces the root and one item
+    // remains. That final root is still copied into place, but no sift or
+    // comparator can run.
+    let pair_source Vec[i32] = [1, 5];
+    let pair = heap.from_vec[i32](pair_source, count);
+    if heap.len(pair) != 2 || !some_i32(heap.peek(pair), 5) { return 445; }
+    let before_pop = calls[0];
+    if !some_i32(heap.pop(pair), 5) { return 446; }
+    if calls[0] != before_pop { return 447; }
+    if heap.len(pair) != 1 || !some_i32(heap.peek(pair), 1) { return 448; }
+
+    // The final-record path still drops the replaced root's stored copy and
+    // keeps the last item owned by the heap.
+    var root_link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    var last_link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let owned = heap.new[box.Box[i32]](before_box);
+    {
+        let root = box.new[i32](7);
+        let last = box.new[i32](3);
+        root_link = weak.downgrade[box.Box[i32]](root);
+        last_link = weak.downgrade[box.Box[i32]](last);
+        heap.push(owned, root);
+        heap.push(owned, last);
+    }
+    switch heap.pop(owned) {
+        case option.Option.Some(value): {
+            if box.get(value) != 7 { return 449; }
+        }
+        case option.Option.None: return 450;
+    }
+    if option.is_some(weak.upgrade(root_link)) { return 451; }
+    switch weak.upgrade(last_link) {
+        case option.Option.Some(value): {
+            if box.get(value) != 3 { return 452; }
+        }
+        case option.Option.None: return 453;
+    }
+    heap.clear(owned);
+    if option.is_some(weak.upgrade(last_link)) { return 454; }
+    return 0;
+}
+
 // An alias left after the original handle and the captured comparator scope
 // end must still own the shared state, the stored element and the comparator
 // environment.
@@ -1368,6 +1431,8 @@ func main() i32 {
     failure = test_vec_api();
     if failure != 0 { return failure; }
     failure = test_heap_from_vec();
+    if failure != 0 { return failure; }
+    failure = test_heap_skip_leaf_sift();
     if failure != 0 { return failure; }
     failure = test_heap_alias_ownership();
     if failure != 0 { return failure; }

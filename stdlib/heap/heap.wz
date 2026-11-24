@@ -115,9 +115,11 @@ func sift_down[T](items Vec[T], start usize, length usize, value T, before func(
 // most once per level of the tree.
 func heapify[T](items Vec[T], before func(T, T) bool) {
     let length = vec.len(items);
+    var index = length / 2;
+    // A Vec with no parents runs no sift, so it needs no pin.
+    if index == 0 { return; }
     __woozy_vec_pin_begin[T](items);
     defer { __woozy_vec_pin_end[T](items); }
-    var index = length / 2;
     for index > 0 {
         index -= 1;
         let value = items[index];
@@ -166,13 +168,18 @@ pub func pop[T](values Heap[T]) option.Option[T] {
             let length = vec.len(values.items);
             if length > 0 {
                 values.items[0] = value;
-                // Same live-owner pin as push. This registration belongs to
-                // the non-empty branch, so the empty-pop None path never
-                // registers or ends a pin.
-                __woozy_vec_pin_begin[T](values.items);
-                defer { __woozy_vec_pin_end[T](values.items); }
-                let end = sift_down(values.items, 0, length, value, values.before);
-                if end != 0 { values.items[end] = value; }
+                // Only a root with a child can sift. Keep the root replacement
+                // above so copy/drop behaviour is unchanged, but skip the pin
+                // and sift_down call when length / 2 == 0 would run no loop.
+                if length / 2 > 0 {
+                    // Same live-owner pin as push. This registration belongs
+                    // to the branch that can compare, so paths with no sift
+                    // never register or end a pin.
+                    __woozy_vec_pin_begin[T](values.items);
+                    defer { __woozy_vec_pin_end[T](values.items); }
+                    let end = sift_down(values.items, 0, length, value, values.before);
+                    if end != 0 { values.items[end] = value; }
+                }
             }
         }
         case option.Option.None: {
