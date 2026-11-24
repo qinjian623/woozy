@@ -839,6 +839,43 @@ func check_capture_round_trip() bool throws regex.Error {
     return true;
 }
 
+// check_runner_scratch_reuse exercises repeated searches that share one
+// ordinary Runner.  scratch buffers are internal, so the observable contract
+// is only the sequence of code-point spans and the zero-width advance rule.
+func check_runner_scratch_reuse() bool throws regex.Error {
+    let empty = regex.compile("");
+    let mixed = "a中😀\n";
+    let all = regex.find_all(empty, mixed);
+    if vec.len(all) != 5 { return false; }
+    for var index usize = 0; index < vec.len(all); index += 1 {
+        if all[index].start != index || all[index].end != index { return false; }
+    }
+    if !same_strings(regex.split(empty, mixed), ["", "a", "中", "😀", "\n", ""]) {
+        return false;
+    }
+    if regex.replace_all(empty, mixed, "-") != "-a-中-😀-\n-" { return false; }
+
+    // Alternation plus both anchors and a repeated non-empty branch returns
+    // to the same runner after each zero-width match.  Repeating the whole
+    // operation checks that scratch contents never survive a completed search.
+    let alternation = regex.compile("^|中+|$");
+    for var round usize = 0; round < 200; round += 1 {
+        let found = regex.find_all(alternation, mixed);
+        if vec.len(found) != 3 { return false; }
+        if found[0].start != 0 || found[0].end != 0 ||
+           found[1].start != 1 || found[1].end != 2 ||
+           found[2].start != 4 || found[2].end != 4 { return false; }
+        if regex.replace_all(alternation, mixed, "|") != "|a|😀\n|" {
+            return false;
+        }
+    }
+
+    // A complete scan without a match leaves the input as one piece.
+    let absent = regex.compile("zzz");
+    if !same_strings(regex.split(absent, mixed), [mixed]) { return false; }
+    return true;
+}
+
 func main() i32 throws regex.Error {
     if !check_find_from() { return 1; }
     if !check_split() { return 2; }
@@ -854,5 +891,6 @@ func main() i32 throws regex.Error {
     if !check_group_text_lifetime() { return 12; }
     if !check_capture_early_stop() { return 13; }
     if !check_capture_round_trip() { return 14; }
+    if !check_runner_scratch_reuse() { return 15; }
     return 0;
 }

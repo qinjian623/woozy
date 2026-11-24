@@ -128,6 +128,15 @@ struct Runner {
     active Vec[usize];
 }
 
+// Scratch holds the three frontiers used by one ordinary search.  A fresh
+// Scratch is cheap for a single find; multi-match callers keep one across all
+// searches instead of allocating these Vecs again for every match.
+struct Scratch {
+    stack Vec[usize];
+    seeds Vec[usize];
+    seed_starts Vec[usize];
+}
+
 struct CaptureThread {
     state usize;
     start usize;
@@ -540,6 +549,13 @@ func make_runner(compiled Pattern, input Vec[u32]) Runner {
         active:vec.empty[usize]());
 }
 
+func make_scratch() Scratch {
+    return Scratch(
+        stack:vec.empty[usize](),
+        seeds:vec.empty[usize](),
+        seed_starts:vec.empty[usize]());
+}
+
 func reset_runner(runner Runner) {
     for state in runner.touched {
         runner.starts[state] = NO_STATE;
@@ -600,8 +616,17 @@ func append_byte_range(out Vec[u8], data Vec[u8], start usize, end usize) {
 // search_runner searches input[from:] for the earliest start and, for that
 // start, the longest end.  A fresh or reused runner is accepted; the caller's
 // input is already in code points.  ^ is tested against position zero of the
-// whole input, never against from.
+// whole input, never against from.  A single search gets a private Scratch,
+// while repeated-search callers use search_runner_with_scratch below.
 func search_runner(runner Runner, from usize) option.Option[Match] {
+    if from > vec.len(runner.input) { return option.Option[Match].None; }
+    return search_runner_with_scratch(runner, from, make_scratch());
+}
+
+// add_thread drains the stack. Each completed scan step clears both seed
+// vectors before advancing, so searches always return with empty scratch.
+func search_runner_with_scratch(runner Runner, from usize,
+    scratch Scratch) option.Option[Match] {
     reset_runner(runner);
     let count = vec.len(runner.input);
     if from > count {
@@ -610,12 +635,9 @@ func search_runner(runner Runner, from usize) option.Option[Match] {
     var best_start = NO_STATE;
     var best_end usize = 0;
     var position usize = from;
-    let stack = vec.empty[usize]();
-    let seed_states = vec.empty[usize]();
-    let seed_starts = vec.empty[usize]();
     // compile_pattern appends the sole MATCH instruction after all others.
     let match_state = vec.len(runner.compiled.states) - 1;
-    add_thread(runner, stack, runner.compiled.start, position, position, count);
+    add_thread(runner, scratch.stack, runner.compiled.start, position, position, count);
     for true {
         let start = runner.starts[match_state];
         if start < best_start ||
@@ -648,18 +670,20 @@ func search_runner(runner Runner, from usize) option.Option[Match] {
                 matched = class_matches(runner.compiled, inst, rune);
             }
             if matched {
-                vec.push(seed_states, inst.next);
-                vec.push(seed_starts, start);
+                vec.push(scratch.seeds, inst.next);
+                vec.push(scratch.seed_starts, start);
             }
         }
         reset_runner(runner);
-        for var index usize = 0; index < vec.len(seed_states); index += 1 {
-            add_thread(runner, stack, seed_states[index], seed_starts[index], position + 1, count);
+        for var index usize = 0; index < vec.len(scratch.seeds); index += 1 {
+            add_thread(runner, scratch.stack, scratch.seeds[index],
+                scratch.seed_starts[index], position + 1, count);
         }
-        vec.clear(seed_states);
-        vec.clear(seed_starts);
+        vec.clear(scratch.seeds);
+        vec.clear(scratch.seed_starts);
         if best_start == NO_STATE {
-            add_thread(runner, stack, runner.compiled.start, position + 1, position + 1, count);
+            add_thread(runner, scratch.stack, runner.compiled.start,
+                position + 1, position + 1, count);
         }
         position += 1;
     }
@@ -698,11 +722,12 @@ pub func is_match(compiled Pattern, value string) bool {
 pub func find_all(compiled Pattern, value string) Vec[Match] {
     let out = vec.empty[Match]();
     let runner = runner_for(compiled, value);
+    let scratch = make_scratch();
     let count = vec.len(runner.input);
     var search usize = 0;
     var done = false;
     for !done {
-        switch search_runner(runner, search) {
+        switch search_runner_with_scratch(runner, search, scratch) {
             case option.Option.Some(found): {
                 vec.push(out, found);
                 if found.start == found.end {
@@ -738,6 +763,7 @@ func split_core(compiled Pattern, value string, bounded bool, limit usize) Vec[s
         return out;
     }
     let runner = runner_for(compiled, value);
+    let scratch = make_scratch();
     let count = vec.len(runner.input);
     let data = text.bytes(value);
     let offsets = byte_offsets(runner.input);
@@ -748,7 +774,7 @@ func split_core(compiled Pattern, value string, bounded bool, limit usize) Vec[s
         if bounded && vec.len(out) + 1 >= limit {
             done = true;
         } else {
-            switch search_runner(runner, search) {
+            switch search_runner_with_scratch(runner, search, scratch) {
                 case option.Option.Some(found): {
                     vec.push(out, text_from_byte_range(data,
                         offsets[piece_start], offsets[found.start]));
@@ -792,6 +818,7 @@ func replace_core(compiled Pattern, value string, replacement string,
         return value;
     }
     let runner = runner_for(compiled, value);
+    let scratch = make_scratch();
     let count = vec.len(runner.input);
     let data = text.bytes(value);
     let offsets = byte_offsets(runner.input);
@@ -806,7 +833,7 @@ func replace_core(compiled Pattern, value string, replacement string,
         if bounded && replaced >= limit {
             done = true;
         } else {
-            switch search_runner(runner, search) {
+            switch search_runner_with_scratch(runner, search, scratch) {
                 case option.Option.Some(found): {
                     append_byte_range(out, data, offsets[piece_start],
                         offsets[found.start]);
