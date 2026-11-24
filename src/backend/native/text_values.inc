@@ -273,7 +273,71 @@
     case SystemOperation::vec_push: {
       auto t = element();
       auto *copy = copy_value(t, args[1]);
-      runtime("lang_vec_push_v1", builder.getVoidTy(), {args[0], element_storage(t, copy)}); break;
+      auto *layout = lower_type(t);
+      const auto &slot_layout = module.getDataLayout();
+      const uint64_t bytes = slot_layout.getTypeAllocSize(layout).getFixedValue();
+      // lang_vec_push_v1 rejects an active iteration pin before its overflow
+      // check, then either grows storage or copies one element slot and
+      // publishes max(initialized,new_length) before the new length. With room
+      // already reserved that becomes one typed store when the slot is a single
+      // non-owning scalar: allocation size equal to the published stride, no
+      // zero-sized slot, and ABI alignment within the 16-byte Vec payload
+      // guarantee. Empty, owning and every other shape keep the runtime ABI
+      // call, including its alias staging, growth and overflow Panic.
+      if (!owning(t) && bytes != 0 && bytes == stride(t) &&
+          slot_layout.getABITypeAlign(layout).value() <= 16) {
+        auto *function = builder.GetInsertBlock()->getParent();
+        auto block = [&](const char *name) {
+          return llvm::BasicBlock::Create(context, name, function);
+        };
+        auto *fast = block("vec.push.reserved");
+        auto *grow = block("vec.push.grow_storage");
+        auto *done = block("vec.push.done");
+        auto *length = vec_field(args[0], 1, builder.getInt64Ty());
+        auto *capacity = vec_field(args[0], 8, builder.getInt64Ty());
+        builder.CreateCondBr(builder.CreateICmpULT(length, capacity), fast,
+                             grow);
+
+        // Growth keeps the runtime's own pin, overflow and alias handling.
+        // A full slot never reaches the inline store, so length == max(u64)
+        // still panics where the runtime does.
+        builder.SetInsertPoint(grow);
+        runtime("lang_vec_push_v1", builder.getVoidTy(),
+                {args[0], element_storage(t, copy)});
+        builder.CreateBr(done);
+
+        builder.SetInsertPoint(fast);
+        // Same acquire pin check as the runtime; it runs before any element or
+        // header byte changes. length < capacity means length + 1 cannot wrap.
+        auto *iterations = builder.CreateLoad(
+            builder.getInt64Ty(), builder.CreateStructGEP(vec_type, args[0], 4));
+        iterations->setAtomic(llvm::AtomicOrdering::Acquire);
+        iterations->setAlignment(llvm::Align(8));
+        vec_memory(iterations, true);
+        guard(builder.CreateICmpNE(iterations, builder.getInt64(0)), 8,
+              i.source);
+        auto *data = vec_field(args[0], 5, builder.getPtrTy());
+        auto *address = builder.CreateGEP(layout, data, length);
+        vec_memory(builder.CreateStore(copy, address), false);
+        // Publish the appended element before extending the initialized
+        // prefix and then the length, exactly as append_value does.
+        auto *next = builder.CreateAdd(length, builder.getInt64(1));
+        auto *initialized = vec_field(args[0], 2, builder.getInt64Ty());
+        auto *kept = builder.CreateSelect(
+            builder.CreateICmpULT(initialized, next), next, initialized);
+        vec_memory(builder.CreateStore(
+                       kept, builder.CreateStructGEP(vec_type, args[0], 2)),
+                   true);
+        vec_memory(builder.CreateStore(
+                       next, builder.CreateStructGEP(vec_type, args[0], 1)),
+                   true);
+        builder.CreateBr(done);
+        builder.SetInsertPoint(done);
+        break;
+      }
+      runtime("lang_vec_push_v1", builder.getVoidTy(),
+              {args[0], element_storage(t, copy)});
+      break;
     }
     case SystemOperation::vec_pop: {
       auto t = element();

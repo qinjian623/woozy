@@ -716,6 +716,16 @@ func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
     return e_vec_pop_value_layout(element, inout state);
 }
 
+// The inline push stores one whole element slot with a typed store, so it needs
+// exactly the inline pop's layout guarantee: one typed access covers the
+// published slot.  element_storage already uses that same layout for the
+// runtime ABI call, and scalar leaves plus nested plain aggregates keep an ABI
+// alignment within the 16-byte Vec payload guarantee.  Owning elements,
+// zero-sized roots and C layouts keep the runtime call.
+func e_vec_push_inline(element usize, state inout Emitter) bool throws Error {
+    return e_vec_pop_inline(element, inout state);
+}
+
 func e_vec_resize_inline(element usize, state inout Emitter) bool throws Error {
     if owning(element, inout state) { return false; }
     switch type_of(state, element).kind {
@@ -1106,11 +1116,60 @@ func e_value_system_call(instruction nativeir.Instruction,
                 }
                 if operation == 39 {
                     let copy = copy_value(element, args[1], inout state);
-                    let address = element_storage(element, copy, inout state);
-                    var actual Vec[Value] = [];
-                    vec.push(actual, args[0]);
-                    vec.push(actual, address);
-                    runtime("lang_vec_push_v1", "void", actual, inout state);
+                    if e_vec_push_inline(element, inout state) {
+                        // lang_vec_push_v1 checks an active iteration pin before
+                        // its overflow check, then copies one element slot and
+                        // publishes initialized=max(initialized,new_length)
+                        // before the new length.  With room already reserved
+                        // that is one typed store.  The growth block keeps the
+                        // runtime's pin, overflow and alias handling, so a full
+                        // slot (including length == max(u64)) still panics and
+                        // grows exactly where the runtime does.
+                        let function_index = current_function(state);
+                        let reserved = new_block(function_index, "vec.push.reserved", inout state);
+                        let grow = new_block(function_index, "vec.push.grow_storage", inout state);
+                        let done = new_block(function_index, "vec.push.done", inout state);
+                        let length = vec_field(args[0], 1, "i64", inout state);
+                        let capacity = vec_field(args[0], 8, "i64", inout state);
+                        let room = c_icmp("ult", "i64", length.reference, capacity.reference, inout state);
+                        c_cond_branch(room, reserved, grow, inout state);
+
+                        position(grow, inout state);
+                        let address = element_storage(element, copy, inout state);
+                        runtime("lang_vec_push_v1", "void", [args[0], address], inout state);
+                        c_branch(done, inout state);
+
+                        position(reserved, inout state);
+                        let iterations = e_vec_iterations_acquire(args[0], inout state);
+                        let pinned = c_icmp("ne", "i64", iterations.reference, "0", inout state);
+                        guard(pinned, 8, instruction.source, inout state);
+                        let data = vec_field(args[0], 5, "ptr", inout state);
+                        let layout = lower_type(element, inout state);
+                        let target = result("ptr", "getelementptr " + layout +
+                            ", ptr " + data.reference + ", i64 " +
+                            length.reference, inout state);
+                        c_store_tagged(copy, target, inout state);
+                        let next = c_binop("add", "i64", length.reference, "1", inout state);
+                        let initialized = vec_field(args[0], 2, "i64", inout state);
+                        let grown = c_icmp("ult", "i64", initialized.reference,
+                            next.reference, inout state);
+                        let kept = result("i64", "select i1 " + grown.reference +
+                            ", i64 " + next.reference + ", i64 " +
+                            initialized.reference, inout state);
+                        let initialized_field = c_gep(VEC_TYPE, args[0], 2, inout state);
+                        let initialized_suffix = vec_memory(true, inout state);
+                        append("store i64 " + kept.reference + ", ptr " +
+                            initialized_field.reference + initialized_suffix, inout state);
+                        let length_field = c_gep(VEC_TYPE, args[0], 1, inout state);
+                        let length_suffix = vec_memory(true, inout state);
+                        append("store i64 " + next.reference + ", ptr " +
+                            length_field.reference + length_suffix, inout state);
+                        c_branch(done, inout state);
+                        position(done, inout state);
+                    } else {
+                        let address = element_storage(element, copy, inout state);
+                        runtime("lang_vec_push_v1", "void", [args[0], address], inout state);
+                    }
                     return option.Option[Value].Some(Value(type_name: "i8",
                         reference: "0"));
                 }

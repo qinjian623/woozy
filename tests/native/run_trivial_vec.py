@@ -170,9 +170,10 @@ def main():
             calls, null_calls, owning = parse_ir_calls(ir_text)
             # Trivial scalar/struct/Unit slices keep null callbacks. Vec[func]
             # now owns a possibly non-null environment and the nested Vec owns
-            # its elements, so both use generated copy/drop callbacks.
-            need(len(null_calls) == 9,
-                 f"O{opt}: expected 9 trivial null/null calls, got {len(null_calls)}")
+            # its elements, so both use generated copy/drop callbacks. The fresh
+            # grow-then-reserve push case adds one trivial scalar Vec.
+            need(len(null_calls) == 10,
+                 f"O{opt}: expected 10 trivial null/null calls, got {len(null_calls)}")
             need(len(owning) == 2,
                  f"O{opt}: expected 2 owning callback calls, got {len(owning)}")
             summary["backend"][f"O{opt}"] = {
