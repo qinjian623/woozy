@@ -88,6 +88,40 @@ class ClosureTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in reduced.iterdir()), ["keep.wz"])
         self.assertEqual(sha(reduced / "keep.wz"), before)
 
+    def test_missing_nested_package_is_staged_without_filling_parent(self) -> None:
+        self.package("a", {"extra.wz": "package a;\n"})
+        self.package("a/b", {"b.wz": 'package b;\nimport "app/wzcc/a/c" as c;\n'})
+        self.package("a/c", {"c.wz": "package c;\n"})
+        self.package("a/unrelated", {"unused.wz": "package unrelated;\n"})
+        self.main('package app;\nimport "app/wzcc/a" as a;\n')
+        parent = self.project / "wzcc/a"
+        parent.mkdir()
+        contents = 'package a;\nimport "app/wzcc/a/b" as b;\n'
+        (parent / "keep.wz").write_text(contents, encoding="utf-8")
+
+        copied = complete_import_closure(self.project, self.source)
+
+        self.assertEqual([record["package"] for record in copied], ["a/b", "a/c"])
+        self.assertEqual(sorted(path.name for path in parent.iterdir()), ["b", "c", "keep.wz"])
+        self.assertEqual((parent / "keep.wz").read_text(encoding="utf-8"), contents)
+
+    def test_parent_discovered_after_staging_nested_package(self) -> None:
+        self.package("a", {"a.wz": "package a;\n"})
+        self.package("a/b", {"b.wz": 'package b;\nimport "app/wzcc/a" as a;\n'})
+        self.main('package app;\nimport "app/wzcc/a/b" as b;\n')
+        copied = complete_import_closure(self.project, self.source)
+        self.assertEqual([record["package"] for record in copied], ["a/b", "a"])
+
+    def test_missing_nested_package_rejects_symlinked_parent(self) -> None:
+        self.package("a/b/c", {"c.wz": "package c;\n"})
+        allowed = self.source / "allowed"
+        allowed.mkdir()
+        os.symlink(allowed, self.project / "wzcc/a", target_is_directory=True)
+        self.main('package app;\nimport "app/wzcc/a/b/c" as c;\n')
+        with self.assertRaises(WriteEscape):
+            complete_import_closure(self.project, self.source)
+        self.assertEqual(list(allowed.iterdir()), [])
+
     def test_production_symlink_read_is_allowed(self) -> None:
         self.package("a", {"a.wz": 'package a;\nimport "app/wzcc/b" as b;\n'})
         self.package("b", {"b.wz": "package b;\n"})

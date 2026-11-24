@@ -10,8 +10,8 @@ Safety rules for this test adapter:
 * reads may follow symlinks only when the resolved target stays inside the
   private project or the designated production source tree;
 * directory cycles and read escapes are errors, never silently skipped;
-* an existing package directory is never filled or overwritten, even if it is
-  empty or deliberately reduced;
+* a pre-staged package directory is never filled or overwritten, even if it
+  is empty or deliberately reduced; missing nested packages can be staged;
 * every write is made below the private project's ``wzcc`` directory; the
   helper refuses a symlinked ``wzcc`` and re-checks every destination real path.
 """
@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 IMPORT_RE = re.compile(
-    r'^\s*import\s+"app/wzcc/([A-Za-z_][A-Za-z0-9_]*)(?:/[^"]*)?"',
+    r'^\s*import\s+"app/wzcc/([A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)"',
     re.MULTILINE)
 
 
@@ -159,9 +159,10 @@ def complete_import_closure(project_src: Path, source_root: Path, *,
     record per copied file with source/target SHA-256.  Existing package
     directories are reported through ``skipped`` and left untouched.
     """
-    project_src = Path(project_src).resolve()
+    project_src = Path(project_src)
     source_root = Path(source_root).resolve()
     _check_private_project(project_src, source_root)
+    project_src = project_src.resolve()
     target_root = project_src / "wzcc"
     if not target_root.is_dir():
         raise FileNotFoundError(f"project has no src/wzcc directory: {target_root}")
@@ -170,14 +171,15 @@ def complete_import_closure(project_src: Path, source_root: Path, *,
     if not _within(target_root, project_src):
         raise WriteEscape(f"project wzcc directory escapes the project: {target_root}")
     copied: list[dict] = []
-    seen: set[str] = set()
+    created_parents: set[Path] = set()
     while True:
         imports = imported_packages(project_src, source_root,
                                     additional_read_roots)
         missing: list[str] = []
         for package in sorted(imports):
             destination = target_root / package
-            if destination.exists() or destination.is_symlink():
+            if destination not in created_parents and (
+                    destination.exists() or destination.is_symlink()):
                 if skipped is not None:
                     skipped.append({
                         "package": package,
@@ -187,35 +189,36 @@ def complete_import_closure(project_src: Path, source_root: Path, *,
                         if destination.is_dir() else [],
                     })
                 continue
-            if package not in seen:
-                missing.append(package)
+            missing.append(package)
         if not missing:
             return copied
         for package in missing:
-            seen.add(package)
             source_dir = source_root / package
+            if not _within(source_dir, source_root):
+                raise ReadEscape(
+                    f"production package symlink escapes source root: {source_dir}")
             if not source_dir.is_dir():
                 raise FileNotFoundError(
                     f"imported production package is missing: {source_dir}")
-            if source_dir.is_symlink() and not _within(_real(source_dir), source_root):
-                raise ReadEscape(
-                    f"production package symlink escapes source root: {source_dir}")
-            sources = _walk_wz(source_dir, source_root, ())
+            sources = [source for source in _walk_wz(source_dir, source_root, ())
+                       if source.parent == source_dir]
             if not sources:
                 raise FileNotFoundError(
                     f"imported production package has no Wz files: {source_dir}")
             destination = target_root / package
-            if destination.exists() or destination.is_symlink():
-                continue
-            destination.mkdir(parents=True, exist_ok=False)
+            _check_write_path(destination, target_root, project_src)
+            # A later import can name an ancestor created only to hold a child.
+            created_parents.update(parent for parent in destination.parents
+                                   if not parent.exists())
+            destination.mkdir(parents=True, exist_ok=destination in created_parents)
+            created_parents.discard(destination)
             for source in sources:
-                relative = source.relative_to(source_dir)
-                out = destination / relative
-                out.parent.mkdir(parents=True, exist_ok=True)
+                out = destination / source.name
                 _check_write_path(out, target_root, project_src)
                 data = source.read_bytes()
                 digest = hashlib.sha256(data).hexdigest()
-                out.write_bytes(data)
+                with out.open("xb") as target:
+                    target.write(data)
                 _check_write_path(out, target_root, project_src)
                 if hashlib.sha256(out.read_bytes()).hexdigest() != digest:
                     raise ClosureError(f"copied source changed bytes: {source}")
