@@ -219,6 +219,25 @@ pub func get[T](values Deque[T], index usize) option.Option[T] {
     return values.slots[position];
 }
 
+// copy_range appends count live slots starting at start to out. It is shared
+// by the two contiguous pieces of a possibly wrapped live range.
+func copy_range[T](out Vec[T], slots Vec[option.Option[T]], ring usize, start usize, count usize) {
+    let end = start + count;
+    for var position = start; position < end; position += 1 {
+        let stored = slots[position];
+        switch stored {
+            case option.Option.Some(value): vec.push(out, value);
+            case option.Option.None: {
+                // The live range never contains None. If the private ring
+                // invariant is ever broken, Panic through the checked Vec
+                // index instead of silently returning a shorter snapshot.
+                let rejected = slots[ring];
+                return;
+            }
+        }
+    }
+}
+
 // to_vec returns a snapshot of the live elements in front-to-back order. The
 // returned Vec is a distinct container, so later pushes, pops or clear on the
 // deque do not change it. Elements themselves are copied by the ordinary
@@ -230,20 +249,12 @@ pub func to_vec[T](values Deque[T]) Vec[T] {
     let out = vec.empty[T]();
     vec.reserve(out, state.length);
     let ring = state.capacity;
-    for var index usize = 0; index < state.length; index += 1 {
-        let position = (state.head + index) % ring;
-        let stored = slots[position];
-        switch stored {
-            case option.Option.Some(value): vec.push(out, value);
-            case option.Option.None: {
-                // The live range never contains None. If the private ring
-                // invariant is ever broken, Panic through the checked Vec
-                // index instead of silently returning a shorter snapshot.
-                let rejected = slots[ring];
-                return out;
-            }
-        }
-    }
+    // The live range is at most two contiguous pieces: from head to the end
+    // of the ring, then from slot zero for whatever remains.
+    var first = ring - state.head;
+    if state.length < first { first = state.length; }
+    copy_range(out, slots, ring, state.head, first);
+    copy_range(out, slots, ring, 0, state.length - first);
     return out;
 }
 

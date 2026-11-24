@@ -85,11 +85,11 @@ constexpr uint32_t kSmallClassCount =
 constexpr uint64_t kMaxSmallPayload =
     kSmallClassSizes[kSmallClassCount - 1] - sizeof(AllocHeader);
 // Direct-mmap regions are retained for repeated large alloc/free.  The total
-// retained bytes are capped by one explicit budget; two slots let a mixed-size
-// loop hold a region on each side of the former 1 MiB cap without growing with
-// the number of distinct request sizes.
+// retained bytes are capped by one explicit budget; four slots let a mixed-size
+// loop keep one region per warmed size within that fixed 8 MiB cap without
+// growing with the number of distinct request sizes.
 constexpr uint64_t kDirectCacheMinSize = 128 * 1024;
-constexpr uint32_t kDirectCacheSlots = 2;
+constexpr uint32_t kDirectCacheSlots = 4;
 constexpr uint64_t kDirectCacheBudget = 8 * 1024 * 1024;
 static_assert(kDirectCacheSlots > 0, "direct cache needs a slot");
 
