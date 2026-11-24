@@ -1,0 +1,200 @@
+// Small, non-mutating algorithms over Vec[T].
+//
+// Every operation reads the input in source order and never changes the input
+// Vec. Functions that may not have an answer use std/option.Option. Predicates
+// and comparators are ordinary function values, so a capturing callback keeps
+// its captured environment alive for the whole call. A callback may replace
+// existing elements of the Vec being traversed; the extrema helpers retain a
+// copy of each candidate before calling less, so the selected value is the one
+// that existed before that comparison. Callback-invoking traversals use
+// a Vec iteration or a full-range Slice to pin the input. A callback that tries to
+// change its length or storage (push, pop, resize, clear, or a reserve that
+// grows) Panics with active-iteration instead of corrupting or extending
+// traversal. Captured Vec/Box contents remain mutable through normal aliasing.
+//
+// map reserves exactly vec.len(values) output slots and fills them with push,
+// so it does not need an initial fill value. filter grows its output as needed
+// because the kept count is not known in advance. fold passes the accumulator
+// by ordinary value: scalar/struct fields are copied, while Vec and other
+// shared handles keep the same object, as in every ordinary parameter.
+package algo;
+
+import "std/option" as option;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+// MinMax holds the first comparator-minimum and first comparator-maximum.
+pub struct MinMax[T] {
+    pub min T;
+    pub max T;
+}
+
+// map returns a new Vec containing transform(value) for every value, in input
+// order. An empty input produces an empty Vec without calling transform.
+pub func map[T, U](values Vec[T], transform func(T) U) Vec[U] {
+    let result = vec.empty[U]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, transform(value));
+    }
+    return result;
+}
+
+// filter returns a new Vec containing, in input order, each value for which
+// keep returns true. An empty input produces an empty Vec without calling
+// keep. The predicate is called once for every input element.
+pub func filter[T](values Vec[T], keep func(T) bool) Vec[T] {
+    let result = vec.empty[T]();
+    let length = vec.len(values);
+    let pinned = slice.view[T](values, 0, length);
+    for var index usize = 0; index < length; index += 1 {
+        let value = values[index];
+        if keep(value) {
+            vec.push(result, value);
+        }
+    }
+    return result;
+}
+
+// fold applies combine(accumulator, value) from left to right and returns the
+// final accumulator. An empty input returns initial without calling combine.
+// Each step passes the current accumulator by ordinary value, then assigns the
+// returned value as the next accumulator.
+pub func fold[T, A](values Vec[T], initial A, combine func(A, T) A) A {
+    var accumulator A = initial;
+    let length = vec.len(values);
+    let pinned = slice.view[T](values, 0, length);
+    var index usize = 0;
+    for length - index >= 4 {
+        accumulator = combine(accumulator, values[index]);
+        accumulator = combine(accumulator, values[index + 1]);
+        accumulator = combine(accumulator, values[index + 2]);
+        accumulator = combine(accumulator, values[index + 3]);
+        index += 4;
+    }
+    for index < length {
+        accumulator = combine(accumulator, values[index]);
+        index += 1;
+    }
+    return accumulator;
+}
+
+// find returns the first value for which predicate is true. It stops calling
+// predicate as soon as a match is found and returns None when no value matches.
+pub func find[T](values Vec[T], predicate func(T) bool) option.Option[T] {
+    for value in values {
+        if predicate(value) {
+            return option.Option[T].Some(value);
+        }
+    }
+    return option.Option[T].None;
+}
+
+// find_index returns the first matching index in input order, or None. Like
+// find, it stops calling predicate after the first match. The input Vec is
+// pinned during traversal.
+pub func find_index[T](values Vec[T], predicate func(T) bool) option.Option[usize] {
+    var index usize = 0;
+    for value in values {
+        if predicate(value) {
+            return option.Option[usize].Some(index);
+        }
+        index += 1;
+    }
+    return option.Option[usize].None;
+}
+
+// any reports whether predicate is true for at least one value. It returns
+// false for an empty input and stops at the first true result.
+pub func any[T](values Vec[T], predicate func(T) bool) bool {
+    for value in values {
+        if predicate(value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// all reports whether predicate is true for every value. It returns true for
+// an empty input and stops at the first false result.
+pub func all[T](values Vec[T], predicate func(T) bool) bool {
+    for value in values {
+        if !predicate(value) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// min_by returns the first value that is not ordered after any other value by
+// less. It returns None for an empty input. For equal values, the earliest one
+// is retained. Each candidate is copied before less runs and that copy is used
+// if selected, so element replacement in the comparator cannot change the
+// result. The comparator must define a strict weak ordering.
+pub func min_by[T](values Vec[T], less func(T, T) bool) option.Option[T] {
+    if vec.len(values) == 0 {
+        return option.Option[T].None;
+    }
+    var best T = values[0];
+    var index usize = 0;
+    for value in values {
+        if index > 0 {
+            let candidate T = value;
+            if less(candidate, best) {
+                best = candidate;
+            }
+        }
+        index += 1;
+    }
+    return option.Option[T].Some(best);
+}
+
+// max_by returns the first value that is not ordered before any other value by
+// less. It returns None for an empty input. For equal values, the earliest one
+// is retained. Each candidate is copied before less runs and that copy is used
+// if selected, so element replacement in the comparator cannot change the
+// result. The comparator must define a strict weak ordering.
+pub func max_by[T](values Vec[T], less func(T, T) bool) option.Option[T] {
+    if vec.len(values) == 0 {
+        return option.Option[T].None;
+    }
+    var best T = values[0];
+    var index usize = 0;
+    for value in values {
+        if index > 0 {
+            let candidate T = value;
+            if less(best, candidate) {
+                best = candidate;
+            }
+        }
+        index += 1;
+    }
+    return option.Option[T].Some(best);
+}
+
+// min_max_by returns both extrema in one pass. Following min_by/max_by, equal
+// values keep the earliest occurrence in each field. An empty input returns
+// None. A one-element input returns that value for both fields. One candidate
+// copy is reused for both comparisons, so element replacement in the comparator
+// cannot affect either result.
+pub func min_max_by[T](values Vec[T], less func(T, T) bool) option.Option[MinMax[T]] {
+    if vec.len(values) == 0 {
+        return option.Option[MinMax[T]].None;
+    }
+    var minimum T = values[0];
+    var maximum T = values[0];
+    var index usize = 0;
+    for value in values {
+        if index > 0 {
+            let candidate T = value;
+            if less(candidate, minimum) {
+                minimum = candidate;
+            }
+            if less(maximum, candidate) {
+                maximum = candidate;
+            }
+        }
+        index += 1;
+    }
+    return option.Option[MinMax[T]].Some(MinMax[T](min: minimum, max: maximum));
+}

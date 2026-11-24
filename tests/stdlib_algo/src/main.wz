@@ -1,0 +1,646 @@
+// Behaviour checks for std/algo. main returns 0 on success and a unique
+// non-zero code identifying the first failing check.
+package app;
+
+import "std/algo" as algo;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct Item {
+    key i32;
+    tag i32;
+}
+
+struct OwnItem {
+    key i32;
+    payload Vec[i32];
+}
+
+func less_i32(left i32, right i32) bool { return left < right; }
+func greater_i32(left i32, right i32) bool { return left > right; }
+func less_item(left Item, right Item) bool { return left.key < right.key; }
+func less_own(left OwnItem, right OwnItem) bool { return left.key < right.key; }
+
+func own_item(key i32, value i32) OwnItem {
+    let payload = vec.make[i32](1, value);
+    return OwnItem(key: key, payload: payload);
+}
+
+func same_i32(left Vec[i32], right Vec[i32]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_item(left Item, right Item) bool {
+    return left.key == right.key && left.tag == right.tag;
+}
+
+func some_i32(value option.Option[i32], expected i32) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func none_i32(value option.Option[i32]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func some_usize(value option.Option[usize], expected usize) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func none_usize(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func some_item(value option.Option[Item], key i32, tag i32) bool {
+    switch value {
+        case option.Option.Some(actual):
+            return same_item(actual, Item(key: key, tag: tag));
+        case option.Option.None: return false;
+    }
+}
+
+func none_item(value option.Option[Item]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func test_map() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let empty_transform = func(value i32) i32 {
+        empty_calls[0] = empty_calls[0] + 1;
+        return value;
+    };
+    let empty_result = algo.map[i32, i32](empty, empty_transform);
+    if vec.len(empty_result) != 0 { return 100; }
+    if empty_calls[0] != 0 { return 101; }
+
+    let input = vec.make[i32](3, 0);
+    input[0] = 1;
+    input[1] = 2;
+    input[2] = 3;
+    let calls = vec.make[i32](1, 0);
+    let transform = func(value i32) i32 {
+        calls[0] = calls[0] + 1;
+        return value * 10 + calls[0];
+    };
+    let mapped = algo.map[i32, i32](input, transform);
+    if !same_i32(mapped, [11, 22, 33]) { return 102; }
+    if !same_i32(input, [1, 2, 3]) { return 103; }
+    if calls[0] != 3 { return 104; }
+
+    // Reusing the function value shares its captured counter. map made a new
+    // Vec, so replacing an output element cannot change the input.
+    let mapped_again = algo.map[i32, i32](input, transform);
+    if !same_i32(mapped_again, [14, 25, 36]) { return 105; }
+    if calls[0] != 6 { return 106; }
+    mapped[0] = 99;
+    if input[0] != 1 { return 107; }
+
+    let items = vec.make[Item](3, Item(key: 0, tag: 0));
+    items[0] = Item(key: 4, tag: 0);
+    items[1] = Item(key: 2, tag: 1);
+    items[2] = Item(key: 7, tag: 2);
+    let doubled = algo.map[Item, Item](items, func(item Item) Item {
+        return Item(key: item.key * 2, tag: item.tag + 10);
+    });
+    if vec.len(doubled) != 3 { return 108; }
+    for var index usize = 0; index < vec.len(doubled); index += 1 {
+        if doubled[index].key != items[index].key * 2 { return 109; }
+        if doubled[index].tag != items[index].tag + 10 { return 110; }
+    }
+    return 0;
+}
+
+func test_filter() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let empty_keep = func(value i32) bool {
+        empty_calls[0] = empty_calls[0] + 1;
+        return true;
+    };
+    let empty_result = algo.filter[i32](empty, empty_keep);
+    if vec.len(empty_result) != 0 { return 200; }
+    if empty_calls[0] != 0 { return 201; }
+
+    let input = vec.make[i32](6, 0);
+    for var index usize = 0; index < vec.len(input); index += 1 {
+        input[index] = i32(index + 1);
+    }
+    let calls = vec.make[i32](1, 0);
+    let keep_even = func(value i32) bool {
+        calls[0] = calls[0] + 1;
+        return value % 2 == 0;
+    };
+    let evens = algo.filter[i32](input, keep_even);
+    if !same_i32(evens, [2, 4, 6]) { return 202; }
+    if calls[0] != 6 { return 203; }
+    if !same_i32(input, [1, 2, 3, 4, 5, 6]) { return 204; }
+
+    // filter has no short circuit: even when it keeps nothing, every element
+    // is visited in source order.
+    let reject_all = func(value i32) bool {
+        calls[0] = calls[0] + 1;
+        return false;
+    };
+    let none = algo.filter[i32](input, reject_all);
+    if vec.len(none) != 0 { return 205; }
+    if calls[0] != 12 { return 206; }
+
+    let items = vec.make[Item](4, Item(key: 0, tag: 0));
+    items[0] = Item(key: 3, tag: 0);
+    items[1] = Item(key: 1, tag: 1);
+    items[2] = Item(key: 2, tag: 2);
+    items[3] = Item(key: 1, tag: 3);
+    let selected = algo.filter[Item](items, func(item Item) bool {
+        return item.key >= 2;
+    });
+    if vec.len(selected) != 2 { return 207; }
+    if !same_item(selected[0], Item(key: 3, tag: 0)) { return 208; }
+    if !same_item(selected[1], Item(key: 2, tag: 2)) { return 209; }
+    if !same_item(items[0], Item(key: 3, tag: 0)) { return 210; }
+    return 0;
+}
+
+func test_fold() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let empty_combine = func(total i32, value i32) i32 {
+        empty_calls[0] = empty_calls[0] + 1;
+        return total + value;
+    };
+    let empty_result = algo.fold[i32, i32](empty, 42, empty_combine);
+    if empty_result != 42 { return 300; }
+    if empty_calls[0] != 0 { return 301; }
+
+    let input = vec.make[i32](4, 0);
+    input[0] = 1;
+    input[1] = 2;
+    input[2] = 3;
+    input[3] = 4;
+    let calls = vec.make[i32](1, 0);
+    let total = algo.fold[i32, i64](input, i64(10),
+        func(total i64, value i32) i64 {
+            calls[0] = calls[0] + 1;
+            return total + i64(value);
+        });
+    if total != 20 { return 302; }
+    if calls[0] != 4 { return 303; }
+    if !same_i32(input, [1, 2, 3, 4]) { return 304; }
+
+    // The count-weighted fold is order-sensitive: (((1 * 10 + 2) * 10 + 3)
+    // * 10 + 4) == 1234.
+    let seen = vec.make[i32](1, 0);
+    let weighted = algo.fold[i32, i32](input, 0,
+        func(total i32, value i32) i32 {
+            seen[0] = seen[0] + 1;
+            return total * 10 + value;
+        });
+    if weighted != 1234 { return 305; }
+    if seen[0] != 4 { return 306; }
+
+    let items = vec.make[Item](3, Item(key: 0, tag: 0));
+    items[0] = Item(key: 1, tag: 2);
+    items[1] = Item(key: 2, tag: 3);
+    items[2] = Item(key: 4, tag: 5);
+    let item_total = algo.fold[Item, i32](items, 0,
+        func(total i32, item Item) i32 {
+            return total + item.key * 10 + item.tag;
+        });
+    if item_total != 80 { return 307; }
+
+    // The accumulator is an ordinary value. A Vec accumulator shares its
+    // handle with the original binding and with each combine call.
+    let accumulated = vec.empty[i32]();
+    let collected = algo.fold[i32, Vec[i32]](input, accumulated,
+        func(total Vec[i32], value i32) Vec[i32] {
+            vec.push(total, value * 2);
+            return total;
+        });
+    if !same_i32(collected, [2, 4, 6, 8]) { return 308; }
+    if vec.len(accumulated) != 4 { return 309; }
+    if !same_i32(accumulated, [2, 4, 6, 8]) { return 310; }
+    collected[0] = 99;
+    if accumulated[0] != 99 { return 311; }
+    return 0;
+}
+
+func test_find() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let empty_predicate = func(value i32) bool {
+        empty_calls[0] = empty_calls[0] + 1;
+        return true;
+    };
+    if !none_i32(algo.find[i32](empty, empty_predicate)) { return 400; }
+    if !none_usize(algo.find_index[i32](empty, empty_predicate)) { return 401; }
+    if empty_calls[0] != 0 { return 402; }
+
+    let input = vec.make[i32](4, 0);
+    input[0] = 4;
+    input[1] = 7;
+    input[2] = 9;
+    input[3] = 7;
+    let calls = vec.make[i32](1, 0);
+    let greater_than_eight = func(value i32) bool {
+        calls[0] = calls[0] + 1;
+        return value > 8;
+    };
+    if !some_i32(algo.find[i32](input, greater_than_eight), 9) { return 403; }
+    if calls[0] != 3 { return 404; }
+    if !same_i32(input, [4, 7, 9, 7]) { return 405; }
+
+    let no_match_calls = vec.make[i32](1, 0);
+    let greater_than_ten = func(value i32) bool {
+        no_match_calls[0] = no_match_calls[0] + 1;
+        return value > 10;
+    };
+    if !none_i32(algo.find[i32](input, greater_than_ten)) { return 406; }
+    if no_match_calls[0] != 4 { return 407; }
+
+    let index_calls = vec.make[i32](1, 0);
+    let seven = func(value i32) bool {
+        index_calls[0] = index_calls[0] + 1;
+        return value == 7;
+    };
+    if !some_usize(algo.find_index[i32](input, seven), 1) { return 408; }
+    if index_calls[0] != 2 { return 409; }
+
+    let items = vec.make[Item](4, Item(key: 0, tag: 0));
+    items[0] = Item(key: 3, tag: 0);
+    items[1] = Item(key: 1, tag: 1);
+    items[2] = Item(key: 2, tag: 2);
+    items[3] = Item(key: 1, tag: 3);
+    let two = algo.find[Item](items, func(item Item) bool {
+        return item.key == 2;
+    });
+    if !some_item(two, 2, 2) { return 410; }
+    if !none_item(algo.find[Item](items, func(item Item) bool {
+        return item.key == 9;
+    })) { return 411; }
+    if !same_item(items[0], Item(key: 3, tag: 0)) { return 412; }
+    return 0;
+}
+
+func test_any_all() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let empty_predicate = func(value i32) bool {
+        empty_calls[0] = empty_calls[0] + 1;
+        return true;
+    };
+    if algo.any[i32](empty, empty_predicate) { return 500; }
+    if !algo.all[i32](empty, empty_predicate) { return 501; }
+    if empty_calls[0] != 0 { return 502; }
+
+    let input = vec.make[i32](4, 0);
+    input[0] = 1;
+    input[1] = 3;
+    input[2] = 4;
+    input[3] = 6;
+
+    let any_calls = vec.make[i32](1, 0);
+    let is_even = func(value i32) bool {
+        any_calls[0] = any_calls[0] + 1;
+        return value % 2 == 0;
+    };
+    if !algo.any[i32](input, is_even) { return 503; }
+    if any_calls[0] != 3 { return 504; }
+
+    let absent_calls = vec.make[i32](1, 0);
+    let huge = func(value i32) bool {
+        absent_calls[0] = absent_calls[0] + 1;
+        return value > 10;
+    };
+    if algo.any[i32](input, huge) { return 505; }
+    if absent_calls[0] != 4 { return 506; }
+
+    let all_calls = vec.make[i32](1, 0);
+    let below_five = func(value i32) bool {
+        all_calls[0] = all_calls[0] + 1;
+        return value < 5;
+    };
+    if algo.all[i32](input, below_five) { return 507; }
+    if all_calls[0] != 4 { return 508; }
+
+    let true_calls = vec.make[i32](1, 0);
+    let below_ten = func(value i32) bool {
+        true_calls[0] = true_calls[0] + 1;
+        return value < 10;
+    };
+    if !algo.all[i32](input, below_ten) { return 509; }
+    if true_calls[0] != 4 { return 510; }
+    if !same_i32(input, [1, 3, 4, 6]) { return 511; }
+
+    let items = vec.make[Item](3, Item(key: 0, tag: 0));
+    items[0] = Item(key: 1, tag: 0);
+    items[1] = Item(key: 2, tag: 1);
+    items[2] = Item(key: 3, tag: 2);
+    if !algo.any[Item](items, func(item Item) bool {
+        return item.key == 2;
+    }) { return 512; }
+    if !algo.all[Item](items, func(item Item) bool {
+        return item.tag >= 0;
+    }) { return 513; }
+    return 0;
+}
+
+func test_early_iteration_reuse() i32 {
+    let values = vec.make[i32](4, 0);
+    values[0] = 4;
+    values[1] = 7;
+    values[2] = 9;
+    values[3] = 7;
+
+    // find returns from the middle of a for-in traversal. A leaked active
+    // iteration would make the following structural change panic.
+    let found = algo.find[i32](values, func(value i32) bool {
+        return value == 9;
+    });
+    if !some_i32(found, 9) { return 720; }
+    vec.push(values, 11);
+    if vec.len(values) != 5 { return 721; }
+    var total i32 = 0;
+    for value in values { total += value; }
+    if total != 38 { return 722; }
+
+    // The same applies to any's early true and all's early false exits.
+    if !algo.any[i32](values, func(value i32) bool {
+        return value == 9;
+    }) { return 723; }
+    vec.push(values, 13);
+    if vec.len(values) != 6 { return 724; }
+
+    if algo.all[i32](values, func(value i32) bool {
+        return value < 9;
+    }) { return 725; }
+    vec.push(values, 17);
+    if vec.len(values) != 7 { return 726; }
+
+    var count usize = 0;
+    for value in values { count += 1; }
+    if count != 7 { return 727; }
+
+    // find_index now shares the for-in traversal pin too. Its early Some return
+    // must end that pin before the caller changes the Vec.
+    let at = algo.find_index[i32](values, func(value i32) bool {
+        return value == 9;
+    });
+    if !some_usize(at, 2) { return 728; }
+    vec.push(values, 19);
+    if vec.len(values) != 8 { return 729; }
+    var recount usize = 0;
+    for value in values { recount += 1; }
+    if recount != 8 { return 730; }
+    return 0;
+}
+
+func test_extrema() i32 {
+    let empty = vec.empty[i32]();
+    let empty_calls = vec.make[i32](1, 0);
+    let counting_less = func(left i32, right i32) bool {
+        empty_calls[0] = empty_calls[0] + 1;
+        return left < right;
+    };
+    if !none_i32(algo.min_by[i32](empty, counting_less)) { return 600; }
+    if !none_i32(algo.max_by[i32](empty, counting_less)) { return 601; }
+    switch algo.min_max_by[i32](empty, counting_less) {
+        case option.Option.Some(value): return 604;
+        case option.Option.None: {}
+    }
+    if empty_calls[0] != 0 { return 606; }
+
+    let single = vec.make[i32](1, 7);
+    if !some_i32(algo.min_by[i32](single, counting_less), 7) { return 607; }
+    if !some_i32(algo.max_by[i32](single, counting_less), 7) { return 608; }
+    switch algo.min_max_by[i32](single, counting_less) {
+        case option.Option.Some(bounds):
+            if bounds.min != 7 || bounds.max != 7 { return 609; }
+        case option.Option.None: return 610;
+    }
+    if empty_calls[0] != 0 { return 611; }
+
+    let input = vec.make[i32](5, 0);
+    input[0] = 3;
+    input[1] = 1;
+    input[2] = 4;
+    input[3] = 1;
+    input[4] = 5;
+    if !some_i32(algo.min_by[i32](input, less_i32), 1) { return 612; }
+    if !some_i32(algo.max_by[i32](input, less_i32), 5) { return 613; }
+    switch algo.min_max_by[i32](input, less_i32) {
+        case option.Option.Some(bounds):
+            if bounds.min != 1 || bounds.max != 5 { return 616; }
+        case option.Option.None: return 617;
+    }
+    if !same_i32(input, [3, 1, 4, 1, 5]) { return 620; }
+
+    // A descending comparator changes which end of the order min_by and
+    // max_by select; it does not reinterpret the field names numerically.
+    if !some_i32(algo.min_by[i32](input, greater_i32), 5) { return 621; }
+    if !some_i32(algo.max_by[i32](input, greater_i32), 1) { return 622; }
+    switch algo.min_max_by[i32](input, greater_i32) {
+        case option.Option.Some(bounds):
+            if bounds.min != 5 || bounds.max != 1 { return 623; }
+        case option.Option.None: return 624;
+    }
+
+    let items = vec.make[Item](5, Item(key: 0, tag: 0));
+    items[0] = Item(key: 2, tag: 0);
+    items[1] = Item(key: 1, tag: 1);
+    items[2] = Item(key: 2, tag: 2);
+    items[3] = Item(key: 1, tag: 3);
+    items[4] = Item(key: 3, tag: 4);
+    if !some_item(algo.min_by[Item](items, less_item), 1, 1) { return 625; }
+    if !some_item(algo.max_by[Item](items, less_item), 3, 4) { return 626; }
+    switch algo.min_max_by[Item](items, less_item) {
+        case option.Option.Some(bounds):
+            if !same_item(bounds.min, Item(key: 1, tag: 1)) { return 627; }
+            if !same_item(bounds.max, Item(key: 3, tag: 4)) { return 628; }
+        case option.Option.None: return 629;
+    }
+
+    let equal = vec.make[Item](2, Item(key: 0, tag: 0));
+    equal[0] = Item(key: 2, tag: 0);
+    equal[1] = Item(key: 2, tag: 1);
+    switch algo.min_max_by[Item](equal, less_item) {
+        case option.Option.Some(bounds):
+            if !same_item(bounds.min, Item(key: 2, tag: 0)) { return 630; }
+            if !same_item(bounds.max, Item(key: 2, tag: 0)) { return 631; }
+        case option.Option.None: return 632;
+    }
+
+    // The comparator may replace an element after the candidate has been
+    // copied. The selected copy must remain the pre-replacement value.
+    let mutated_min = vec.make[i32](2, 0);
+    mutated_min[0] = 2;
+    mutated_min[1] = 1;
+    let replace_min = func(left i32, right i32) bool {
+        if left == 1 && right == 2 {
+            mutated_min[1] = 99;
+        }
+        return left < right;
+    };
+    if !some_i32(algo.min_by[i32](mutated_min, replace_min), 1) { return 633; }
+    if mutated_min[1] != 99 { return 634; }
+
+    let mutated_max = vec.make[i32](2, 0);
+    mutated_max[0] = 1;
+    mutated_max[1] = 2;
+    let replace_max = func(left i32, right i32) bool {
+        if left == 1 && right == 2 {
+            mutated_max[1] = 99;
+        }
+        return left < right;
+    };
+    if !some_i32(algo.max_by[i32](mutated_max, replace_max), 2) { return 635; }
+    if mutated_max[1] != 99 { return 636; }
+
+    let mutated_both = vec.make[i32](2, 0);
+    mutated_both[0] = 2;
+    mutated_both[1] = 1;
+    let replace_both = func(left i32, right i32) bool {
+        if left == 1 && right == 2 {
+            mutated_both[1] = 99;
+        }
+        return left < right;
+    };
+    switch algo.min_max_by[i32](mutated_both, replace_both) {
+        case option.Option.Some(bounds):
+            if bounds.min != 1 || bounds.max != 2 { return 637; }
+        case option.Option.None: return 638;
+    }
+    if mutated_both[1] != 99 { return 639; }
+
+    // The normal end of the extrema traversal must release its pin as well.
+    vec.push(input, 6);
+    if vec.len(input) != 6 { return 640; }
+    return 0;
+}
+
+func test_owning_extrema() i32 {
+    let items = vec.empty[OwnItem]();
+    vec.push(items, own_item(2, 20));
+    vec.push(items, own_item(1, 10));
+    vec.push(items, own_item(3, 30));
+
+    let minimum = algo.min_by[OwnItem](items, less_own);
+    switch minimum {
+        case option.Option.Some(best):
+            if best.key != 1 || vec.len(best.payload) != 1 { return 700; }
+            if best.payload[0] != 10 { return 701; }
+            // The returned struct is an ordinary copy, but its Vec field still
+            // aliases the payload of the source element.
+            best.payload[0] = 11;
+        case option.Option.None: return 702;
+    }
+    if items[1].key != 1 || items[1].payload[0] != 11 { return 703; }
+    if items[0].payload[0] != 20 { return 704; }
+
+    // Moving the Option result preserves its owning payload, and the source
+    // Vec remains readable because the algorithm did not consume its elements.
+    let maximum = algo.max_by[OwnItem](items, less_own);
+    let moved_maximum = move maximum;
+    switch moved_maximum {
+        case option.Option.Some(best):
+            if best.key != 3 || best.payload[0] != 30 { return 705; }
+        case option.Option.None: return 706;
+    }
+    if items[2].payload[0] != 30 { return 707; }
+
+    let mutating_min = vec.empty[OwnItem]();
+    vec.push(mutating_min, own_item(2, 20));
+    vec.push(mutating_min, own_item(1, 10));
+    let replace_min = func(left OwnItem, right OwnItem) bool {
+        if left.key == 1 && right.key == 2 {
+            mutating_min[1] = own_item(99, 990);
+        }
+        return left.key < right.key;
+    };
+    let min_result = algo.min_by[OwnItem](mutating_min, replace_min);
+    switch min_result {
+        case option.Option.Some(best):
+            if best.key != 1 || best.payload[0] != 10 { return 708; }
+        case option.Option.None: return 709;
+    }
+    if mutating_min[1].key != 99 || mutating_min[1].payload[0] != 990 {
+        return 710;
+    }
+
+    let mutating_max = vec.empty[OwnItem]();
+    vec.push(mutating_max, own_item(1, 10));
+    vec.push(mutating_max, own_item(2, 20));
+    let replace_max = func(left OwnItem, right OwnItem) bool {
+        if left.key == 1 && right.key == 2 {
+            mutating_max[1] = own_item(99, 990);
+        }
+        return left.key < right.key;
+    };
+    let max_result = algo.max_by[OwnItem](mutating_max, replace_max);
+    switch max_result {
+        case option.Option.Some(best):
+            if best.key != 2 || best.payload[0] != 20 { return 711; }
+        case option.Option.None: return 712;
+    }
+    if mutating_max[1].key != 99 || mutating_max[1].payload[0] != 990 {
+        return 713;
+    }
+
+    let mutating_both = vec.empty[OwnItem]();
+    vec.push(mutating_both, own_item(2, 20));
+    vec.push(mutating_both, own_item(1, 10));
+    let replace_both = func(left OwnItem, right OwnItem) bool {
+        if left.key == 1 && right.key == 2 {
+            mutating_both[1] = own_item(99, 990);
+        }
+        return left.key < right.key;
+    };
+    let both_result = algo.min_max_by[OwnItem](mutating_both, replace_both);
+    switch both_result {
+        case option.Option.Some(bounds):
+            if bounds.min.key != 1 || bounds.min.payload[0] != 10 { return 714; }
+            if bounds.max.key != 2 || bounds.max.payload[0] != 20 { return 715; }
+        case option.Option.None: return 716;
+    }
+    if mutating_both[1].key != 99 || mutating_both[1].payload[0] != 990 {
+        return 717;
+    }
+    return 0;
+}
+
+func main() i32 {
+    var failure = test_map();
+    if failure != 0 { return failure; }
+    failure = test_filter();
+    if failure != 0 { return failure; }
+    failure = test_fold();
+    if failure != 0 { return failure; }
+    failure = test_find();
+    if failure != 0 { return failure; }
+    failure = test_any_all();
+    if failure != 0 { return failure; }
+    failure = test_early_iteration_reuse();
+    if failure != 0 { return failure; }
+    failure = test_extrema();
+    if failure != 0 { return failure; }
+    failure = test_owning_extrema();
+    if failure != 0 { return failure; }
+    return 0;
+}

@@ -1,5 +1,6 @@
 // Writer-priority readers-writer lock built only from std/sync primitives and
-// ordinary shared Vec storage. A copied ReadWriteLock aliases the same state.
+// ordinary shared Vec storage. A copied ReadWriteLock aliases the same state:
+// the mutex, condition variable, reader table and owner cell are all shared.
 //
 // The lock is non-recursive: a thread may not acquire read twice, write twice,
 // or upgrade/downgrade while holding the other mode. Those mistakes and
@@ -11,21 +12,26 @@ import "std/os" as os;
 import "std/sync" as sync;
 import "std/vec" as vec;
 
-const WAITING_WRITERS usize = 0;
-const WAITING_READERS usize = 1;
-const ACTIVE_WRITER usize = 2;
+struct Owners {
+    waiting_writers i64;
+    waiting_readers i64;
+    writer i64;
+    first_reader i64;
+}
 
 struct State {
+    // Direct native handles and Vec handles; copying ReadWriteLock copies these
+    // aliases, so every copy operates on the same gate, reader table and owners.
     gate sync.Mutex;
     changed sync.Condvar;
-    // Linux thread ids currently holding read; one entry per thread.
+    // Additional reader thread IDs. Nonempty only while first_reader is set.
     readers Vec[i64];
-    // [waiting writers, waiting readers, active writer tid or 0].
-    cells Vec[i64];
+    // Waiter counts and the active writer and first reader IDs (0 if absent).
+    owners Vec[Owners];
 }
 
 pub struct ReadWriteLock {
-    state Vec[State];
+    state State;
 }
 
 func misuse() {
@@ -46,7 +52,8 @@ func current_thread() i64 {
 }
 
 func reader_index(readers Vec[i64], tid i64) i64 {
-    for var index usize = 0; index < vec.len(readers); index += 1 {
+    let count = vec.len(readers);
+    for var index usize = 0; index < count; index += 1 {
         if readers[index] == tid { return i64(index); }
     }
     return -1;
@@ -60,86 +67,112 @@ func remove_reader(readers Vec[i64], index usize) {
 
 pub func new() ReadWriteLock {
     let readers = vec.empty[i64]();
-    let cells = vec.make[i64](3, 0);
-    return ReadWriteLock(state: [State(
+    let owners = [Owners(waiting_writers: 0, waiting_readers: 0,
+                         writer: 0, first_reader: 0)];
+    return ReadWriteLock(state: State(
         gate: sync.mutex(),
         changed: sync.condvar(),
         readers: readers,
-        cells: cells)]);
+        owners: owners));
 }
 
 pub func read_lock(lock ReadWriteLock) {
     let tid = current_thread();
-    let state = lock.state[0];
-    sync.lock(state.gate);
-    if reader_index(state.readers, tid) >= 0 {
-        sync.unlock(state.gate);
-        misuse();
-    }
-    if state.cells[ACTIVE_WRITER] == tid {
-        sync.unlock(state.gate);
+    sync.lock(lock.state.gate);
+    var owners = lock.state.owners[0];
+    let first = owners.first_reader;
+    if owners.writer == tid || first == tid ||
+       (first != 0 && reader_index(lock.state.readers, tid) >= 0) {
+        sync.unlock(lock.state.gate);
         misuse();
     }
 
-    state.cells[WAITING_READERS] += 1;
-    for state.cells[ACTIVE_WRITER] != 0 || state.cells[WAITING_WRITERS] != 0 {
-        sync.wait(state.changed, state.gate);
+    if owners.writer != 0 || owners.waiting_writers != 0 {
+        owners.waiting_readers += 1;
+        lock.state.owners[0] = owners;
+        for owners.writer != 0 || owners.waiting_writers != 0 {
+            sync.wait(lock.state.changed, lock.state.gate);
+            owners = lock.state.owners[0];
+        }
+        owners.waiting_readers -= 1;
     }
-    state.cells[WAITING_READERS] -= 1;
-    vec.push(state.readers, tid);
-    sync.unlock(state.gate);
+    if owners.first_reader == 0 {
+        owners.first_reader = tid;
+        lock.state.owners[0] = owners;
+    } else {
+        vec.push(lock.state.readers, tid);
+        lock.state.owners[0] = owners;
+    }
+    sync.unlock(lock.state.gate);
 }
 
 pub func read_unlock(lock ReadWriteLock) {
     let tid = current_thread();
-    let state = lock.state[0];
-    sync.lock(state.gate);
-    let index = reader_index(state.readers, tid);
-    if index < 0 {
-        sync.unlock(state.gate);
-        misuse();
+    sync.lock(lock.state.gate);
+    var owners = lock.state.owners[0];
+    if owners.first_reader == tid {
+        let count = vec.len(lock.state.readers);
+        if count == 0 {
+            owners.first_reader = 0;
+            lock.state.owners[0] = owners;
+            if owners.waiting_writers != 0 || owners.waiting_readers != 0 {
+                sync.notify_all(lock.state.changed);
+            }
+        } else {
+            let last = count - 1;
+            owners.first_reader = lock.state.readers[last];
+            lock.state.owners[0] = owners;
+            let removed = vec.pop(lock.state.readers);
+        }
+    } else {
+        let index = reader_index(lock.state.readers, tid);
+        if index < 0 {
+            sync.unlock(lock.state.gate);
+            misuse();
+        }
+        remove_reader(lock.state.readers, usize(index));
     }
-    remove_reader(state.readers, usize(index));
-    if vec.len(state.readers) == 0 &&
-       (state.cells[WAITING_WRITERS] != 0 || state.cells[WAITING_READERS] != 0) {
-        sync.notify_all(state.changed);
-    }
-    sync.unlock(state.gate);
+    sync.unlock(lock.state.gate);
 }
 
 pub func write_lock(lock ReadWriteLock) {
     let tid = current_thread();
-    let state = lock.state[0];
-    sync.lock(state.gate);
-    if state.cells[ACTIVE_WRITER] == tid {
-        sync.unlock(state.gate);
-        misuse();
-    }
-    if reader_index(state.readers, tid) >= 0 {
-        sync.unlock(state.gate);
+    sync.lock(lock.state.gate);
+    var owners = lock.state.owners[0];
+    let writer = owners.writer;
+    let first = owners.first_reader;
+    if writer == tid || first == tid ||
+       (first != 0 && reader_index(lock.state.readers, tid) >= 0) {
+        sync.unlock(lock.state.gate);
         misuse();
     }
 
-    state.cells[WAITING_WRITERS] += 1;
-    for state.cells[ACTIVE_WRITER] != 0 || vec.len(state.readers) != 0 {
-        sync.wait(state.changed, state.gate);
+    if writer != 0 || first != 0 {
+        owners.waiting_writers += 1;
+        lock.state.owners[0] = owners;
+        for owners.writer != 0 || owners.first_reader != 0 {
+            sync.wait(lock.state.changed, lock.state.gate);
+            owners = lock.state.owners[0];
+        }
+        owners.waiting_writers -= 1;
     }
-    state.cells[WAITING_WRITERS] -= 1;
-    state.cells[ACTIVE_WRITER] = tid;
-    sync.unlock(state.gate);
+    owners.writer = tid;
+    lock.state.owners[0] = owners;
+    sync.unlock(lock.state.gate);
 }
 
 pub func write_unlock(lock ReadWriteLock) {
     let tid = current_thread();
-    let state = lock.state[0];
-    sync.lock(state.gate);
-    if state.cells[ACTIVE_WRITER] != tid {
-        sync.unlock(state.gate);
+    sync.lock(lock.state.gate);
+    var owners = lock.state.owners[0];
+    if owners.writer != tid {
+        sync.unlock(lock.state.gate);
         misuse();
     }
-    state.cells[ACTIVE_WRITER] = 0;
-    if state.cells[WAITING_WRITERS] != 0 || state.cells[WAITING_READERS] != 0 {
-        sync.notify_all(state.changed);
+    owners.writer = 0;
+    lock.state.owners[0] = owners;
+    if owners.waiting_writers != 0 || owners.waiting_readers != 0 {
+        sync.notify_all(lock.state.changed);
     }
-    sync.unlock(state.gate);
+    sync.unlock(lock.state.gate);
 }

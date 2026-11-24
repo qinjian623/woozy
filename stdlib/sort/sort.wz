@@ -4,10 +4,14 @@
 // define a strict weak ordering: it is irreflexive, transitive, and
 // incomparable elements form equivalence classes. It must not mutate the Vec
 // being sorted or searched, because that invalidates the algorithm's
-// invariants. sort_by keeps equivalent elements in their relative order.
+// invariants. sort_by and sort_by_key pin the original Vec shape across
+// callbacks until the sorted values are written back; changing its length or
+// storage through an alias Panics while that pin is active. sort_by keeps
+// equivalent elements in their relative order.
 package sort;
 
 import "std/option" as option;
+import "std/slice" as slice;
 import "std/vec" as vec;
 
 // merge combines the sorted ranges [left, middle) and [middle, right) from
@@ -44,36 +48,48 @@ func merge[T](values Vec[T], scratch Vec[T], left usize, middle usize,
     }
 }
 
-func sort_range[T](values Vec[T], scratch Vec[T], left usize, right usize,
-    less func(T, T) bool) {
+func sort_range[T](values Vec[T], scratch inout Vec[T], left usize,
+    right usize, less func(T, T) bool) {
     if right - left <= 1 {
         return;
     }
     let middle = left + (right - left) / 2;
-    sort_range(values, scratch, left, middle, less);
-    sort_range(values, scratch, middle, right, less);
+    sort_range(values, inout scratch, left, middle, less);
+    sort_range(values, inout scratch, middle, right, less);
     // Adjacent runs that already order correctly need no merge, which keeps
     // an already sorted Vec cheap without changing the worst-case bound.
     if !less(values[middle], values[middle - 1]) {
         return;
+    }
+    // Allocate only when the first merge actually needs a second buffer. An
+    // ordered input therefore completes without allocating the scratch Vec.
+    if vec.len(scratch) == 0 {
+        scratch = vec.make[T](vec.len(values), values[0]);
     }
     merge(values, scratch, left, middle, right, less);
 }
 
 // sort_by sorts values in place with a stable merge sort. The running time is
 // O(n log n) for every input. Already ordered adjacent runs are left untouched
-// instead of being copied through the scratch buffer. One scratch Vec of
-// length n is allocated while the sort runs, so the auxiliary space is O(n).
-// Empty and single-element Vecs are left untouched.
+// instead of being copied through the scratch buffer. At most one scratch Vec
+// of length n is allocated, on the first merge that needs it, so the
+// auxiliary space is O(n) and an ordered input allocates none. Empty and
+// single-element Vecs are left untouched.
 pub func sort_by[T](values Vec[T], less func(T, T) bool) {
     let length = vec.len(values);
     if length <= 1 {
         return;
     }
-    // values[0] only supplies an initial element; merge overwrites every slot
-    // before it is read.
-    let scratch = vec.make[T](length, values[0]);
-    sort_range(values, scratch, 0, length, less);
+    // The full-range Slice pins the original Vec until sort_range has written
+    // the result back. The comparator may read or replace elements, but a
+    // structural change through an alias Panics at the Vec mutation.
+    let pinned = slice.view[T](values, 0, length);
+    // The scratch Vec is empty until the first merge that needs it. This
+    // avoids an O(n) allocation when the input is already ordered.
+    var scratch = vec.empty[T]();
+    // The Slice stays alive until this block exits. Index the original Vec
+    // directly so the merge does not need to translate Slice positions.
+    sort_range(values, inout scratch, 0, length, less);
 }
 
 // is_sorted_by reports whether values is ordered by less. Equivalent adjacent
@@ -85,6 +101,53 @@ pub func is_sorted_by[T](values Vec[T], less func(T, T) bool) bool {
         }
     }
     return true;
+}
+
+// key_value is the private decoration used by sort_by_key. Both fields are
+// owned so sorting can move entries without calling the key function again.
+struct key_value[T, K] {
+    key K;
+    value T;
+}
+
+// sort_by_key sorts values in place by key(value), keeping equivalent keys in
+// their original relative order. It is stable by default: decorated entries
+// are sorted by sort_by and equivalent entries are emitted in original order.
+// less must define a strict weak order on the key type.
+//
+// key is called exactly once for each element, in the original Vec order, and
+// the input is not written until every key has been extracted. The original
+// Vec shape is pinned by a full-range Slice before key extraction; the pin is
+// held through key and less callbacks and until all sorted values are written
+// back. Structural changes through an alias Panic while it is active.
+//
+// key must not mutate values, the Vec, or anything reachable from its
+// argument; changing them during extraction invalidates the captured keys and
+// the ordering contract. Empty Vecs make no key calls. The decorated Vec and
+// the merge scratch are both O(n); comparing only the stored keys keeps the
+// comparator work at O(n log n).
+pub func sort_by_key[T, K](values Vec[T], key func(T) K,
+    less func(K, K) bool) {
+    let length = vec.len(values);
+    if length == 0 {
+        return;
+    }
+    // Hold this pin from before the first key call until the final value write.
+    let pinned = slice.view[T](values, 0, length);
+    let decorated = vec.empty[key_value[T, K]]();
+    vec.reserve(decorated, length);
+    for var index usize = 0; index < length; index += 1 {
+        let value = pinned[index];
+        let extracted = key(value);
+        vec.push(decorated, key_value[T, K](key: extracted, value: value));
+    }
+    let by_key = func(left key_value[T, K], right key_value[T, K]) bool {
+        return less(left.key, right.key);
+    };
+    sort_by(decorated, by_key);
+    for var index usize = 0; index < length; index += 1 {
+        pinned[index] = decorated[index].value;
+    }
 }
 
 // lower_bound_by returns the first position whose element is not less than
@@ -103,6 +166,42 @@ pub func lower_bound_by[T](values Vec[T], value T, less func(T, T) bool) usize {
         }
     }
     return low;
+}
+
+// upper_bound_by returns the first position whose element sorts after value
+// in a Vec sorted by less. Equivalently, it is the position after the last
+// element equivalent to value. If every element sorts before or with value,
+// the result is vec.len(values). With a strict weak order the result is in
+// [lower_bound_by(values, value, less), vec.len(values)].
+pub func upper_bound_by[T](values Vec[T], value T, less func(T, T) bool) usize {
+    var low usize = 0;
+    var high usize = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        // value is not after values[middle] exactly when the comparator
+        // reports values[middle] <= value, so the upper bound starts later.
+        if less(value, values[middle]) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    return low;
+}
+
+// Range is a half-open [start, end) interval of Vec positions.
+pub struct Range {
+    pub start usize;
+    pub end usize;
+}
+
+// equal_range_by returns the half-open range of elements equivalent to value
+// in a Vec sorted by less. The range is empty when no stored element is
+// equivalent to value. Both endpoints are found in O(log n) comparisons.
+pub func equal_range_by[T](values Vec[T], value T,
+    less func(T, T) bool) Range {
+    return Range(start: lower_bound_by(values, value, less),
+        end: upper_bound_by(values, value, less));
 }
 
 // binary_search_by returns the first equivalent position in a Vec sorted by

@@ -7,12 +7,15 @@
 // token of user-constructed Number values and rejects malformed tokens.
 //
 // Parser and serializer both accept at most 256 nested containers and report
-// Error.DepthLimit instead of exhausting the stack. serialize also detects a
-// cyclic Vec graph through that depth limit.
+// Error.DepthLimit instead of exhausting the stack. serialize and
+// serialize_pretty also detect a cyclic Vec graph through that depth limit.
+// serialize_pretty uses the conventional two-space indentation and never adds
+// a trailing newline; empty arrays and objects stay on one line as [] and {}.
 //
 // Object duplicate keys: the last value wins, and the member keeps the
-// position of its first occurrence. This applies to the parser and is
-// documented here; the serializer writes every member it is given.
+// position of its first occurrence. This applies to the parser; field applies
+// the same last-match rule even to manually built objects, while the
+// serializer still writes every member it is given in stored order.
 //
 // Error.Syntax offsets are Unicode code point indices into the input string,
 // matching std/text.len and string indexing.
@@ -24,6 +27,7 @@ import "std/text" as text;
 import "std/vec" as vec;
 
 const MAX_DEPTH usize = 256;
+const PRETTY_INDENT usize = 2;
 
 pub enum Error {
     Syntax(offset usize);
@@ -431,109 +435,176 @@ func valid_number(token string) bool {
     }
 }
 
-func push_ascii(out Vec[u8], value string) {
-    let bytes = text.bytes(value);
+// Integer conversions accept only tokens without a fraction or exponent.
+// parse_i64/parse_u64 deliberately reject those as InvalidSyntax.
+func integer_token(token string) bool {
+    let bytes = text.bytes(token);
     for var index usize = 0; index < vec.len(bytes); index += 1 {
+        let byte = bytes[index];
+        if byte == 46 || byte == 101 || byte == 69 { return false; }
+    }
+    return true;
+}
+
+// The grammar is ASCII. Validate the bytes that will be emitted, keeping the
+// original spelling and avoiding the parser's rune and token allocations.
+func valid_number_bytes(bytes Vec[u8], count usize) bool {
+    if count == 0 { return false; }
+    var index usize = 0;
+    if bytes[index] == 45 { index += 1; }
+    if index == count || !is_digit(u32(bytes[index])) { return false; }
+    if bytes[index] == 48 {
+        index += 1;
+    } else {
+        for index < count && is_digit(u32(bytes[index])) { index += 1; }
+    }
+    if index < count && bytes[index] == 46 {
+        index += 1;
+        let start = index;
+        for index < count && is_digit(u32(bytes[index])) { index += 1; }
+        if index == start { return false; }
+    }
+    if index < count && (bytes[index] == 101 || bytes[index] == 69) {
+        index += 1;
+        if index < count && (bytes[index] == 43 || bytes[index] == 45) { index += 1; }
+        let start = index;
+        for index < count && is_digit(u32(bytes[index])) { index += 1; }
+        if index == start { return false; }
+    }
+    return index == count;
+}
+
+func write_number(out Vec[u8], token string) Unit throws Error {
+    let bytes = text.bytes(token);
+    let count = vec.len(bytes);
+    if !valid_number_bytes(bytes, count) { throw Error.InvalidNumber; }
+    for var index usize = 0; index < count; index += 1 {
         vec.push(out, bytes[index]);
     }
 }
 
-func push_hex4(out Vec[u8], value u32) {
-    push_byte(out, 92);
-    push_byte(out, 117);
-    push_byte(out, 48);
-    push_byte(out, 48);
-    let high = (value >> 4) & 0x0f;
-    let low = value & 0x0f;
-    if high < 10 { push_byte(out, 48 + high); } else { push_byte(out, 87 + high); }
-    if low < 10 { push_byte(out, 48 + low); } else { push_byte(out, 87 + low); }
+func write_hex_digit(out Vec[u8], digit u8) {
+    if digit < 10 { vec.push(out, 48 + digit); }
+    else { vec.push(out, 87 + digit); }
 }
 
 func write_string(out Vec[u8], value string) {
-    push_byte(out, 34);
-    let runes = materialize_runes(value);
-    for var index usize = 0; index < vec.len(runes); index += 1 {
-        let rune = runes[index];
-        if rune == 34 {
-            push_byte(out, 92);
-            push_byte(out, 34);
-        } else if rune == 92 {
-            push_byte(out, 92);
-            push_byte(out, 92);
-        } else if rune == 8 {
-            push_byte(out, 92);
-            push_byte(out, 98);
-        } else if rune == 12 {
-            push_byte(out, 92);
-            push_byte(out, 102);
-        } else if rune == 10 {
-            push_byte(out, 92);
-            push_byte(out, 110);
-        } else if rune == 13 {
-            push_byte(out, 92);
-            push_byte(out, 114);
-        } else if rune == 9 {
-            push_byte(out, 92);
-            push_byte(out, 116);
-        } else if rune < 0x20 {
-            push_hex4(out, rune);
-        } else {
-            push_rune(out, rune);
+    vec.push(out, 34);
+    // No byte of a multibyte UTF-8 scalar can match the ASCII escape set.
+    let bytes = text.bytes(value);
+    let count = vec.len(bytes);
+    for var index usize = 0; index < count; index += 1 {
+        let byte = bytes[index];
+        if byte >= 32 && byte != 34 && byte != 92 {
+            vec.push(out, byte);
+            continue;
+        }
+        vec.push(out, 92);
+        switch byte {
+            case 34: vec.push(out, 34);
+            case 92: vec.push(out, 92);
+            case 8: vec.push(out, 98);
+            case 12: vec.push(out, 102);
+            case 10: vec.push(out, 110);
+            case 13: vec.push(out, 114);
+            case 9: vec.push(out, 116);
+            case _: {
+                vec.push(out, 117);
+                vec.push(out, 48);
+                vec.push(out, 48);
+                write_hex_digit(out, byte >> 4);
+                write_hex_digit(out, byte & 15);
+            }
         }
     }
-    push_byte(out, 34);
+    vec.push(out, 34);
 }
 
-func write_value(out Vec[u8], value Value, depth usize) throws Error {
+func write_indent(out Vec[u8], depth usize) {
+    vec.push(out, 10);
+    for var index usize = 0; index < depth * PRETTY_INDENT; index += 1 {
+        vec.push(out, 32);
+    }
+}
+
+func write_value(out Vec[u8], value Value, depth usize, pretty bool) throws Error {
     switch value {
-        case Value.Null: push_ascii(out, "null");
-        case Value.Bool(item): if item { push_ascii(out, "true"); } else { push_ascii(out, "false"); }
-        case Value.String(item): write_string(out, item);
-        case Value.Number(token): {
-            if !valid_number(token) {
-                throw Error.InvalidNumber;
-            }
-            push_ascii(out, token);
+        case Value.Null: {
+            vec.push(out, 110);
+            vec.push(out, 117);
+            vec.push(out, 108);
+            vec.push(out, 108);
         }
+        case Value.Bool(item): {
+            if item {
+                vec.push(out, 116);
+                vec.push(out, 114);
+                vec.push(out, 117);
+                vec.push(out, 101);
+            } else {
+                vec.push(out, 102);
+                vec.push(out, 97);
+                vec.push(out, 108);
+                vec.push(out, 115);
+                vec.push(out, 101);
+            }
+        }
+        case Value.String(item): write_string(out, item);
+        case Value.Number(token): write_number(out, token);
         case Value.Array(items): {
-            if depth >= MAX_DEPTH {
-                throw Error.DepthLimit;
+            if depth >= MAX_DEPTH { throw Error.DepthLimit; }
+            vec.push(out, 91);
+            let count = vec.len(items);
+            for var index usize = 0; index < count; index += 1 {
+                if index != 0 { vec.push(out, 44); }
+                if pretty { write_indent(out, depth + 1); }
+                write_value(out, items[index], depth + 1, pretty);
             }
-            push_byte(out, 91);
-            for var index usize = 0; index < vec.len(items); index += 1 {
-                if index != 0 { push_byte(out, 44); }
-                write_value(out, items[index], depth + 1);
-            }
-            push_byte(out, 93);
+            if pretty && count != 0 { write_indent(out, depth); }
+            vec.push(out, 93);
         }
         case Value.Object(members): {
-            if depth >= MAX_DEPTH {
-                throw Error.DepthLimit;
+            if depth >= MAX_DEPTH { throw Error.DepthLimit; }
+            vec.push(out, 123);
+            let count = vec.len(members);
+            for var index usize = 0; index < count; index += 1 {
+                if index != 0 { vec.push(out, 44); }
+                if pretty { write_indent(out, depth + 1); }
+                let member = members[index];
+                write_string(out, member.name);
+                vec.push(out, 58);
+                if pretty { vec.push(out, 32); }
+                write_value(out, member.value, depth + 1, pretty);
             }
-            push_byte(out, 123);
-            for var index usize = 0; index < vec.len(members); index += 1 {
-                if index != 0 { push_byte(out, 44); }
-                write_string(out, members[index].name);
-                push_byte(out, 58);
-                write_value(out, members[index].value, depth + 1);
-            }
-            push_byte(out, 125);
+            if pretty && count != 0 { write_indent(out, depth); }
+            vec.push(out, 125);
         }
     }
 }
 
 pub func serialize(value Value) string throws Error {
     let out = vec.empty[u8]();
-    write_value(out, value, 0);
+    write_value(out, value, 0, false);
     return decode_utf8(out, 0);
 }
 
-// field returns the value of an object member, using the parser's duplicate
-// policy (the stored value is already the last one parsed).
+// serialize_pretty writes the same JSON value with two-space indentation.
+pub func serialize_pretty(value Value) string throws Error {
+    let out = vec.empty[u8]();
+    write_value(out, value, 0, true);
+    return decode_utf8(out, 0);
+}
+
+// field returns the value of the last object member with the given name.
+// Parsed objects already contain the last value at the first position, and
+// manually built objects use the same last-match rule without being reordered
+// or deduplicated.
 pub func field(value Value, name string) option.Option[Value] {
     switch value {
         case Value.Object(members): {
-            for var index usize = 0; index < vec.len(members); index += 1 {
+            var index = vec.len(members);
+            for index > 0 {
+                index -= 1;
                 if members[index].name == name {
                     return option.Option[Value].Some(members[index].value);
                 }
@@ -568,10 +639,14 @@ pub func as_i64(value Value) i64 throws Error {
     switch value {
         case Value.Number(token): {
             if !valid_number(token) { throw Error.InvalidNumber; }
+            if !integer_token(token) { throw Error.InvalidNumber; }
             try {
                 return strconv.parse_i64(token);
             } catch error strconv.Error {
-                throw Error.NumberRange;
+                switch error {
+                    case strconv.Error.InvalidSyntax: throw Error.InvalidNumber;
+                    case strconv.Error.OutOfRange: throw Error.NumberRange;
+                }
             }
         }
         case _: throw Error.InvalidNumber;
@@ -582,10 +657,18 @@ pub func as_u64(value Value) u64 throws Error {
     switch value {
         case Value.Number(token): {
             if !valid_number(token) { throw Error.InvalidNumber; }
+            if !integer_token(token) { throw Error.InvalidNumber; }
+            // parse_u64 reports a leading minus as InvalidSyntax. Any negative
+            // integer token (including the -0 spelling) is outside the u64
+            // domain, so it is a range failure rather than a malformed number.
+            if token[0] == 45 { throw Error.NumberRange; }
             try {
                 return strconv.parse_u64(token);
             } catch error strconv.Error {
-                throw Error.NumberRange;
+                switch error {
+                    case strconv.Error.InvalidSyntax: throw Error.InvalidNumber;
+                    case strconv.Error.OutOfRange: throw Error.NumberRange;
+                }
             }
         }
         case _: throw Error.InvalidNumber;

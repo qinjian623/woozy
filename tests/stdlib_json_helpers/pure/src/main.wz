@@ -1,0 +1,297 @@
+// Pure std/json checks. No Native-only import is allowed here, so this
+// project must build and run with both the native and Python backends.
+package app;
+
+import "std/json" as json;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func rejects_number(token string) bool {
+    let value = json.Value.Number(token);
+    var compact = false;
+    try {
+        let encoded = json.serialize(value);
+    } catch error json.Error {
+        switch error {
+            case json.Error.InvalidNumber: compact = true;
+            default: return false;
+        }
+    }
+    if !compact { return false; }
+    try {
+        let encoded = json.serialize_pretty(value);
+    } catch error json.Error {
+        switch error {
+            case json.Error.InvalidNumber: return true;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func rejects_syntax(source string) bool {
+    try {
+        let value = json.parse(source);
+    } catch error json.Error {
+        switch error {
+            case json.Error.Syntax(offset): return true;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func i64_error(value json.Value) string {
+    try {
+        let parsed = json.as_i64(value);
+        return "ok";
+    } catch error json.Error {
+        switch error {
+            case json.Error.InvalidNumber: return "invalid";
+            case json.Error.NumberRange: return "range";
+            default: return "other";
+        }
+    }
+}
+
+func u64_error(value json.Value) string {
+    try {
+        let parsed = json.as_u64(value);
+        return "ok";
+    } catch error json.Error {
+        switch error {
+            case json.Error.InvalidNumber: return "invalid";
+            case json.Error.NumberRange: return "range";
+            default: return "other";
+        }
+    }
+}
+
+func check_compact() i32 {
+    try {
+        let parsed = json.parse(" { \"b\" : 1 , \"a\" : [ 1 , 2 ] , \"b\" : 3 } ");
+        if json.serialize(parsed) != "{\"b\":3,\"a\":[1,2]}" { return 101; }
+        let empty_array = json.Value.Array(vec.empty[json.Value]());
+        let empty_object = json.Value.Object(vec.empty[json.Member]());
+        if json.serialize(empty_array) != "[]" { return 102; }
+        if json.serialize(empty_object) != "{}" { return 103; }
+        let members = vec.empty[json.Member]();
+        vec.push(members, json.Member(name: "emptyArray", value: empty_array));
+        vec.push(members, json.Member(name: "emptyObject", value: empty_object));
+        if json.serialize(json.Value.Object(members)) !=
+            "{\"emptyArray\":[],\"emptyObject\":{}}" { return 104; }
+    } catch error json.Error { return 199; }
+    return 0;
+}
+
+func check_pretty() i32 {
+    try {
+        let source = "{\"emptyArray\":[],\"emptyObject\":{},\"array\":[1,{\"x\":[]}],\"object\":{\"a\":[[],{}]}}";
+        let value = json.parse(source);
+        let expected = "{\n  \"emptyArray\": [],\n  \"emptyObject\": {},\n  \"array\": [\n    1,\n    {\n      \"x\": []\n    }\n  ],\n  \"object\": {\n    \"a\": [\n      [],\n      {}\n    ]\n  }\n}";
+        if json.serialize_pretty(value) != expected { return 201; }
+        if json.serialize_pretty(json.Value.Array(vec.empty[json.Value]())) != "[]" { return 202; }
+        if json.serialize_pretty(json.Value.Object(vec.empty[json.Member]())) != "{}" { return 203; }
+        let reparsed = json.parse(json.serialize_pretty(value));
+        if json.serialize(reparsed) != source { return 204; }
+    } catch error json.Error { return 299; }
+    return 0;
+}
+
+func check_numbers() i32 {
+    let source = "{\"n\":12345678901234567890123456789012345678901234567890,\"f\":1.2300e+400,\"z\":-0.0e-000}";
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != source { return 301; }
+        let expected = "{\n  \"n\": 12345678901234567890123456789012345678901234567890,\n  \"f\": 1.2300e+400,\n  \"z\": -0.0e-000\n}";
+        if json.serialize_pretty(value) != expected { return 302; }
+        switch json.field(value, "n") {
+            case option.Option.Some(number): {
+                switch json.number_text(number) {
+                    case option.Option.Some(token): {
+                        if token != "12345678901234567890123456789012345678901234567890" { return 303; }
+                    }
+                    case option.Option.None: return 304;
+                }
+            }
+            case option.Option.None: return 305;
+        }
+        let invalid = ["", "01", "+1", "-", "1.", ".1", "1e", "1e+", "NaN",
+            "Infinity", "0x10", " 1", "1 "];
+        for token in invalid {
+            if !rejects_number(token) { return 306; }
+        }
+        let valid = ["0", "-0", "1.2300e+400", "-0.0e-000"];
+        for token in valid {
+            if json.serialize(json.Value.Number(token)) != token { return 307; }
+        }
+        let malformed = ["", "{", "[", "[1,]", "{\"a\":}", "01",
+            "true false", "1 2", "\"unterminated"];
+        for source_text in malformed {
+            if !rejects_syntax(source_text) { return 308; }
+        }
+    } catch error json.Error { return 399; }
+    return 0;
+}
+
+func check_conversions() i32 {
+    let fractional = ["1.0", "-1.5", "1e3", "1E+3", "0.0", "-0.0e-0"];
+    for token in fractional {
+        let value = json.Value.Number(token);
+        if i64_error(value) != "invalid" { return 501; }
+        if u64_error(value) != "invalid" { return 502; }
+        switch json.number_text(value) {
+            case option.Option.Some(number_text): {
+                if number_text != token { return 503; }
+            }
+            case option.Option.None: return 504;
+        }
+    }
+    for token in ["", "-01", "-1.", "-1e", "99999999999999999999999999x"] {
+        let value = json.Value.Number(token);
+        if i64_error(value) != "invalid" { return 519; }
+        if u64_error(value) != "invalid" { return 520; }
+    }
+    let wrong = [json.Value.Null, json.Value.Bool(true), json.Value.String("1"),
+        json.Value.Array(vec.empty[json.Value]()),
+        json.Value.Object(vec.empty[json.Member]())];
+    for value in wrong {
+        if i64_error(value) != "invalid" { return 505; }
+        if u64_error(value) != "invalid" { return 506; }
+    }
+    try {
+        if json.as_i64(json.Value.Number("9223372036854775807")) != 9223372036854775807 { return 507; }
+        if json.as_i64(json.Value.Number("-9223372036854775808")) != -9223372036854775808 { return 508; }
+        if json.as_i64(json.Value.Number("-0")) != 0 { return 509; }
+        if json.as_u64(json.Value.Number("0")) != 0 { return 510; }
+        if json.as_u64(json.Value.Number("18446744073709551615")) != 18446744073709551615 { return 511; }
+    } catch error json.Error { return 512; }
+    let i64_ranges = ["9223372036854775808", "-9223372036854775809",
+        "18446744073709551616", "-999999999999999999999999999999999999999"];
+    for token in i64_ranges {
+        let value = json.Value.Number(token);
+        if i64_error(value) != "range" { return 513; }
+        switch json.number_text(value) {
+            case option.Option.Some(number_text): {
+                if number_text != token { return 514; }
+            }
+            case option.Option.None: return 515;
+        }
+    }
+    let u64_ranges = ["18446744073709551616", "-1", "-0",
+        "-18446744073709551616"];
+    for token in u64_ranges {
+        let value = json.Value.Number(token);
+        if u64_error(value) != "range" { return 516; }
+        switch json.number_text(value) {
+            case option.Option.Some(number_text): {
+                if number_text != token { return 517; }
+            }
+            case option.Option.None: return 518;
+        }
+    }
+    return 0;
+}
+
+func check_field() i32 {
+    let members = vec.empty[json.Member]();
+    vec.push(members, json.Member(name: "a", value: json.Value.Number("1")));
+    vec.push(members, json.Member(name: "b", value: json.Value.Number("2")));
+    vec.push(members, json.Member(name: "a", value: json.Value.Number("3")));
+    let value = json.Value.Object(members);
+    switch json.field(value, "a") {
+        case option.Option.Some(number): {
+            switch json.number_text(number) {
+                case option.Option.Some(token): if token != "3" { return 601; }
+                case option.Option.None: return 602;
+            }
+        }
+        case option.Option.None: return 603;
+    }
+    switch json.field(value, "b") {
+        case option.Option.Some(number): {
+            switch json.number_text(number) {
+                case option.Option.Some(token): if token != "2" { return 604; }
+                case option.Option.None: return 605;
+            }
+        }
+        case option.Option.None: return 606;
+    }
+    switch json.field(value, "missing") {
+        case option.Option.Some(extra): return 607;
+        case option.Option.None: {}
+    }
+    try {
+        if json.serialize(value) != "{\"a\":1,\"b\":2,\"a\":3}" { return 608; }
+        let pretty = "{\n  \"a\": 1,\n  \"b\": 2,\n  \"a\": 3\n}";
+        if json.serialize_pretty(value) != pretty { return 609; }
+        let parsed = json.parse("{\"a\":1,\"b\":2,\"a\":3}");
+        if json.serialize(parsed) != "{\"a\":3,\"b\":2}" { return 610; }
+        switch json.field(parsed, "a") {
+            case option.Option.Some(number): {
+                switch json.number_text(number) {
+                    case option.Option.Some(token): if token != "3" { return 611; }
+                    case option.Option.None: return 612;
+                }
+            }
+            case option.Option.None: return 613;
+        }
+    } catch error json.Error { return 614; }
+    return 0;
+}
+
+func check_depth() i32 {
+    let allowed = text.repeat("[", 256) + "0" + text.repeat("]", 256);
+    let rejected = text.repeat("[", 257) + "0" + text.repeat("]", 257);
+    try {
+        let value = json.parse(allowed);
+        if text.len(json.serialize_pretty(value)) == 0 { return 401; }
+    } catch error json.Error { return 402; }
+    try {
+        let value = json.parse(rejected);
+        return 403;
+    } catch error json.Error {
+        switch error {
+            case json.Error.DepthLimit: {}
+            default: return 404;
+        }
+    }
+    var value = json.Value.Null;
+    for var index usize = 0; index < 256; index += 1 {
+        let items = vec.empty[json.Value]();
+        vec.push(items, value);
+        value = json.Value.Array(items);
+    }
+    try {
+        let compact = json.serialize(value);
+        let pretty = json.serialize_pretty(value);
+    } catch error json.Error { return 405; }
+    let outer = vec.empty[json.Value]();
+    vec.push(outer, value);
+    let too_deep = json.Value.Array(outer);
+    try {
+        let encoded = json.serialize_pretty(too_deep);
+        return 406;
+    } catch error json.Error {
+        switch error {
+            case json.Error.DepthLimit: {}
+            default: return 407;
+        }
+    }
+    return 0;
+}
+
+func main() i32 {
+    let compact = check_compact();
+    if compact != 0 { return compact; }
+    let pretty = check_pretty();
+    if pretty != 0 { return pretty; }
+    let numbers = check_numbers();
+    if numbers != 0 { return numbers; }
+    let conversions = check_conversions();
+    if conversions != 0 { return conversions; }
+    let fields = check_field();
+    if fields != 0 { return fields; }
+    return check_depth();
+}
