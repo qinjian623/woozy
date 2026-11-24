@@ -451,6 +451,8 @@ inline const SystemOperationSpec *system_operation_spec(std::string_view name) {
 inline bool system_operation_allows_module(const SystemOperationSpec &spec,
                                           std::string_view logical_path) {
   if (logical_path == spec.owner) return true;
+  if (spec.operation == SystemOperation::vec_try_move_trivial &&
+      logical_path == "std/deque") return true;
   // Internal balanced Vec pins shared by the callback algorithms.
   return (spec.operation == SystemOperation::vec_pin_begin ||
           spec.operation == SystemOperation::vec_pin_end) &&

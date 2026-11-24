@@ -83,8 +83,10 @@ func grow_to[T](values Deque[T], state Cursor, minimum usize) {
             // Moving the shorter prefix just past the old ring makes the
             // live range contiguous. Publish the new ring before releasing
             // the original slots, as on the wrapped-tail path.
-            for var i usize = 0; i < prefix; i += 1 {
-                slots[before + i] = slots[i];
+            if !__woozy_vec_try_move_trivial[option.Option[T]](slots, before, 0, prefix) {
+                for var i usize = 0; i < prefix; i += 1 {
+                    slots[before + i] = slots[i];
+                }
             }
             values.cursor[0] = Cursor(head:head,length:state.length,capacity:capacity);
             for var i usize = 0; i < prefix; i += 1 {
@@ -94,10 +96,12 @@ func grow_to[T](values Deque[T], state Cursor, minimum usize) {
         }
         // Keep the prefix at zero and move the tail to the new end.
         head = capacity - tail;
-        var i = before;
-        for i > state.head {
-            i -= 1;
-            slots[head + (i - state.head)] = slots[i];
+        if !__woozy_vec_try_move_trivial[option.Option[T]](slots, head, state.head, tail) {
+            var i = before;
+            for i > state.head {
+                i -= 1;
+                slots[head + (i - state.head)] = slots[i];
+            }
         }
     }
     values.cursor[0] = Cursor(head:head,length:state.length,capacity:capacity);

@@ -188,6 +188,7 @@ pub struct FileInfo {
   };
   denied("__woozy_os_getpid();","E_CAPABILITY_UNAVAILABLE",false);
   denied("let values Vec[i32]=[1]; __woozy_vec_pin_begin[i32](values);","E_CAPABILITY_UNAVAILABLE",false);
+  denied("let values Vec[i32]=[1]; __woozy_vec_try_move_trivial[i32](values,0,0,1);","E_CAPABILITY_UNAVAILABLE",false);
   denied("let operation = __woozy_os_getpid;","E_CAPABILITY_UNAVAILABLE",true);
   denied("__woozy_os_getpid[i32]();","E_CALL_ARGUMENT",true);
   denied("__woozy_os_close(fd: 0);","E_CALL_ARGUMENT",true);
