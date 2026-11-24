@@ -15,11 +15,14 @@ async func main() i32 throws os.Error {
     let task = get();
     {
         let first = await task;
-        io.println(first[0]);
+        if first[0] != 42 { return 1; }
+        // Keep display formatting allocations out of the ownership test.
+        io.println("42");
     }
     {
         let second = await task;
-        io.println(second[0]);
+        if second[0] != 42 { return 1; }
+        io.println("42");
     }
     return 0;
 }

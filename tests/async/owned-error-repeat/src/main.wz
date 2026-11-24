@@ -19,7 +19,10 @@ async func main() i32 throws os.Error {
             await task;
         } catch error Failure {
             switch error {
-                case Failure.Bad(values): io.println(values[0]);
+                case Failure.Bad(values): {
+                    if values[0] != 42 { return 1; }
+                    io.println("42");
+                }
             }
         }
     }
@@ -28,7 +31,10 @@ async func main() i32 throws os.Error {
             await task;
         } catch error Failure {
             switch error {
-                case Failure.Bad(values): io.println(values[0]);
+                case Failure.Bad(values): {
+                    if values[0] != 42 { return 1; }
+                    io.println("42");
+                }
             }
         }
     }

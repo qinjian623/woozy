@@ -109,10 +109,20 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
         return option.Option[usize].None;
     }
     if needle_length == 0 { return option.Option[usize].Some(start); }
+    let offset = __woozy_text_cursor_at(value,start);
+    if needle_length == 1 {
+        let rune = needle[0];
+        var cursor = offset;
+        for var index = start; index < value_length; index += 1 {
+            let read = __woozy_text_cursor_read(value,cursor);
+            if u32(read >> 32) == rune { return option.Option[usize].Some(index); }
+            cursor += read & CURSOR_STEP_MASK;
+        }
+        return option.Option[usize].None;
+    }
     let pattern = runes(needle);
     let fallback = match_table(pattern);
-    var cursor = SearchCursor(offset:__woozy_text_cursor_at(value,start),
-        index:start);
+    var cursor = SearchCursor(offset:offset,index:start);
     if scan_matches(value,pattern,fallback,inout cursor,1,false) != 0 {
         return option.Option[usize].Some(cursor.index-needle_length);
     }
