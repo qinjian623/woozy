@@ -1,0 +1,917 @@
+package app;
+
+import "std/box" as box;
+import "std/hash" as hash;
+import "std/set" as set;
+import "std/vec" as vec;
+import "std/option" as option;
+import "std/weak" as weak;
+
+// A key whose Hash implementation can perform one scripted mutation through a
+// Set alias. target, the armed flags and the action are copied with the key,
+// so the callback sees the same set as the test.
+struct Key {
+    id i32;
+    fingerprint u64;
+    payload Vec[i32];
+    target box.Box[set.Set[Key]];
+    hash_armed box.Box[bool];
+    equals_armed box.Box[bool];
+    action i32;
+    action_value i32;
+    action_fingerprint u64;
+    budget box.Box[i32];
+}
+
+const ACTION_NONE i32 = 0;
+const ACTION_ADD i32 = 1;
+const ACTION_REMOVE i32 = 2;
+const ACTION_CLEAR i32 = 3;
+const ACTION_CHAIN_ADD i32 = 4;
+
+func plain(target box.Box[set.Set[Key]], id i32) Key {
+    return Key(
+        id: id,
+        fingerprint: u64(id),
+        payload: vec.make[i32](1, id),
+        target: target,
+        hash_armed: box.new(false),
+        equals_armed: box.new(false),
+        action: ACTION_NONE,
+        action_value: 0,
+        action_fingerprint: u64(id),
+        budget: box.new(0),
+    );
+}
+
+func colliding(target box.Box[set.Set[Key]], id i32) Key {
+    return Key(
+        id: id,
+        fingerprint: 0,
+        payload: vec.make[i32](1, id),
+        target: target,
+        hash_armed: box.new(false),
+        equals_armed: box.new(false),
+        action: ACTION_NONE,
+        action_value: 0,
+        action_fingerprint: u64(id),
+        budget: box.new(0),
+    );
+}
+
+func scripted(target box.Box[set.Set[Key]], id i32, action i32, value i32) Key {
+    return Key(
+        id: id,
+        fingerprint: u64(id),
+        payload: vec.make[i32](1, id),
+        target: target,
+        hash_armed: box.new(false),
+        equals_armed: box.new(false),
+        action: action,
+        action_value: value,
+        action_fingerprint: u64(value),
+        budget: box.new(0),
+    );
+}
+
+// chain shares the armed flags and budget with the key it inserts, so the
+// inserted key can re-enter the same operation. The budget bounds the chain.
+func chain(value Key) Key {
+    let next = value.action_value;
+    return Key(
+        id: next,
+        fingerprint: u64(next),
+        payload: vec.make[i32](1, next),
+        target: value.target,
+        hash_armed: value.hash_armed,
+        equals_armed: value.equals_armed,
+        action: ACTION_CHAIN_ADD,
+        action_value: next + 1,
+        action_fingerprint: u64(next + 1),
+        budget: value.budget,
+    );
+}
+
+func perform(value Key) {
+    let target = box.get(value.target);
+    if value.action == ACTION_ADD {
+        var next = plain(value.target, value.action_value);
+        next.fingerprint = value.action_fingerprint;
+        set.add(target, next);
+    } else if value.action == ACTION_REMOVE {
+        var next = plain(value.target, value.action_value);
+        next.fingerprint = value.action_fingerprint;
+        set.remove(target, next);
+    } else if value.action == ACTION_CLEAR {
+        set.clear(target);
+    } else if value.action == ACTION_CHAIN_ADD {
+        set.add(target, chain(value));
+    }
+}
+
+impl hash.Hash for Key {
+    func hash(value Self) u64 {
+        if box.get(value.hash_armed) {
+            if box.get(value.budget) > 0 {
+                box.set(value.budget, box.get(value.budget) - 1);
+            } else {
+                box.set(value.hash_armed, false);
+            }
+            perform(value);
+        }
+        return value.fingerprint;
+    }
+    func equals(left Self, right Self) bool {
+        let same = left.id == right.id && left.fingerprint == right.fingerprint;
+        if box.get(left.equals_armed) {
+            box.set(left.equals_armed, false);
+            perform(left);
+        } else if box.get(right.equals_armed) {
+            box.set(right.equals_armed, false);
+            perform(right);
+        }
+        return same;
+    }
+}
+
+func make_set(target box.Box[set.Set[Key]]) set.Set[Key] {
+    let value = set.new[Key]();
+    box.set(target, value);
+    return value;
+}
+
+func add_all(values set.Set[Key], target box.Box[set.Set[Key]], count i32) bool {
+    for var i i32 = 0; i < count; i += 1 {
+        if !set.add(values, plain(target, i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func add_range(values set.Set[Key], target box.Box[set.Set[Key]], first i32, count i32) bool {
+    for var i i32 = 0; i < count; i += 1 {
+        if !set.add(values, plain(target, first + i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func has_all(values set.Set[Key], target box.Box[set.Set[Key]], count i32) bool {
+    for var i i32 = 0; i < count; i += 1 {
+        if !set.contains(values, plain(target, i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A hash callback inserts another key before the outer insertion completes.
+// The outer add must keep the callback's size update.
+func test_add_hash_insert() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, plain(cell, 0)) {
+        return 1;
+    }
+    var callback = scripted(cell, 2, ACTION_ADD, 1);
+    box.set(callback.hash_armed, true);
+    if !set.add(values, callback) {
+        return 2;
+    }
+    if set.len(values) != 3 || !has_all(values, cell, 3) {
+        return 3;
+    }
+    return 0;
+}
+
+// An equals callback inserts another key while add is probing. The outer add
+// must not overwrite the callback's size update with its stale Header.
+func test_add_equals_insert() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, colliding(cell, 0)) {
+        return 4;
+    }
+    var callback = colliding(cell, 2);
+    box.set(callback.equals_armed, true);
+    callback.action = ACTION_ADD;
+    callback.action_value = 1;
+    callback.action_fingerprint = 0;
+    if !set.add(values, callback) {
+        return 5;
+    }
+    if set.len(values) != 3 {
+        return 60 + i32(set.len(values));
+    }
+    if !set.contains(values, colliding(cell, 0)) {
+        return 70;
+    }
+    if !set.contains(values, colliding(cell, 1)) {
+        return 71;
+    }
+    if !set.contains(values, colliding(cell, 2)) {
+        return 72;
+    }
+    return 0;
+}
+
+// The hash callback of an existing-key lookup grows the table. contains must
+// re-read the Header and must not keep probing the old region.
+func test_contains_hash_growth() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !add_all(values, cell, 6) {
+        return 7;
+    }
+    var callback = plain(cell, 0);
+    callback.action = ACTION_ADD;
+    callback.action_value = 6;
+    callback.action_fingerprint = 6;
+    box.set(callback.hash_armed, true);
+    if !set.contains(values, callback) {
+        return 8;
+    }
+    if set.len(values) != 7 {
+        return 90 + i32(set.len(values));
+    }
+    for var check i32 = 0; check < 7; check += 1 {
+        if !set.contains(values, plain(cell, check)) {
+            return 100 + check;
+        }
+    }
+    return 0;
+}
+
+// A hash callback during rehashing removes another key. The removal must
+// survive publishing the new table.
+func test_rehash_remove() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    let first = scripted(cell, 0, ACTION_REMOVE, 4);
+    if !set.add(values, first) {
+        return 10;
+    }
+    if !add_range(values, cell, 1, 5) {
+        return 11;
+    }
+    if set.len(values) != 6 {
+        return 12;
+    }
+    box.set(first.hash_armed, true);
+    if !set.add(values, plain(cell, 6)) {
+        return 13;
+    }
+    if set.len(values) != 6 {
+        return 14;
+    }
+    if set.contains(values, plain(cell, 4)) {
+        return 15;
+    }
+    if !set.contains(values, plain(cell, 0)) ||
+    !set.contains(values, plain(cell, 5)) ||
+    !set.contains(values, plain(cell, 6)) {
+        return 16;
+    }
+    return 0;
+}
+
+// A hash callback during rehashing clears the set. No stale region may be
+// published and the abandoned new region must stay in bounds.
+func test_rehash_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    let first = scripted(cell, 0, ACTION_CLEAR, 0);
+    if !set.add(values, first) {
+        return 17;
+    }
+    if !add_range(values, cell, 1, 5) {
+        return 18;
+    }
+    box.set(first.hash_armed, true);
+    if !set.add(values, plain(cell, 6)) {
+        return 19;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 20;
+    }
+    if vec.len(set.values(values)) != 0 {
+        return 21;
+    }
+    if set.contains(values, plain(cell, 6)) {
+        return 22;
+    }
+    return 0;
+}
+
+// A hash callback during rehashing removes the very key whose hash is running.
+// The rehash loop must not use the key after the callback dropped it.
+func test_rehash_remove_self() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    let first = scripted(cell, 0, ACTION_REMOVE, 0);
+    if !set.add(values, first) {
+        return 23;
+    }
+    if !add_range(values, cell, 1, 5) {
+        return 24;
+    }
+    box.set(first.hash_armed, true);
+    if !set.add(values, plain(cell, 6)) {
+        return 25;
+    }
+    if set.len(values) != 6 {
+        return 26;
+    }
+    if set.contains(values, plain(cell, 0)) {
+        return 27;
+    }
+    if !set.contains(values, plain(cell, 1)) ||
+    !set.contains(values, plain(cell, 6)) {
+        return 28;
+    }
+    return 0;
+}
+
+// An equals callback clears the set during remove. The remove restarts and
+// observes the cleared table; len must not underflow.
+func test_remove_equals_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, colliding(cell, 0)) ||
+    !set.add(values, colliding(cell, 1)) ||
+    !set.add(values, colliding(cell, 2)) {
+        return 29;
+    }
+    var callback = colliding(cell, 1);
+    callback.action = ACTION_CLEAR;
+    box.set(callback.equals_armed, true);
+    if set.remove(values, callback) {
+        return 30;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 31;
+    }
+    return 0;
+}
+
+// An equals callback adds a key during remove. The add and the removal must
+// both be visible after the restart.
+func test_remove_equals_add() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, colliding(cell, 0)) ||
+    !set.add(values, colliding(cell, 1)) ||
+    !set.add(values, colliding(cell, 2)) {
+        return 32;
+    }
+    var callback = colliding(cell, 1);
+    callback.action = ACTION_ADD;
+    callback.action_value = 3;
+    callback.action_fingerprint = 0;
+    box.set(callback.equals_armed, true);
+    if !set.remove(values, callback) {
+        return 33;
+    }
+    if set.len(values) != 3 {
+        return 34;
+    }
+    if set.contains(values, colliding(cell, 1)) {
+        return 35;
+    }
+    if !set.contains(values, colliding(cell, 0)) ||
+    !set.contains(values, colliding(cell, 2)) ||
+    !set.contains(values, colliding(cell, 3)) {
+        return 36;
+    }
+    return 0;
+}
+
+// A hash callback clears a grown table during contains. contains restarts on
+// the cleared table instead of indexing the old region.
+func test_contains_hash_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !add_all(values, cell, 20) {
+        return 37;
+    }
+    var callback = plain(cell, 0);
+    callback.action = ACTION_CLEAR;
+    box.set(callback.hash_armed, true);
+    if set.contains(values, callback) {
+        return 38;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 39;
+    }
+    return 0;
+}
+
+// Collisions, tombstones, original representative keys and owning payloads
+// must keep working through the ordinary path.
+func test_ordinary() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    let collision = ~u64(0);
+    for var id i32 = 0; id < 32; id += 1 {
+        var member = colliding(cell, id);
+        member.fingerprint = collision;
+        if !set.add(values, member) {
+            return 40;
+        }
+    }
+    if set.len(values) != 32 {
+        return 41;
+    }
+    let snapshot = set.values(values);
+    if vec.len(snapshot) != 32 {
+        return 42;
+    }
+    var duplicate = colliding(cell, 31);
+    duplicate.fingerprint = collision;
+    duplicate.payload = vec.make[i32](1, -1);
+    if set.add(values, duplicate) {
+        return 43;
+    }
+    if set.len(values) != 32 {
+        return 44;
+    }
+    var original = false;
+    for member in set.values(values) {
+        if member.id == 31 {
+            if member.payload[0] != 31 {
+                return 45;
+            }
+            original = true;
+        }
+    }
+    if !original {
+        return 46;
+    }
+    if !set.remove(values, duplicate) {
+        return 47;
+    }
+    if set.contains(values, duplicate) {
+        return 48;
+    }
+    set.clear(values);
+    if !set.is_empty(values) {
+        return 49;
+    }
+    if vec.len(snapshot) != 32 {
+        return 50;
+    }
+    var sum i32 = 0;
+    for member in snapshot {
+        if member.payload[0] != member.id {
+            return 51;
+        }
+        sum += member.id;
+    }
+    if sum != 496 {
+        return 52;
+    }
+    return 0;
+}
+
+// A duplicate add whose hash callback grows the table must keep the original
+// representative and must not return through the old slot.
+func test_add_existing_hash_growth() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !add_all(values, cell, 6) {
+        return 53;
+    }
+    var callback = plain(cell, 0);
+    callback.action = ACTION_ADD;
+    callback.action_value = 6;
+    callback.action_fingerprint = 6;
+    box.set(callback.hash_armed, true);
+    if set.add(values, callback) {
+        return 54;
+    }
+    if set.len(values) != 7 {
+        return 55;
+    }
+    for var check i32 = 0; check < 7; check += 1 {
+        if !set.contains(values, plain(cell, check)) {
+            return 56;
+        }
+    }
+    return 0;
+}
+
+// A duplicate add whose equals callback clears the set returns false and
+// leaves len at zero instead of writing back a stale size.
+func test_add_existing_equals_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, colliding(cell, 0)) {
+        return 57;
+    }
+    var callback = colliding(cell, 0);
+    callback.action = ACTION_CLEAR;
+    box.set(callback.equals_armed, true);
+    if set.add(values, callback) {
+        return 58;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 59;
+    }
+    return 0;
+}
+
+// contains may linearize a hit before an equals callback clears the table.
+func test_contains_equals_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, colliding(cell, 0)) {
+        return 61;
+    }
+    var callback = colliding(cell, 0);
+    callback.action = ACTION_CLEAR;
+    box.set(callback.equals_armed, true);
+    if !set.contains(values, callback) {
+        return 62;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 63;
+    }
+    return 0;
+}
+
+// remove reads the Header after the hash call, so a clear there makes the
+// removal a miss on an already empty table.
+func test_remove_hash_clear() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, plain(cell, 0)) ||
+    !set.add(values, plain(cell, 1)) {
+        return 64;
+    }
+    var callback = plain(cell, 1);
+    callback.action = ACTION_CLEAR;
+    box.set(callback.hash_armed, true);
+    if set.remove(values, callback) {
+        return 65;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 66;
+    }
+    return 0;
+}
+
+// A hash callback that removes the queried key makes contains a miss without
+// touching the replaced slot.
+func test_contains_hash_remove_self() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !set.add(values, plain(cell, 0)) ||
+    !set.add(values, plain(cell, 1)) {
+        return 67;
+    }
+    var callback = plain(cell, 0);
+    callback.action = ACTION_REMOVE;
+    callback.action_value = 0;
+    callback.action_fingerprint = 0;
+    box.set(callback.hash_armed, true);
+    if set.contains(values, callback) {
+        return 68;
+    }
+    if set.len(values) != 1 {
+        return 69;
+    }
+    if !set.contains(values, plain(cell, 1)) {
+        return 70;
+    }
+    return 0;
+}
+
+struct OwnedKey {
+    id i32;
+    payload Vec[i32];
+}
+
+impl hash.Hash for OwnedKey {
+    func hash(value Self) u64 {
+        return u64(value.id);
+    }
+    func equals(left Self, right Self) bool {
+        return left.id == right.id;
+    }
+}
+
+// Growth, removal and clear must retain and release owned key payloads exactly.
+func test_owning_release() i32 {
+    let values = set.new[OwnedKey]();
+    let links = vec.empty[Weak[Vec[i32]]]();
+    for var i i32 = 0; i < 400; i += 1 {
+        {
+            let payload = vec.make[i32](1, i);
+            vec.push(links, weak.downgrade[Vec[i32]](payload));
+            if !set.add(values, OwnedKey(id: i, payload: payload)) {
+                return 71;
+            }
+        }
+    }
+    for var i i32 = 0; i < 400; i += 1 {
+        switch weak.upgrade(links[i]) {
+            case option.Option.Some(value):
+                {}
+            case option.Option.None:
+                return 72;
+        }
+    }
+    for var i i32 = 0; i < 200; i += 1 {
+        if !set.remove(values, OwnedKey(id: i, payload: vec.empty[i32]())) {
+            return 73;
+        }
+    }
+    for var i i32 = 0; i < 400; i += 1 {
+        switch weak.upgrade(links[i]) {
+            case option.Option.Some(value):
+                {
+                    if i < 200 {
+                        return 74;
+                    }
+                }
+            case option.Option.None:
+                {
+                    if i >= 200 {
+                        return 75;
+                    }
+                }
+        }
+    }
+    set.clear(values);
+    for var i i32 = 0; i < 400; i += 1 {
+        switch weak.upgrade(links[i]) {
+            case option.Option.Some(value):
+                return 76;
+            case option.Option.None:
+                {}
+        }
+    }
+    return 0;
+}
+
+// Repeated nested hash reentry: each inserted key stays armed until the
+// shared budget is exhausted. The additions also force a growth.
+func test_repeated_hash_growth() i32 {
+    let cell = box.new(set.new[Key]());
+    let values = make_set(cell);
+    if !add_all(values, cell, 5) {
+        return 77;
+    }
+    var first = scripted(cell, 1000, ACTION_CHAIN_ADD, 100);
+    box.set(first.budget, 3);
+    box.set(first.hash_armed, true);
+    if !set.add(values, first) {
+        return 78;
+    }
+    if set.len(values) != 10 {
+        return 79;
+    }
+    for var check i32 = 0; check < 5; check += 1 {
+        if !set.contains(values, plain(cell, check)) {
+            return 80;
+        }
+    }
+    for var check i32 = 100; check <= 103; check += 1 {
+        if !set.contains(values, plain(cell, check)) {
+            return 81;
+        }
+    }
+    if !set.contains(values, plain(cell, 1000)) {
+        return 82;
+    }
+    return 0;
+}
+
+// FlipKey fires equals twice: stage 0 removes the non-equal home key and
+// makes the operation retry; stage 1 returns true for the equal key and then
+// clears the set. A successful terminal comparison must stay a hit/duplicate
+// even though the callback cleared the table.
+struct FlipKey {
+    id i32;
+    target box.Box[set.Set[FlipKey]];
+    stage box.Box[i32];
+}
+
+func flip_plain(target box.Box[set.Set[FlipKey]], id i32) FlipKey {
+    return FlipKey(id: id, target: target, stage: box.new(2));
+}
+
+func flip_query(target box.Box[set.Set[FlipKey]], id i32) FlipKey {
+    return FlipKey(id: id, target: target, stage: box.new(0));
+}
+
+func flip_fire(value FlipKey) {
+    let target = box.get(value.target);
+    let stage = box.get(value.stage);
+    if stage == 0 {
+        box.set(value.stage, 1);
+        set.remove(target, flip_plain(value.target, 0));
+    } else if stage == 1 {
+        box.set(value.stage, 2);
+        set.clear(target);
+    }
+}
+
+impl hash.Hash for FlipKey {
+    func hash(value Self) u64 {
+        return 0;
+    }
+    func equals(left Self, right Self) bool {
+        let same = left.id == right.id;
+        if box.get(left.stage) < 2 {
+            flip_fire(left);
+        } else if box.get(right.stage) < 2 {
+            flip_fire(right);
+        }
+        return same;
+    }
+}
+
+func make_flip_set(target box.Box[set.Set[FlipKey]]) set.Set[FlipKey] {
+    let value = set.new[FlipKey]();
+    box.set(target, value);
+    return value;
+}
+
+// First comparison is false and removes the non-equal home key; retry's
+// collision probe compares equal and clears. contains must report the
+// successful terminal hit.
+func test_contains_flip_clear() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    if !set.add(values, flip_plain(cell, 0)) {
+        return 83;
+    }
+    if !set.add(values, flip_plain(cell, 1)) {
+        return 84;
+    }
+    let query = flip_query(cell, 1);
+    if !set.contains(values, query) {
+        return 85;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 86;
+    }
+    return 0;
+}
+
+// Duplicate add with the same two-stage comparison: the first comparison
+// removes the home key, the retry comparison is equal and clears. The add
+// must return false, not insert after the clear.
+func test_add_flip_clear() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    if !set.add(values, flip_plain(cell, 0)) {
+        return 87;
+    }
+    if !set.add(values, flip_plain(cell, 1)) {
+        return 88;
+    }
+    let query = flip_query(cell, 1);
+    if set.add(values, query) {
+        return 89;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 90;
+    }
+    return 0;
+}
+
+// remove keeps its no-stale-delete rule: after the retry comparison clears
+// the set, remove must observe the cleared table and return false.
+func test_remove_flip_clear() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    if !set.add(values, flip_plain(cell, 0)) {
+        return 96;
+    }
+    if !set.add(values, flip_plain(cell, 1)) {
+        return 97;
+    }
+    let query = flip_query(cell, 1);
+    if set.remove(values, query) {
+        return 98;
+    }
+    if set.len(values) != 0 || !set.is_empty(values) {
+        return 99;
+    }
+    return 0;
+}
+
+// Match through tombs: insertion_position must return the terminal equality
+// match, not reuse a tomb or report exhaustion.
+func test_add_tomb_match() i32 {
+    let cell = box.new(set.new[FlipKey]());
+    let values = make_flip_set(cell);
+    for var id i32 = 0; id < 6; id += 1 {
+        if !set.add(values, flip_plain(cell, id)) {
+            return 91;
+        }
+    }
+    for var id i32 = 0; id < 3; id += 1 {
+        if !set.remove(values, flip_plain(cell, id)) {
+            return 92;
+        }
+    }
+    if set.add(values, flip_plain(cell, 5)) {
+        return 93;
+    }
+    if set.len(values) != 3 {
+        return 94;
+    }
+    if !set.contains(values, flip_plain(cell, 5)) {
+        return 95;
+    }
+    return 0;
+}
+
+func main() i32 {
+    var status = test_add_hash_insert();
+    if status != 0 {
+        return status;
+    }
+    status = test_add_equals_insert();
+    if status != 0 {
+        return status;
+    }
+    status = test_contains_hash_growth();
+    if status != 0 {
+        return status;
+    }
+    status = test_rehash_remove();
+    if status != 0 {
+        return status;
+    }
+    status = test_rehash_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_rehash_remove_self();
+    if status != 0 {
+        return status;
+    }
+    status = test_remove_equals_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_remove_equals_add();
+    if status != 0 {
+        return status;
+    }
+    status = test_contains_hash_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_add_existing_hash_growth();
+    if status != 0 {
+        return status;
+    }
+    status = test_add_existing_equals_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_contains_equals_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_remove_hash_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_contains_hash_remove_self();
+    if status != 0 {
+        return status;
+    }
+    status = test_ordinary();
+    if status != 0 {
+        return status;
+    }
+    status = test_repeated_hash_growth();
+    if status != 0 {
+        return status;
+    }
+    status = test_contains_flip_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_add_flip_clear();
+    if status != 0 {
+        return status;
+    }
+    status = test_add_tomb_match();
+    if status != 0 {
+        return status;
+    }
+    status = test_remove_flip_clear();
+    if status != 0 {
+        return status;
+    }
+    return test_owning_release();
+}

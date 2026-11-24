@@ -1,25 +1,60 @@
-// Set is a thin wrapper around Map[K,Unit]. Like Map, copying a Set shares
-// the same logical set because all mutable state is held by shared Vec
-// handles inside the wrapped map.
+// Set is a linear-probing hash table with one shared table region.
+//
+// Copying a Set copies two shared Vec handles (cells and meta). Every alias
+// therefore observes the same table, size, growth and clear. A Header names
+// the current region inside cells; regions older than the current one are
+// kept allocated but contain no live keys.
+//
+// Hash and equals are user code. They may call back into the same Set through
+// an alias, so every operation reads the Header after the hash call and
+// restarts if a callback changed the table while an equality check ran.
+// Growth rehashes from the current table and checks the mutation generation
+// before publishing; a callback that removes or clears during growth is
+// preserved instead of being overwritten.
 package set;
 
 import "std/hash" as hash;
-import "std/map" as map;
-import "std/option" as option;
 import "std/vec" as vec;
 
-pub struct Set[K hash.Hash] {
-    items map.Map[K,Unit];
+const INITIAL_CAPACITY usize = 8;
+const NO_POSITION usize = ~usize(0);
+// insertion_position returns NO_POSITION only for an equality match. NO_SLOT
+// means the probe exhausted the table without finding a match or an
+// insertable Empty/Tomb; it must not be mistaken for a terminal match.
+const NO_SLOT usize = ~usize(1);
+// A stable Hash implementation normally needs at most one restart. The bound
+// only prevents an implementation that mutates the set on every call from
+// looping forever; after it is reached the operation reports a best-effort
+// result without publishing a new table.
+const MAX_RESTARTS usize = 64;
+
+enum Slot[K] {
+    Empty;
+    Tomb;
+    Member(key K);
 }
 
-func unit_value() {}
+struct Header {
+    size usize;
+    base usize;
+    capacity usize;
+    generation usize;
+}
+
+pub struct Set[K hash.Hash] {
+    cells Vec[Slot[K]];
+    meta Vec[Header];
+}
 
 pub func new[K hash.Hash]() Set[K] {
-    return Set[K](items: map.new[K,Unit]());
+    return Set[K](
+        cells: vec.make[Slot[K]](INITIAL_CAPACITY, Slot[K].Empty),
+        meta: vec.make[Header](1, Header(size: 0, base: 0, capacity: INITIAL_CAPACITY, generation: 0)),
+    );
 }
 
 pub func len[K hash.Hash](values Set[K]) usize {
-    return map.len(values.items);
+    return values.meta[0].size;
 }
 
 // is_empty reports whether the set has no members.
@@ -27,48 +62,565 @@ pub func is_empty[K hash.Hash](values Set[K]) bool {
     return len(values) == 0;
 }
 
-pub func contains[K hash.Hash](values Set[K], key K) bool {
-    return map.contains(values.items, key);
+// clear_region drops every key in a table region. It does not change the
+// shared Vec length, so a rehash in progress can still abandon its region.
+func clear_region[K hash.Hash](cells Vec[Slot[K]], base usize, capacity usize) {
+    for var index usize = 0; index < capacity; index += 1 {
+        cells[base + index] = Slot[K].Empty;
+    }
 }
 
-// add returns true when the key was inserted and false when it was already
-// present.
-pub func add[K hash.Hash](values Set[K], key K) bool {
-    if map.contains(values.items, key) {
+// Only a home-slot miss calls this loop. An Empty ends the probe. Tombs do
+// not, since a colliding member may have been inserted beyond them.
+func probe[K hash.Hash](cells Vec[Slot[K]], key K, header Header, home usize) usize {
+    let mask = header.capacity - 1;
+    var offset = (home + 1) & mask;
+    for offset != home {
+        let position = header.base + offset;
+        switch cells[position] {
+            case Slot.Member(found):
+                {
+                    if K.equals(found, key) {
+                        return position;
+                    }
+                }
+            case Slot.Empty:
+                return NO_POSITION;
+            case Slot.Tomb:
+                {}
+        }
+        offset = (offset + 1) & mask;
+    }
+    return NO_POSITION;
+}
+
+pub func contains[K hash.Hash](values Set[K], key K) bool {
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                // The successful equality test is the linearization point. A
+                // callback that removed the key afterwards does not turn this
+                // hit into a miss.
+                if equal {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, 1);
+                }
+                let found_at = probe(values.cells, key, header, home);
+                if found_at != NO_POSITION {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, 1);
+                }
+                return false;
+            }
+        case Slot.Empty:
+            return false;
+        case Slot.Tomb:
+            {
+                let found_at = probe(values.cells, key, header, home);
+                if found_at != NO_POSITION {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, 1);
+                }
+                return false;
+            }
+    }
+}
+
+func contains_retry[K hash.Hash](values Set[K], key K, attempt usize) bool {
+    if attempt >= MAX_RESTARTS {
         return false;
     }
-    let previous = map.insert(values.items, key, unit_value());
-    switch previous {
-        case option.Option.Some(existing): return false;
-        case option.Option.None: return true;
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                // A successful terminal comparison stays a hit even if its
+                // callback cleared the table. Only a miss needs a retry.
+                if equal {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, attempt + 1);
+                }
+                let found_at = probe(values.cells, key, header, home);
+                if found_at != NO_POSITION {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, attempt + 1);
+                }
+                return false;
+            }
+        case Slot.Empty:
+            return false;
+        case Slot.Tomb:
+            {
+                let found_at = probe(values.cells, key, header, home);
+                if found_at != NO_POSITION {
+                    return true;
+                }
+                if values.meta[0].generation != header.generation {
+                    return contains_retry(values, key, attempt + 1);
+                }
+                return false;
+            }
     }
+}
+
+func insertion_position[K hash.Hash](cells Vec[Slot[K]], key K, header Header, home usize, first_tomb usize) usize {
+    let mask = header.capacity - 1;
+    var offset = (home + 1) & mask;
+    var position = first_tomb;
+    for offset != home {
+        let current = header.base + offset;
+        switch cells[current] {
+            case Slot.Member(found):
+                {
+                    if K.equals(found, key) {
+                        return NO_POSITION;
+                    }
+                }
+            case Slot.Empty:
+                {
+                    if position == NO_POSITION {
+                        return current;
+                    }
+                    return position;
+                }
+            case Slot.Tomb:
+                {
+                    if position == NO_POSITION {
+                        position = current;
+                    }
+                }
+        }
+        offset = (offset + 1) & mask;
+    }
+    // A valid tomb is reusable. Otherwise the table had no Empty and no
+    // tomb: report exhaustion separately from an equality match.
+    if position == NO_POSITION {
+        return NO_SLOT;
+    }
+    return position;
+}
+
+func grow[K hash.Hash](values Set[K], header Header) {
+    var current = header;
+    var attempt usize = 0;
+    var retry = true;
+    var reuse_base = NO_POSITION;
+    var reuse_capacity usize = 0;
+    for retry {
+        retry = false;
+        if current.size <= current.capacity - current.capacity / 4 {
+            return;
+        }
+        var capacity = NO_POSITION;
+        if current.capacity <= NO_POSITION / 2 {
+            capacity = current.capacity * 2;
+        } else {
+            // Keep the request at NO_POSITION so vec's checked allocation
+            // size reports the overflow instead of wrapping to a small table.
+            vec.reserve(values.cells, NO_POSITION);
+            return;
+        }
+        var new_base = NO_POSITION;
+        if reuse_capacity >= capacity && reuse_base + capacity <= vec.len(values.cells) {
+            new_base = reuse_base;
+            clear_region(values.cells, new_base, capacity);
+        } else {
+            new_base = vec.len(values.cells);
+            if current.capacity > (NO_POSITION - new_base) / 2 {
+                vec.reserve(values.cells, NO_POSITION);
+                return;
+            }
+            vec.resize(values.cells, new_base + capacity, Slot[K].Empty);
+        }
+        let mask = capacity - 1;
+        // Rehash the old region. A hash callback may mutate the published
+        // table; the generation check after the loop discards this partial
+        // region and restarts from the table the callback left behind.
+        for var index usize = 0; index < current.capacity; index += 1 {
+            switch values.cells[current.base + index] {
+                case Slot.Member(key):
+                    {
+                        var offset = usize(K.hash(key) & u64(mask));
+                        var inserted = false;
+                        for !inserted {
+                            switch values.cells[new_base + offset] {
+                                case Slot.Empty:
+                                    {
+                                        values.cells[new_base + offset] = Slot[K].Member(key);
+                                        inserted = true;
+                                    }
+                                case Slot.Tomb:
+                                    {}
+                                case Slot.Member(other):
+                                    {}
+                            }
+                            offset = (offset + 1) & mask;
+                        }
+                    }
+                case Slot.Empty:
+                    {}
+                case Slot.Tomb:
+                    {}
+            }
+        }
+        let now = values.meta[0];
+        if now.generation == current.generation {
+            // Publish first; the old region is no longer visible. Its key
+            // copies can then be dropped without touching live entries.
+            values.meta[0] = Header(
+                size: now.size,
+                base: new_base,
+                capacity: capacity,
+                generation: now.generation + 1,
+            );
+            if current.base != new_base {
+                clear_region(values.cells, current.base, current.capacity);
+            }
+            return;
+        }
+        // A callback changed the table. Discard this region and re-read what
+        // the callback published. If this region is still the tail, shrink it
+        // away so repeated failed grows reuse the same tail slots instead of
+        // appending another region every time. A region left in the middle by
+        // a successful nested grow is kept for reuse by the retry.
+        clear_region(values.cells, new_base, capacity);
+        if new_base + capacity == vec.len(values.cells) {
+            vec.resize(values.cells, new_base, Slot[K].Empty);
+            reuse_base = NO_POSITION;
+            reuse_capacity = 0;
+        } else {
+            reuse_base = new_base;
+            reuse_capacity = capacity;
+        }
+        current = values.meta[0];
+        attempt += 1;
+        if attempt >= MAX_RESTARTS {
+            return;
+        }
+        retry = true;
+    }
+}
+
+func insert_at[K hash.Hash](values Set[K], header Header, position usize, key K) {
+    values.cells[position] = Slot[K].Member(key);
+    let updated = Header(
+        size: header.size + 1,
+        base: header.base,
+        capacity: header.capacity,
+        generation: header.generation + 1,
+    );
+    values.meta[0] = updated;
+    if updated.size > updated.capacity - updated.capacity / 4 {
+        grow(values, updated);
+    }
+}
+
+func add_slow[K hash.Hash](values Set[K], key K, header Header, home usize, first_tomb usize, attempt usize) bool {
+    if attempt >= MAX_RESTARTS {
+        return false;
+    }
+    let target = insertion_position(values.cells, key, header, home, first_tomb);
+    // NO_POSITION is a successful terminal equality: the key is already
+    // present, even if its callback changed the table. NO_SLOT is stale table
+    // exhaustion and must be retried when the generation changed.
+    if target == NO_POSITION {
+        return false;
+    }
+    if target == NO_SLOT {
+        if values.meta[0].generation != header.generation {
+            return add_retry(values, key, attempt + 1);
+        }
+        return false;
+    }
+    if values.meta[0].generation != header.generation {
+        return add_retry(values, key, attempt + 1);
+    }
+    insert_at(values, values.meta[0], target, key);
+    return true;
+}
+
+// add returns true when the key was inserted. An equal existing key stays in
+// its original slot, even if the argument is a different representative.
+pub func add[K hash.Hash](values Set[K], key K) bool {
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Empty:
+            {
+                insert_at(values, header, position, key);
+                return true;
+            }
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                // "Already present" linearizes at the equality test; a callback
+                // that clears or removes afterwards is still visible in the final
+                // table and must not be overwritten by this add.
+                if equal {
+                    return false;
+                }
+                if values.meta[0].generation != header.generation {
+                    return add_retry(values, key, 1);
+                }
+                let target = insertion_position(values.cells, key, header, home, NO_POSITION);
+                if target == NO_POSITION {
+                    return false;
+                }
+                if target == NO_SLOT {
+                    if values.meta[0].generation != header.generation {
+                        return add_retry(values, key, 1);
+                    }
+                    return false;
+                }
+                if values.meta[0].generation != header.generation {
+                    return add_retry(values, key, 1);
+                }
+                insert_at(values, values.meta[0], target, key);
+                return true;
+            }
+        case Slot.Tomb:
+            {
+                let target = insertion_position(values.cells, key, header, home, position);
+                if target == NO_POSITION {
+                    return false;
+                }
+                if target == NO_SLOT {
+                    if values.meta[0].generation != header.generation {
+                        return add_retry(values, key, 1);
+                    }
+                    return false;
+                }
+                if values.meta[0].generation != header.generation {
+                    return add_retry(values, key, 1);
+                }
+                insert_at(values, values.meta[0], target, key);
+                return true;
+            }
+    }
+}
+
+func add_retry[K hash.Hash](values Set[K], key K, attempt usize) bool {
+    if attempt >= MAX_RESTARTS {
+        return false;
+    }
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Empty:
+            {
+                insert_at(values, header, position, key);
+                return true;
+            }
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                // A duplicate is a successful terminal comparison; a later
+                // clear/remove by its callback does not turn it into an insert.
+                if equal {
+                    return false;
+                }
+                if values.meta[0].generation != header.generation {
+                    return add_retry(values, key, attempt + 1);
+                }
+                return add_slow(values, key, header, home, NO_POSITION, attempt + 1);
+            }
+        case Slot.Tomb:
+            return add_slow(values, key, header, home, position, attempt + 1);
+    }
+}
+
+func erase[K hash.Hash](values Set[K], header Header, position usize) {
+    values.cells[position] = Slot[K].Tomb;
+    values.meta[0] = Header(
+        size: header.size - 1,
+        base: header.base,
+        capacity: header.capacity,
+        generation: header.generation + 1,
+    );
+}
+
+func remove_slow[K hash.Hash](values Set[K], key K, header Header, home usize, attempt usize) bool {
+    if attempt >= MAX_RESTARTS {
+        return false;
+    }
+    let found_at = probe(values.cells, key, header, home);
+    if values.meta[0].generation != header.generation {
+        return remove_retry(values, key, attempt + 1);
+    }
+    if found_at == NO_POSITION {
+        return false;
+    }
+    erase(values, values.meta[0], found_at);
+    return true;
 }
 
 // remove returns true when the key was present.
 pub func remove[K hash.Hash](values Set[K], key K) bool {
-    switch map.remove(values.items, key) {
-        case option.Option.Some(removed): return true;
-        case option.Option.None: return false;
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Empty:
+            return false;
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                if values.meta[0].generation != header.generation {
+                    return remove_retry(values, key, 1);
+                }
+                if equal {
+                    let current = values.meta[0];
+                    values.cells[position] = Slot[K].Tomb;
+                    values.meta[0] = Header(
+                        size: current.size - 1,
+                        base: current.base,
+                        capacity: current.capacity,
+                        generation: current.generation + 1,
+                    );
+                    return true;
+                }
+                return remove_slow(values, key, header, home, 1);
+            }
+        case Slot.Tomb:
+            return remove_slow(values, key, header, home, 1);
+    }
+}
+
+func remove_retry[K hash.Hash](values Set[K], key K, attempt usize) bool {
+    if attempt >= MAX_RESTARTS {
+        return false;
+    }
+    let hashed = K.hash(key);
+    let header = values.meta[0];
+    let home = usize(hashed & u64(header.capacity - 1));
+    let position = header.base + home;
+    switch values.cells[position] {
+        case Slot.Empty:
+            return false;
+        case Slot.Member(found):
+            {
+                let equal = K.equals(found, key);
+                if values.meta[0].generation != header.generation {
+                    return remove_retry(values, key, attempt + 1);
+                }
+                if equal {
+                    erase(values, values.meta[0], position);
+                    return true;
+                }
+                return remove_slow(values, key, header, home, attempt + 1);
+            }
+        case Slot.Tomb:
+            return remove_slow(values, key, header, home, attempt + 1);
     }
 }
 
 // values returns a snapshot of the keys. It is not invalidated by later
 // mutations of the set.
 pub func values[K hash.Hash](values Set[K]) Vec[K] {
-    return map.keys(values.items);
+    let header = values.meta[0];
+    let out = vec.empty[K]();
+    vec.reserve(out, header.size);
+    for var index usize = 0; index < header.capacity; index += 1 {
+        switch values.cells[header.base + index] {
+            case Slot.Member(key):
+                vec.push(out, key);
+            case Slot.Empty:
+                {}
+            case Slot.Tomb:
+                {}
+        }
+    }
+    return out;
 }
 
+// clear removes every member for all aliases. It keeps the backing Vec
+// allocated so a rehash that is being abandoned cannot read past its end.
 pub func clear[K hash.Hash](values Set[K]) {
-    map.clear(values.items);
+    let header = values.meta[0];
+    clear_region(values.cells, header.base, header.capacity);
+    // Keep the current region and capacity. A refill then reuses the table
+    // that was already allocated instead of appending a fresh region after
+    // every clear. Old regions are already empty; nothing else is live.
+    values.meta[0] = Header(
+        size: 0,
+        base: header.base,
+        capacity: header.capacity,
+        generation: header.generation + 1,
+    );
 }
 
-// union returns a new set containing every key from left and right. The result
-// has its own map storage, so changing it does not change either input and
-// changing an input does not change it. Keys are copied by ordinary assignment
-// when inserted into the result. left and right may be the same set. Iteration
-// order is unspecified.
+// reserve_empty gives a fresh result one region large enough for the expected
+// member count. It is only used by the algebra helpers, which call it before
+// any member is inserted; callbacks cannot observe a partially built result.
+func reserve_empty[K hash.Hash](values Set[K], minimum usize) {
+    let header = values.meta[0];
+    if header.size != 0 {
+        return;
+    }
+    if minimum <= header.capacity - header.capacity / 4 {
+        return;
+    }
+    var capacity = header.capacity;
+    for capacity - capacity / 4 < minimum {
+        if capacity > NO_POSITION / 2 {
+            vec.reserve(values.cells, NO_POSITION);
+            return;
+        }
+        capacity *= 2;
+    }
+    let new_base = vec.len(values.cells);
+    if capacity > NO_POSITION - new_base {
+        vec.reserve(values.cells, NO_POSITION);
+        return;
+    }
+    vec.resize(values.cells, new_base + capacity, Slot[K].Empty);
+    clear_region(values.cells, header.base, header.capacity);
+    values.meta[0] = Header(
+        size: 0,
+        base: new_base,
+        capacity: capacity,
+        generation: header.generation + 1,
+    );
+}
+
+// union returns a new set containing every key from left and right. The
+// result has its own table, so changing it does not change either input and
+// changing an input does not change it. Keys are copied by ordinary
+// assignment when inserted into the result. left and right may be the same
+// set. Iteration order is unspecified.
 pub func union[K hash.Hash](left Set[K], right Set[K]) Set[K] {
     let result = new[K]();
+    var needed = len(left);
+    if len(right) > NO_POSITION - needed {
+        needed = NO_POSITION;
+    } else {
+        needed += len(right);
+    }
+    reserve_empty(result, needed);
     for key in values(left) {
         add(result, key);
     }
@@ -78,11 +630,13 @@ pub func union[K hash.Hash](left Set[K], right Set[K]) Set[K] {
     return result;
 }
 
-// intersection returns a new, independently stored set containing the keys that
-// are present in both left and right. Neither input is modified, and aliased
-// inputs produce a copy of their common keys. Iteration order is unspecified.
+// intersection returns a new, independently stored set containing the keys
+// that are present in both left and right. Neither input is modified, and
+// aliased inputs produce a copy of their common keys. Iteration order is
+// unspecified.
 pub func intersection[K hash.Hash](left Set[K], right Set[K]) Set[K] {
     let result = new[K]();
+    reserve_empty(result, len(left));
     for key in values(left) {
         if contains(right, key) {
             add(result, key);
@@ -91,11 +645,12 @@ pub func intersection[K hash.Hash](left Set[K], right Set[K]) Set[K] {
     return result;
 }
 
-// difference returns a new, independently stored set containing the keys from
-// left that are not present in right. Neither input is modified, and aliased
-// inputs produce an empty set. Iteration order is unspecified.
+// difference returns a new, independently stored set containing the keys
+// from left that are not present in right. Neither input is modified, and
+// aliased inputs produce an empty set. Iteration order is unspecified.
 pub func difference[K hash.Hash](left Set[K], right Set[K]) Set[K] {
     let result = new[K]();
+    reserve_empty(result, len(left));
     for key in values(left) {
         if !contains(right, key) {
             add(result, key);
