@@ -396,16 +396,25 @@ pub func split_lines(value string) Vec[string] {
 }
 
 pub func trim_start(value string) string {
-    if len(value) == 0 || !is_space(value[0]) { return value; }
-    let data = bytes(value);
-    let data_bytes = vec.len(data);
-    var offset usize = 0;
-    for offset < data_bytes {
-        if !is_space(utf8_decode(data,offset)) { break; }
-        offset = utf8_next(data,offset);
+    let length = len(value);
+    if length == 0 { return value; }
+    let initial = __woozy_text_cursor_read(value,0);
+    if !is_space(u32(initial >> 32)) { return value; }
+    var offset = initial & CURSOR_STEP_MASK;
+    var first usize = 1;
+    for first < length {
+        let read = __woozy_text_cursor_read(value,offset);
+        if !is_space(u32(read >> 32)) { break; }
+        offset += read & CURSOR_STEP_MASK;
+        first += 1;
     }
-    if offset == 0 { return value; }
-    return text_from_span(data,offset,data_bytes);
+    if first == length { return ""; }
+    // Keep the view when it covers at least as much data as it omits.
+    // A smaller result should not keep a large discarded prefix alive.
+    let suffix = value[first:];
+    let size = byte_len(suffix);
+    if size < byte_len(value)-size { return text_from_buffer(bytes(suffix)); }
+    return suffix;
 }
 pub func trim_end(value string) string {
     if len(value) == 0 || !is_space(value[len(value)-1]) { return value; }
