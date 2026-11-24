@@ -7,7 +7,7 @@
 // Pushing copies the value and popping returns an owned copy.
 //
 // push_front/push_back are amortized O(1): a full ring grows by doubling and
-// may move the wrapped tail, so n pushes cost O(n) total. pop_front,
+// may move one wrapped segment, so n pushes cost O(n) total. pop_front,
 // pop_back, peek_front, peek_back, get and is_empty are O(1). to_vec copies
 // the live range front-to-back into a new Vec in O(length). clear is O(length)
 // and keeps the allocated ring for reuse. Popping an empty deque returns
@@ -75,11 +75,25 @@ func grow_to[T](values Deque[T], state Cursor, minimum usize) {
     }
     vec.resize(slots, capacity, option.Option[T].None);
 
-    // The wrapped tail belongs at the end of the larger ring so the prefix
-    // can stay at zero. Keep the old cursor until the moved values exist.
     var head = state.head;
-    if state.length > before - head {
-        head = capacity - (before - state.head);
+    let tail = before - head;
+    if state.length > tail {
+        let prefix = state.length - tail;
+        if prefix < tail && prefix <= capacity - before {
+            // Moving the shorter prefix just past the old ring makes the
+            // live range contiguous. Publish the new ring before releasing
+            // the original slots, as on the wrapped-tail path.
+            for var i usize = 0; i < prefix; i += 1 {
+                slots[before + i] = slots[i];
+            }
+            values.cursor[0] = Cursor(head:head,length:state.length,capacity:capacity);
+            for var i usize = 0; i < prefix; i += 1 {
+                slots[i] = option.Option[T].None;
+            }
+            return;
+        }
+        // Keep the prefix at zero and move the tail to the new end.
+        head = capacity - tail;
         var i = before;
         for i > state.head {
             i -= 1;
