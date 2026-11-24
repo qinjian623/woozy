@@ -1,4 +1,5 @@
 package app;
+import "std/option" as option;
 import "std/slice" as slice;
 import "std/vec" as vec;
 
@@ -10,6 +11,17 @@ struct Trivial {
 struct NestedTrivial {
     inner Trivial;
     tag i32;
+}
+
+struct Packed {
+    a i32;
+    b i32;
+}
+
+enum Tiny {
+    Zero;
+    One(value i32);
+    Pair(left i32, right i32);
 }
 
 struct Empty {}
@@ -28,6 +40,8 @@ func main() i32 {
     ];
     let empties Vec[Empty] = [Empty(), Empty()];
     let nested Vec[Vec[i32]] = [[1, 2], [3]];
+    let packed Vec[Packed] = [Packed(a: 1, b: 2), Packed(a: 3, b: 4)];
+    let tiny Vec[Tiny] = [Tiny.Zero, Tiny.One(value: 5), Tiny.Pair(left: 6, right: 7)];
 
     let int_slice Vec[i32] = ints[1:3];
     let unit_slice Vec[Unit] = units[0:2];
@@ -102,6 +116,76 @@ func main() i32 {
     }
     vec.resize(ints_alias, 1, 99);
     if vec.len(ints) != 1 || ints[0] != 17 { return 25; }
+
+    // Pop moves a plain non-owning aggregate with one typed load/store.  The
+    // padded Trivial/NestedTrivial layouts and the un-padded Packed layout
+    // must all preserve their exact field bytes; the enum result also checks
+    // the Option[element] payload storage.  An owned nested Vec keeps the
+    // runtime ABI call.
+    switch vec.pop(ts) {
+        case option.Option.Some(value): {
+            if value.n != 2 || value.flag { return 26; }
+        }
+        case option.Option.None: return 27;
+    }
+    if vec.len(ts) != 1 || ts[0].n != 7 || !ts[0].flag { return 28; }
+    switch vec.pop(nts) {
+        case option.Option.Some(value): {
+            if value.inner.n != 4 || value.inner.flag || value.tag != 40 { return 29; }
+        }
+        case option.Option.None: return 30;
+    }
+    if vec.len(nts) != 1 || nts[0].inner.n != 8 || nts[0].tag != 80 { return 31; }
+    switch vec.pop(packed) {
+        case option.Option.Some(value): {
+            if value.a != 3 || value.b != 4 { return 32; }
+        }
+        case option.Option.None: return 33;
+    }
+    if vec.len(packed) != 1 || packed[0].a != 1 || packed[0].b != 2 { return 34; }
+    switch vec.pop(tiny) {
+        case option.Option.Some(value): {
+            switch value {
+                case Tiny.Pair(left, right): {
+                    if left != 6 || right != 7 { return 35; }
+                }
+                case _: return 36;
+            }
+        }
+        case option.Option.None: return 37;
+    }
+    switch vec.pop(tiny) {
+        case option.Option.Some(value): {
+            switch value {
+                case Tiny.One(payload): {
+                    if payload != 5 { return 38; }
+                }
+                case _: return 39;
+            }
+        }
+        case option.Option.None: return 40;
+    }
+    switch vec.pop(tiny) {
+        case option.Option.Some(value): {
+            switch value {
+                case Tiny.Zero: {}
+                case _: return 41;
+            }
+        }
+        case option.Option.None: return 42;
+    }
+    switch vec.pop(tiny) {
+        case option.Option.Some(value): return 43;
+        case option.Option.None: {}
+    }
+    if vec.len(tiny) != 0 { return 44; }
+    switch vec.pop(nested) {
+        case option.Option.Some(value): {
+            if value[0] != 12 || vec.len(value) != 1 { return 45; }
+        }
+        case option.Option.None: return 46;
+    }
+    if vec.len(nested) != 3 { return 47; }
     vec.clear(nested_self);
     if vec.len(nested) != 0 { return 22; }
     return 0;

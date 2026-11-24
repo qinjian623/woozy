@@ -653,17 +653,15 @@ func e_extra_system_call(instruction nativeir.Instruction,
 
 // ---- trivial Vec pop fast path ---------------------------------------------
 
-// lang_vec_pop_v1 rejects an empty pop before the pin check, acquire-loads
-// iterations and panics when pinned, moves the original last slot's bytes, and
-// publishes the shorter length and initialized=min(original initialized,last).
-// The inline path needs one typed load/store to cover the published slot
-// exactly, so it is limited to the non-owning scalar family, whose LLVM
-// allocation size is its published stride and whose alignment fits the 16-byte
-// Vec payload guarantee.  Owning elements, aggregates, zero-sized slots and C
-// layouts keep the runtime ABI call unchanged.
-func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
-    if owning(element, inout state) { return false; }
-    let value = type_of(state, element);
+// A plain value layout is a non-owning scalar, or a nominal struct/enum whose
+// fields are recursively plain values.  lower_type spells structs as LLVM
+// literal structs in field order and enums as { i32, payload... }, exactly the
+// field sequence the C++ backend uses.  Empty nominal structs are excluded by
+// the caller because their published stride is one byte while LLVM allocation
+// size is zero.  C records, function values, Vec/Slice/String and every other
+// owning or target-specific layout stay on the runtime ABI path.
+func e_vec_pop_value_layout(type_id usize, state inout Emitter) bool throws Error {
+    let value = type_of(state, type_id);
     switch value.kind {
         case model.TypeKind.Unit: return true;
         case model.TypeKind.Bool: return true;
@@ -672,8 +670,50 @@ func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
         case model.TypeKind.Isize: return true;
         case model.TypeKind.Usize: return true;
         case model.TypeKind.Float: return true;
+        case model.TypeKind.NominalStruct: {
+            let fields = aggregate_fields(type_id, option.Option[usize].None,
+                inout state);
+            for field in fields {
+                if !e_vec_pop_value_layout(field.type_id, inout state) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case model.TypeKind.NominalEnum: {
+            let declaration = aggregate_declaration(state, type_id);
+            for variant in declaration.variants {
+                let fields = aggregate_fields(type_id,
+                    option.Option[usize].Some(variant.symbol), inout state);
+                for field in fields {
+                    if !e_vec_pop_value_layout(field.type_id, inout state) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
         default: return false;
     }
+}
+
+// lang_vec_pop_v1 rejects an empty pop before the pin check, acquire-loads
+// iterations and panics when pinned, moves the original last slot's bytes, and
+// publishes the shorter length and initialized=min(original initialized,last).
+// The inline path needs one typed load/store to cover the published slot
+// exactly.  For a non-empty plain value layout, stride() is the same LLVM
+// allocation-size expression used to construct the Vec descriptor, so bytes
+// and stride are equal by construction.  Scalar leaves are Unit/i1/integers up
+// to i64/f32/f64; both supported target layouts give them ABI alignment <= 8,
+// and nested plain aggregates inherit that bound, so the moved slot fits the
+// 16-byte Vec payload guarantee.  The Option result is built through the same
+// lower_type and insertvalue path as every other enum, so its padding and
+// payload slot introduce no extra layout assumption.  Owning elements,
+// zero-sized roots and C layouts keep the runtime ABI call.
+func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
+    if owning(element, inout state) { return false; }
+    if b_empty_size_id(element, inout state) { return false; }
+    return e_vec_pop_value_layout(element, inout state);
 }
 
 func e_vec_resize_inline(element usize, state inout Emitter) bool throws Error {
