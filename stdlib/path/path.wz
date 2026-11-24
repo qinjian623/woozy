@@ -1,9 +1,94 @@
 package path;
 import "std/text" as text;
 import "std/vec" as vec;
+import "std/option" as option;
 
-pub func is_absolute(value string) bool { return text.starts_with(value,"/"); }
+pub func is_absolute(value string) bool {
+    return text.len(value) != 0 && value[0] == 47;
+}
+
 pub func clean(value string) string {
+    let length = text.len(value);
+    if length == 0 { return "."; }
+    if length > 64 && length != text.byte_len(value) {
+        return clean_long_unicode(value);
+    }
+    let absolute = value[0] == 47;
+    var cursor = length;
+    var parents usize = 0;
+    var run_start usize = 0;
+    var run_end usize = 0;
+    var suffixes = option.Option[Vec[string]].None;
+    // Walk backwards so ".." can cancel a component before we copy it.
+    for cursor != 0 {
+        let end = cursor;
+        var first u32 = 0;
+        for cursor != 0 {
+            let rune = value[cursor-1];
+            if rune == 47 { break; }
+            first = rune;
+            cursor -= 1;
+        }
+        let start = cursor;
+        if cursor != 0 { cursor -= 1; }
+        let count = end-start;
+        if count == 0 || (count == 1 && first == 46) { continue; }
+        if count == 2 && first == 46 && value[start+1] == 46 {
+            parents += 1;
+            continue;
+        }
+        if parents != 0 {
+            parents -= 1;
+            continue;
+        }
+        if run_end == 0 {
+            run_end = end;
+        } else if end+1 != run_start {
+            // Keep a slash with each later run. Consecutive components
+            // already have the right separators inside their shared span.
+            let piece = value[run_start-1:run_end];
+            switch suffixes {
+                case option.Option.Some(pieces): vec.push(pieces,piece);
+                case option.Option.None: suffixes = option.Option[Vec[string]].Some([piece]);
+            }
+            run_end = end;
+        }
+        run_start = start;
+    }
+    if run_end == 0 {
+        if absolute { return "/"; }
+        if parents == 0 { return "."; }
+        return text.repeat("../",parents-1)+"..";
+    }
+
+    if run_end == length && (run_start == 0 || (absolute && run_start == 1)) && parents == 0 {
+        return value;
+    }
+
+    var result = "";
+    if absolute && run_start == 1 {
+        result = value[:run_end];
+    } else {
+        result = value[run_start:run_end];
+        if absolute { result = "/"+result; }
+        else if parents != 0 { result = text.repeat("../",parents)+result; }
+    }
+    switch suffixes {
+        case option.Option.Some(pieces): return result+combine_reverse(pieces,0,vec.len(pieces));
+        case option.Option.None: return result;
+    }
+}
+
+// Balance concatenation so many noncontiguous runs do not repeatedly copy
+// all of the output accumulated so far.
+func combine_reverse(pieces Vec[string], start usize, end usize) string {
+    if end-start == 1 { return pieces[start]; }
+    let middle = start+(end-start)/2;
+    return combine_reverse(pieces,middle,end)+combine_reverse(pieces,start,middle);
+}
+// Indexed code point access walks UTF-8 prefixes. Use the byte-based split
+// for long non-ASCII paths to keep the scan linear.
+func clean_long_unicode(value string) string {
     let parts = vec.empty[string]();
     let absolute = is_absolute(value);
     for part in text.split(value,"/") {

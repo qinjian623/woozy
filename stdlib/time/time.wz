@@ -1,6 +1,6 @@
 package time;
 import "std/os" as os;
-import "std/strconv" as strconv;
+import "std/vec" as vec;
 import "std/text" as text;
 
 pub enum Error { InvalidDate; OutOfRange; }
@@ -107,55 +107,90 @@ pub func from_timestamp(value os.Timespec) DateTime throws Error {
 }
 // Sunday is 0; this uses the proleptic Gregorian calendar in UTC.
 pub func weekday(value DateTime) i64 throws Error { return modulo(civil_days(value)+4,7); }
-func padded(value i64, width usize) string {
-    let result = strconv.format_i64(value);
-    if text.len(result) >= width { return result; }
-    return text.repeat("0",width-text.len(result))+result;
+// The caller validates the date and chooses a width that fits every field.
+func write_decimal(out Vec[u8], end usize, width usize, value i64) {
+    var remaining = value;
+    for var index = end; index > end-width; index -= 1 {
+        out[index-1] = u8(48+remaining%10);
+        remaining /= 10;
+    }
 }
 pub func format_rfc3339(value DateTime) string throws Error {
     let checked = civil_days(value);
     if value.year < 0 || value.year > 9999 { throw Error.OutOfRange; }
-    var out = padded(value.year,4)+"-"+padded(value.month,2)+"-"+padded(value.day,2)+
-        "T"+padded(value.hour,2)+":"+padded(value.minute,2)+":"+padded(value.second,2);
-    if value.nanoseconds != 0 {
-        let fraction = padded(value.nanoseconds,9);
-        var end = text.len(fraction);
-        for end > 0 && fraction[end-1] == 48 { end -= 1; }
-        out += "."+fraction[:end];
+    var fraction = value.nanoseconds;
+    var width usize = 0;
+    if fraction != 0 {
+        width = 9;
+        for fraction%10 == 0 {
+            fraction /= 10;
+            width -= 1;
+        }
     }
-    return out+"Z";
+    var end usize = 19;
+    if width != 0 { end += 1+width; }
+    let out = vec.make[u8](end+1,0);
+    write_decimal(out,4,4,value.year);
+    out[4] = 45;
+    write_decimal(out,7,2,value.month);
+    out[7] = 45;
+    write_decimal(out,10,2,value.day);
+    out[10] = 84;
+    write_decimal(out,13,2,value.hour);
+    out[13] = 58;
+    write_decimal(out,16,2,value.minute);
+    out[16] = 58;
+    write_decimal(out,19,2,value.second);
+    if width != 0 {
+        out[19] = 46;
+        write_decimal(out,end,width,fraction);
+    }
+    out[end] = 90;
+    try { return text.from_bytes(out); }
+    catch error text.Error { throw Error.InvalidDate; }
 }
-func decimal(value string) i64 throws Error {
-    for rune in value { if rune < 48 || rune > 57 { throw Error.InvalidDate; } }
-    try { return strconv.parse_i64(value); }
-    catch error strconv.Error { throw Error.InvalidDate; }
+func decimal(value string, start usize, end usize) i64 throws Error {
+    var result i64 = 0;
+    for var index = start; index < end; index += 1 {
+        let digit = value[index];
+        if digit < 48 || digit > 57 { throw Error.InvalidDate; }
+        result = result*10+i64(digit)-48;
+    }
+    return result;
 }
 pub func parse_rfc3339(value string) os.Timespec throws Error {
     let length = text.len(value);
-    if length < 20 || value[4] != 45 || value[7] != 45 ||
+    // The longest accepted profile is seconds plus "." and nine fractional
+    // digits plus a numeric offset (19+1+9+6 = 35). Reject longer input before
+    // scanning the fraction so an unbounded digit run is constant-time work.
+    if length < 20 || length > 35 || value[4] != 45 || value[7] != 45 ||
        (value[10] != 84 && value[10] != 116) || value[13] != 58 || value[16] != 58 { throw Error.InvalidDate; }
     var nanoseconds i64 = 0;
     var end usize = 19;
     if value[end] == 46 {
         end += 1;
         let start = end;
-        for end < length && value[end] >= 48 && value[end] <= 57 { end += 1; }
+        for end < length {
+            let digit = value[end];
+            if digit < 48 || digit > 57 { break; }
+            nanoseconds = nanoseconds*10+i64(digit)-48;
+            end += 1;
+        }
         if end == start || end-start > 9 { throw Error.InvalidDate; }
-        nanoseconds = decimal(value[start:end]);
         for var index = end-start; index < 9; index += 1 { nanoseconds *= 10; }
     }
     var offset i64 = 0;
     if end+1 == length && (value[end] == 90 || value[end] == 122) {}
     else {
         if end+6 != length || (value[end] != 43 && value[end] != 45) || value[end+3] != 58 { throw Error.InvalidDate; }
-        let hour = decimal(value[end+1:end+3]);
-        let minute = decimal(value[end+4:end+6]);
+        let hour = decimal(value,end+1,end+3);
+        let minute = decimal(value,end+4,end+6);
         if hour > 23 || minute > 59 { throw Error.InvalidDate; }
         offset = hour*3600+minute*60;
         if value[end] == 45 { offset = -offset; }
     }
-    let result = to_timestamp(DateTime(year:decimal(value[:4]),month:decimal(value[5:7]),
-        day:decimal(value[8:10]),hour:decimal(value[11:13]),minute:decimal(value[14:16]),
-        second:decimal(value[17:19]),nanoseconds:nanoseconds));
+    let result = to_timestamp(DateTime(year:decimal(value,0,4),month:decimal(value,5,7),
+        day:decimal(value,8,10),hour:decimal(value,11,13),minute:decimal(value,14,16),
+        second:decimal(value,17,19),nanoseconds:nanoseconds));
     return os.Timespec(seconds:result.seconds-offset,nanoseconds:result.nanoseconds);
 }

@@ -1,0 +1,147 @@
+package app;
+
+import "std/text" as text;
+import "std/time" as time;
+import "std/unicode" as unicode;
+import "std/vec" as vec;
+
+func same_strings(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_points(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func owned_graphemes() Vec[string] {
+    var source = "a中😀e\u{301}";
+    let parts = unicode.graphemes(source);
+    source = "replaced";
+    return parts;
+}
+
+func check_unicode() i32 {
+    if unicode.VERSION != "18.0.0" { return 1; }
+    if !same_points(unicode.boundaries(""), [0]) { return 2; }
+    if unicode.grapheme_count("") != 0 { return 3; }
+    if !same_strings(unicode.graphemes(""), []) { return 4; }
+
+    if !same_points(unicode.boundaries("\0\r\n"), [0,1,3]) { return 5; }
+    if !same_strings(unicode.graphemes("\0\r\n"), ["\0","\r\n"]) { return 6; }
+
+    let family = "👩‍👩‍👧‍👦";
+    let flag = "🇨🇳";
+    let accented = "e\u{301}";
+    let sequence = family+flag+accented;
+    if !same_points(unicode.boundaries(sequence), [0,7,9,11]) { return 7; }
+    if unicode.grapheme_count(sequence) != 3 { return 8; }
+    if !same_strings(unicode.graphemes(sequence), [family,flag,accented]) { return 9; }
+
+    let hangul = "\u{1100}\u{1161}\u{11a8}";
+    if !same_points(unicode.boundaries(hangul), [0,3]) { return 10; }
+    if !same_strings(unicode.graphemes(hangul), [hangul]) { return 11; }
+
+    let toned = "👍🏽";
+    if !same_points(unicode.boundaries(toned+"x"), [0,2,3]) { return 12; }
+    if !same_strings(unicode.graphemes(toned+"x"), [toned,"x"]) { return 13; }
+
+    let mixed = "a\0中😀"+accented;
+    if !same_points(unicode.boundaries(mixed), [0,1,2,3,4,6]) { return 14; }
+    if !same_strings(unicode.graphemes(mixed), ["a","\0","中","😀",accented]) { return 15; }
+
+    if !same_strings(owned_graphemes(), ["a","中","😀",accented]) { return 16; }
+
+    // 8192 * 8 bytes = exactly 64 KiB, with one NUL and two multi-byte
+    // graphemes per unit. Every result must remain an independent string.
+    let large = text.repeat("中😀\0",8192);
+    if text.byte_len(large) != 65536 || text.len(large) != 24576 { return 17; }
+    let parts = unicode.graphemes(large);
+    if vec.len(parts) != 24576 { return 18; }
+    for var index usize = 0; index < vec.len(parts); index += 1 {
+        let remainder = index%3;
+        if remainder == 0 { if parts[index] != "中" { return 19; } }
+        else if remainder == 1 { if parts[index] != "😀" { return 20; } }
+        else { if parts[index] != "\0" { return 21; } }
+    }
+    return 0;
+}
+
+func parse_matches(value string, seconds i64, nanoseconds i64) bool {
+    try {
+        let actual = time.parse_rfc3339(value);
+        return actual.seconds == seconds && actual.nanoseconds == nanoseconds;
+    } catch error time.Error { return false; }
+}
+
+func invalid_date(value string) bool {
+    try { let ignored = time.parse_rfc3339(value); }
+    catch error time.Error {
+        switch error {
+            case time.Error.InvalidDate: return true;
+            default: return false;
+        }
+    }
+    return false;
+}
+
+func check_time_profiles() i32 {
+    // Uppercase and lowercase suffixes, Z and numeric offsets.
+    if !parse_matches("1970-01-01T00:00:00Z",0,0) { return 31; }
+    if !parse_matches("1970-01-01t00:00:00z",0,0) { return 32; }
+    if !parse_matches("1970-01-01T08:00:00+08:00",0,0) { return 33; }
+    if !parse_matches("1969-12-31T23:59:59.5-00:30",1799,500000000) { return 34; }
+
+    // Fraction digits scale to nanoseconds from the left.
+    if !parse_matches("1970-01-01T00:00:00.1Z",0,100000000) { return 35; }
+    if !parse_matches("1970-01-01T00:00:00.12Z",0,120000000) { return 36; }
+    if !parse_matches("1970-01-01T00:00:00.123456789Z",0,123456789) { return 37; }
+    if !parse_matches("1970-01-01T00:00:00.000000001Z",0,1) { return 38; }
+    if !parse_matches("1970-01-01T00:00:00.000000000Z",0,0) { return 39; }
+    if !parse_matches("1970-01-01T00:00:00.999999999Z",0,999999999) { return 42; }
+
+    // 19 + 1 + 9 + 6 = 35 is the longest accepted profile.
+    if !parse_matches("1970-01-01T08:00:00.123456789+08:00",0,123456789) { return 40; }
+    if !parse_matches("9999-12-31T23:59:59Z",253402300799,0) { return 41; }
+    return 0;
+}
+
+func check_time_invalid() i32 {
+    if !invalid_date("2023-02-29T12:00:00Z") { return 51; }
+    if !invalid_date("1970-01-01T24:00:00Z") { return 52; }
+    if !invalid_date("1970-01-01T00:60:00Z") { return 53; }
+    if !invalid_date("1970-01-01T00:00:60Z") { return 54; }
+    if !invalid_date("1970-01-01T00:00:00+24:00") { return 55; }
+    if !invalid_date("1970-01-01T00:00:00+00:60") { return 56; }
+    if !invalid_date("1970-01-01T00:00:00") { return 57; }
+    if !invalid_date("1970-01-01T00:00:00X") { return 58; }
+    if !invalid_date("1970-01-01T00:00:00.Z") { return 59; }
+    if !invalid_date("1970-01-01T00:00:00.1234567890Z") { return 60; }
+    if !invalid_date("1970-01-01T00:00:00.123456789+00:00 ") { return 61; }
+
+    // The grammar caps the accepted length, so overlong inputs must be
+    // rejected as InvalidDate without scanning the rest of the fraction.
+    let million usize = 1048576;
+    if !invalid_date(text.repeat("9",million)) { return 62; }
+    if !invalid_date("1970-01-01T00:00:00."+text.repeat("1",million)+"Z") { return 63; }
+    if !invalid_date("1970-01-01T00:00:00Z"+text.repeat("0",million)) { return 64; }
+    if !invalid_date("1970-01-01T00:00:00.123456789+00:00"+"0") { return 65; }
+    return 0;
+}
+
+func main() i32 {
+    let unicode_result = check_unicode();
+    if unicode_result != 0 { return unicode_result; }
+    let profile_result = check_time_profiles();
+    if profile_result != 0 { return profile_result; }
+    let invalid_result = check_time_invalid();
+    if invalid_result != 0 { return invalid_result; }
+    return 0;
+}
