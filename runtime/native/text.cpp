@@ -31,6 +31,20 @@ void copy(uint8_t *to, const uint8_t *from, uint64_t bytes) noexcept {
 bool scalar(uint32_t rune) noexcept {
   return rune <= 0x10ffff && !(rune >= 0xd800 && rune <= 0xdfff);
 }
+uint32_t scalar_width(uint32_t rune) noexcept {
+  return rune < 0x80 ? 1 : rune < 0x800 ? 2 : rune < 0x10000 ? 3 : 4;
+}
+void write_scalar(uint8_t *data, uint32_t rune, uint32_t width) noexcept {
+  if (width == 1) {
+    data[0] = static_cast<uint8_t>(rune);
+    return;
+  }
+  for (auto i = width - 1; i != 0; --i) {
+    data[i] = static_cast<uint8_t>(0x80 | (rune & 0x3f));
+    rune >>= 6;
+  }
+  data[0] = static_cast<uint8_t>((width == 2 ? 0xc0 : width == 3 ? 0xe0 : 0xf0) | rune);
+}
 bool decode(const uint8_t *data, uint64_t bytes, uint64_t &offset,
             uint32_t &rune) noexcept {
   if (offset >= bytes) return false;
@@ -194,10 +208,19 @@ extern "C" uint64_t lang_text_count_rune_v1(const LangText *text,
     for (uint64_t offset = 0; offset < text->bytes; ++offset)
       matches += text->data[offset] == static_cast<uint8_t>(rune);
   } else {
-    for (uint64_t offset = 0; offset < text->bytes;) {
-      uint32_t current;
-      if (!decode(text->data, text->bytes, offset, current)) panic(10);
-      matches += current == rune;
+    const auto width = scalar_width(rune);
+    if (width > text->bytes) return 0;
+    uint8_t encoded[4];
+    write_scalar(encoded, rune, width);
+    // A valid leading byte cannot match a continuation byte. Equality over
+    // this bounded window therefore implies one complete matching scalar.
+    const auto last = text->bytes - width;
+    for (uint64_t offset = 0; offset <= last; ++offset) {
+      if (text->data[offset] != encoded[0]) continue;
+      bool equal = true;
+      for (uint32_t i = 1; i < width; ++i)
+        equal &= text->data[offset + i] == encoded[i];
+      matches += equal;
     }
   }
   return matches;
@@ -253,18 +276,9 @@ extern "C" int64_t lang_text_from_rune_v1(LangText *out,
   if (!out) panic(10);
   *out = {};
   if (!scalar(rune)) return kInvalid;
-  const uint64_t bytes = rune < 0x80 ? 1 : rune < 0x800 ? 2 : rune < 0x10000 ? 3 : 4;
-  auto result = allocate(bytes, 1);
-  auto *data = const_cast<uint8_t *>(result.data);
-  if (bytes == 1) data[0] = static_cast<uint8_t>(rune);
-  else {
-    uint32_t value = rune;
-    for (uint64_t i = bytes - 1; i; --i) {
-      data[i] = static_cast<uint8_t>(0x80 | (value & 0x3f));
-      value >>= 6;
-    }
-    data[0] = static_cast<uint8_t>((bytes == 2 ? 0xc0 : bytes == 3 ? 0xe0 : 0xf0) | value);
-  }
+  const auto width = scalar_width(rune);
+  auto result = allocate(width, 1);
+  write_scalar(const_cast<uint8_t *>(result.data), rune, width);
   *out = result;
   return 0;
 }
