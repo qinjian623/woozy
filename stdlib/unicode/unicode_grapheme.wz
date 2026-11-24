@@ -25,57 +25,61 @@ import "std/vec" as vec;
 //  - ASCII code points inside mixed text skip the generated property tree.
 func wz_grapheme_boundaries(value string) Vec[usize] {
     let total = text.len(value);
-    let points = vec.empty[usize]();
     if total == 0 {
-        vec.push(points,0);
-        return points;
+        let empty = vec.make[usize](1,0);
+        return empty;
     }
-    vec.reserve(points,total+1);
-    vec.push(points,0);
     let byte_total = text.byte_len(value);
-
-    // Pure ASCII needs no UTF-8 decoding and no byte copy.  Short inputs use
-    // scalar indexing because the copy costs more than the scan; long inputs
-    // use one byte copy so the loop reads a contiguous Vec.
     if byte_total == total {
         if total <= 256 {
-            // Unroll four scalars per loop test.  The only repeated work is
-            // the CR LF join check; every emitted index is still a code-point
-            // offset and no byte copy or temporary Vec is created.
+            let crlfbase = total+1;
+            var crlf usize = 0;
             var previous = value[0];
-            var index usize = 1;
-            for index+3 < total {
-                let c0 = value[index];
-                if !(previous == 0x0d && c0 == 0x0a) { vec.push(points,index); }
-                let c1 = value[index+1];
-                if !(c0 == 0x0d && c1 == 0x0a) { vec.push(points,index+1); }
-                let c2 = value[index+2];
-                if !(c1 == 0x0d && c2 == 0x0a) { vec.push(points,index+2); }
-                let c3 = value[index+3];
-                if !(c2 == 0x0d && c3 == 0x0a) { vec.push(points,index+3); }
-                previous = c3;
-                index += 4;
-            }
-            for index < total {
+            for var index usize = 1; index < total; index += 1 {
                 let current = value[index];
-                if !(previous == 0x0d && current == 0x0a) {
-                    vec.push(points,index);
-                }
+                if previous == 0x0d && current == 0x0a { crlf += 1; }
                 previous = current;
-                index += 1;
             }
+            let count = crlfbase - crlf;
+            let out = vec.make[usize](count,0);
+            if crlf == 0 {
+                for var index usize = 0; index <= total; index += 1 { out[index] = index; }
+            } else {
+                var pos usize = 1;
+                out[0] = 0;
+                previous = value[0];
+                for var index usize = 1; index < total; index += 1 {
+                    let current = value[index];
+                    if !(previous == 0x0d && current == 0x0a) { out[pos] = index; pos += 1; }
+                    previous = current;
+                }
+                out[pos] = total;
+            }
+            return out;
         } else {
             let data = text.bytes(value);
+            var crlf usize = 0;
             for var index usize = 1; index < total; index += 1 {
-                if !(data[index-1] == 0x0d && data[index] == 0x0a) {
-                    vec.push(points,index);
-                }
+                if data[index-1] == 0x0d && data[index] == 0x0a { crlf += 1; }
             }
+            let count = total+1-crlf;
+            let out = vec.make[usize](count,0);
+            if crlf == 0 {
+                for var index usize = 0; index <= total; index += 1 { out[index] = index; }
+            } else {
+                var pos usize = 1;
+                out[0] = 0;
+                for var index usize = 1; index < total; index += 1 {
+                    if !(data[index-1] == 0x0d && data[index] == 0x0a) { out[pos] = index; pos += 1; }
+                }
+                out[pos] = total;
+            }
+            return out;
         }
-        vec.push(points,total);
-        return points;
     }
-
+    let points = vec.empty[usize]();
+    vec.reserve(points,total+1);
+    vec.push(points,0);
     let data = text.bytes(value);
     let data_total = vec.len(data);
     var offset usize = 0;
