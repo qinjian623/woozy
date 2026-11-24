@@ -2,6 +2,8 @@ package math;
 pub struct Fraction { pub fraction f64; pub exponent i32; }
 pub const PI f64 = 3.141592653589793238462643383279502884;
 pub const E f64 = 2.718281828459045235360287471352662498;
+const POSITIVE_INFINITY_VALUE f64 = 1e9999;
+const NEGATIVE_INFINITY_VALUE f64 = -1e9999;
 pub func fabs(value0 f64) f64 { return __woozy_math_fabs(value0); }
 pub func floor(value0 f64) f64 { return __woozy_math_floor(value0); }
 pub func ceil(value0 f64) f64 { return __woozy_math_ceil(value0); }
@@ -31,7 +33,7 @@ pub func fma(value0 f64, value1 f64, value2 f64) f64 { return __woozy_math_fma(v
 pub func ldexp(value0 f64, value1 i32) f64 { return __woozy_math_ldexp(value0, value1); }
 pub func frexp(value0 f64) Fraction { return __woozy_math_frexp(value0); }
 pub func isnan(value0 f64) bool { return value0 != value0; }
-pub func isinf(value0 f64) bool { return __woozy_math_isinf(value0); }
+pub func isinf(value0 f64) bool { return value0 == POSITIVE_INFINITY_VALUE || value0 == NEGATIVE_INFINITY_VALUE; }
 pub func isfinite(value0 f64) bool { return __woozy_math_isfinite(value0); }
 pub func signbit(value0 f64) bool { return __woozy_math_signbit(value0); }
 pub func min(left f64, right f64) f64 { if isnan(left) { return left; } if isnan(right) { return right; } if left < right { return left; } if left == 0.0 && right == 0.0 && signbit(left) { return left; } return right; }
