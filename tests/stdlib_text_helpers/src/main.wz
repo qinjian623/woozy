@@ -159,6 +159,11 @@ func check_split_whitespace() i32 {
         return 1010;
     }
 
+    var source = text.repeat("中😀 ",3);
+    let owned = text.split_whitespace(source);
+    source = "replaced";
+    if !same_strings(owned, ["中😀","中😀","中😀"]) { return 1013; }
+
     let fields = text.split_whitespace(text.repeat("a ",10000));
     if vec.len(fields) != 10000 { return 1011; }
     if fields[0] != "a" || fields[9999] != "a" { return 1012; }

@@ -145,16 +145,16 @@ pub func split(value string, separator string) Vec[string] {
 // an empty Vec. Embedded NUL is ordinary non-whitespace text.
 pub func split_whitespace(value string) Vec[string] {
     let out = vec.empty[string]();
-    let data = bytes(value);
-    let data_bytes = vec.len(data);
-    var offset usize = 0;
-    var start usize = 0;
+    let end = __woozy_text_cursor_at(value,len(value));
+    var offset u64 = 0;
+    var start u64 = 0;
     var in_field = false;
-    for offset < data_bytes {
-        let next = utf8_next(data,offset);
-        if is_space(utf8_decode(data,offset)) {
+    for offset < end {
+        let read = __woozy_text_cursor_read(value,offset);
+        let next = offset + (read & CURSOR_STEP_MASK);
+        if is_space(u32(read >> 32)) {
             if in_field {
-                vec.push(out,text_from_span(data,start,offset));
+                vec.push(out,__woozy_text_cursor_slice(value,start,offset));
                 in_field = false;
             }
         } else if !in_field {
@@ -163,7 +163,7 @@ pub func split_whitespace(value string) Vec[string] {
         }
         offset = next;
     }
-    if in_field { vec.push(out,text_from_span(data,start,data_bytes)); }
+    if in_field { vec.push(out,__woozy_text_cursor_slice(value,start,end)); }
     return out;
 }
 pub func join(values Vec[string], separator string) string {
