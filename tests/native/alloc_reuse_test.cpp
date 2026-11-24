@@ -260,6 +260,22 @@ static int test_reuse_without_mmap() {
       return 52;
     lang_free_v1(pointer);
   }
+
+  // One slot in this class was previously used. With that slot live again,
+  // a second allocation must come from the same page without another mmap.
+  constexpr uint64_t kPartiallyUsedSize = 3000;
+  void *first = lang_alloc_v1(kPartiallyUsedSize, 16);
+  void *second = lang_alloc_v1(kPartiallyUsedSize, 16);
+  if (!first || !second || first == second)
+    return 61;
+  fill(first, kPartiallyUsedSize, 0x30);
+  fill(second, kPartiallyUsedSize, 0x31);
+  if (!matches(first, kPartiallyUsedSize, 0x30) ||
+      !matches(second, kPartiallyUsedSize, 0x31))
+    return 62;
+  lang_free_v1(second);
+  lang_free_v1(first);
+
   for (uint32_t index = 0; index < 16; ++index) {
     void *pointer = lang_alloc_v1(48, 16);
     if (!pointer)

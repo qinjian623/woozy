@@ -108,6 +108,20 @@ struct PoolPage {
   uint32_t reserved;
 };
 
+// Offset of the first slot from the page base.  It stays on the metadata page,
+// so the first user allocation does not touch a second page merely to write
+// its header.  All class sizes are multiples of 16, matching AllocHeader.
+constexpr uint64_t kPoolSlotOffset = (sizeof(PoolPage) + 15) & ~uint64_t{15};
+static_assert(kPoolSlotOffset + 2 * kSmallClassSizes[kSmallClassCount - 1] <=
+              kPoolPageSize);
+
+static inline FreeSlot *pool_slot(PoolPage *page, uint32_t index) noexcept {
+  const uint64_t size = kSmallClassSizes[page->class_index];
+  return reinterpret_cast<FreeSlot *>(
+      reinterpret_cast<unsigned char *>(page) + kPoolSlotOffset +
+      static_cast<uintptr_t>(index) * size);
+}
+
 struct ClassState {
   PoolPage *nonfull;
   uint32_t empty_count;
@@ -316,28 +330,19 @@ static PoolPage *new_pool_page(uint32_t class_index) noexcept {
     return nullptr;
 
   auto *page = static_cast<PoolPage *>(base);
-  const uintptr_t page_base = reinterpret_cast<uintptr_t>(page);
-  constexpr uint64_t slot_offset = (sizeof(PoolPage) + 15) & ~uint64_t{15};
-  static_assert(slot_offset + 2 * kSmallClassSizes[kSmallClassCount - 1] <=
-                kPoolPageSize);
-  const uintptr_t slot_start = page_base + slot_offset;
-  const uint64_t slot_count = (kPoolPageSize - slot_offset) / slot_size;
+  const uint64_t slot_count = (kPoolPageSize - kPoolSlotOffset) / slot_size;
 
   page->next_free = nullptr;
   page->prev_free = nullptr;
+  page->free_list = nullptr;
   page->active = 0;
   page->class_index = class_index;
   page->slot_count = static_cast<uint32_t>(slot_count);
+  // reserved is the number of slots ever carved from this mapping.  Slots [0,
+  // reserved) have had their header written at least once; slots after it are
+  // untouched pages.  Freed slots are always preferred through free_list.
   page->reserved = 0;
 
-  FreeSlot *head = nullptr;
-  for (uint64_t index = 0; index < slot_count; ++index) {
-    auto *slot = reinterpret_cast<FreeSlot *>(
-        slot_start + static_cast<uintptr_t>(index * slot_size));
-    slot->next = head;
-    head = slot;
-  }
-  page->free_list = head;
   ++g_classes[class_index].empty_count;
   add_nonfull(page);
   return page;
@@ -358,14 +363,27 @@ static void *small_alloc(uint64_t size) noexcept {
   }
 
   FreeSlot *slot = page->free_list;
-  if (!slot)
+  if (slot) {
+    // Reuse a slot freed by an earlier allocation before carving new space.
+    page->free_list = slot->next;
+  } else if (page->reserved < page->slot_count) {
+    // No freed slot is available: carve the next untouched slot on demand.
+    // Starting at slot 0 keeps the first allocation on the metadata page.
+    slot = pool_slot(page, page->reserved);
+    ++page->reserved;
+  } else {
+    // A page with active < slot_count always has either a freed or an
+    // uncarved slot.  Keep the nonfull invariant explicit if that ever breaks.
+    remove_nonfull(page);
     return nullptr;
-  page->free_list = slot->next;
+  }
 
   if (page->active == 0)
     --state.empty_count;
   ++page->active;
-  if (!page->free_list)
+  // The page is nonfull exactly while active < slot_count, regardless of how
+  // many slots have been carved so far.
+  if (page->active == page->slot_count)
     remove_nonfull(page);
 
   auto *header = reinterpret_cast<AllocHeader *>(slot);
