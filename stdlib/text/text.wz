@@ -129,13 +129,14 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
     var offset = __woozy_text_cursor_at(value,start);
     var index = start;
     var needle_cursor u64 = 0;
-    var wanted = __woozy_text_cursor_read(needle,0);
+    let anchor = __woozy_text_cursor_read(needle,0);
+    var wanted = anchor;
     var matched usize = 0;
-    // The first partial mismatch is the only point that needs a failure
-    // table. Keep that input scalar and the matched prefix for KMP.
+    var retry_offset = offset;
     for index < value_length {
         let read = __woozy_text_cursor_read(value,offset);
         if (read >> 32) == (wanted >> 32) {
+            if matched == 0 { retry_offset = offset + (read & CURSOR_STEP_MASK); }
             matched += 1;
             if matched == needle_length {
                 return option.Option[usize].Some(index+1-needle_length);
@@ -149,10 +150,40 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
         index += 1;
     }
     if index == value_length { return option.Option[usize].None; }
-    let table = match_table(needle,false);
-    var cursor = SearchCursor(offset:offset,index:index);
-    if scan_matches(value,table,inout cursor,1,matched) != 0 {
-        return option.Option[usize].Some(cursor.index-needle_length);
+    // A partial match failed. Retry at the next code point, using the offset
+    // saved when the first attempt read its anchor. When repeated work reaches
+    // the length of the needle, build the KMP table once and scan the rest.
+    let last_start = value_length - needle_length;
+    var retry_index = index + 1 - matched;
+    var wasted = matched;
+    for retry_index <= last_start {
+        let read = __woozy_text_cursor_read(value,retry_offset);
+        let next_offset = retry_offset + (read & CURSOR_STEP_MASK);
+        if (read >> 32) == (anchor >> 32) {
+            var depth usize = 1;
+            var value_cursor = next_offset;
+            var pattern_cursor = anchor & CURSOR_STEP_MASK;
+            for depth < needle_length {
+                let step = __woozy_text_cursor_read(value,value_cursor);
+                let want = __woozy_text_cursor_read(needle,pattern_cursor);
+                if (step >> 32) != (want >> 32) { break; }
+                depth += 1;
+                value_cursor += step & CURSOR_STEP_MASK;
+                pattern_cursor += want & CURSOR_STEP_MASK;
+            }
+            if depth == needle_length { return option.Option[usize].Some(retry_index); }
+            if depth >= needle_length - wasted {
+                let table = match_table(needle,false);
+                var cursor = SearchCursor(offset:next_offset,index:retry_index+1);
+                if scan_matches(value,table,inout cursor,1,0) != 0 {
+                    return option.Option[usize].Some(cursor.index-needle_length);
+                }
+                return option.Option[usize].None;
+            }
+            wasted += depth;
+        }
+        retry_offset = next_offset;
+        retry_index += 1;
     }
     return option.Option[usize].None;
 }
