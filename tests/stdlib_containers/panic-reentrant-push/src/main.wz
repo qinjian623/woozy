@@ -1,0 +1,40 @@
+// The comparator reaches an alias of the heap that owns it and pushes through
+// that alias during the second push's sift. The sift pins the backing Vec, so
+// the reentrant structural push must Panic with active-iteration before it can
+// change the length or relocate storage. Returning 0 means the pin missed the
+// case and the heap accepted a reentrant mutation.
+package app;
+
+import "std/heap" as heap;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func before_i32(left i32, right i32) bool { return left > right; }
+
+func take(slot Vec[option.Option[heap.Heap[i32]]]) heap.Heap[i32] {
+    switch slot[0] {
+        case option.Option.Some(value): return value;
+        case option.Option.None: return heap.new[i32](before_i32);
+    }
+}
+
+func main() i32 {
+    // The Option slot makes the comparator and the heap that stores it
+    // mutually reachable without an uninitialized Heap value.
+    let slot = vec.make[option.Option[heap.Heap[i32]]](1,
+        option.Option[heap.Heap[i32]].None);
+    let reentrant = func(left i32, right i32) bool {
+        switch slot[0] {
+            case option.Option.Some(target): heap.push(target, left);
+            case option.Option.None: {}
+        }
+        return left > right;
+    };
+    slot[0] = option.Option[heap.Heap[i32]].Some(heap.new[i32](reentrant));
+
+    let target = take(slot);
+    heap.push(target, 1);
+    // index 1 > 0 calls the comparator while the sift holds its pin.
+    heap.push(target, 2);
+    return 0;
+}

@@ -3,9 +3,96 @@ import "std/option" as option;
 pub func empty[T]() Vec[T] { return __woozy_vec_empty[T](); }
 pub func make[T](length usize, fill T) Vec[T] { return __woozy_vec_make[T](length,fill); }
 pub func len[T](values Vec[T]) usize { return __woozy_vec_len[T](values); }
+pub func is_empty[T](values Vec[T]) bool { return len(values) == 0; }
 pub func capacity[T](values Vec[T]) usize { return __woozy_vec_capacity[T](values); }
 pub func reserve[T](values Vec[T], minimum usize) { __woozy_vec_reserve[T](values,minimum); }
 pub func push[T](values Vec[T], value T) { __woozy_vec_push[T](values,value); }
 pub func pop[T](values Vec[T]) option.Option[T] { return __woozy_vec_pop[T](values); }
 pub func resize[T](values Vec[T], length usize, fill T) { __woozy_vec_resize[T](values,length,fill); }
 pub func clear[T](values Vec[T]) { __woozy_vec_clear[T](values); }
+
+// pop_last transfers the final element out. Callers check that the Vec is
+// non-empty first; indexing at the current length Panics if that invariant is
+// ever broken instead of inventing a value.
+func pop_last[T](values Vec[T]) T {
+    switch pop(values) {
+        case option.Option.Some(value):
+            return value;
+        case option.Option.None:
+            return values[len(values)];
+    }
+}
+
+// insert places value at index and moves later elements one slot toward the
+// end. index must be at most the current length; an invalid index Panics
+// before any element or length changes. The push below performs the active
+// iteration/Slice pin check before the shifting writes start.
+pub func insert[T](values Vec[T], index usize, value T) {
+    let length = len(values);
+    if index > length {
+        // This out-of-range read raises the existing vec-index Panic before
+        // the push or any shift can run.
+        let rejected = values[index];
+        return;
+    }
+    push(values, value);
+    for var position usize = length; position > index; position -= 1 {
+        values[position] = values[position - 1];
+    }
+    values[index] = value;
+}
+
+// remove_at removes the element at index and shifts later elements one slot
+// toward the front. index must be less than the current length; an invalid
+// index Panics before any mutation. The pop below checks active pins and
+// shortens the Vec before the shifting writes start.
+pub func remove_at[T](values Vec[T], index usize) T {
+    let length = len(values);
+    if index >= length {
+        // This out-of-range read raises the existing vec-index Panic before
+        // the pop or any shift can run.
+        let rejected = values[index];
+        return rejected;
+    }
+    let last = pop_last(values);
+    if index == length - 1 {
+        return last;
+    }
+    let removed = values[index];
+    for var position usize = index; position + 1 < length - 1; position += 1 {
+        values[position] = values[position + 1];
+    }
+    values[length - 2] = last;
+    return removed;
+}
+
+// extend appends logical copies of every element in extra. The source length
+// is read once, so extending a Vec with itself appends exactly the original
+// elements; each push performs the active pin check before changing length.
+pub func extend[T](values Vec[T], extra Vec[T]) {
+    let count = len(extra);
+    for var index usize = 0; index < count; index += 1 {
+        push(values, extra[index]);
+    }
+}
+
+// swap_remove removes index in O(1) by moving the final element into its slot.
+// Element order is not preserved. index must be less than the current length;
+// an invalid index Panics before any mutation. The pop below checks active pins
+// and shortens the Vec before the replacement write.
+pub func swap_remove[T](values Vec[T], index usize) T {
+    let length = len(values);
+    if index >= length {
+        // This out-of-range read raises the existing vec-index Panic before
+        // the pop or the replacement write can run.
+        let rejected = values[index];
+        return rejected;
+    }
+    let last = pop_last(values);
+    if index == length - 1 {
+        return last;
+    }
+    let removed = values[index];
+    values[index] = last;
+    return removed;
+}

@@ -8,6 +8,11 @@ pub func view[T](values Vec[T], start usize, end usize) Slice[T] {
 pub func len[T](value Slice[T]) usize {
     return __woozy_slice_len[T](value);
 }
+// is_empty reports whether the view has no elements. An empty view still
+// keeps its owner alive and pins it until the view is dropped.
+pub func is_empty[T](value Slice[T]) bool {
+    return len(value) == 0;
+}
 pub func sub[T](value Slice[T], start usize, end usize) Slice[T] {
     return __woozy_slice_sub[T](value, start, end);
 }

@@ -17,12 +17,18 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(ROOT / 'tests/native'))
+from gc_ir_contract import (  # noqa: E402
+    ContractError, check_gc_poll_contract, expected_safepoints,
+)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--woozyc', default=str(ROOT / 'build/woozy-stdlib-native/woozyc'))
 parser.add_argument('--toolchain-root', default=str(ROOT.parent / 'toolchains'))
@@ -60,6 +66,19 @@ compat = str(TOOLCHAIN / 'libxml2-legacy-2.13.9/usr/lib')
 ENV['LD_LIBRARY_PATH'] = compat + (':' + ENV['LD_LIBRARY_PATH'] if ENV.get('LD_LIBRARY_PATH') else '')
 ENV['TMPDIR'] = str(WORK)
 
+SELFHOST_HIR_BLOCK = re.compile(r'^b[0-9]+\.[0-9]+$')
+SELFHOST_ASYNC_FUNCTION = re.compile(r'^lang\.async\.[0-9]+$')
+SELFHOST_ASYNC_DEFINE = re.compile(
+    r'@(?:"lang\.async\.[0-9]+"|lang\.async\.[0-9]+)\s*\('
+)
+REQUEST_SEQUENCE = re.compile(
+    r'(?m)^[ \t]*%[-\w.$]+ = load atomic volatile i32, ptr '
+    r'@"lang_gc_world_request_word_v1" acquire, align 4\n'
+    r'[ \t]*%[-\w.$]+ = and i32 [^\n]+, 1\n'
+    r'[ \t]*%[-\w.$]+ = icmp ne i32 [^\n]+, 0\n'
+    r'[ \t]*br i1 [^\n]+, label %[^\n]+, label %[^\n]+, !prof [^\n]+\n'
+)
+
 REQUIRED_D = [
     'scan_c_resource_flags', 'type_owns_c_resource', 'promise_type',
     'coroutine_signature', 'declare_async', 'async_begin',
@@ -88,6 +107,83 @@ records = []
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def selfhost_safepoint_contract(text):
+    """Check the Wz emitter's real HIR blocks, not the C++ b<N> convention."""
+    if not SELFHOST_ASYNC_DEFINE.search(text):
+        return None
+    return check_gc_poll_contract(
+        text, target_pattern=SELFHOST_ASYNC_FUNCTION,
+        hir_block=SELFHOST_HIR_BLOCK)
+
+def selfhost_contract_negative_checks(text):
+    """Minimal counterexamples: a missing poll and an extra misplaced poll."""
+    mutated, count = REQUEST_SEQUENCE.subn('', text, count=1)
+    if count != 1:
+        raise RuntimeError('safepoint counterexample setup: no request sequence')
+    try:
+        selfhost_safepoint_contract(mutated)
+    except ContractError:
+        missing_rejected = True
+    else:
+        missing_rejected = False
+    if not missing_rejected:
+        raise RuntimeError('IR contract accepted a missing safepoint poll')
+
+    sequence = REQUEST_SEQUENCE.search(text)
+    if sequence is None:
+        raise RuntimeError('safepoint counterexample setup: no poll sequence')
+    lines = text.splitlines(keepends=True)
+    labels = []
+    for index, line in enumerate(lines):
+        match = re.match(r'^(?P<name>"?[-\w.$]+"?):(?:\s*;.*)?\n?$', line)
+        if match is not None:
+            labels.append((index, match.group('name').strip('"')))
+    insert_at = None
+    for position, (index, name) in enumerate(labels):
+        if name.startswith('gc.poll.') or name.startswith('entry.'):
+            continue
+        end = labels[position + 1][0] if position + 1 < len(labels) else len(lines)
+        body = ''.join(lines[index + 1:end])
+        if 'lang_gc_world_request_word_v1' in body:
+            continue
+        insert_at = index + 1
+        break
+    if insert_at is None:
+        raise RuntimeError('safepoint counterexample setup: no target block')
+    misplaced = ''.join(lines[:insert_at]) + sequence.group(0) + ''.join(
+        lines[insert_at:])
+    try:
+        selfhost_safepoint_contract(misplaced)
+    except ContractError:
+        misplaced_rejected = True
+    else:
+        misplaced_rejected = False
+    if not misplaced_rejected:
+        raise RuntimeError('IR contract accepted a misplaced safepoint poll')
+    return {'missing_rejected': missing_rejected,
+            'misplaced_rejected': misplaced_rejected}
+
+def selfhost_loop_position_check():
+    """The Wz block names b<N>.<label> must still expose loop header/exit."""
+    text = (
+        'define void @"lang.async.0"(i1 %c) {\n'
+        '"entry.0":\n'
+        '  br label %"b0.1"\n'
+        '"b0.1":\n'
+        '  br label %"b1.2"\n'
+        '"b1.2":\n'
+        '  br i1 %c, label %"b1.2", label %"b2.3"\n'
+        '"b2.3":\n'
+        '  ret void\n'
+        '}\n'
+    )
+    got = expected_safepoints(text, SELFHOST_HIR_BLOCK)['lang.async.0']
+    want = {'b0.1', 'b1.2', 'b2.3'}
+    if got != want:
+        raise RuntimeError(
+            f'loop safepoint positions: expected {sorted(want)}, got {sorted(got)}')
+    return {'entry': 'b0.1', 'header': 'b1.2', 'exit': 'b2.3'}
 
 def write_records():
     (WORK / 'commands.json').write_text(json.dumps(records, indent=2) + '\n')
@@ -296,6 +392,9 @@ try:
             command('raw-check', [STAGE0, 'check', '--project', project / 'lang.toml',
                     '--backend', 'native', '--format', 'json'])
             raw_failed = False
+            contract_checks = 0
+            negative_checks = None
+            loop_check = None
             for level in (0, 2):
                 opt = level
                 out_dir = WORK / f'raw-O{level}'
@@ -313,13 +412,31 @@ try:
                         continue
                     ll = WORK / (label + '.ll')
                     ll.write_bytes(cases[index])
+                    text = ll.read_text(encoding='utf-8', errors='replace')
+                    try:
+                        contract = selfhost_safepoint_contract(text)
+                        if level == 0 and contract is not None:
+                            negative_checks = selfhost_contract_negative_checks(text)
+                            loop_check = selfhost_loop_position_check()
+                        contract_checks += 1 if contract is not None else 0
+                    except (ContractError, RuntimeError) as error:
+                        result['cases'].append({
+                            'label': label, 'opt': level, 'status': 'failed',
+                            'error': f'IR safepoint contract: {error}'})
+                        raw_failed = True
+                        continue
                     case = verify_case(label, ll, expected_exit, expected_stderr)
                     case['opt'] = level
+                    if contract is not None:
+                        case['safepoint_contract'] = contract
                     result['cases'].append(case)
                     if case['status'] != 'passed':
                         raw_failed = True
                 write_records()
             raw_status = 'failed' if raw_failed else 'passed'
+            result['safepoint_contracts_checked'] = contract_checks
+            result['safepoint_negative_checks'] = negative_checks
+            result['safepoint_loop_check'] = loop_check
         result['raw'] = raw_status
 
         # 3. Full public Verified emit entry.  This worktree has no

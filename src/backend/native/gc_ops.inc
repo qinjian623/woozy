@@ -324,10 +324,53 @@
                                       gc_trace_for_fields(fields)));
   }
   void gc_poll() {
-    auto callee = module.getOrInsertFunction(
-        "lang_gc_runtime_poll_v1",
-        llvm::FunctionType::get(builder.getVoidTy(), {}, false));
-    builder.CreateCall(callee, {});
+    const auto load_word = [&](const char *name, llvm::IntegerType *type,
+                               bool hidden) {
+      auto *word = module.getNamedGlobal(name);
+      if (!word) {
+        word = new llvm::GlobalVariable(module, type, false,
+                                       llvm::GlobalValue::ExternalLinkage,
+                                       nullptr, name);
+        if (hidden)
+          word->setVisibility(llvm::GlobalValue::HiddenVisibility);
+      }
+      auto *load = builder.CreateLoad(type, word, /*isVolatile=*/true);
+      load->setAtomic(llvm::AtomicOrdering::Acquire);
+      load->setAlignment(llvm::Align(type->getBitWidth() / 8));
+      return load;
+    };
+    const auto call_poll = [&](const char *name) {
+      auto callee = module.getOrInsertFunction(
+          name, llvm::FunctionType::get(builder.getVoidTy(), {}, false));
+      builder.CreateCall(callee, {});
+    };
+    auto *function = builder.GetInsertBlock()->getParent();
+    auto *world = llvm::BasicBlock::Create(context, "gc.poll.world", function);
+    auto *pressure =
+        llvm::BasicBlock::Create(context, "gc.poll.pressure", function);
+    auto *collect =
+        llvm::BasicBlock::Create(context, "gc.poll.collect", function);
+    auto *done = llvm::BasicBlock::Create(context, "gc.poll.done", function);
+    auto *request = load_word("lang_gc_world_request_word_v1",
+                              builder.getInt32Ty(), false);
+    auto *requested = builder.CreateAnd(request, builder.getInt32(1));
+    auto *unlikely = llvm::MDBuilder(context).createBranchWeights(1, 1024);
+    builder.CreateCondBr(builder.CreateIsNotNull(requested), world, pressure,
+                         unlikely);
+    builder.SetInsertPoint(world);
+    call_poll("lang_gc_world_poll_v1");
+    builder.CreateBr(pressure);
+    builder.SetInsertPoint(pressure);
+    auto *limit = load_word("lang_gc_runtime_pressure_limit_v1",
+                            builder.getInt64Ty(), true);
+    auto *accum = load_word("lang_gc_runtime_pressure_accum_v1",
+                            builder.getInt64Ty(), true);
+    builder.CreateCondBr(builder.CreateICmpUGE(accum, limit), collect, done,
+                         unlikely);
+    builder.SetInsertPoint(collect);
+    call_poll("lang_gc_runtime_poll_pressure_v1");
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
   }
   // A stable safepoint is a function entry, a natural-loop header, or a
   // natural-loop exit. Header polls bound garbage during a loop; exit polls

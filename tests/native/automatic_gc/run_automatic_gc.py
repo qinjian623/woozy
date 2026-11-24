@@ -1435,13 +1435,15 @@ def planned_commands(cases, opts, role):
     """Exact pre-run budget; never derived from a successful driver exit."""
     per_run = 7 if role == ROLE_REFERENCE else 6
     runs = len(cases) * len(opts)
+    resource_paths = 1 if role == ROLE_REFERENCE else 0
     return {
         "role": role,
         "commands_per_run": per_run,
         "runs": runs,
         "case_commands_expected": runs * per_run,
         "clang_version_commands": 1,
-        "total_expected": runs * per_run + 1,
+        "resource_paths_commands": resource_paths,
+        "total_expected": runs * per_run + 1 + resource_paths,
     }
 
 
@@ -1805,36 +1807,85 @@ def main():
         for name in ("cli", "helper", "runtime")
         if name in expected and expected[name] != actual_start[name]
     }
-    helper_embedded = None
-    if not candidate:
-        helper_embedded = str(args.helper.resolve()).encode() in args.cli.read_bytes()
     report["tool_pin"] = {
         "expected": expected,
         "actual_start": actual_start,
         "changed": mismatched,
-        "helper_path_embedded_in_cli": helper_embedded,
         "paths": {name: str(path) for name, path in tool_paths.items()},
         "helper_used": not candidate,
     }
-    if mismatched or (not candidate and not helper_embedded):
+    if mismatched:
         report["status"] = "inconclusive"
         report["gc_test_result"] = "inconclusive_tool_pin"
-        report["failure"] = (
-            "pinned CLI/helper/runtime mismatch"
-            if mismatched
-            else "woozyc does not embed the supplied helper path"
-        )
+        report["failure"] = "pinned CLI/helper/runtime mismatch"
         write_json(args.out / "summary.json", report)
-        print(
-            json.dumps(
-                {
-                    "status": report["status"],
-                    "gc_test_result": report["gc_test_result"],
-                    "failure": report["failure"],
-                }
-            )
-        )
+        print(json.dumps({"status": report["status"],
+                          "gc_test_result": report["gc_test_result"],
+                          "failure": report["failure"]}))
         return 2
+
+    if not candidate:
+        probe_dir = args.out / "tool"
+        try:
+            probe = execute_recorded(
+                [args.cli, "--__resource-paths"],
+                args.timeout,
+                env,
+                probe_dir,
+                "resource-paths",
+                args.raw_output_limit,
+                cwd=HERE,
+                kind="harness",
+                extra={"case": None, "opt": None},
+            )
+            require_process_clean(probe, "woozyc --__resource-paths", "harness")
+            if probe["exit"] != 0:
+                raise CaseError(
+                    "harness",
+                    f"woozyc --__resource-paths exit {probe['exit']}: "
+                    f"{probe['stderr']}",
+                )
+            paths_document = strict_json_loads(probe["_raw_stdout"])
+            if not isinstance(paths_document, dict):
+                raise CaseError(
+                    "harness", "woozyc --__resource-paths is not an object"
+                )
+        except (CaseError, OSError, ValueError, TypeError) as error:
+            report["status"] = "inconclusive"
+            report["gc_test_result"] = "inconclusive_tool_or_build"
+            report["failure"] = str(error)
+            write_json(args.out / "summary.json", report)
+            print(json.dumps({"status": report["status"],
+                              "failure": report["failure"]}))
+            return 2
+        report["tool_pin"]["resource_paths_process"] = probe.get("process_path")
+        report["tool_pin"]["helper_path_from_cli"] = paths_document.get("helper")
+        try:
+            resolved_helper = Path(paths_document["helper"]).resolve(strict=True)
+            resolved_runtime = Path(
+                paths_document["runtime"]["native"]
+            ).resolve(strict=True)
+        except (KeyError, OSError, TypeError) as error:
+            report["status"] = "inconclusive"
+            report["gc_test_result"] = "inconclusive_tool_pin"
+            report["failure"] = f"woozyc resource paths are incomplete: {error}"
+            write_json(args.out / "summary.json", report)
+            print(json.dumps({"status": report["status"],
+                              "failure": report["failure"]}))
+            return 2
+        if (resolved_helper != Path(args.helper).resolve() or
+                resolved_runtime != Path(args.runtime).resolve()):
+            report["status"] = "inconclusive"
+            report["gc_test_result"] = "inconclusive_tool_pin"
+            report["failure"] = (
+                "woozyc resolves a different helper/runtime than the pinned "
+                "reference tools"
+            )
+            write_json(args.out / "summary.json", report)
+            print(json.dumps({"status": report["status"],
+                              "failure": report["failure"]}))
+            return 2
+        report["tool_pin"]["helper_resolved_by_cli"] = True
     version_dir = args.out / "tool"
     version_trace = None
     if candidate:
@@ -1964,14 +2015,22 @@ def main():
     )
     actual_case_commands = sum(len(row["commands"]) for row in report["cases"])
     clang_actual = 1 if "clang_version" in report["tool_pin"] else 0
+    resource_paths_actual = (
+        1 if "resource_paths_process" in report["tool_pin"] else 0
+    )
     report["command_plan"]["case_commands_actual"] = actual_case_commands
     report["command_plan"]["runs_actual"] = len(report["cases"])
     report["command_plan"]["clang_version_commands_actual"] = clang_actual
-    report["command_plan"]["total_actual"] = actual_case_commands + clang_actual
+    report["command_plan"]["resource_paths_commands_actual"] = resource_paths_actual
+    report["command_plan"]["total_actual"] = (
+        actual_case_commands + clang_actual + resource_paths_actual
+    )
     report["command_plan"]["complete"] = (
         len(report["cases"]) == report["command_plan"]["runs"]
         and actual_case_commands == report["command_plan"]["case_commands_expected"]
         and clang_actual == report["command_plan"]["clang_version_commands"]
+        and resource_paths_actual ==
+        report["command_plan"]["resource_paths_commands"]
     )
 
     status, gc_result, not_implemented, feature_claim = classify_outcome(

@@ -1,0 +1,20 @@
+package main;
+import "std/os" as os;
+import "std/rwlock" as rwlock;
+import "std/sync" as sync;
+import "std/thread" as thread;
+struct Shared { lock rwlock.ReadWriteLock; started sync.AtomicI64; }
+func unlock(shared Shared) i64 {
+    sync.store(shared.started,1);
+    rwlock.write_unlock(shared.lock);
+    return 0;
+}
+func main() i32 throws os.Error {
+    let shared = Shared(lock: rwlock.new(), started: sync.atomic_i64(0));
+    rwlock.write_lock(shared.lock);
+    let worker = thread.spawn[Shared](unlock,shared);
+    for sync.load(shared.started) == 0 { }
+    let status = thread.join(worker);
+    // Reaching here means the wrong-thread unlock was accepted: fail the case.
+    return 0;
+}

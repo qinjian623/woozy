@@ -18,6 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from gc_ir_contract import ContractError, check_gc_poll_contract
+
 HERE = Path(__file__).resolve().parent
 CASES = (
     "self-cycle",
@@ -154,10 +158,19 @@ def parse_events(text: str):
 
 
 def inspect_llvm(llvm: str, case: str):
+    try:
+        poll = check_gc_poll_contract(llvm)
+    except ContractError as error:
+        need(False, f"{case}: {error}")
     checks = {
         "program_init": "lang_gc_program_init_v1" in llvm,
         "program_finish": "lang_gc_program_finish_v1" in llvm,
-        "safepoint_poll": "lang_gc_runtime_poll_v1" in llvm,
+        "safepoint_poll": poll["sites"] > 0,
+        "safepoint_positions": poll["positions_exact"],
+        "pressure_handler": poll["pressure_calls"] == poll["sites"],
+        "legacy_poll_absent": poll["legacy_calls"] == 0,
+        "safepoint_functions": poll["functions"] > 0,
+        "safepoint_sites": poll["sites"],
         "modification_window": "lang_gc_program_enter_critical_v1" in llvm,
     }
     if case == "scalar-control":

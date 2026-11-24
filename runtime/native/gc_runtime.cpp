@@ -34,9 +34,6 @@ uint32_t g_enqueue_open = 0;
 ThreadId g_collector_tid = 0;
 uint64_t g_generation = 0;
 
-uint64_t g_pressure_accum = 0;
-uint64_t g_pressure_limit = kInitialPressure;
-
 uint64_t g_queue_lock_next = 0;
 uint64_t g_queue_lock_serving = 0;
 DeferredRelease *g_queue_head = nullptr;
@@ -125,9 +122,9 @@ void queue_unlock() noexcept {
 
 bool pressure_pending() noexcept {
   const uint64_t limit =
-      __atomic_load_n(&g_pressure_limit, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_limit_v1, __ATOMIC_ACQUIRE);
   const uint64_t accum =
-      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE);
   return accum >= limit;
 }
 
@@ -194,14 +191,15 @@ void update_pressure(uint64_t snapshot, uint64_t live_after) noexcept {
   // Subtract only the registrations captured before this collection. Anything
   // registered after the snapshot remains pending and is not lost.
   uint64_t current =
-      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE);
   for (;;) {
     const uint64_t next = current > snapshot ? current - snapshot : 0;
-    if (__atomic_compare_exchange_n(&g_pressure_accum, &current, next, false,
+    if (__atomic_compare_exchange_n(&lang_gc_runtime_pressure_accum_v1,
+                                    &current, next, false,
                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
       break;
   }
-  __atomic_store_n(&g_pressure_limit, limit, __ATOMIC_RELEASE);
+  __atomic_store_n(&lang_gc_runtime_pressure_limit_v1, limit, __ATOMIC_RELEASE);
   __atomic_store_n(&g_last_live_after, live_after, __ATOMIC_RELAXED);
 }
 
@@ -219,11 +217,16 @@ int64_t map_world_failure(int64_t status) noexcept {
 
 } // namespace
 
+extern "C" {
+uint64_t lang_gc_runtime_pressure_accum_v1 = 0;
+uint64_t lang_gc_runtime_pressure_limit_v1 = kInitialPressure;
+}
+
 extern "C" LangGcStatus lang_gc_runtime_register_v1(
     void *object, const LangGcOps *ops) noexcept {
   const LangGcStatus status = lang_gc_register_v1(object, ops);
   if (status == LANG_GC_OK)
-    saturating_increment(&g_pressure_accum);
+    saturating_increment(&lang_gc_runtime_pressure_accum_v1);
   return status;
 }
 
@@ -237,8 +240,11 @@ extern "C" void lang_gc_runtime_poll_v1(void) noexcept {
   // pending.
   if (lang_gc_world_poll_required_v1())
     lang_gc_world_poll_v1();
-  if (!pressure_pending())
-    return;
+  if (pressure_pending())
+    lang_gc_runtime_poll_pressure_v1();
+}
+
+extern "C" void lang_gc_runtime_poll_pressure_v1(void) noexcept {
   if (!lang_gc_world_can_collect_v1())
     return;
   (void)lang_gc_runtime_collect_v1(kAutoStopNs, nullptr);
@@ -262,7 +268,7 @@ extern "C" int64_t lang_gc_runtime_collect_v1(
 
   const ThreadId tid = current_tid();
   const uint64_t pressure_snapshot =
-      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE);
 
   __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_STOPPING,
                    __ATOMIC_RELEASE);
@@ -370,9 +376,9 @@ extern "C" void lang_gc_runtime_stats_v1(LangGcRuntimeStats *out) noexcept {
     return;
   *out = LangGcRuntimeStats{};
   out->pressure_accum =
-      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_accum_v1, __ATOMIC_ACQUIRE);
   out->pressure_limit =
-      __atomic_load_n(&g_pressure_limit, __ATOMIC_ACQUIRE);
+      __atomic_load_n(&lang_gc_runtime_pressure_limit_v1, __ATOMIC_ACQUIRE);
   out->last_live_after =
       __atomic_load_n(&g_last_live_after, __ATOMIC_RELAXED);
   out->queue_depth = __atomic_load_n(&g_queue_depth, __ATOMIC_RELAXED);

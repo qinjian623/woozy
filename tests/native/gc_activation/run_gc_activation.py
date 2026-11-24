@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from gc_ir_contract import ContractError, check_gc_poll_contract
 
 CASES = {
     "no-graph-string-vec": False,
@@ -91,13 +93,21 @@ def main() -> int:
             ok(emit, f"{label} O{opt} emit")
             assert json.loads(emit["stdout"])["status"] == "passed", emit
             llvm = (ir / "before.ll").read_text(encoding="utf-8")
+            try:
+                poll = check_gc_poll_contract(llvm)
+            except ContractError as error:
+                raise RuntimeError(f"{label} O{opt}: {error}") from error
             facts = {
                 "init_calls": calls(llvm, "lang_gc_program_init_v1"),
                 "register_calls": calls(llvm, "lang_gc_program_register_v1"),
                 "world_register_calls": calls(
                     llvm, "lang_gc_world_register_v1"),
                 "finish_calls": calls(llvm, "lang_gc_program_finish_v1"),
-                "poll_calls": calls(llvm, "lang_gc_runtime_poll_v1"),
+                "poll_sites": poll["sites"],
+                "poll_functions": poll["functions"],
+                "poll_positions_exact": poll["positions_exact"],
+                "pressure_handler_calls": poll["pressure_calls"],
+                "legacy_poll_calls": poll["legacy_calls"],
                 "critical_calls": calls(
                     llvm, "lang_gc_program_enter_critical_v1"),
             }
@@ -112,7 +122,11 @@ def main() -> int:
             # The optimization must not remove safepoints or graph-stable
             # modification windows; only the program lifecycle is skipped.
             assert facts["finish_calls"] > 0, (label, opt, facts)
-            assert facts["poll_calls"] > 0, (label, opt, facts)
+            assert facts["poll_sites"] > 0, (label, opt, facts)
+            assert facts["poll_positions_exact"], (label, opt, facts)
+            assert facts["pressure_handler_calls"] == facts["poll_sites"], (
+                label, opt, facts)
+            assert facts["legacy_poll_calls"] == 0, (label, opt, facts)
             assert facts["critical_calls"] > 0, (label, opt, facts)
         row["status"] = "passed"
 
@@ -136,12 +150,20 @@ def main() -> int:
     ok(emit, "timezone LLVM emit")
     assert json.loads(emit["stdout"])["status"] == "passed", emit
     llvm = (tz_out / "before.ll").read_text(encoding="utf-8")
+    try:
+        poll = check_gc_poll_contract(llvm)
+    except ContractError as error:
+        raise RuntimeError(f"timezone-no-graph O2: {error}") from error
     facts = {
         "init_calls": calls(llvm, "lang_gc_program_init_v1"),
         "register_calls": calls(llvm, "lang_gc_program_register_v1"),
         "world_register_calls": calls(llvm, "lang_gc_world_register_v1"),
         "finish_calls": calls(llvm, "lang_gc_program_finish_v1"),
-        "poll_calls": calls(llvm, "lang_gc_runtime_poll_v1"),
+        "poll_sites": poll["sites"],
+        "poll_functions": poll["functions"],
+        "poll_positions_exact": poll["positions_exact"],
+        "pressure_handler_calls": poll["pressure_calls"],
+        "legacy_poll_calls": poll["legacy_calls"],
         "critical_calls": calls(llvm, "lang_gc_program_enter_critical_v1"),
     }
     report["timezone_no_graph"]["llvm"] = facts
@@ -149,7 +171,10 @@ def main() -> int:
     assert facts["register_calls"] == 0, facts
     assert facts["world_register_calls"] == 0, facts
     assert facts["finish_calls"] > 0, facts
-    assert facts["poll_calls"] > 0, facts
+    assert facts["poll_sites"] > 0, facts
+    assert facts["poll_positions_exact"], facts
+    assert facts["pressure_handler_calls"] == facts["poll_sites"], facts
+    assert facts["legacy_poll_calls"] == 0, facts
     assert facts["critical_calls"] > 0, facts
     report["timezone_no_graph"]["status"] = "passed"
     report["status"] = "passed"

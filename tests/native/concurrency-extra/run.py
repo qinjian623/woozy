@@ -81,6 +81,8 @@ def main():
         ('rwlock-misuse-unowned-read-unlock', 101, 1),
         ('rwlock-misuse-unowned-write-unlock', 101, 1),
         ('rwlock-misuse-wrong-thread-unlock', 101, 1),
+        ('rwlock-misuse-read-recursive-overflow', 101, 1),
+        ('rwlock-misuse-wrong-thread-write-unlock', 101, 1),
     ]
     report = dict(status='failed', cli_sha256=digest(args.cli),
                   runs=[], runtime=[], static=[], not_run=[])

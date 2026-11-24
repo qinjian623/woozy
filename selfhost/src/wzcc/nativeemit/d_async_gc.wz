@@ -1522,7 +1522,42 @@ func d_text_length(value string) usize {
 // GC polling and the stable loop safepoints from gc_ops.inc.
 
 pub func gc_poll(state inout Emitter) throws Error {
-    let poll = runtime("lang_gc_runtime_poll_v1", "void", [], inout state);
+    let origin = here(state);
+    let function_index = origin.function_index;
+    let world = new_block(function_index, "gc.poll.world", inout state);
+    let pressure = new_block(function_index, "gc.poll.pressure", inout state);
+    let collect = new_block(function_index, "gc.poll.collect", inout state);
+    let done = new_block(function_index, "gc.poll.done", inout state);
+    let request_word = define_global("lang_gc_world_request_word_v1",
+        "external global i32, align 4", inout state);
+    let request = result("i32", "load atomic volatile i32, ptr " +
+        request_word.reference + " acquire, align 4", inout state);
+    let bit = result("i32", "and " + typed(request) + ", 1", inout state);
+    let requested = result("i1", "icmp ne " + typed(bit) + ", 0", inout state);
+    let weights = define_metadata("gc.poll.weights",
+        "!{!\"branch_weights\", i32 1, i32 1024}", inout state);
+    terminate("br " + typed(requested) + ", label " + world.reference +
+        ", label " + pressure.reference + ", !prof " + weights, inout state);
+    position(world, inout state);
+    let parked = runtime("lang_gc_world_poll_v1", "void", [], inout state);
+    terminate("br label " + pressure.reference, inout state);
+    position(pressure, inout state);
+    let limit_word = define_global("lang_gc_runtime_pressure_limit_v1",
+        "external hidden global i64, align 8", inout state);
+    let accum_word = define_global("lang_gc_runtime_pressure_accum_v1",
+        "external hidden global i64, align 8", inout state);
+    let limit = result("i64", "load atomic volatile i64, ptr " +
+        limit_word.reference + " acquire, align 8", inout state);
+    let accum = result("i64", "load atomic volatile i64, ptr " +
+        accum_word.reference + " acquire, align 8", inout state);
+    let pending = result("i1", "icmp uge " + typed(accum) + ", " +
+        limit.reference, inout state);
+    terminate("br " + typed(pending) + ", label " + collect.reference +
+        ", label " + done.reference + ", !prof " + weights, inout state);
+    position(collect, inout state);
+    let collected = runtime("lang_gc_runtime_poll_pressure_v1", "void", [], inout state);
+    terminate("br label " + done.reference, inout state);
+    position(done, inout state);
 }
 
 pub func gc_collect_loop_exit(state inout Emitter) throws Error {

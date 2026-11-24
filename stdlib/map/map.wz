@@ -17,6 +17,9 @@ import "std/option" as option;
 import "std/vec" as vec;
 
 const INITIAL_CAPACITY usize = 8;
+// The largest representable usize. Bucket growth must never double past half
+// of this value; see grow.
+const MAX_USIZE usize = ~usize(0);
 
 pub struct Entry[K,V] {
     pub key K;
@@ -57,6 +60,11 @@ pub func len[K hash.Hash,V](values Map[K,V]) usize {
     return values.state[0].size[0];
 }
 
+// is_empty reports whether the map has no entries.
+pub func is_empty[K hash.Hash,V](values Map[K,V]) bool {
+    return len(values) == 0;
+}
+
 func bucket_index[K hash.Hash](key K, capacity usize) usize {
     return usize(K.hash(key) % u64(capacity));
 }
@@ -73,7 +81,14 @@ func find_index[K hash.Hash,V](bucket Vec[Entry[K,V]], key K) option.Option[usiz
 
 func grow[K hash.Hash,V](values Map[K,V], state State[K,V]) {
     let capacity = vec.len(state.buckets);
-    let larger = capacity * 2;
+    // Doubling is representable only up to MAX_USIZE / 2. Keep the request at
+    // MAX_USIZE beyond that point so empty_buckets reaches std/vec's checked
+    // allocation-size Panic; never rehash into a silently wrapped, smaller
+    // bucket array. The current capacity can only get here after the previous
+    // allocation already succeeded, but the arithmetic guard states the
+    // contract directly instead of relying on allocator failure first.
+    var larger = MAX_USIZE;
+    if capacity <= MAX_USIZE / 2 { larger = capacity * 2; }
     let buckets = empty_buckets[K,V](larger);
     for var index usize = 0; index < capacity; index += 1 {
         let bucket = state.buckets[index];

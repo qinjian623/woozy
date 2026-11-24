@@ -22,6 +22,11 @@ pub func len[K hash.Hash](values Set[K]) usize {
     return map.len(values.items);
 }
 
+// is_empty reports whether the set has no members.
+pub func is_empty[K hash.Hash](values Set[K]) bool {
+    return len(values) == 0;
+}
+
 pub func contains[K hash.Hash](values Set[K], key K) bool {
     return map.contains(values.items, key);
 }
@@ -55,4 +60,46 @@ pub func values[K hash.Hash](values Set[K]) Vec[K] {
 
 pub func clear[K hash.Hash](values Set[K]) {
     map.clear(values.items);
+}
+
+// union returns a new set containing every key from left and right. The result
+// has its own map storage, so changing it does not change either input and
+// changing an input does not change it. Keys are copied by ordinary assignment
+// when inserted into the result. left and right may be the same set. Iteration
+// order is unspecified.
+pub func union[K hash.Hash](left Set[K], right Set[K]) Set[K] {
+    let result = new[K]();
+    for key in values(left) {
+        add(result, key);
+    }
+    for key in values(right) {
+        add(result, key);
+    }
+    return result;
+}
+
+// intersection returns a new, independently stored set containing the keys that
+// are present in both left and right. Neither input is modified, and aliased
+// inputs produce a copy of their common keys. Iteration order is unspecified.
+pub func intersection[K hash.Hash](left Set[K], right Set[K]) Set[K] {
+    let result = new[K]();
+    for key in values(left) {
+        if contains(right, key) {
+            add(result, key);
+        }
+    }
+    return result;
+}
+
+// difference returns a new, independently stored set containing the keys from
+// left that are not present in right. Neither input is modified, and aliased
+// inputs produce an empty set. Iteration order is unspecified.
+pub func difference[K hash.Hash](left Set[K], right Set[K]) Set[K] {
+    let result = new[K]();
+    for key in values(left) {
+        if !contains(right, key) {
+            add(result, key);
+        }
+    }
+    return result;
 }

@@ -1,0 +1,18 @@
+// The oversized reserve must terminate through the checked Vec allocation
+// Panic. It must not return and must not loop while a usize doubling wraps to
+// zero.
+package app;
+
+import "std/deque" as deque;
+
+struct Payload {
+    left u64;
+    right u64;
+}
+
+func main() i32 {
+    let queue = deque.new[Payload]();
+    deque.reserve(queue, ~usize(0));
+    // Unreachable: reserve panics before returning.
+    return 1;
+}

@@ -198,10 +198,11 @@ build failure stops that case before a later observer can mask it.
 
 The full nine cases at O0/O2 are 18 runs. Reference uses 7 commands per run
 (126 case commands); candidate uses 6 (108) because it has no helper emit.
-Each role also performs one `clang --version` check, so the full
-planned counts are 127 and 109 (236 for both), excluding preparation. The
-`command_plan` field reports these pre-run expectations; it is not backfilled
-from a driver exit status.
+Each role also performs one `clang --version` check. Reference additionally
+runs one bounded `woozyc --__resource-paths` query, so the full planned counts
+are 128 and 109 (237 for both), excluding preparation. The `command_plan` field
+reports these pre-run expectations; it is not backfilled from a driver exit
+status.
 
 ## Tool and input pinning
 
@@ -212,14 +213,19 @@ from a driver exit status.
   overflow such as `1e999` are rejected, not stringified. `summary.json`,
   compact reports and process JSON are written with `allow_nan=False` and
   recursive finite-number checks.
-- In reference mode the CLI must embed the supplied helper path; a mismatch
-  is `inconclusive_tool_pin`, not a GC result. Candidate mode does not check
-  the helper and pins the CLI, runtime, clang, readelf, strace and LLD.
+- In reference mode the runner asks the CLI for its bounded
+  `--__resource-paths` document and requires the resolved helper and native
+  runtime to be the supplied `--helper` and `--runtime`. The current CLI
+  resolves resources relative to its executable; it intentionally does not
+  embed an absolute helper path. The query itself is recorded as a bounded
+  process with raw streams and hashes. A different resolved resource is
+  `inconclusive_tool_pin`, not a GC result. Candidate mode does not check the
+  helper and pins the CLI, runtime, clang, readelf, strace and LLD.
 - CLI/helper/runtime (reference) or CLI/runtime/strace/LLD (candidate) are
   re-hashed after the run. Any change makes the run `inconclusive_tool_pin`.
   Root may rebuild the CLI while running Python GC tests; the helper/runtime
-  pin is what matters for Native evidence. A copied CLI (with the same
-  embedded helper path) can be used to keep the CLI stable.
+  pin is what matters for Native evidence. A copied CLI with the same
+  executable-relative resource layout can be used to keep the CLI stable.
 - Every command has a finite timeout (`--timeout`, per-case override for the
   pressure cases). Tool output, exit codes, source hashes and the pin are in
   the external full summary.

@@ -159,6 +159,258 @@ func writer_priority() i32 throws os.Error {
     return 0;
 }
 
+
+// The first reader owns the fixed slot; every additional reader lives in the
+// overflow table. This case makes the first reader leave while an overflow
+// reader still holds the lock and a writer is competing. The overflow reader
+// must be promoted without overlapping the writer; the writer runs after the
+// promoted reader leaves and a later reader then refills the slot.
+//
+// Writer priority itself is covered by writer_priority. The lock exposes no
+// waiting-queue query, so this case asserts only invariant no-overlap and
+// deterministic handoff/liveness signals, never a guessed wait state.
+struct Handoff {
+    lock rwlock.ReadWriteLock;
+    phase sync.AtomicI64;
+    r1_started sync.AtomicI64;
+    r1_done sync.AtomicI64;
+    r2_started sync.AtomicI64;
+    r2_done sync.AtomicI64;
+    r3_acquired sync.AtomicI64;
+    r3_done sync.AtomicI64;
+    writer_ready sync.AtomicI64;
+    writer_acquired sync.AtomicI64;
+    writer_done sync.AtomicI64;
+    active_readers sync.AtomicI64;
+    active_writers sync.AtomicI64;
+    overlap sync.AtomicI64;
+}
+
+func handoff_first(shared Handoff) i64 {
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    sync.store(shared.r1_started,1);
+    for sync.load(shared.phase) < 1 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r1_done,1);
+    return 0;
+}
+
+func handoff_second(shared Handoff) i64 {
+    for sync.load(shared.r1_started) == 0 { }
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    sync.store(shared.r2_started,1);
+    for sync.load(shared.phase) < 2 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r2_done,1);
+    return 0;
+}
+
+func handoff_third(shared Handoff) i64 {
+    for sync.load(shared.writer_done) == 0 { }
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    if sync.load(shared.active_writers) != 0 { sync.store(shared.overlap,1); }
+    sync.store(shared.r3_acquired,1);
+    for sync.load(shared.phase) < 4 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r3_done,1);
+    return 0;
+}
+
+func handoff_writer(shared Handoff) i64 {
+    for sync.load(shared.r2_started) == 0 { }
+    sync.store(shared.writer_ready,1);
+    rwlock.write_lock(shared.lock);
+    if sync.load(shared.active_readers) != 0 || sync.load(shared.active_writers) != 0 {
+        sync.store(shared.overlap,1);
+    }
+    sync.fetch_add(shared.active_writers,1);
+    sync.store(shared.writer_acquired,1);
+    for sync.load(shared.phase) < 3 { }
+    sync.fetch_add(shared.active_writers,-1);
+    rwlock.write_unlock(shared.lock);
+    sync.store(shared.writer_done,1);
+    return 0;
+}
+
+func slot_handoff() i32 throws os.Error {
+    let shared = Handoff(
+        lock: rwlock.new(),
+        phase: sync.atomic_i64(0),
+        r1_started: sync.atomic_i64(0),
+        r1_done: sync.atomic_i64(0),
+        r2_started: sync.atomic_i64(0),
+        r2_done: sync.atomic_i64(0),
+        r3_acquired: sync.atomic_i64(0),
+        r3_done: sync.atomic_i64(0),
+        writer_ready: sync.atomic_i64(0),
+        writer_acquired: sync.atomic_i64(0),
+        writer_done: sync.atomic_i64(0),
+        active_readers: sync.atomic_i64(0),
+        active_writers: sync.atomic_i64(0),
+        overlap: sync.atomic_i64(0));
+    let first = thread.spawn[Handoff](handoff_first,shared);
+    if !wait_value(shared.r1_started,1) { return 17; }
+    let second = thread.spawn[Handoff](handoff_second,shared);
+    if !wait_value(shared.r2_started,1) { return 18; }
+    if sync.load(shared.active_readers) != 2 { return 19; }
+
+    let writer = thread.spawn[Handoff](handoff_writer,shared);
+    if !wait_value(shared.writer_ready,1) { return 20; }
+    if sync.load(shared.writer_acquired) != 0 { return 21; }
+
+    sync.store(shared.phase,1);
+    if !wait_value(shared.r1_done,1) { return 22; }
+    if sync.load(shared.active_readers) != 1 { return 23; }
+    if sync.load(shared.writer_acquired) != 0 { return 24; }
+
+    sync.store(shared.phase,2);
+    if !wait_value(shared.r2_done,1) { return 25; }
+    if !wait_value(shared.writer_acquired,1) { return 26; }
+    if sync.load(shared.active_readers) != 0 { return 27; }
+
+    sync.store(shared.phase,3);
+    if !wait_value(shared.writer_done,1) { return 28; }
+    let third = thread.spawn[Handoff](handoff_third,shared);
+    if !wait_value(shared.r3_acquired,1) { return 29; }
+    if sync.load(shared.active_readers) != 1 ||
+       sync.load(shared.active_writers) != 0 { return 30; }
+
+    sync.store(shared.phase,4);
+    if !wait_value(shared.r3_done,1) { return 31; }
+    if thread.join(writer) != 0 { return 32; }
+    if thread.join(third) != 0 || thread.join(second) != 0 ||
+       thread.join(first) != 0 { return 33; }
+    if sync.load(shared.overlap) != 0 { return 34; }
+    return 0;
+}
+
+// No writer participates here. Readers leave in slot order so the promoted
+// reader is unlocked next and a new overflow reader is appended after that.
+struct Refill {
+    lock rwlock.ReadWriteLock;
+    phase sync.AtomicI64;
+    r1_started sync.AtomicI64;
+    r1_done sync.AtomicI64;
+    r2_started sync.AtomicI64;
+    r2_done sync.AtomicI64;
+    r3_started sync.AtomicI64;
+    r3_done sync.AtomicI64;
+    writer_acquired sync.AtomicI64;
+    active_readers sync.AtomicI64;
+    overlap sync.AtomicI64;
+}
+
+func refill_first(shared Refill) i64 {
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    sync.store(shared.r1_started,1);
+    for sync.load(shared.phase) < 1 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r1_done,1);
+    return 0;
+}
+
+func refill_second(shared Refill) i64 {
+    for sync.load(shared.r1_started) == 0 { }
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    sync.store(shared.r2_started,1);
+    for sync.load(shared.phase) < 2 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r2_done,1);
+    return 0;
+}
+
+func refill_third(shared Refill) i64 {
+    for sync.load(shared.r1_done) == 0 { }
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    sync.store(shared.r3_started,1);
+    for sync.load(shared.phase) < 3 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    sync.store(shared.r3_done,1);
+    return 0;
+}
+
+func refill_writer(shared Refill) i64 {
+    for sync.load(shared.r3_done) == 0 { }
+    rwlock.write_lock(shared.lock);
+    if sync.load(shared.active_readers) != 0 { sync.store(shared.overlap,1); }
+    sync.store(shared.writer_acquired,1);
+    rwlock.write_unlock(shared.lock);
+    return 0;
+}
+
+func slot_refill() i32 throws os.Error {
+    let shared = Refill(
+        lock: rwlock.new(),
+        phase: sync.atomic_i64(0),
+        r1_started: sync.atomic_i64(0),
+        r1_done: sync.atomic_i64(0),
+        r2_started: sync.atomic_i64(0),
+        r2_done: sync.atomic_i64(0),
+        r3_started: sync.atomic_i64(0),
+        r3_done: sync.atomic_i64(0),
+        writer_acquired: sync.atomic_i64(0),
+        active_readers: sync.atomic_i64(0),
+        overlap: sync.atomic_i64(0));
+    let first = thread.spawn[Refill](refill_first,shared);
+    if !wait_value(shared.r1_started,1) { return 30; }
+    let second = thread.spawn[Refill](refill_second,shared);
+    if !wait_value(shared.r2_started,1) { return 31; }
+    if sync.load(shared.active_readers) != 2 { return 32; }
+
+    sync.store(shared.phase,1);
+    if !wait_value(shared.r1_done,1) { return 33; }
+    let third = thread.spawn[Refill](refill_third,shared);
+    if !wait_value(shared.r3_started,1) { return 34; }
+    if sync.load(shared.active_readers) != 2 { return 35; }
+
+    sync.store(shared.phase,2);
+    if !wait_value(shared.r2_done,1) { return 36; }
+    sync.store(shared.phase,3);
+    if !wait_value(shared.r3_done,1) { return 37; }
+
+    let writer = thread.spawn[Refill](refill_writer,shared);
+    if !wait_value(shared.writer_acquired,1) { return 38; }
+    if thread.join(writer) != 0 || thread.join(third) != 0 ||
+       thread.join(second) != 0 || thread.join(first) != 0 { return 39; }
+    if sync.load(shared.overlap) != 0 { return 40; }
+    return 0;
+}
+
+
+// A copied ReadWriteLock must alias the original gate, reader table and owner
+// cell. The owning thread unlocks through a local copy and a struct-field
+// copy; an independent copy has no matching owner and Panics instead.
+struct Alias {
+    lock rwlock.ReadWriteLock;
+}
+
+func copy_alias() i32 {
+    let lock = rwlock.new();
+    let copy = lock;
+    let alias = Alias(lock: lock);
+    rwlock.write_lock(lock);
+    rwlock.write_unlock(copy);
+    rwlock.write_lock(alias.lock);
+    rwlock.write_unlock(lock);
+    rwlock.read_lock(lock);
+    rwlock.read_unlock(copy);
+    rwlock.read_lock(alias.lock);
+    rwlock.read_unlock(lock);
+    return 0;
+}
+
 func main() i32 throws os.Error {
     let readers = parallel_readers();
     if readers != 0 { return readers; }
@@ -166,5 +418,9 @@ func main() i32 throws os.Error {
     if writers != 0 { return writers; }
     let priority = writer_priority();
     if priority != 0 { return priority; }
-    return 0;
+    let handoff = slot_handoff();
+    if handoff != 0 { return handoff; }
+    let refill = slot_refill();
+    if refill != 0 { return refill; }
+    return copy_alias();
 }

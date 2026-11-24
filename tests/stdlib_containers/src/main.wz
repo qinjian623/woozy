@@ -1,0 +1,1116 @@
+// Behaviour checks for std/deque and std/heap. main returns 0 on success and
+// a unique non-zero code identifying the first failing check.
+package app;
+
+import "std/box" as box;
+import "std/deque" as deque;
+import "std/heap" as heap;
+import "std/map" as map;
+import "std/option" as option;
+import "std/set" as set;
+import "std/slice" as slice;
+import "std/vec" as vec;
+import "std/weak" as weak;
+
+struct Item {
+    key i32;
+    tag i32;
+}
+
+func before_i32(left i32, right i32) bool { return left > right; }
+func before_lower_i32(left i32, right i32) bool { return left < right; }
+func before_item(left Item, right Item) bool { return left.key > right.key; }
+func before_string(left string, right string) bool { return left > right; }
+func before_vec(left Vec[i32], right Vec[i32]) bool { return left[0] > right[0]; }
+func before_box(left box.Box[i32], right box.Box[i32]) bool {
+    return box.get(left) > box.get(right);
+}
+
+// make_scaled_heap returns a heap whose comparator captures a Vec handle. The
+// caller scope ends before the heap is used, so the heap must retain the
+// captured environment itself. factor[0] == -1 makes this a min-heap.
+func make_scaled_heap() heap.Heap[i32] {
+    let factor = vec.make[i32](1, -1);
+    let captured = func(left i32, right i32) bool {
+        return left * factor[0] > right * factor[0];
+    };
+    return heap.new[i32](captured);
+}
+
+func some_i32(value option.Option[i32], expected i32) bool {
+    switch value {
+        case option.Option.Some(actual): return actual == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func none_i32(value option.Option[i32]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func some_item(value option.Option[Item], key i32) bool {
+    switch value {
+        case option.Option.Some(actual): return actual.key == key;
+        case option.Option.None: return false;
+    }
+}
+
+func none_item(value option.Option[Item]) bool {
+    switch value {
+        case option.Option.Some(actual): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func test_empty() i32 {
+    let queue = deque.new[i32]();
+    if deque.len(queue) != 0 { return 10; }
+    if !deque.is_empty(queue) { return 11; }
+    if deque.capacity(queue) < 8 { return 12; }
+    if !none_i32(deque.pop_front(queue)) { return 13; }
+    if !none_i32(deque.pop_back(queue)) { return 14; }
+    if !none_i32(deque.peek_front(queue)) { return 15; }
+    if !none_i32(deque.peek_back(queue)) { return 16; }
+    if !none_i32(deque.pop_front(queue)) { return 17; }
+    if !none_i32(deque.peek_front(queue)) { return 18; }
+    if !none_i32(deque.get(queue, 0)) { return 19; }
+
+    deque.push_back(queue, 5);
+    if deque.len(queue) != 1 || deque.is_empty(queue) { return 20; }
+    if !some_i32(deque.pop_front(queue), 5) { return 21; }
+    if !none_i32(deque.pop_front(queue)) { return 22; }
+    deque.push_front(queue, 6);
+    if !some_i32(deque.pop_back(queue), 6) { return 23; }
+    if !none_i32(deque.pop_back(queue)) { return 24; }
+
+    let priority = heap.new[i32](before_i32);
+    if heap.len(priority) != 0 || !heap.is_empty(priority) { return 25; }
+    if !none_i32(heap.peek(priority)) { return 26; }
+    if !none_i32(heap.pop(priority)) { return 27; }
+    heap.push(priority, 7);
+    if heap.len(priority) != 1 || heap.is_empty(priority) { return 28; }
+    if !some_i32(heap.peek(priority), 7) { return 29; }
+    if !some_i32(heap.pop(priority), 7) { return 30; }
+    if !none_i32(heap.pop(priority)) { return 31; }
+    if !none_i32(heap.peek(priority)) { return 32; }
+    return 0;
+}
+
+// Fill part of the ring, move head forward, then wrap new pushes through slot
+// zero. A final push from full exercises growth with a nonzero head.
+func test_deque_wrap_growth() i32 {
+    let queue = deque.new[i32]();
+    if deque.capacity(queue) < 8 { return 40; }
+    for var index i32 = 0; index < 6; index += 1 {
+        deque.push_back(queue, index);
+    }
+    if !some_i32(deque.peek_front(queue), 0) { return 41; }
+    if !some_i32(deque.peek_back(queue), 5) { return 42; }
+    if !some_i32(deque.pop_front(queue), 0) { return 43; }
+    if !some_i32(deque.pop_front(queue), 1) { return 44; }
+    for var index i32 = 6; index < 10; index += 1 {
+        deque.push_back(queue, index);
+    }
+    if deque.len(queue) != 8 { return 45; }
+    let wrapped Vec[i32] = [2, 3, 4, 5, 6, 7, 8, 9];
+    for var index usize = 0; index < 8; index += 1 {
+        if !some_i32(deque.get(queue, index), wrapped[index]) { return 46; }
+    }
+    if !none_i32(deque.get(queue, 8)) { return 47; }
+
+    deque.push_back(queue, 10);
+    if deque.len(queue) != 9 { return 48; }
+    if deque.capacity(queue) < 16 { return 49; }
+    let grown Vec[i32] = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+    for var index usize = 0; index < 9; index += 1 {
+        if !some_i32(deque.get(queue, index), grown[index]) { return 50; }
+    }
+    if !some_i32(deque.peek_front(queue), 2) { return 51; }
+    if !some_i32(deque.peek_back(queue), 10) { return 52; }
+    for var index usize = 0; index < 9; index += 1 {
+        if !some_i32(deque.pop_front(queue), grown[index]) { return 53; }
+    }
+    if !none_i32(deque.pop_front(queue)) { return 54; }
+
+    // head is not reset when the deque becomes empty, so this round starts at
+    // a wrapped position inside the retained ring.
+    for var index i32 = 0; index < 5; index += 1 {
+        deque.push_front(queue, index);
+    }
+    if !some_i32(deque.peek_front(queue), 4) { return 55; }
+    if !some_i32(deque.peek_back(queue), 0) { return 56; }
+    for var index i32 = 0; index < 5; index += 1 {
+        if !some_i32(deque.pop_back(queue), index) { return 57; }
+    }
+    if !none_i32(deque.pop_back(queue)) { return 58; }
+    return 0;
+}
+
+func test_deque_reuse_and_aliases() i32 {
+    let queue = deque.new[i32]();
+    for var index i32 = 0; index < 5; index += 1 {
+        deque.push_back(queue, index);
+    }
+    let reserved = deque.capacity(queue);
+    deque.clear(queue);
+    if deque.len(queue) != 0 || !deque.is_empty(queue) { return 60; }
+    if deque.capacity(queue) != reserved { return 61; }
+    if !none_i32(deque.pop_front(queue)) { return 62; }
+    if !none_i32(deque.peek_back(queue)) { return 63; }
+
+    deque.push_back(queue, 100);
+    deque.push_front(queue, 99);
+    let alias = queue;
+    if deque.len(alias) != 2 { return 64; }
+    deque.push_back(alias, 101);
+    if deque.len(queue) != 3 { return 65; }
+    if !some_i32(deque.pop_back(queue), 101) { return 66; }
+    if !some_i32(deque.pop_front(alias), 99) { return 67; }
+    if !some_i32(deque.peek_front(queue), 100) { return 68; }
+    if !some_i32(deque.pop_front(queue), 100) { return 69; }
+    if !none_i32(deque.pop_front(queue)) { return 70; }
+
+    // Reuse the same container after clear; old slots must not reappear.
+    deque.push_back(queue, 7);
+    deque.push_front(queue, 8);
+    deque.clear(queue);
+    if !none_i32(deque.get(queue, 0)) { return 71; }
+    deque.push_back(queue, 42);
+    if !some_i32(deque.pop_front(queue), 42) { return 72; }
+    if !none_i32(deque.pop_front(queue)) { return 73; }
+    return 0;
+}
+
+// Vec handles are shared references. Popping returns one owning copy, but it
+// still refers to the same inner container as the original alias.
+func test_deque_values() i32 {
+    let queue = deque.new[Vec[i32]]();
+    let first = vec.make[i32](1, 7);
+    let second = vec.make[i32](1, 8);
+    let first_alias = first;
+    deque.push_back(queue, first);
+    deque.push_front(queue, second);
+    first[0] = 70;
+    switch deque.pop_back(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 70 { return 80; }
+            item[0] = 71;
+        }
+        case option.Option.None: return 81;
+    }
+    if first_alias[0] != 71 { return 82; }
+    switch deque.pop_front(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 8 { return 83; }
+            item[0] = 80;
+        }
+        case option.Option.None: return 84;
+    }
+    if second[0] != 80 { return 85; }
+    if deque.len(queue) != 0 { return 86; }
+
+    deque.push_back(queue, first_alias);
+    switch deque.peek_front(queue) {
+        case option.Option.Some(item): { if item[0] != 71 { return 87; } }
+        case option.Option.None: return 88;
+    }
+    switch deque.pop_front(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 71 { return 89; }
+            item[0] = 72;
+        }
+        case option.Option.None: return 90;
+    }
+    if first[0] != 72 { return 91; }
+    return 0;
+}
+
+// Popping the only strong handle held by the queue must release it even while
+// the queue object itself stays alive.
+func test_deque_release_on_pop() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let queue = deque.new[box.Box[i32]]();
+    {
+        let cell = box.new[i32](5);
+        link = weak.downgrade[box.Box[i32]](cell);
+        deque.push_back(queue, cell);
+        switch weak.upgrade(link) {
+            case option.Option.Some(value): {
+                if box.get(value) != 5 { return 100; }
+            }
+            case option.Option.None: return 101;
+        }
+        switch deque.pop_front(queue) {
+            case option.Option.Some(item): {
+                if box.get(item) != 5 { return 102; }
+            }
+            case option.Option.None: return 103;
+        }
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 104;
+        case option.Option.None: {}
+    }
+    return 0;
+}
+
+// clear must drop every stored strong reference, not just stop reporting len.
+func test_deque_release_on_clear() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let queue = deque.new[box.Box[i32]]();
+    {
+        let cell = box.new[i32](9);
+        link = weak.downgrade[box.Box[i32]](cell);
+        deque.push_back(queue, cell);
+        if deque.len(queue) != 1 { return 110; }
+        deque.clear(queue);
+        if deque.len(queue) != 0 { return 111; }
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 112;
+        case option.Option.None: {}
+    }
+    return 0;
+}
+
+func test_heap_order() i32 {
+    let numbers Vec[i32] = [5, 1, 9, 3, 9, 0, -2, 7];
+    let priority = heap.new[i32](before_i32);
+    for value in numbers {
+        heap.push(priority, value);
+    }
+    if heap.len(priority) != 8 { return 120; }
+    if !some_i32(heap.peek(priority), 9) { return 121; }
+    if heap.len(priority) != 8 { return 122; }
+    let descending Vec[i32] = [9, 9, 7, 5, 3, 1, 0, -2];
+    for var index usize = 0; index < 8; index += 1 {
+        if !some_i32(heap.pop(priority), descending[index]) {
+            return 123;
+        }
+    }
+    if !none_i32(heap.pop(priority)) { return 124; }
+    if !none_i32(heap.peek(priority)) { return 125; }
+
+    let minimum = heap.new[i32](before_lower_i32);
+    for value in numbers {
+        heap.push(minimum, value);
+    }
+    let ascending Vec[i32] = [-2, 0, 1, 3, 5, 7, 9, 9];
+    for var index usize = 0; index < 8; index += 1 {
+        if !some_i32(heap.peek(minimum), ascending[index]) { return 126; }
+        if !some_i32(heap.pop(minimum), ascending[index]) {
+            return 127;
+        }
+    }
+    if !none_i32(heap.pop(minimum)) { return 128; }
+    if !none_i32(heap.peek(minimum)) { return 129; }
+    return 0;
+}
+
+// Equal priorities are equivalent, not missing. Every stored item must be
+// returned exactly once and a lower key must wait until all tied tops leave.
+func test_heap_equal_priorities() i32 {
+    let count usize = 24;
+    let priority = heap.new[Item](before_item);
+    for var index usize = 0; index < count; index += 1 {
+        heap.push(priority, Item(key: 3, tag: i32(index)));
+    }
+    let seen = vec.make[bool](count, false);
+    for var index usize = 0; index < count; index += 1 {
+        switch heap.pop(priority) {
+            case option.Option.Some(item): {
+                if item.key != 3 { return 130; }
+                if item.tag < 0 || usize(item.tag) >= count { return 131; }
+                if seen[usize(item.tag)] { return 132; }
+                seen[usize(item.tag)] = true;
+            }
+            case option.Option.None: return 133;
+        }
+    }
+    if !none_item(heap.pop(priority)) { return 134; }
+    for var index usize = 0; index < count; index += 1 {
+        if !seen[index] { return 135; }
+    }
+
+    let mixed = heap.new[Item](before_item);
+    for var index usize = 0; index < 8; index += 1 {
+        heap.push(mixed, Item(key: 5, tag: i32(index)));
+    }
+    for var index usize = 0; index < 8; index += 1 {
+        heap.push(mixed, Item(key: 1, tag: i32(100 + index)));
+    }
+    for var index usize = 0; index < 8; index += 1 {
+        if !some_item(heap.pop(mixed), 5) { return 136; }
+    }
+    for var index usize = 0; index < 8; index += 1 {
+        if !some_item(heap.pop(mixed), 1) { return 137; }
+    }
+    if !none_item(heap.pop(mixed)) { return 138; }
+    return 0;
+}
+
+func test_heap_reuse_and_values() i32 {
+    let priority = heap.new[Vec[i32]](before_vec);
+    let first = vec.make[i32](1, 10);
+    let second = vec.make[i32](1, 20);
+    let alias = priority;
+    heap.push(priority, first);
+    heap.push(alias, second);
+    if heap.len(priority) != 2 { return 140; }
+    switch heap.peek(priority) {
+        case option.Option.Some(item): { if item[0] != 20 { return 141; } }
+        case option.Option.None: return 142;
+    }
+    switch heap.pop(alias) {
+        case option.Option.Some(item): {
+            if item[0] != 20 { return 143; }
+            item[0] = 21;
+        }
+        case option.Option.None: return 144;
+    }
+    if second[0] != 21 { return 145; }
+    switch heap.pop(priority) {
+        case option.Option.Some(item): {
+            if item[0] != 10 { return 146; }
+            item[0] = 11;
+        }
+        case option.Option.None: return 147;
+    }
+    if first[0] != 11 { return 148; }
+    if !heap.is_empty(priority) { return 149; }
+
+    let reserved = heap.capacity(priority);
+    heap.clear(priority);
+    if heap.len(priority) != 0 || !heap.is_empty(priority) { return 150; }
+    if heap.capacity(priority) != reserved { return 151; }
+    heap.push(priority, first);
+    if heap.is_empty(alias) { return 152; }
+    switch heap.peek(alias) {
+        case option.Option.Some(item): { if item[0] != 11 { return 153; } }
+        case option.Option.None: return 154;
+    }
+    switch heap.pop(priority) {
+        case option.Option.Some(item): { item[0] = 12; }
+        case option.Option.None: return 155;
+    }
+    if first[0] != 12 { return 156; }
+    return 0;
+}
+
+func test_heap_growth_reuse() i32 {
+    let count usize = 64;
+    let priority = heap.new[i32](before_i32);
+    let alias = priority;
+    for var index usize = 0; index < count; index += 1 {
+        heap.push(alias, i32(index * 7 % count));
+    }
+    if heap.len(priority) != count { return 160; }
+    var previous i32 = 999;
+    for var index usize = 0; index < count; index += 1 {
+        switch heap.pop(priority) {
+            case option.Option.Some(value): {
+                if value > previous { return 161; }
+                previous = value;
+            }
+            case option.Option.None: return 162;
+        }
+    }
+    if !none_i32(heap.pop(priority)) { return 163; }
+    if !heap.is_empty(alias) { return 166; }
+
+    // Reuse the grown shared heap; pushes through the alias are visible to the
+    // original handle and keep using the comparator stored at construction.
+    for var index usize = 0; index < 32; index += 1 {
+        heap.push(alias, i32(index));
+    }
+    if heap.len(priority) != 32 { return 167; }
+    for var index i32 = 31; index >= 0; index -= 1 {
+        if !some_i32(heap.pop(priority), index) { return 164; }
+    }
+    if !none_i32(heap.pop(alias)) { return 165; }
+    return 0;
+}
+
+func test_heap_release_on_pop() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let priority = heap.new[box.Box[i32]](before_box);
+    {
+        let cell = box.new[i32](9);
+        link = weak.downgrade[box.Box[i32]](cell);
+        heap.push(priority, cell);
+        switch heap.pop(priority) {
+            case option.Option.Some(item): {
+                if box.get(item) != 9 { return 170; }
+            }
+            case option.Option.None: return 171;
+        }
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 172;
+        case option.Option.None: {}
+    }
+    return 0;
+}
+
+func test_heap_release_on_clear() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    let priority = heap.new[box.Box[i32]](before_box);
+    {
+        let cell = box.new[i32](13);
+        link = weak.downgrade[box.Box[i32]](cell);
+        heap.push(priority, cell);
+        heap.clear(priority);
+        if heap.len(priority) != 0 { return 180; }
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 181;
+        case option.Option.None: {}
+    }
+    return 0;
+}
+
+func test_deque_cycles() i32 {
+    let queue = deque.new[i32]();
+    var next_back i32 = 0;
+    var next_front i32 = -1;
+    for var round usize = 0; round < 40; round += 1 {
+        for var index usize = 0; index < 7; index += 1 {
+            deque.push_back(queue, next_back);
+            next_back += 1;
+        }
+        for var index usize = 0; index < 5; index += 1 {
+            deque.push_front(queue, next_front);
+            next_front -= 1;
+        }
+        if deque.len(queue) != 12 { return 200; }
+        for var index usize = 0; index < 5; index += 1 {
+            let expected = next_front + 1 + i32(index);
+            if !some_i32(deque.pop_front(queue), expected) { return 201; }
+        }
+        for var value i32 = next_back - 1; value >= next_back - 7;
+            value -= 1 {
+            if !some_i32(deque.pop_back(queue), value) { return 202; }
+        }
+        if !deque.is_empty(queue) { return 203; }
+        if !none_i32(deque.pop_front(queue)) { return 204; }
+        if !none_i32(deque.pop_back(queue)) { return 205; }
+    }
+    return 0;
+}
+
+func test_capacity_helpers() i32 {
+    let queue = deque.with_capacity[i32](32);
+    if deque.capacity(queue) < 32 { return 190; }
+    for var index i32 = 0; index < 4; index += 1 {
+        deque.push_back(queue, index);
+    }
+    deque.reserve(queue, 64);
+    if deque.capacity(queue) < 64 { return 191; }
+    for var index i32 = 0; index < 4; index += 1 {
+        if !some_i32(deque.pop_front(queue), index) { return 192; }
+    }
+
+    let priority = heap.with_capacity[i32](before_i32, 32);
+    if heap.capacity(priority) < 32 { return 193; }
+    heap.reserve(priority, 64);
+    if heap.capacity(priority) < 64 { return 194; }
+    for var index i32 = 0; index < 4; index += 1 {
+        heap.push(priority, index);
+    }
+    for var index i32 = 3; index >= 0; index -= 1 {
+        if !some_i32(heap.pop(priority), index) { return 195; }
+    }
+    return 0;
+}
+
+func test_string_elements() i32 {
+    let names = deque.new[string]();
+    deque.push_back(names, "b");
+    deque.push_front(names, "a");
+    switch deque.pop_front(names) {
+        case option.Option.Some(value): { if value != "a" { return 210; } }
+        case option.Option.None: return 211;
+    }
+    switch deque.pop_back(names) {
+        case option.Option.Some(value): { if value != "b" { return 212; } }
+        case option.Option.None: return 213;
+    }
+
+    let ranked = heap.new[string](before_string);
+    heap.push(ranked, "b");
+    heap.push(ranked, "c");
+    heap.push(ranked, "a");
+    switch heap.pop(ranked) {
+        case option.Option.Some(value): { if value != "c" { return 214; } }
+        case option.Option.None: return 215;
+    }
+    return 0;
+}
+
+func test_deque_aliased_growth() i32 {
+    let queue = deque.new[i32]();
+    let alias = queue;
+    let initial = deque.capacity(queue);
+    for var index i32 = 0; index < 40; index += 1 {
+        deque.push_back(alias, index);
+    }
+    if deque.len(queue) != 40 { return 220; }
+    if deque.capacity(queue) <= initial { return 221; }
+    for var index i32 = 0; index < 40; index += 1 {
+        if !some_i32(deque.pop_front(queue), index) { return 222; }
+    }
+    if !deque.is_empty(alias) { return 223; }
+    for var index i32 = 0; index < 5; index += 1 {
+        deque.push_front(queue, index);
+    }
+    for var index i32 = 0; index < 5; index += 1 {
+        if !some_i32(deque.pop_back(alias), index) { return 224; }
+    }
+    if !none_i32(deque.pop_back(queue)) { return 225; }
+    return 0;
+}
+
+func test_deque_clear_wrapped_owned() i32 {
+    let queue = deque.new[Vec[i32]]();
+    let first = vec.make[i32](1, 1);
+    let second = vec.make[i32](1, 2);
+    let third = vec.make[i32](1, 3);
+    deque.push_back(queue, first);
+    deque.push_back(queue, second);
+    deque.push_back(queue, third);
+    let reserved = deque.capacity(queue);
+    for var index usize = 3; index < reserved; index += 1 {
+        deque.push_back(queue, vec.make[i32](1, i32(index)));
+    }
+    switch deque.pop_front(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 1 { return 230; }
+            item[0] = 10;
+        }
+        case option.Option.None: return 231;
+    }
+    switch deque.pop_front(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 2 { return 232; }
+            item[0] = 20;
+        }
+        case option.Option.None: return 233;
+    }
+    var wrapped Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    {
+        let item = vec.make[i32](1, 99);
+        wrapped = weak.downgrade[Vec[i32]](item);
+        deque.push_back(queue, item);
+    }
+    deque.push_back(queue, second);
+    if deque.len(queue) != reserved { return 234; }
+    switch weak.upgrade(wrapped) {
+        case option.Option.Some(item): { if item[0] != 99 { return 241; } }
+        case option.Option.None: return 242;
+    }
+    deque.clear(queue);
+    if deque.len(queue) != 0 || !deque.is_empty(queue) { return 235; }
+    if deque.capacity(queue) != reserved { return 236; }
+    switch weak.upgrade(wrapped) {
+        case option.Option.Some(item): return 243;
+        case option.Option.None: {}
+    }
+    // External aliases still own their values after the queue released its
+    // copies during clear.
+    third[0] = 30;
+    if first[0] != 10 || second[0] != 20 || third[0] != 30 { return 237; }
+    deque.push_back(queue, third);
+    switch deque.pop_front(queue) {
+        case option.Option.Some(item): {
+            if item[0] != 30 { return 238; }
+            item[0] = 31;
+        }
+        case option.Option.None: return 239;
+    }
+    if third[0] != 31 { return 240; }
+    return 0;
+}
+
+func test_deque_reserve_wrapped_owned() i32 {
+    let queue = deque.with_capacity[Vec[i32]](9);
+    let alias = queue;
+    for var index usize = 0; index < 6; index += 1 {
+        deque.push_back(queue, vec.make[i32](1, 0));
+        let removed = deque.pop_front(queue);
+    }
+    var watched = weak.empty[Vec[i32]]();
+    var watched_prefix = weak.empty[Vec[i32]]();
+    {
+        let first = vec.make[i32](1, 10);
+        watched = weak.downgrade(first);
+        deque.push_back(queue, first);
+    }
+    for var value i32 = 11; value <= 12; value += 1 {
+        deque.push_back(queue, vec.make[i32](1, value));
+    }
+    {
+        let last = vec.make[i32](1, 13);
+        watched_prefix = weak.downgrade(last);
+        deque.push_back(queue, last);
+    }
+    deque.reserve(alias, 31);
+    if deque.capacity(queue) < 31 || deque.len(queue) != 4 { return 370; }
+    if !option.is_some(weak.upgrade(watched_prefix)) { return 375; }
+    {
+        switch deque.pop_back(queue) {
+            case option.Option.Some(item): { if item[0] != 13 { return 376; } }
+            case option.Option.None: return 377;
+        }
+    }
+    if option.is_some(weak.upgrade(watched_prefix)) { return 378; }
+    for var value i32 = 10; value <= 12; value += 1 {
+        switch deque.pop_front(queue) {
+            case option.Option.Some(item): { if item[0] != value { return 371; } }
+            case option.Option.None: return 372;
+        }
+    }
+    if !deque.is_empty(alias) { return 373; }
+    if option.is_some(weak.upgrade(watched)) { return 374; }
+    return 0;
+}
+
+func test_heap_captured_comparator() i32 {
+    let priority = make_scaled_heap();
+    let alias = priority;
+    let values Vec[i32] = [5, 1, 9, 3, 7];
+    for value in values {
+        heap.push(alias, value);
+    }
+    if heap.len(priority) != 5 { return 250; }
+    let ascending Vec[i32] = [1, 3, 5, 7, 9];
+    for var index usize = 0; index < 5; index += 1 {
+        if !some_i32(heap.peek(priority), ascending[index]) { return 251; }
+        if !some_i32(heap.pop(alias), ascending[index]) { return 252; }
+    }
+    if !none_i32(heap.pop(priority)) { return 253; }
+    if !heap.is_empty(alias) { return 254; }
+    return 0;
+}
+
+func test_deque_to_vec_snapshot() i32 {
+    let queue = deque.new[i32]();
+    let empty Vec[i32] = deque.to_vec[i32](queue);
+    if vec.len(empty) != 0 || !vec.is_empty(empty) { return 260; }
+
+    deque.push_back(queue, 2);
+    deque.push_front(queue, 1);
+    let snapshot Vec[i32] = deque.to_vec[i32](queue);
+    if vec.len(snapshot) != 2 { return 261; }
+    if snapshot[0] != 1 || snapshot[1] != 2 { return 262; }
+
+    // Later deque changes do not modify an earlier snapshot.
+    deque.pop_front(queue);
+    deque.push_back(queue, 3);
+    if snapshot[0] != 1 || snapshot[1] != 2 { return 263; }
+    if deque.len(queue) != 2 { return 264; }
+    snapshot[0] = 99;
+    switch deque.peek_front(queue) {
+        case option.Option.Some(value): { if value != 2 { return 265; } }
+        case option.Option.None: return 266;
+    }
+
+    // The snapshot follows logical front-to-back order even when the ring
+    // wraps through slot zero.
+    deque.push_front(queue, 1);
+    for var index i32 = 4; index < 9; index += 1 {
+        deque.push_back(queue, index);
+    }
+    let wrapped Vec[i32] = deque.to_vec[i32](queue);
+    if vec.len(wrapped) != 8 { return 267; }
+    for var index usize = 0; index < vec.len(wrapped); index += 1 {
+        if wrapped[index] != i32(index) + 1 { return 267; }
+    }
+
+    // Reference elements are copied by the ordinary rules: the outer Vec is
+    // independent, while a nested Vec still refers to the same inner object.
+    let nested = deque.new[Vec[i32]]();
+    let first = vec.make[i32](1, 5);
+    deque.push_back(nested, first);
+    let nested_snapshot Vec[Vec[i32]] = deque.to_vec[Vec[i32]](nested);
+    first[0] = 6;
+    if nested_snapshot[0][0] != 6 { return 268; }
+    nested_snapshot[0][0] = 7;
+    if first[0] != 7 { return 269; }
+
+    deque.clear(queue);
+    if vec.len(snapshot) != 2 || snapshot[1] != 2 { return 270; }
+    return 0;
+}
+
+func test_is_empty_helpers() i32 {
+    let values = vec.empty[i32]();
+    if !vec.is_empty(values) { return 271; }
+    vec.push(values, 1);
+    if vec.is_empty(values) { return 272; }
+    vec.clear(values);
+    if !vec.is_empty(values) { return 273; }
+
+    let mapping = map.new[i32,i32]();
+    if !map.is_empty(mapping) { return 274; }
+    map.insert(mapping, 1, 2);
+    if map.is_empty(mapping) { return 275; }
+    map.clear(mapping);
+    if !map.is_empty(mapping) { return 276; }
+
+    let members = set.new[i32]();
+    if !set.is_empty(members) { return 277; }
+    set.add(members, 3);
+    if set.is_empty(members) { return 278; }
+    set.remove(members, 3);
+    if !set.is_empty(members) { return 279; }
+
+    let numbers = vec.make[i32](3, 0);
+    let full = slice.view(numbers, 0, 3);
+    if slice.is_empty(full) { return 280; }
+    let prefix = slice.view(numbers, 0, 0);
+    if !slice.is_empty(prefix) { return 281; }
+    if !slice.is_empty(slice.sub(full, 1, 1)) { return 282; }
+    return 0;
+}
+
+func test_vec_api() i32 {
+    let values = vec.empty[i32]();
+    if !vec.is_empty(values) { return 283; }
+    vec.insert(values, 0, 10);
+    vec.push(values, 30);
+    vec.insert(values, 1, 20);
+    if vec.len(values) != 3 { return 284; }
+    if values[0] != 10 || values[1] != 20 || values[2] != 30 { return 285; }
+    if vec.remove_at(values, 1) != 20 { return 286; }
+    if vec.len(values) != 2 || values[0] != 10 || values[1] != 30 { return 287; }
+    let extra = vec.make[i32](2, 7);
+    vec.extend(values, extra);
+    if vec.len(values) != 4 || values[2] != 7 || values[3] != 7 { return 288; }
+    if vec.swap_remove(values, 0) != 10 { return 289; }
+    if vec.len(values) != 3 || values[0] != 7 || values[1] != 30 ||
+        values[2] != 7 { return 303; }
+    vec.clear(values);
+    if !vec.is_empty(values) { return 304; }
+    return 0;
+}
+
+// from_vec copies its source and Floyd heapify performs a linear number of
+// comparisons. The bound is deliberately loose; the check is that the count
+// grows with n rather than n log n for this adversarial ascending input.
+func test_heap_from_vec() i32 {
+    let n usize = 1024;
+    let calls = vec.make[usize](1, 0);
+    let count = func(left i32, right i32) bool {
+        calls[0] += 1;
+        return left > right;
+    };
+    let source = vec.empty[i32]();
+    vec.reserve(source, n);
+    for var index usize = 0; index < n; index += 1 {
+        vec.push(source, i32(index));
+    }
+
+    let priority = heap.from_vec[i32](source, count);
+    if calls[0] == 0 { return 290; }
+    if calls[0] > n * 4 { return 291; }
+    if heap.len(priority) != n { return 292; }
+    if !some_i32(heap.peek(priority), i32(n - 1)) { return 293; }
+
+    // The heap owns a distinct items container. Changing the source after the
+    // copy must not change the heap, and heap growth must not change source.
+    if vec.len(source) != n { return 294; }
+    if source[0] != 0 || source[n - 1] != i32(n - 1) { return 295; }
+    source[n - 1] = -5;
+    if !some_i32(heap.peek(priority), i32(n - 1)) { return 296; }
+    heap.push(priority, 5000);
+    if vec.len(source) != n { return 297; }
+    if !some_i32(heap.pop(priority), 5000) { return 298; }
+
+    var expected i32 = i32(n - 1);
+    for var index usize = 0; index < n; index += 1 {
+        if !some_i32(heap.pop(priority), expected) { return 299; }
+        expected -= 1;
+    }
+    if !heap.is_empty(priority) { return 300; }
+
+    let empty_source = vec.empty[i32]();
+    let empty = heap.from_vec[i32](empty_source, before_i32);
+    if !heap.is_empty(empty) || heap.len(empty) != 0 { return 301; }
+    if !none_i32(heap.pop(empty)) { return 302; }
+    return 0;
+}
+
+// An alias left after the original handle and the captured comparator scope
+// end must still own the shared state, the stored element and the comparator
+// environment.
+func test_heap_alias_ownership() i32 {
+    var link Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    var alias = heap.new[box.Box[i32]](before_box);
+    {
+        let scale = vec.make[i32](1, -1);
+        let before_scaled = func(left box.Box[i32], right box.Box[i32]) bool {
+            return box.get(left) * scale[0] > box.get(right) * scale[0];
+        };
+        let original = heap.new[box.Box[i32]](before_scaled);
+        let cell = box.new[i32](21);
+        link = weak.downgrade[box.Box[i32]](cell);
+        heap.push(original, cell);
+        alias = original;
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): { if box.get(value) != 21 { return 310; } }
+        case option.Option.None: return 311;
+    }
+
+    // Exercise multi-level sifts while the heap owns the shifted boxes.
+    heap.push(alias, box.new[i32](50));
+    heap.push(alias, box.new[i32](40));
+    heap.push(alias, box.new[i32](30));
+    let other = box.new[i32](19);
+    heap.push(alias, other);
+    switch heap.pop(alias) {
+        case option.Option.Some(value): { if box.get(value) != 19 { return 312; } }
+        case option.Option.None: return 313;
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): { if box.get(value) != 21 { return 314; } }
+        case option.Option.None: return 315;
+    }
+    switch heap.pop(alias) {
+        case option.Option.Some(value): { if box.get(value) != 21 { return 316; } }
+        case option.Option.None: return 317;
+    }
+    switch weak.upgrade(link) {
+        case option.Option.Some(value): return 318;
+        case option.Option.None: {}
+    }
+    for var expected i32 = 30; expected <= 50; expected += 10 {
+        switch heap.pop(alias) {
+            case option.Option.Some(value): { if box.get(value) != expected { return 168; } }
+            case option.Option.None: return 169;
+        }
+    }
+    if !heap.is_empty(alias) { return 319; }
+    return 0;
+}
+
+// pop must publish the removed last element at the root before the first
+// comparison. A comparator that peeks through an alias should observe the same
+// intermediate root as the original swap-based implementation.
+func test_heap_pop_alias_root() i32 {
+    let slot = vec.make[option.Option[heap.Heap[i32]]](1,
+        option.Option[heap.Heap[i32]].None);
+    let armed = vec.make[bool](1, false);
+    let observed = vec.empty[i32]();
+    let before = func(left i32, right i32) bool {
+        switch slot[0] {
+            case option.Option.Some(alias): {
+                if armed[0] {
+                    switch heap.peek(alias) {
+                        case option.Option.Some(root): vec.push(observed, root);
+                        case option.Option.None: vec.push(observed, -1);
+                    }
+                    vec.push(observed, i32(heap.len(alias)));
+                }
+            }
+            case option.Option.None: {}
+        }
+        return left > right;
+    };
+    let priority = heap.new[i32](before);
+    slot[0] = option.Option[heap.Heap[i32]].Some(priority);
+    heap.push(priority, 9);
+    heap.push(priority, 7);
+    heap.push(priority, 5);
+    if heap.len(priority) != 3 { return 173; }
+    armed[0] = true;
+    switch heap.pop(priority) {
+        case option.Option.Some(value): { if value != 9 { return 174; } }
+        case option.Option.None: return 175;
+    }
+    // The first sift comparison is before(7, 5). The alias-visible root must
+    // already be 5, and the heap still reports its post-pop length.
+    if vec.len(observed) != 2 { return 176; }
+    if observed[0] != 5 || observed[1] != 2 { return 177; }
+    if !some_i32(heap.peek(priority), 7) { return 178; }
+    return 0;
+}
+
+// test_set_algebra checks the set operations against empty and overlapping
+// inputs and verifies that every result owns independent storage. It also
+// passes the same set as both arguments, which must behave like an ordinary
+// aliased copy rather than mutate or observe extra state.
+func test_set_algebra() i32 {
+    let empty = set.new[i32]();
+    let left = set.new[i32]();
+    let right = set.new[i32]();
+    let left_keys Vec[i32] = [1, 2, 3, 4];
+    let right_keys Vec[i32] = [3, 4, 5];
+    for key in left_keys { set.add(left, key); }
+    for key in right_keys { set.add(right, key); }
+
+    let empty_union = set.union(empty, empty);
+    if !set.is_empty(empty_union) { return 320; }
+    let empty_intersection = set.intersection(empty, empty);
+    if !set.is_empty(empty_intersection) { return 321; }
+    let empty_difference = set.difference(empty, empty);
+    if !set.is_empty(empty_difference) { return 322; }
+
+    let left_with_empty = set.union(left, empty);
+    if set.len(left_with_empty) != 4 { return 323; }
+    let empty_with_right = set.union(empty, right);
+    if set.len(empty_with_right) != 3 { return 324; }
+    if !set.contains(empty_with_right, 3) ||
+        !set.contains(empty_with_right, 4) ||
+        !set.contains(empty_with_right, 5) ||
+        set.contains(empty_with_right, 1) { return 325; }
+    if !set.is_empty(set.intersection(left, empty)) { return 326; }
+    if !set.is_empty(set.intersection(empty, right)) { return 327; }
+    let left_minus_empty = set.difference(left, empty);
+    if set.len(left_minus_empty) != 4 { return 328; }
+    if !set.is_empty(set.difference(empty, right)) { return 329; }
+
+    let together = set.union(left, right);
+    let common = set.intersection(left, right);
+    let only_left = set.difference(left, right);
+    if set.len(left) != 4 || set.len(right) != 3 {
+        return 330;
+    }
+    let universe Vec[i32] = [-1, 0, 1, 2, 3, 4, 5, 6];
+    let expected_union Vec[bool] =
+        [false, false, true, true, true, true, true, false];
+    let expected_common Vec[bool] =
+        [false, false, false, false, true, true, false, false];
+    let expected_only_left Vec[bool] =
+        [false, false, true, true, false, false, false, false];
+
+    if set.len(together) != 5 { return 331; }
+    if set.len(common) != 2 { return 332; }
+    if set.len(only_left) != 2 { return 333; }
+    for var index usize = 0; index < vec.len(universe); index += 1 {
+        let key = universe[index];
+        if set.contains(together, key) != expected_union[index] {
+            return 334;
+        }
+        if set.contains(common, key) != expected_common[index] {
+            return 335;
+        }
+        if set.contains(only_left, key) != expected_only_left[index] {
+            return 336;
+        }
+    }
+
+    // Adding to an input after a call must not be visible in any result, and
+    // adding to a result must not be visible in either input.
+    set.add(left, 100);
+    set.add(right, 200);
+    if set.contains(together, 100) || set.contains(together, 200) ||
+        set.contains(common, 100) || set.contains(only_left, 200) {
+        return 337;
+    }
+    if !set.contains(together, 1) || !set.contains(together, 5) ||
+        !set.contains(common, 3) || !set.contains(only_left, 2) {
+        return 338;
+    }
+    set.add(together, 300);
+    if set.contains(left, 300) || set.contains(right, 300) {
+        return 339;
+    }
+    set.remove(together, 1);
+    if !set.contains(left, 1) { return 340; }
+    set.add(common, 400);
+    if set.contains(only_left, 400) || set.contains(together, 400) {
+        return 341;
+    }
+    if set.len(together) != 5 { return 342; }
+
+    // Passing one Set twice is an alias, not a request to mutate shared
+    // storage. Each operation still produces an independent result.
+    let aliased = set.new[i32]();
+    set.add(aliased, 7);
+    set.add(aliased, 8);
+    let same = aliased;
+    let alias_union = set.union(same, aliased);
+    let alias_intersection = set.intersection(same, aliased);
+    let alias_difference = set.difference(same, aliased);
+    if set.len(alias_union) != 2 { return 343; }
+    if set.len(alias_intersection) != 2 { return 344; }
+    if !set.is_empty(alias_difference) { return 345; }
+    if !set.contains(alias_union, 7) || !set.contains(alias_union, 8) ||
+        !set.contains(alias_intersection, 7) ||
+        !set.contains(alias_intersection, 8) { return 346; }
+    if set.len(aliased) != 2 { return 347; }
+
+    set.add(aliased, 9);
+    if set.contains(alias_union, 9) || set.contains(alias_intersection, 9) {
+        return 348;
+    }
+    set.add(alias_union, 10);
+    if set.contains(aliased, 10) || set.contains(alias_intersection, 10) {
+        return 349;
+    }
+    set.add(alias_intersection, 11);
+    if set.contains(aliased, 11) || set.contains(alias_difference, 11) {
+        return 350;
+    }
+    return 0;
+}
+
+func main() i32 {
+    var failure = test_empty();
+    if failure != 0 { return failure; }
+    failure = test_capacity_helpers();
+    if failure != 0 { return failure; }
+    failure = test_deque_wrap_growth();
+    if failure != 0 { return failure; }
+    failure = test_deque_reuse_and_aliases();
+    if failure != 0 { return failure; }
+    failure = test_deque_cycles();
+    if failure != 0 { return failure; }
+    failure = test_deque_aliased_growth();
+    if failure != 0 { return failure; }
+    failure = test_deque_clear_wrapped_owned();
+    if failure != 0 { return failure; }
+    failure = test_deque_reserve_wrapped_owned();
+    if failure != 0 { return failure; }
+    failure = test_deque_values();
+    if failure != 0 { return failure; }
+    failure = test_deque_release_on_pop();
+    if failure != 0 { return failure; }
+    failure = test_deque_release_on_clear();
+    if failure != 0 { return failure; }
+    failure = test_heap_order();
+    if failure != 0 { return failure; }
+    failure = test_heap_equal_priorities();
+    if failure != 0 { return failure; }
+    failure = test_heap_captured_comparator();
+    if failure != 0 { return failure; }
+    failure = test_heap_reuse_and_values();
+    if failure != 0 { return failure; }
+    failure = test_heap_growth_reuse();
+    if failure != 0 { return failure; }
+    failure = test_heap_release_on_pop();
+    if failure != 0 { return failure; }
+    failure = test_heap_release_on_clear();
+    if failure != 0 { return failure; }
+    failure = test_string_elements();
+    if failure != 0 { return failure; }
+    failure = test_deque_to_vec_snapshot();
+    if failure != 0 { return failure; }
+    failure = test_is_empty_helpers();
+    if failure != 0 { return failure; }
+    failure = test_vec_api();
+    if failure != 0 { return failure; }
+    failure = test_heap_from_vec();
+    if failure != 0 { return failure; }
+    failure = test_heap_alias_ownership();
+    if failure != 0 { return failure; }
+    failure = test_heap_pop_alias_root();
+    if failure != 0 { return failure; }
+    failure = test_set_algebra();
+    if failure != 0 { return failure; }
+    return 0;
+}

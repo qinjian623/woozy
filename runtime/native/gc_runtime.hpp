@@ -102,11 +102,26 @@ LangGcStatus lang_gc_runtime_register_v1(
 LangGcStatus lang_gc_runtime_unregister_v1(
     void *object) LANG_GC_RUNTIME_NOEXCEPT;
 
+// Private compiler/runtime ABI for generated safepoints. The generated poll
+// loads the world request first (and services it if set), then loads the limit
+// and accum in that order, all with acquire ordering. It calls
+// lang_gc_runtime_poll_pressure_v1 only when accum >= limit. The two words are
+// written only by this controller; they are exposed so the fast path can avoid
+// a function call when neither a stop nor pressure is pending.
+__attribute__((visibility("hidden"))) extern uint64_t
+    lang_gc_runtime_pressure_limit_v1;
+__attribute__((visibility("hidden"))) extern uint64_t
+    lang_gc_runtime_pressure_accum_v1;
+__attribute__((visibility("hidden"))) void
+lang_gc_runtime_poll_pressure_v1(void) LANG_GC_RUNTIME_NOEXCEPT;
+
 // Automatic safepoint/controller poll. See the header comment for the fast path
 // and ordering. It handles a pending world request first; only then does it
 // consider pressure and lang_gc_world_can_collect_v1. Critical/SAFE threads do
 // not start a collection. Auto stop uses a fixed 10 ms world timeout; timeout
 // leaves pressure pending for a later retry and never reports success.
+// Generated code may inline the same ordering instead of calling this entry
+// point; the pressure handler keeps the collectibility check and collection.
 void lang_gc_runtime_poll_v1(void) LANG_GC_RUNTIME_NOEXCEPT;
 
 // Explicit collection. The caller must be explicitly world-registered and,

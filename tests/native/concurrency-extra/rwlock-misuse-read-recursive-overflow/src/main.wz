@@ -1,0 +1,21 @@
+package main;
+import "std/os" as os;
+import "std/rwlock" as rwlock;
+import "std/sync" as sync;
+import "std/thread" as thread;
+struct Shared { lock rwlock.ReadWriteLock; acquired sync.AtomicI64; }
+func overflow_reader(shared Shared) i64 {
+    rwlock.read_lock(shared.lock);
+    sync.store(shared.acquired,1);
+    rwlock.read_lock(shared.lock);
+    return 0;
+}
+func main() i32 throws os.Error {
+    let shared = Shared(lock: rwlock.new(), acquired: sync.atomic_i64(0));
+    rwlock.read_lock(shared.lock);
+    let worker = thread.spawn[Shared](overflow_reader,shared);
+    for sync.load(shared.acquired) == 0 { }
+    let status = thread.join(worker);
+    // Reaching here means the recursive read was accepted: fail the case.
+    return 0;
+}

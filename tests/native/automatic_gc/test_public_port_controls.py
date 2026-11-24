@@ -84,8 +84,10 @@ ORIGINAL_OBSERVER_SHA = (
     "122b601464ad0dcd3b2d818fa89e6a0244c84580320e10dbb4ccd56c04d65e54"
 )
 ORIGINAL_COMMAND_PLAN = {
-    "reference": {"runs": 18, "commands_per_run": 7, "case_commands": 126},
-    "candidate": {"runs": 18, "commands_per_run": 6, "case_commands": 108},
+    "reference": {"runs": 18, "commands_per_run": 7, "case_commands": 126,
+                  "resource_paths": 1},
+    "candidate": {"runs": 18, "commands_per_run": 6, "case_commands": 108,
+                  "resource_paths": 0},
 }
 ORIGINAL_FIXTURES = {
     "fixtures/control-empty/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
@@ -208,6 +210,12 @@ class FakeCorpus:
         executable = actual[0]
         name = Path(executable).name
         if executable == self.layout["cli"]:
+            if actual[1:] == ["--__resource-paths"]:
+                return result(stdout=json.dumps({
+                    "schema_version": 1,
+                    "helper": self.layout["helper"],
+                    "runtime": {"native": self.layout["runtime"]},
+                }) + "\n")
             out_dir = Path(actual[actual.index("--out-dir") + 1])
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "program").write_bytes(
@@ -294,11 +302,10 @@ def make_layout(base):
     layout["runtime"] = str(runtime)
     (base / "stdlib").mkdir()
     (base / "stdlib/test.wz").write_text("fake stdlib", encoding="utf-8")
-    # Reference tool pinning requires the supplied helper path to be embedded
-    # in the CLI bytes; candidate mode never reads this marker.
-    Path(layout["cli"]).write_bytes(
-        b"fake-cli:" + layout["helper"].encode()
-    )
+    # The current CLI resolves resources relative to the executable rather
+    # than embedding the helper path in its bytes.  The runner asks the CLI
+    # for its resource paths instead; the fake CLI answers that query below.
+    Path(layout["cli"]).write_bytes(b"fake-cli")
     return layout
 
 
@@ -443,8 +450,11 @@ class PublicPortControls(unittest.TestCase):
             self.assertEqual(plan["case_commands_expected"],
                              expected["case_commands"])
             self.assertEqual(plan["clang_version_commands"], 1)
+            self.assertEqual(plan["resource_paths_commands"],
+                             expected["resource_paths"])
             self.assertEqual(plan["total_expected"],
-                             expected["case_commands"] + 1)
+                             expected["case_commands"] + 1 +
+                             expected["resource_paths"])
 
     def test_all_nine_cases_keep_exact_role_command_counts(self):
         for role, per_run in (("reference", 7), ("candidate", 6)):
@@ -770,10 +780,13 @@ class PublicPortControls(unittest.TestCase):
         self.assertEqual(summary["role"], "reference")
         self.assertEqual(summary["command_plan"]["commands_per_run"], 7)
         self.assertEqual(summary["command_plan"]["case_commands_expected"], 7)
-        self.assertEqual(summary["command_plan"]["total_actual"], 8)
+        self.assertEqual(summary["command_plan"]["resource_paths_commands_actual"], 1)
+        self.assertEqual(summary["command_plan"]["total_actual"], 9)
         self.assertTrue(summary["tool_pin"]["helper_used"])
-        self.assertTrue(summary["tool_pin"]["helper_path_embedded_in_cli"])
+        self.assertTrue(summary["tool_pin"]["helper_resolved_by_cli"])
         self.assertIn("helper", summary["tool_pin"]["paths"])
+        self.assertEqual(summary["tool_pin"]["helper_path_from_cli"],
+                         layout["helper"])
         self.assertEqual(
             [command["name"] for command in summary["cases"][0]["commands"]][3],
             "helper-emit-llvm")

@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="concurrency_extra_rwlock_misuse_read_recursive_overflow"
+source_root="src"
+entry="app"
+[build]
+backend="native"
+word_bits=64

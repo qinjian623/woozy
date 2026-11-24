@@ -1,0 +1,189 @@
+// Binary priority heap over a shared Vec and a shared ordering callback.
+//
+// Each Heap copy retains the same backing Vec and comparator. Aliases observe
+// the same items and ordering. The comparator's captured environment stays
+// alive as long as any Heap alias exists.
+//
+// The before comparator decides priority: before(a, b) must return true when a
+// should be removed before b. Like std/sort's less, it must define a strict weak
+// order: irreflexive, transitive, and equivalent elements return false in both
+// directions. Passing before directly to sort.sort_by sorts in the heap's
+// removal order; swapping its arguments sorts in the opposite order. It is not
+// the negation of less, which would also accept equivalent elements. Use left >
+// right for a max-heap and left < right for a min-heap. The comparator must not
+// mutate the heap or the values being compared, must not change compared keys
+// through shared aliases while they are queued, and must not re-enter this heap.
+// A structural re-entry during a sift Panics on the active iteration instead of
+// invalidating the sift, but such a comparator is still outside the contract.
+// Equivalent elements have no promised order.
+//
+// The layout is the usual implicit binary tree at indices 0..len-1: the parent
+// of i is (i-1)/2 and its children are 2*i+1 and 2*i+2. push appends and sifts
+// up; pop moves the last element to the root and sifts down. Both are O(log n)
+// (push is amortized O(log n) because Vec growth is amortized O(1)); peek is
+// O(1). from_vec copies its source into a distinct Vec and uses Floyd's
+// bottom-up heapify, which is O(n) when copying and comparison are
+// constant-time. Popping or peeking an empty heap returns option.Option.None.
+// Values are copied by the ordinary logical rules on push/peek/pop/from_vec, so
+// managed values are retained while a copy, the heap slot, or a returned Option
+// owns them.
+package heap;
+
+import "std/option" as option;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+pub struct Heap[T] {
+    items Vec[T];
+    before func(T, T) bool;
+}
+
+// new creates an empty heap ordered by before. The comparator is stored in the
+// heap and shared by every alias.
+pub func new[T](before func(T, T) bool) Heap[T] {
+    return Heap[T](items: vec.empty[T](), before: before);
+}
+
+// with_capacity creates an empty heap with room for at least minimum elements
+// and stores before as its comparator. The ordering callback comes first, like
+// new, so callers cannot accidentally pass the two in the other order.
+pub func with_capacity[T](before func(T, T) bool, minimum usize) Heap[T] {
+    let items = vec.empty[T]();
+    vec.reserve(items, minimum);
+    return Heap[T](items: items, before: before);
+}
+
+// from_vec copies source into a new backing Vec and returns a heap ordered by
+// before. The result never shares its items container with source: changing
+// either Vec's length or slots later does not structurally change the other,
+// though copied nested references still point at the same inner objects. The
+// copied items are arranged with Floyd's bottom-up heapify in O(n) comparisons.
+pub func from_vec[T](source Vec[T], before func(T, T) bool) Heap[T] {
+    let items = vec.empty[T]();
+    vec.reserve(items, vec.len(source));
+    vec.extend(items, source);
+    heapify(items, before);
+    return Heap[T](items: items, before: before);
+}
+
+// len returns the number of stored elements.
+pub func len[T](values Heap[T]) usize {
+    return vec.len(values.items);
+}
+
+// capacity returns the current Vec capacity. It does not shrink when elements
+// are removed.
+pub func capacity[T](values Heap[T]) usize {
+    return vec.capacity(values.items);
+}
+
+// is_empty reports whether the heap has no elements.
+pub func is_empty[T](values Heap[T]) bool {
+    return vec.len(values.items) == 0;
+}
+
+// reserve asks the backing Vec to hold at least minimum elements. Heap order
+// and the stored comparator are unchanged.
+pub func reserve[T](values Heap[T], minimum usize) {
+    vec.reserve(values.items, minimum);
+}
+
+// The caller pins items until the final write. Shift children up along the
+// chosen path and return the slot where value belongs.
+func sift_down[T](items Vec[T], start usize, length usize, value T, before func(T, T) bool) usize {
+    var index = start;
+    for index < length / 2 {
+        let left = index * 2 + 1;
+        var best = left;
+        var candidate = items[left];
+        let right = left + 1;
+        if right < length {
+            let other = items[right];
+            if before(other, candidate) {
+                best = right;
+                candidate = other;
+            }
+        }
+        if !before(candidate, value) { break; }
+        items[index] = candidate;
+        index = best;
+    }
+    return index;
+}
+
+// heapify rearranges an already complete items Vec into heap order. Visiting
+// parents bottom-up is Floyd's linear-time construction; each element moves at
+// most once per level of the tree.
+func heapify[T](items Vec[T], before func(T, T) bool) {
+    let length = vec.len(items);
+    let pinned = slice.view(items, 0, length);
+    var index = length / 2;
+    for index > 0 {
+        index -= 1;
+        let value = items[index];
+        let end = sift_down(items, index, length, value, before);
+        if end != index { items[end] = value; }
+    }
+}
+
+// push stores an ordinary copy of value and restores the heap invariant using
+// the comparator stored at construction.
+pub func push[T](values Heap[T], value T) {
+    vec.push(values.items, value);
+    let length = vec.len(values.items);
+    let start = length - 1;
+    if start == 0 { return; }
+    // Even an empty view pins the whole Vec against structural changes by
+    // the comparator through another Heap alias.
+    let pinned = slice.view(values.items, 0, 0);
+    var index = start;
+    for index > 0 {
+        let parent = (index - 1) / 2;
+        let candidate = values.items[parent];
+        if !values.before(value, candidate) { break; }
+        values.items[index] = candidate;
+        index = parent;
+    }
+    if index != start { values.items[index] = value; }
+}
+
+// pop removes and returns the highest-priority element, or None when empty.
+pub func pop[T](values Heap[T]) option.Option[T] {
+    if vec.len(values.items) == 0 { return option.Option[T].None; }
+
+    // Keep an owned copy of the root. Removing the last slot provides the
+    // element to sift. Fill the root before the first comparison so an alias
+    // read from the comparator sees the same intermediate root as the original
+    // swap-based implementation, then shift children up along the chosen path.
+    let top = values.items[0];
+    let last = vec.pop(values.items);
+    switch last {
+        case option.Option.Some(value): {
+            let length = vec.len(values.items);
+            if length > 0 {
+                values.items[0] = value;
+                let pinned = slice.view(values.items, 0, 0);
+                let end = sift_down(values.items, 0, length, value, values.before);
+                if end != 0 { values.items[end] = value; }
+            }
+        }
+        case option.Option.None: {
+            // len > 0 before pop guarantees Some; this branch is explicit so
+            // the empty-pop contract never throws or reads an inactive slot.
+        }
+    }
+    return option.Option[T].Some(top);
+}
+
+// peek returns a normal owned copy of the highest-priority element without
+// removing it, or None when empty.
+pub func peek[T](values Heap[T]) option.Option[T] {
+    if vec.len(values.items) == 0 { return option.Option[T].None; }
+    return option.Option[T].Some(values.items[0]);
+}
+
+// clear removes all elements and keeps the allocated Vec capacity and the
+// stored comparator for reuse.
+pub func clear[T](values Heap[T]) {
+    vec.clear(values.items);
+}
