@@ -1,6 +1,8 @@
 package app;
 
 import "std/hash" as hash;
+import "std/text" as text;
+import "std/vec" as vec;
 
 func equal_hash[T hash.Hash](left T, right T) bool {
     if T.hash(left) != T.hash(right) { return false; }
@@ -50,5 +52,48 @@ func main() i32 {
     if first == swapped { return 24; }
     if hash.avalanche(0) != hash.avalanche(0) { return 25; }
     if hash.avalanche(0) == hash.avalanche(1) { return 26; }
+
+    // Expected values pin the exact rune sequence and rune count, including
+    // embedded NUL, distinct normalization forms, and keys on both sides of
+    // the string-hash short-key threshold. The oracle is an independent
+    // implementation of the documented FNV-1a-style rune fold and avalanche.
+    let keys Vec[string] = [
+        "", "a", "abc", "\0", "a\0b", "键\0😀",
+        "e\u{301}", "\u{e9}", "\u{10FFFF}",
+        text.repeat("A",8), text.repeat("A",32), text.repeat("A",33),
+        text.repeat("A",64), text.repeat("A",128), text.repeat("A",512),
+        text.repeat("é",4), text.repeat("é",16),
+        text.repeat("é",16) + "A", text.repeat("键",21) + "A",
+        text.repeat("键",42) + "AA", text.repeat("😀",128),
+        text.repeat("A\0",16), text.repeat("A\0",17), text.repeat("\0",64),
+        text.repeat("e\u{301}",16), text.repeat("\u{e9}",24),
+        "北京训练，camera相机！模型test。"
+    ];
+    let expected Vec[u64] = [
+        u64(13331581593930102267), u64(16206628985836262640),
+        u64(15273906544802412065), u64(4428793074834702424),
+        u64(11973505175162754535), u64(10549652153687468209),
+        u64(11192455484973525043), u64(16895938867165736697),
+        u64(2433590249257751565), u64(8035578799360477442),
+        u64(16981478156624348144), u64(4640337252499689881),
+        u64(6833848265266223635), u64(911413466567422205),
+        u64(13048196783848158822), u64(8455593886073074388),
+        u64(10162780985968602384), u64(14270850524721511409),
+        u64(8039810489724992165), u64(17778278335378966171),
+        u64(2279206648905334000), u64(11155528773707639300),
+        u64(3112267990288019468), u64(16294515957978350517),
+        u64(15815949136665016373), u64(12743184077175896413),
+        u64(11565712451095760059)
+    ];
+    if vec.len(keys) != vec.len(expected) { return 27; }
+    for var index usize = 0; index < vec.len(keys); index += 1 {
+        if keys[index].hash() != expected[index] { return 28; }
+    }
+
+    // Equal values built differently must still hash equally.
+    if "键\0😀".hash() != ("键" + "\0" + "😀").hash() { return 29; }
+    if "e\u{301}".hash() == "\u{e9}".hash() { return 30; }
+    if "e\u{301}" == "\u{e9}" { return 31; }
+
     return 0;
 }

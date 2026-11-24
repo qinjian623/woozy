@@ -30,7 +30,7 @@ pub func remainder(value0 f64, value1 f64) f64 { return __woozy_math_remainder(v
 pub func fma(value0 f64, value1 f64, value2 f64) f64 { return __woozy_math_fma(value0, value1, value2); }
 pub func ldexp(value0 f64, value1 i32) f64 { return __woozy_math_ldexp(value0, value1); }
 pub func frexp(value0 f64) Fraction { return __woozy_math_frexp(value0); }
-pub func isnan(value0 f64) bool { return __woozy_math_isnan(value0); }
+pub func isnan(value0 f64) bool { return value0 != value0; }
 pub func isinf(value0 f64) bool { return __woozy_math_isinf(value0); }
 pub func isfinite(value0 f64) bool { return __woozy_math_isfinite(value0); }
 pub func signbit(value0 f64) bool { return __woozy_math_signbit(value0); }

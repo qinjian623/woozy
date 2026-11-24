@@ -11,6 +11,8 @@
 // allowed and the map/set implementations compare keys with equals.
 package hash;
 
+import "std/text" as text;
+
 pub trait Hash {
     func hash(value Self) u64;
     func equals(left Self, right Self) bool;
@@ -51,8 +53,53 @@ func from_signed(value i64) u64 {
     return u64(value);
 }
 
+// Indexing non-ASCII text scans from the start of the string. Short keys use
+// the indexed loop to avoid scratch allocation. ASCII indexing is constant
+// time and uses that loop at every length.
+const SHORT_KEY_BYTES usize = 32;
+
+// Decode the byte copy from a valid UTF-8 string and fold each rune immediately.
+// This avoids allocating and traversing a second Vec containing the runes.
+func hash_string_sequential(value string, bytes usize, count usize) u64 {
+    let data = text.bytes(value);
+    var state = OFFSET_BASIS;
+    var offset usize = 0;
+    for offset < bytes {
+        let first = u32(data[offset]);
+        var rune = first;
+        offset += 1;
+        if first >= 0x80 {
+            rune = u32(data[offset]) & 0x3f;
+            offset += 1;
+            if first < 0xe0 {
+                rune |= (first & 0x1f) << 6;
+            } else {
+                rune = (rune << 6) | (u32(data[offset]) & 0x3f);
+                offset += 1;
+                if first < 0xf0 {
+                    rune |= (first & 0x0f) << 12;
+                } else {
+                    rune = (rune << 6) | (u32(data[offset]) & 0x3f);
+                    offset += 1;
+                    rune |= (first & 0x07) << 18;
+                }
+            }
+        }
+        state = (state ^ u64(rune)) * FNV_PRIME;
+    }
+    state = (state ^ u64(count)) * FNV_PRIME;
+    return avalanche(state);
+}
+
 impl Hash for string {
     func hash(value Self) u64 {
+        let bytes = text.byte_len(value);
+        if bytes > SHORT_KEY_BYTES {
+            let count = text.len(value);
+            if count != bytes {
+                return hash_string_sequential(value, bytes, count);
+            }
+        }
         var state = OFFSET_BASIS;
         var count u64 = 0;
         for rune in value {

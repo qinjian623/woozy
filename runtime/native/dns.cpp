@@ -1078,32 +1078,32 @@ int64_t host_view(const LangText *hostname, const char **data,
 
 LANG_NATIVE_NO_STACK_PROTECTOR
 int64_t try_numeric(const char *text, uint64_t length, int32_t family,
-                    CandidateList *list) noexcept {
-  bool found_v4 = false;
-  bool found_v6 = false;
-  LangNetAddress parsed;
-  parsed.data = nullptr;
-
-  if (lang_net_inet_pton_v1(kAfInet, text, length, &parsed) == 0) {
-    found_v4 = true;
-    if (family == 0 || family == kAfInet)
-      candidate_add(list, kAfInet,
-                    static_cast<const uint8_t *>(parsed.data->data));
-    release_address(&parsed);
+                    uint16_t port, LangVec **out) noexcept {
+  const int32_t families[] = {kAfInet, kAfInet6};
+  LangNetAddress addresses[2];
+  uint64_t count = 0;
+  bool found = false;
+  for (int32_t candidate : families) {
+    LangNetAddress address;
+    if (lang_net_inet_pton_v1(candidate, text, length, &address) != 0)
+      continue;
+    found = true;
+    if (family == 0 || family == candidate) {
+      address.port = port;
+      addresses[count++] = address;
+    } else {
+      release_address(&address);
+    }
   }
+  if (count == 0) return found ? kErrNoEnt : 0;
 
-  parsed.data = nullptr;
-  if (lang_net_inet_pton_v1(kAfInet6, text, length, &parsed) == 0) {
-    found_v6 = true;
-    if (family == 0 || family == kAfInet6)
-      candidate_add(list, kAfInet6,
-                    static_cast<const uint8_t *>(parsed.data->data));
-    release_address(&parsed);
-  }
-
-  if (list->count > 0) return 1;
-  if (found_v4 || found_v6) return kErrNoEnt;
-  return 0;
+  LangVec *result = lang_vec_new_v1(
+      count, sizeof(LangNetAddress), address_copy, address_drop);
+  // Initialization takes ownership of each parser-produced byte Vec.
+  for (uint64_t index = 0; index < count; ++index)
+    lang_vec_init_v1(result, &addresses[index]);
+  *out = result;
+  return 1;
 }
 
 LANG_NATIVE_NO_STACK_PROTECTOR
@@ -1447,12 +1447,11 @@ int64_t lang_net_lookup_v1(const LangText *hostname, uint16_t port,
       host_view(hostname, &raw_name, &raw_length, &raw_absolute);
   if (result < 0) return result;
 
+  result = try_numeric(raw_name, raw_length, family, port, out);
+  if (result != 0) return result < 0 ? result : 0;
+
   CandidateList candidates;
   candidates.count = 0;
-  result = try_numeric(raw_name, raw_length, family, &candidates);
-  if (result < 0) return result;
-  if (result > 0) return build_result(candidates, port, out);
-
   if (equal_ignore_case(raw_name, raw_length, "localhost", 9)) {
     add_loopback_candidates(family, &candidates);
     return build_result(candidates, port, out);

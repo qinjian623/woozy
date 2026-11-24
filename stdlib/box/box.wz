@@ -7,15 +7,19 @@
 // changing the cell length.
 package box;
 
-import "std/vec" as vec;
-
 pub struct Box[T] {
     cell Vec[T];
 }
 
+// Keep the constructor call's normal collector poll while initializing fresh
+// one-element storage directly.
+func singleton[T](value T) Vec[T] {
+    return [value];
+}
+
 // new creates a cell holding one ordinary copy of value.
 pub func new[T](value T) Box[T] {
-    return Box[T](cell: vec.make[T](1, value));
+    return Box[T](cell: singleton[T](value));
 }
 
 // get returns an ordinary owned copy of the current value.
