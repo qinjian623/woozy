@@ -566,6 +566,21 @@ func e_extra_numeric(instruction nativeir.Instruction, operation u32,
     return option.Option[Value].Some(loaded);
 }
 
+func e_extra_float_bits(instruction nativeir.Instruction, operation u32,
+                         args Vec[Value], state inout Emitter) option.Option[Value] throws Error {
+    if operation == 242 {
+        // Same-width reinterpretation for std/strconv's Ryu formatter. The
+        // source operation is private; no numeric conversion is performed.
+        return option.Option[Value].Some(result("i32", "bitcast " +
+            typed(args[0]) + " to i32", inout state));
+    }
+    if operation == 243 {
+        return option.Option[Value].Some(result("i64", "bitcast " +
+            typed(args[0]) + " to i64", inout state));
+    }
+    return option.Option[Value].None;
+}
+
 func e_extra_fs(instruction nativeir.Instruction, operation u32,
                 args Vec[Value], state inout Emitter) option.Option[Value] throws Error {
     let name = e_extra_fs_name(operation);
@@ -632,6 +647,10 @@ func e_extra_system_call(instruction nativeir.Instruction,
             }
             if operation >= 85 && operation <= 105 {
                 return e_network_system_call(instruction, args, inout state);
+            }
+            switch e_extra_float_bits(instruction, operation, args, inout state) {
+                case option.Option.Some(value): return option.Option[Value].Some(value);
+                case option.Option.None: {}
             }
             switch e_extra_math(instruction, operation, args, inout state) {
                 case option.Option.Some(value): return option.Option[Value].Some(value);
@@ -1644,7 +1663,8 @@ func system_call(instruction nativeir.Instruction, args Vec[Value],
             }
             if ((operation >= 43 && operation <= 84) ||
                 (operation >= 213 && operation <= 219) ||
-                operation == 220 || operation == 221) {
+                operation == 220 || operation == 221 ||
+                operation == 242 || operation == 243) {
                 switch e_extra_system_call(instruction, args, inout state) {
                     case option.Option.Some(value): return value;
                     case option.Option.None: {}

@@ -73,6 +73,16 @@
       runtime("lang_io_vec_append_bytes_v1", builder.getVoidTy(), args);
       return llvm::Constant::getNullValue(lower_type(i.type));
     }
+    if (operation == SystemOperation::num_f32_bits ||
+        operation == SystemOperation::num_f64_bits) {
+      // std/strconv's Ryu formatter needs the exact same-width IEEE-754 bits.
+      // Reinterpret, never numerically convert: signed zero, infinities and
+      // NaN payloads reach the pure Wz formatter unchanged.
+      auto *width = operation == SystemOperation::num_f32_bits
+                        ? builder.getInt32Ty()
+                        : builder.getInt64Ty();
+      return builder.CreateBitCast(args[0], width);
+    }
     if (operation >= SystemOperation::math_fabs && operation <= SystemOperation::math_signbit) {
       const auto *spec = hir::system_operation_spec(operation);
       const auto name = "lang_"+std::string(spec->name.substr(8))+"_v1";

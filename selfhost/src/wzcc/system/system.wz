@@ -82,6 +82,8 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 83, name: "__woozy_num_format_f32", result: "string", parameters: ["f32"], owner: "std/strconv", type_arity: 0),
         OperationSpec(operation: 80, name: "__woozy_num_parse_f64", result: "Result[f64,i32]", parameters: ["string"], owner: "std/strconv", type_arity: 0),
         OperationSpec(operation: 84, name: "__woozy_num_format_f64", result: "string", parameters: ["f64"], owner: "std/strconv", type_arity: 0),
+        OperationSpec(operation: 242, name: "__woozy_num_f32_bits", result: "u32", parameters: ["f32"], owner: "std/strconv", type_arity: 0),
+        OperationSpec(operation: 243, name: "__woozy_num_f64_bits", result: "u64", parameters: ["f64"], owner: "std/strconv", type_arity: 0),
         OperationSpec(operation: 106, name: "__woozy_math_fabs", result: "f64", parameters: ["f64"], owner: "std/math", type_arity: 0),
         OperationSpec(operation: 107, name: "__woozy_math_floor", result: "f64", parameters: ["f64"], owner: "std/math", type_arity: 0),
         OperationSpec(operation: 108, name: "__woozy_math_ceil", result: "f64", parameters: ["f64"], owner: "std/math", type_arity: 0),

@@ -275,6 +275,16 @@ def ieee(pattern, bits):
     raise ValueError('unsupported IEEE width')
 
 
+def _float_bits(value, bits):
+    """Encode one IEEE-754 value without changing its width.
+
+    The standard library's struct codec preserves signed zero and infinity;
+    NaN payloads follow the host IEEE value rather than a numeric conversion.
+    """
+    fmt = {32: '>f', 64: '>d'}[bits]
+    return int.from_bytes(struct.pack(fmt, value), 'big')
+
+
 def _float_round(numerator, denominator, bits, negative=False):
     """Round a nonnegative exact ratio directly to the target IEEE format.
 
@@ -1716,6 +1726,10 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
         if operation.startswith('num_parse_'):
             error, value = _parse_number(args[0], operation[10:])
             return (tags['Err'], (error,)) if error else (tags['Ok'], (value,))
+        if operation == 'num_f32_bits':
+            return _float_bits(args[0], 32)
+        if operation == 'num_f64_bits':
+            return _float_bits(args[0], 64)
         if operation.startswith('num_format_'):
             return _format_number(args[0], operation[11:])
         if operation == 'unicode_normalize':
