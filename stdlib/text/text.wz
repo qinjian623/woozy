@@ -168,6 +168,36 @@ pub func find_last(value string, needle string) option.Option[usize] {
 pub func count(value string, needle string) usize {
     if needle == "" { return len(value)+1; }
     if byte_len(needle) > byte_len(value) { return 0; }
+    if byte_len(needle) == 1 {
+        let target = u8(needle[0]);
+        if byte_len(value) <= 32 && byte_len(value) == len(value) {
+            var total usize = 0;
+            for var index usize = 0; index < len(value); index += 1 {
+                if value[index] == u32(target) { total += 1; }
+            }
+            return total;
+        }
+        let haystack = bytes(value);
+        let haystack_bytes = vec.len(haystack);
+        var total usize = 0;
+        var offset usize = 0;
+        for haystack_bytes - offset >= 8 {
+            if haystack[offset] == target { total += 1; }
+            if haystack[offset+1] == target { total += 1; }
+            if haystack[offset+2] == target { total += 1; }
+            if haystack[offset+3] == target { total += 1; }
+            if haystack[offset+4] == target { total += 1; }
+            if haystack[offset+5] == target { total += 1; }
+            if haystack[offset+6] == target { total += 1; }
+            if haystack[offset+7] == target { total += 1; }
+            offset += 8;
+        }
+        for offset < haystack_bytes {
+            if haystack[offset] == target { total += 1; }
+            offset += 1;
+        }
+        return total;
+    }
     let haystack = bytes(value);
     let pattern = bytes(needle);
     let pattern_bytes = vec.len(pattern);

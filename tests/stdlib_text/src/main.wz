@@ -99,6 +99,16 @@ func check_count() i32 {
     if text.count("", "中") != 0 { return 312; }
     if text.count("中", "") != 2 { return 313; }
     if text.count("a\0b", "") != 4 { return 314; }
+    let boundary = text.repeat("ba",16);
+    if text.count(boundary,"a") != 16 || text.count(boundary+"a","a") != 17 {
+        return 315;
+    }
+    let mixed = text.repeat("中😀\0a",9);
+    for var tail usize = 0; tail < 8; tail += 1 {
+        let value = mixed + text.repeat("a",tail);
+        if text.count(value,"a") != 9+tail { return 316; }
+        if text.count(value,"\0") != 9 { return 317; }
+    }
     return 0;
 }
 
