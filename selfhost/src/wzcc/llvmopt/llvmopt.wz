@@ -1,0 +1,351 @@
+// Conservative textual folding for collapsed GC critical regions in the
+// canonical text emitted by LLVM 22.1.8 `opt -S`.
+//
+// The driver preserves the async bitcode path. This pass only rewrites the
+// exact, physically adjacent empty form:
+//
+//   %token = [tail] call i32 @lang_gc_program_enter_critical_v1(), <marker>
+//   [tail] call void @lang_gc_program_leave_critical_v1(i32 %token), <marker>
+//
+// into a preserved token definition and a request-only runtime poll:
+//
+//   %token = add i32 0, 0
+//   call void @lang_gc_program_poll_request_v1()
+//
+// Everything else is left byte-for-byte unchanged. In particular, the token
+// must be a simple local and occur exactly twice in its function (definition
+// plus leave operand). Pairs with any intervening instruction, extra metadata,
+// declarations, a reused token, or unfamiliar syntax are skipped.
+package llvmopt;
+
+import "std/map" as map;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const ENTER_CALL string = "call i32 @lang_gc_program_enter_critical_v1()";
+const ENTER_TAIL_CALL string = "tail call i32 @lang_gc_program_enter_critical_v1()";
+const LEAVE_PREFIX string = "call void @lang_gc_program_leave_critical_v1(i32 ";
+const LEAVE_TAIL_PREFIX string = "tail call void @lang_gc_program_leave_critical_v1(i32 ";
+const MARKER_PREFIX string = ", !lang.bound.gc.critical.guard.v1 !";
+const HELPER_NAME string = "lang_gc_program_poll_request_v1";
+const HELPER_DECLARATION string = "declare void @lang_gc_program_poll_request_v1()\n";
+
+struct Line {
+    start usize;
+    text_end usize;
+    after usize;
+}
+
+struct Token {
+    valid bool;
+    start usize;
+    end usize;
+}
+
+struct Pair {
+    enter_line usize;
+    leave_line usize;
+    token string;
+}
+
+func digit(byte u8) bool { return byte >= 48 && byte <= 57; }
+
+func ident_start(byte u8) bool {
+    return (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+        byte == 95 || byte == 36 || byte == 46 || byte == 45;
+}
+
+func ident_continue(byte u8) bool {
+    return ident_start(byte) || digit(byte);
+}
+
+func match_at(data Vec[u8], at usize, limit usize, needle string) bool {
+    let length = text.byte_len(needle);
+    if at > limit || length > limit - at { return false; }
+    for var index usize = 0; index < length; index += 1 {
+        if data[at + index] != u8(needle[index]) { return false; }
+    }
+    return true;
+}
+
+func slice_text(data Vec[u8], first usize, last usize) string {
+    try { return text.from_bytes(data[first:last]); }
+    catch problem text.Error { return ""; }
+}
+
+func split_lines(data Vec[u8]) Vec[Line] {
+    let lines = vec.empty[Line]();
+    let size = vec.len(data);
+    var start usize = 0;
+    for var index usize = 0; index <= size; index += 1 {
+        if index == size || data[index] == 10 {
+            var text_end = index;
+            if text_end > start && data[text_end - 1] == 13 { text_end -= 1; }
+            var after = index;
+            if index < size { after = index + 1; }
+            vec.push(lines, Line(start: start, text_end: text_end,
+                after: after));
+            start = index + 1;
+        }
+    }
+    return lines;
+}
+
+func function_start(data Vec[u8], line Line) bool {
+    return match_at(data, line.start, line.text_end, "define ") ||
+        match_at(data, line.start, line.text_end, "define\t");
+}
+
+func function_end(data Vec[u8], line Line) bool {
+    var at = line.start;
+    for at < line.text_end &&
+          (data[at] == 32 || data[at] == 9) {
+        at += 1;
+    }
+    return at < line.text_end && data[at] == 125 && at + 1 == line.text_end;
+}
+
+func parse_token(data Vec[u8], at usize, limit usize) Token {
+    let invalid = Token(valid: false, start: at, end: at);
+    if at >= limit || data[at] != 37 { return invalid; }
+    var cursor = at + 1;
+    if cursor >= limit { return invalid; }
+    let first = data[cursor];
+    let numeric = digit(first);
+    if !numeric && !ident_start(first) { return invalid; }
+    cursor += 1;
+    for cursor < limit && ident_continue(data[cursor]) { cursor += 1; }
+    if numeric {
+        for var index usize = at + 1; index < cursor; index += 1 {
+            if !digit(data[index]) { return invalid; }
+        }
+    }
+    return Token(valid: true, start: at, end: cursor);
+}
+
+func marker_suffix(data Vec[u8], at usize, limit usize) bool {
+    if !match_at(data, at, limit, MARKER_PREFIX) { return false; }
+    var cursor = at + text.byte_len(MARKER_PREFIX);
+    let first = cursor;
+    for cursor < limit && digit(data[cursor]) { cursor += 1; }
+    return cursor > first && cursor == limit;
+}
+
+func parse_enter(data Vec[u8], line Line) Token {
+    var cursor = line.start;
+    for cursor < line.text_end &&
+          (data[cursor] == 32 || data[cursor] == 9) {
+        cursor += 1;
+    }
+    let token = parse_token(data, cursor, line.text_end);
+    if !token.valid { return token; }
+    cursor = token.end;
+    if !match_at(data, cursor, line.text_end, " = ") {
+        return Token(valid: false, start: token.start, end: token.end);
+    }
+    cursor += 3;
+    if match_at(data, cursor, line.text_end, ENTER_TAIL_CALL) {
+        cursor += text.byte_len(ENTER_TAIL_CALL);
+    } else if match_at(data, cursor, line.text_end, ENTER_CALL) {
+        cursor += text.byte_len(ENTER_CALL);
+    } else {
+        return Token(valid: false, start: token.start, end: token.end);
+    }
+    if !marker_suffix(data, cursor, line.text_end) {
+        return Token(valid: false, start: token.start, end: token.end);
+    }
+    return token;
+}
+
+func parse_leave(data Vec[u8], line Line) Token {
+    var cursor = line.start;
+    for cursor < line.text_end &&
+          (data[cursor] == 32 || data[cursor] == 9) {
+        cursor += 1;
+    }
+    if match_at(data, cursor, line.text_end, LEAVE_TAIL_PREFIX) {
+        cursor += text.byte_len(LEAVE_TAIL_PREFIX);
+    } else if match_at(data, cursor, line.text_end, LEAVE_PREFIX) {
+        cursor += text.byte_len(LEAVE_PREFIX);
+    } else {
+        return Token(valid: false, start: cursor, end: cursor);
+    }
+    let token = parse_token(data, cursor, line.text_end);
+    if !token.valid { return token; }
+    cursor = token.end;
+    if !match_at(data, cursor, line.text_end, ")") {
+        return Token(valid: false, start: token.start, end: token.end);
+    }
+    cursor += 1;
+    if !marker_suffix(data, cursor, line.text_end) {
+        return Token(valid: false, start: token.start, end: token.end);
+    }
+    return token;
+}
+
+func add_token(counts map.Map[string, usize], token string) {
+    switch map.get(counts, token) {
+        case option.Option.Some(count): {
+            let ignored = map.insert(counts, token, count + 1);
+        }
+        case option.Option.None: {
+            let ignored = map.insert(counts, token, 1);
+        }
+    }
+}
+
+// Count every complete local-looking token on a line. This deliberately also
+// counts struct type names and tokens in comments; over-counting only makes a
+// candidate more likely to be skipped.
+func count_tokens(data Vec[u8], line Line, counts map.Map[string, usize]) {
+    var cursor = line.start;
+    for cursor < line.text_end {
+        if data[cursor] != 37 {
+            cursor += 1;
+            continue;
+        }
+        let token = parse_token(data, cursor, line.text_end);
+        if !token.valid {
+            cursor += 1;
+            continue;
+        }
+        let spelling = slice_text(data, token.start, token.end);
+        if spelling != "" { add_token(counts, spelling); }
+        cursor = token.end;
+    }
+}
+
+func commit_pairs(pairs Vec[Pair], counts map.Map[string, usize],
+                  enter_tokens Vec[string], leave_tokens Vec[string]) usize {
+    var edits usize = 0;
+    for pair in pairs {
+        if pair.token == "" { continue; }
+        if enter_tokens[pair.enter_line] != "" ||
+           leave_tokens[pair.leave_line] != "" {
+            continue;
+        }
+        switch map.get(counts, pair.token) {
+            case option.Option.Some(count): {
+                if count == 2 {
+                    enter_tokens[pair.enter_line] = pair.token;
+                    leave_tokens[pair.leave_line] = pair.token;
+                    edits += 1;
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    return edits;
+}
+
+func leading_whitespace_end(data Vec[u8], line Line) usize {
+    var cursor = line.start;
+    for cursor < line.text_end &&
+          (data[cursor] == 32 || data[cursor] == 9) {
+        cursor += 1;
+    }
+    return cursor;
+}
+
+func render(data Vec[u8], lines Vec[Line], enter_tokens Vec[string],
+            leave_tokens Vec[string], add_helper bool) Vec[u8] {
+    let out = vec.empty[u8]();
+    vec.reserve(out, vec.len(data) + text.byte_len(HELPER_DECLARATION));
+    var cursor usize = 0;
+    for var index usize = 0; index < vec.len(lines); index += 1 {
+        let line = lines[index];
+        if line.start > cursor { vec.extend(out, data[cursor:line.start]); }
+        let enter_token = enter_tokens[index];
+        let leave_token = leave_tokens[index];
+        if enter_token != "" {
+            let indent = leading_whitespace_end(data, line);
+            vec.extend(out, data[line.start:indent]);
+            let replacement = enter_token + " = add i32 0, 0";
+            vec.extend(out, text.bytes(replacement));
+        } else if leave_token != "" {
+            let indent = leading_whitespace_end(data, line);
+            vec.extend(out, data[line.start:indent]);
+            let replacement = "call void @lang_gc_program_poll_request_v1()";
+            vec.extend(out, text.bytes(replacement));
+        } else {
+            vec.extend(out, data[line.start:line.text_end]);
+        }
+        // Keep the original CR/LF bytes for both edited and unedited lines.
+        vec.extend(out, data[line.text_end:line.after]);
+        cursor = line.after;
+    }
+    if cursor < vec.len(data) { vec.extend(out, data[cursor:]); }
+    if add_helper {
+        if vec.len(out) != 0 && out[vec.len(out) - 1] != 10 {
+            vec.push(out, 10);
+        }
+        vec.extend(out, text.bytes(HELPER_DECLARATION));
+    }
+    return out;
+}
+
+pub func fold_empty_gc_regions(input string) string {
+    // A pre-existing helper symbol is a collision. Refuse the whole input
+    // rather than risk a second declaration or a different signature.
+    if text.contains(input, HELPER_NAME) { return input; }
+
+    let data = text.bytes(input);
+    let lines = split_lines(data);
+    let enter_tokens = vec.make[string](vec.len(lines), "");
+    let leave_tokens = vec.make[string](vec.len(lines), "");
+
+    var in_function = false;
+    var counts = map.new[string, usize]();
+    var pairs = vec.empty[Pair]();
+    var pending_valid = false;
+    var pending_line usize = 0;
+    var pending_token = "";
+    var edits usize = 0;
+
+    for var index usize = 0; index < vec.len(lines); index += 1 {
+        let line = lines[index];
+        if !in_function {
+            if function_start(data, line) {
+                in_function = true;
+                counts = map.new[string, usize]();
+                pairs = vec.empty[Pair]();
+                pending_valid = false;
+                pending_token = "";
+                count_tokens(data, line, counts);
+            }
+            continue;
+        }
+        if function_end(data, line) {
+            edits += commit_pairs(pairs, counts, enter_tokens, leave_tokens);
+            in_function = false;
+            pending_valid = false;
+            pending_token = "";
+            continue;
+        }
+
+        count_tokens(data, line, counts);
+        let leave = parse_leave(data, line);
+        if pending_valid && index == pending_line + 1 && leave.valid {
+            let leave_token = slice_text(data, leave.start, leave.end);
+            if leave_token == pending_token {
+                vec.push(pairs, Pair(enter_line: pending_line,
+                    leave_line: index, token: pending_token));
+            }
+        }
+        pending_valid = false;
+        pending_token = "";
+
+        let enter = parse_enter(data, line);
+        if enter.valid {
+            pending_valid = true;
+            pending_line = index;
+            pending_token = slice_text(data, enter.start, enter.end);
+        }
+    }
+
+    if edits == 0 { return input; }
+    let output = render(data, lines, enter_tokens, leave_tokens, true);
+    try { return text.from_bytes(output); }
+    catch problem text.Error { return input; }
+}

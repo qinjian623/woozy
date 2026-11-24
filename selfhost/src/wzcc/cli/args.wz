@@ -50,6 +50,12 @@ pub func arguments(args Vec[string]) Options {
         options.valid = true;
         return options;
     }
+    if options.command == "__llvmopt_gc" {
+        options.error = "E_DRIVER_ARGUMENT: use __llvmopt_gc INPUT OUTPUT";
+        options.valid = vec.len(args) == 4 && args[2] != "" && args[3] != "";
+        if options.valid { options.path = args[2]; options.output = args[3]; }
+        return options;
+    }
     if options.command == "fmt" {
         options.error = "E_DRIVER_ARGUMENT: use fmt [--check] FILE|-";
         var check = false;

@@ -4,6 +4,7 @@ import "app/wzcc/model" as model;
 import "app/wzcc/frontcache" as frontcache;
 import "std/option" as option;
 import "std/json" as json;
+import "app/wzcc/llvmopt" as llvmopt;
 import "app/wzcc/nativeemit" as nativeemit;
 import "app/wzcc/resources" as resources;
 import "app/wzcc/toolio" as toolio;
@@ -193,6 +194,22 @@ func compile(output nativeemit.Output, project model.Project, stage toolio.Stage
     for argument in ["-passes=" + passes, "-verify-each", "-mtriple=" + output.triple,
                      "-mcpu=generic", source, "-o", optimized] { vec.push(opt_command, argument); }
     llvm_tool(opt_command, capture, "opt");
+    if optimization == 2 && !output.has_async && !output.debug_info {
+        let folded = stage.path + "/folded.ll";
+        var modified = false;
+        try { modified = llvmopt.fold_empty_gc_regions_file(optimized, folded); }
+        catch problem os.Error {
+            throw abort("E_INPUT_IO", "codegen", model.FailureKind.Environment,
+                "cannot fold optimized GC regions: " + os_text(problem), []);
+        }
+        if modified {
+            let verified_folded = stage.path + "/verified-folded.ll";
+            let verify_command = [tools + "/opt", "-S", "-passes=verify", "-verify-each",
+                "-mtriple=" + output.triple, "-mcpu=generic", folded, "-o", verified_folded];
+            llvm_tool(verify_command, capture, "opt");
+            optimized = verified_folded;
+        }
+    }
     let llc_command = [tools + "/llc", "-filetype=obj", "-O=" + strconv.format_u64(u64(optimization)),
         "-mtriple=" + output.triple, "-mcpu=generic", "-relocation-model=pic",
         "-code-model=small", optimized, "-o", object];
@@ -286,6 +303,24 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
         " -filetype=obj -O=" + strconv.format_u64(u64(settings.optimization)) +
         " -mtriple=" + settings.triple + " -mcpu=generic -relocation-model=pic -code-model=small" +
         target_flags + " $in -o $out\n";
+    var fold_objects = false;
+    if settings.optimization == 2 && !settings.debug_info {
+        for input in inputs {
+            if !option.is_some(input.object) {
+                switch input.output {
+                    case option.Option.Some(output): { if !output.has_async { fold_objects = true; } }
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    if fold_objects {
+        let gc_fold = ninja_escape(shell_quote(os.executable_path())) + " __llvmopt_gc";
+        plan += "rule gc_fold\n  command = " + gc_fold + " $in $out\n";
+        plan += "rule gc_verify\n  command = " + opt +
+            " -S -passes=verify -verify-each -mtriple=" + settings.triple +
+            " -mcpu=generic $in -o $out\n";
+    }
     var objects = "";
     var misses usize = 0; var records = "["; var first = true;
     for input in inputs {
@@ -299,8 +334,16 @@ func compile_packages(inputs Vec[PackageInput], project model.Project, stage too
                         var verified = name + ".verified.ll";
                         var rule = "opt";
                         if output.has_async { verified = name + ".verified.bc"; rule = "opt_bitcode"; }
-                        plan += "build " + verified + ": " + rule + " " + name +
-                            ".ll\nbuild " + name + ".o: object " + verified + "\n";
+                        plan += "build " + verified + ": " + rule + " " + name + ".ll\n";
+                        var llc_input = verified;
+                        if settings.optimization == 2 && !output.has_async && !settings.debug_info {
+                            let folded = name + ".folded.ll";
+                            let checked = name + ".folded.verified.ll";
+                            plan += "build " + folded + ": gc_fold " + verified + "\n";
+                            plan += "build " + checked + ": gc_verify " + folded + "\n";
+                            llc_input = checked;
+                        }
+                        plan += "build " + name + ".o: object " + llc_input + "\n";
                     }
                     case option.Option.None: throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal, "missing package emission", []);
                 }

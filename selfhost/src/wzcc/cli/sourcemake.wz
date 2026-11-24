@@ -11,6 +11,7 @@ package cli;
 
 import "app/wzcc/frontcache" as frontcache;
 import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/llvmopt" as llvmopt;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeemit" as nativeemit;
 import "app/wzcc/nativelower" as nativelower;
@@ -879,10 +880,39 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                                     "LLVM opt failed with status " + strconv.format_i64(i64(opt.exit_code)),
                                     model.FailureKind.Internal);
                             }
+                            var verified_input = verified_llvm;
+                            if state.opt == "2" && !output.has_async && !state.debug_info {
+                                let folded_llvm = OBJECT_DIR + "/pkg-" + package_value.fixed + ".folded.ll";
+                                var modified = false;
+                                try { modified = llvmopt.fold_empty_gc_regions_file(verified_llvm, folded_llvm); }
+                                catch problem os.Error {
+                                    write_status(package_value, status);
+                                    write_log("module-" + package_value.fixed + ".log", log);
+                                    return fail(options, manager.snapshots, "E_INPUT_IO", "codegen",
+                                        "cannot fold optimized package LLVM: " + source_os_text(problem),
+                                        model.FailureKind.Environment);
+                                }
+                                if modified {
+                                    let verified_folded = OBJECT_DIR + "/pkg-" + package_value.fixed + ".folded.verified.ll";
+                                    let verify = run_logged([tools + "/opt", "-S",
+                                        "-passes=verify", "-verify-each", "-mtriple=" + output.triple,
+                                        "-mcpu=generic", folded_llvm, "-o", verified_folded],
+                                        OBJECT_DIR + "/pkg-" + package_value.fixed + ".fold-verify-capture",
+                                        inout log, true);
+                                    if verify.exit_code != 0 || verify.signalled {
+                                        write_status(package_value, status);
+                                        write_log("module-" + package_value.fixed + ".log", log);
+                                        return fail(options, manager.snapshots, "E_IR_INVALID", "codegen",
+                                            "LLVM opt verification failed with status " + strconv.format_i64(i64(verify.exit_code)),
+                                            model.FailureKind.Internal);
+                                    }
+                                    verified_input = verified_folded;
+                                }
+                            }
                             let llc_command = [tools + "/llc", "-filetype=obj",
                                 "-O=" + state.opt, "-mtriple=" + output.triple,
                                 "-mcpu=generic", "-relocation-model=pic",
-                                "-code-model=small", verified_llvm, "-o", object];
+                                "-code-model=small", verified_input, "-o", object];
                             if output.triple == nativeemit.DARWIN_ARM64_TRIPLE {
                                 vec.push(llc_command, "-global-isel=0");
                             }

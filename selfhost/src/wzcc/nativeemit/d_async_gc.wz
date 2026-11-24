@@ -1564,14 +1564,27 @@ pub func gc_collect_loop_exit(state inout Emitter) throws Error {
     position(done, inout state);
 }
 
+// Both compiler-generated guard calls carry the same LLVM marker node as
+// the native seed.  define_metadata allocates the next module metadata ID, so
+// this ID cannot collide with TBAA, debug, or the poll branch weights.
+func d_gc_critical_guard(state inout Emitter) string throws Error {
+    let marker = define_metadata("gc.critical.guard",
+        "!{!\"lang.bound.gc.critical.guard.v1\"}", inout state);
+    return ", !lang.bound.gc.critical.guard.v1 " + marker;
+}
+
 pub func gc_enter_critical(state inout Emitter) Value throws Error {
-    return runtime("lang_gc_program_enter_critical_v1", "i32", [], inout state);
+    let signature = Signature(result: "i32", parameters: []);
+    let target = declare_function("lang_gc_program_enter_critical_v1", signature, inout state);
+    let guard = d_gc_critical_guard(inout state);
+    return result("i32", "call i32 " + target.reference + "()" + guard, inout state);
 }
 
 pub func gc_leave_critical(token Value, state inout Emitter) throws Error {
-    var args = vec.empty[Value]();
-    vec.push(args, token);
-    let left = runtime("lang_gc_program_leave_critical_v1", "void", args, inout state);
+    let signature = Signature(result: "void", parameters: ["i32"]);
+    let target = declare_function("lang_gc_program_leave_critical_v1", signature, inout state);
+    let guard = d_gc_critical_guard(inout state);
+    append("call void " + target.reference + "(" + typed(token) + ")" + guard, inout state);
 }
 
 pub func gc_enter_safe(state inout Emitter) Value throws Error {
