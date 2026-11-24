@@ -451,6 +451,12 @@ inline const SystemOperationSpec *system_operation_spec(std::string_view name) {
 inline bool system_operation_allows_module(const SystemOperationSpec &spec,
                                           std::string_view logical_path) {
   if (logical_path == spec.owner) return true;
+  // std/unicode's single-pass grapheme slicer walks one source through the
+  // shared std/text cursor primitives. Keep the grant exact: only these two
+  // operations, only from std/unicode.
+  if (logical_path == "std/unicode" &&
+      (spec.operation == SystemOperation::text_cursor_read ||
+       spec.operation == SystemOperation::text_cursor_slice)) return true;
   if (spec.operation == SystemOperation::vec_try_move_trivial &&
       logical_path == "std/deque") return true;
   // Internal balanced Vec pins shared by the callback algorithms.

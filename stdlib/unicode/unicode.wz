@@ -207,16 +207,11 @@ pub func graphemes(value string) Vec[string] {
     if text.byte_len(value) == total {
         return graphemes_ascii(value,total);
     }
-    let points = boundaries(value);
-    if vec.len(points) < 2 { return vec.empty[string](); }
-    if vec.len(points) <= 5 {
-        let out = vec.empty[string]();
-        for var index usize = 1; index < vec.len(points); index += 1 {
-            vec.push(out,value[points[index-1]:points[index]]);
-        }
-        return out;
-    }
-    return graphemes_cursor(value,points);
+    // Mixed input is sliced in one pass: cursor reads supply each scalar once
+    // and cursor slices retain the original source, with no copied haystack or
+    // intermediate boundary vector.  Native slicing counts leading bytes only
+    // within each emitted cluster, not a second full scalar decode.
+    return wz_grapheme_slices(value);
 }
 
 // Pure-ASCII scan: one code point per cluster except CR LF; direct slices, adjacency reload.
@@ -232,19 +227,5 @@ func graphemes_ascii(value string,total usize) Vec[string] {
         }
     }
     vec.push(out,value[start:total]);
-    return out;
-}
-
-// Absolute string slices rescan the prefix to find each code-point offset.
-// Keep the source as one retained owner and advance an opaque cursor by the
-// code-point width of each Wz-computed cluster instead.
-func graphemes_cursor(value string, points Vec[usize]) Vec[string] {
-    let out = vec.empty[string]();
-    // The exact result length is already known from the boundary vector.
-    vec.reserve(out,vec.len(points)-1);
-    let cursor = vec.make[u64](1,0);
-    for var index usize = 1; index < vec.len(points); index += 1 {
-        vec.push(out,__woozy_unicode_text_take(value,cursor,points[index]-points[index-1]));
-    }
     return out;
 }

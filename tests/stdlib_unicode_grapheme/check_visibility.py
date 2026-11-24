@@ -59,7 +59,27 @@ def main():
         if code == 0 or "E_PRIVATE_ACCESS" not in codes:
             raise SystemExit("cross-package private access was not rejected:\n%s"
                              % json.dumps(private, indent=2))
-        print("visibility ok: public fixture passes; cross-package scanner is E_PRIVATE_ACCESS")
+        for name, expression in (
+                ("read", '__woozy_text_cursor_read("abc",0)'),
+                ("slice", '__woozy_text_cursor_slice("abc",0,1)')):
+            with tempfile.TemporaryDirectory(
+                    prefix="grapheme-cursor-%s-denial-" % name) as directory:
+                source = Path(directory) / "src"
+                source.mkdir()
+                (source / "main.wz").write_text(
+                    'package app;\n'
+                    'func main() i32 { return i32(%s); }\n' % expression)
+                project = Path(directory) / "lang.toml"
+                project.write_text(
+                    'schema_version = 1\n[package]\nname = "app"\nsource_root = "src"\n'
+                    'entry = "app"\n[build]\nbackend = "native"\nword_bits = 64\n')
+                code, denied = run_check(args.compiler, project)
+            codes = [item.get("code") for item in denied.get("diagnostics", [])]
+            if code == 0 or "E_CAPABILITY_UNAVAILABLE" not in codes:
+                raise SystemExit("user-module cursor %s access was not rejected:\n%s"
+                                 % (name, json.dumps(denied, indent=2)))
+        print("visibility ok: public fixture passes; private scanner and "
+              "user-module cursor read/slice access are rejected")
     finally:
         if previous is None:
             os.environ.pop("LD_LIBRARY_PATH", None)

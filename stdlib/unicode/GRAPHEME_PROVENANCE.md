@@ -8,7 +8,9 @@ property data for the package-internal `wz_grapheme_boundaries` scanner in
 
 ## Implementation and fixture paths
 
-- Scanner: `stdlib/unicode/unicode_grapheme.wz`
+- Scanner: `stdlib/unicode/unicode_grapheme.wz` (`wz_grapheme_boundaries`,
+  `wz_grapheme_count`, and the one-pass `wz_grapheme_slices` used by
+  `graphemes` for mixed input)
 - Generated data: `stdlib/unicode/unicode_grapheme_tables.wz`
 - Public delegates: `stdlib/unicode/unicode.wz` (`boundaries`,
   `grapheme_count`, `graphemes`)
@@ -77,8 +79,15 @@ python3 tests/stdlib_unicode_grapheme/run_conformance.py \
   --compiler /path/to/frozen/woozyc --work-dir /tmp/grapheme-conformance
 ```
 
+`graphemes` keeps the empty, single-scalar and pure-ASCII fast paths.  For
+mixed input `wz_grapheme_slices` reads each scalar once through the shared
+text cursor operation 234, applies the same `grapheme_break_step` state
+machine, and emits each cluster as a retained source view through operation
+235.  It neither copies the UTF-8 source nor materializes a boundary vector.
+
 `--ucd-dir` checks the four pinned files above; it does not re-derive the
 unassigned-code-point defaults, which intentionally follow the captured
 utf8proc runtime.  `verify_tables.py` parses every generated leaf and compares
 all 1,114,112 code points with `runtime/python/unicode18.py`; the conformance
-runner uses only the public `std/unicode.boundaries` and `grapheme_count`.
+runner uses only the public `std/unicode.boundaries`, `grapheme_count` and
+`graphemes`, and compares each grapheme part to the official boundary slice.

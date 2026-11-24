@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run the official Unicode 18.0.0 GraphemeBreakTest through a built program.
 
-The generated program calls only the public std/unicode.boundaries and
-grapheme_count functions.  Expected boundaries come only from the official
-test file; the package-internal scanner is not named by the fixture.
+The generated program calls only the public std/unicode.boundaries,
+grapheme_count and graphemes functions.  Expected boundaries come only from
+the official test file; the package-internal scanner is not named by the
+fixture.  graphemes output is checked independently against the official
+boundary slices and against joining back to the original input.
 
 Usage:
     python3 tests/stdlib_unicode_grapheme/run_conformance.py \
@@ -104,6 +106,14 @@ def source(cases):
         "    let got = unicode.boundaries(item.value);",
         "    if !same(got,want) { return 10; }",
         "    if unicode.grapheme_count(item.value) != vec.len(want)-1 { return 11; }",
+        "    let parts = unicode.graphemes(item.value);",
+        "    if vec.len(parts) != vec.len(want)-1 { return 12; }",
+        "    var joined = \"\";",
+        "    for var index usize = 1; index < vec.len(want); index += 1 {",
+        "        if parts[index-1] != item.value[want[index-1]:want[index]] { return 13; }",
+        "        joined = joined + parts[index-1];",
+        "    }",
+        "    if joined != item.value { return 14; }",
         "    return 0;",
         "}",
         "",

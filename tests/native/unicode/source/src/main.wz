@@ -48,6 +48,16 @@ func main() i32 {
     if unicode.casefold("E\u{301}") != "e\u{301}" { return 14; }
     let indic = unicode.boundaries("\u{915}\u{94d}\u{915}");
     if vec.len(indic) != 2 || indic[1] != 3 { return 15; }
+    let control_parts = unicode.graphemes("\0\r\n");
+    if vec.len(control_parts) != 2 || control_parts[0] != "\0" ||
+       control_parts[1] != "\r\n" { return 17; }
+    let ri_parts = unicode.graphemes("\u{1f1ef}\u{1f1f5}\u{1f1ef}");
+    if vec.len(ri_parts) != 2 || ri_parts[0] != "\u{1f1ef}\u{1f1f5}" ||
+       ri_parts[1] != "\u{1f1ef}" { return 18; }
+    let indic_parts = unicode.graphemes("\u{915}\u{94d}\u{200d}\u{937}\u{915}\u{94d}\u{937}");
+    if vec.len(indic_parts) != 2 ||
+       indic_parts[0] != "\u{915}\u{94d}\u{200d}\u{937}" ||
+       indic_parts[1] != "\u{915}\u{94d}\u{937}" { return 19; }
     // A long run is reordered by class while preserving the order within a class.
     let marks = text.repeat("\u{315}\u{301}\u{300}",128);
     let ordered = text.repeat("\u{301}\u{300}",128)+text.repeat("\u{315}",128);

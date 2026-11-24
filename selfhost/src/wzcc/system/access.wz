@@ -2,6 +2,12 @@ package system;
 
 pub func allows_module(operation u32, owner string, logical_path string) bool {
     if logical_path == owner { return true; }
+    // std/unicode's single-pass grapheme slicer walks one source through the
+    // shared std/text cursor primitives. Keep the grant exact: only these two
+    // operations, only from std/unicode.
+    if logical_path == "std/unicode" && (operation == 234 || operation == 235) {
+        return true;
+    }
     if operation == 229 && logical_path == "std/deque" { return true; }
     // Internal balanced Vec pins shared by the callback algorithms.
     return (operation == 231 || operation == 232) &&

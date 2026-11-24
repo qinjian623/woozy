@@ -155,6 +155,55 @@ func scan_mixed(value string) usize {
     return count;
 }
 
+// Slice a mixed string in one pass for graphemes.  The caller handles the
+// empty, single-scalar and pure-ASCII cases.  Each scalar is read once through
+// the shared text cursor and every cluster becomes one retained source view,
+// so the scan needs neither a UTF-8 byte copy nor a boundary vector.  Native
+// text_cursor_slice derives each result's code-point length by counting
+// leading bytes inside that emitted cluster; it does not decode the scalars a
+// second time.  Cursor steps are backend-defined; only the value returned by
+// __woozy_text_cursor_read advances the cursor.
+func wz_grapheme_slices(value string) Vec[string] {
+    let count = text.len(value);
+    let out = vec.empty[string]();
+    var offset u64 = 0;
+    var start u64 = 0;
+    let first_read = __woozy_text_cursor_read(value,offset);
+    offset += first_read & 0xffffffff;
+    let first = u32(first_read >> 32);
+    var first_property u32 = grapheme_other;
+    if first < 0x80 {
+        first_property = grapheme_property_ascii(u8(first));
+    } else {
+        first_property = grapheme_property(first);
+    }
+    var left_class u32 = first_property & 0xff;
+    var left_icb u32 = first_property >> 8;
+    var state u32 = 0;
+    for var index usize = 1; index < count; index += 1 {
+        let read = __woozy_text_cursor_read(value,offset);
+        let current = u32(read >> 32);
+        let width = read & 0xffffffff;
+        var property u32 = grapheme_other;
+        if current < 0x80 {
+            property = grapheme_property_ascii(u8(current));
+        } else {
+            property = grapheme_property(current);
+        }
+        let right_class = property & 0xff;
+        let right_icb = property >> 8;
+        if grapheme_break_step(left_class,right_class,left_icb,right_icb,inout state) {
+            vec.push(out,__woozy_text_cursor_slice(value,start,offset));
+            start = offset;
+        }
+        left_class = right_class;
+        left_icb = right_icb;
+        offset += width;
+    }
+    vec.push(out,__woozy_text_cursor_slice(value,start,offset));
+    return out;
+}
+
 // ASCII has a boundary between every pair except CR followed by LF.
 func count_ascii_graphemes(value string, total usize) usize {
     var count = total;
