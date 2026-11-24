@@ -61,6 +61,8 @@ bool count(const uint8_t *data, uint64_t bytes, uint64_t &length) noexcept {
   return true;
 }
 uint64_t offset_for(const LangText &text, uint64_t index) noexcept {
+  // Equal byte and scalar counts imply that this valid UTF-8 is ASCII.
+  if (text.bytes == text.length) return index;
   uint64_t offset = 0;
   for (uint64_t i = 0; i < index; ++i) {
     uint32_t rune;
@@ -106,6 +108,7 @@ extern "C" uint32_t lang_text_at_v1(const LangText *text,
                                      uint64_t index) noexcept {
   if (!text) panic(10);
   if (index >= text->length) panic(4);
+  if (text->bytes == text->length) return text->data[index];
   auto offset = offset_for(*text, index);
   uint32_t rune;
   if (!decode(text->data, text->bytes, offset, rune)) panic(10);

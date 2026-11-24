@@ -40,6 +40,13 @@ pub struct Limits {
     pub body_bytes usize;
     pub header_count usize;
 }
+// One incremental decoded request-body piece. data is non-empty unless done.
+// trailers is populated only on the final piece.
+pub struct BodyPart {
+    pub data Vec[u8];
+    pub done bool;
+    pub trailers Vec[Header];
+}
 pub struct Reader { /* private socket, pending bytes, parser state, limits */ }
 ```
 
@@ -59,7 +66,8 @@ Initial header fields and chunked trailer fields are separate:
   preserve this separation.
 - `encode_request`/`encode_response` currently reject a non-empty `trailers`
   vector with `UnsupportedTrailers`. They never silently discard trailers.
-  A later chunked encoder can lift this restriction.
+  The chunked frame encoders below send trailers explicitly through
+  `encode_response_chunk_end`.
 
 ## Text helpers
 
@@ -218,6 +226,7 @@ appended to `headers`.
 ```woozy
 pub func read_request_head(reader Reader) Request throws Error
 pub func read_request_body(reader Reader) Request throws Error
+pub func read_request_body_part(reader Reader, max_bytes usize) BodyPart throws Error
 pub func read_response_head(reader Reader, request_method string) Response throws Error
 pub func read_response_body(reader Reader) Response throws Error
 ```
@@ -236,6 +245,45 @@ WouldBlock body read after `poll` is safe and resumes the saved body state.
 
 `read_response_head` uses `request_method` only for framing rules (HEAD and
 status-specific body rules); `read_response_body` does not need it again.
+
+### Incremental request body
+
+`read_request_body_part(reader, max_bytes)` decodes the fixed-length or chunked
+request body selected by `read_request_head` without buffering the whole body:
+
+- `max_bytes` must be positive. Zero throws `ReadOrder` and leaves the reader
+  unchanged.
+- `max_bytes` is a hard upper bound on the decoded bytes in `BodyPart.data`
+  for that call. Decoded bytes already buffered are returned immediately, even
+  when fewer than `max_bytes`; the call does not wait to fill the bound. A
+  receive is attempted only when no decoded bytes are currently available. A
+  non-final piece never has empty data. A final piece may be empty when only
+  the chunk terminator and trailers remain.
+- `BodyPart.done == true` is the precise end of the message. It is set only
+  after a fixed-length body has reached its exact length or after the chunked
+  zero-size chunk and the complete trailer section have been consumed.
+- `BodyPart.trailers` is empty unless `done` is true. On the final piece it
+  contains only the decoded chunked trailer fields, never initial headers.
+- The reader stores parsing progress and decoded bytes accumulated in the
+  current call. `WouldBlock` during a header, chunk-size line, chunk data,
+  chunk terminator, or trailer line can therefore be retried with the same
+  bound after `poll` reports readability; already consumed bytes and the chunk
+  phase/cursor are not lost or replayed.
+- Changing the bound between calls is allowed. Any decoded bytes already held
+  are returned at the new bound before more wire input is parsed.
+- The cumulative `body_bytes`, trailer `head_bytes`, and total `header_count`
+  limits are enforced across all calls, including multiple chunks. A chunk
+  whose size would exceed the remaining body budget is rejected as
+  `BodyTooLarge` before its data is stored.
+- Streaming and whole-message reads cannot be mixed for one message. After a
+  streaming call, `read_request_body`/`read_request` throw `ReadOrder`; after a
+  whole-body read has started, `read_request_body_part` throws `ReadOrder`.
+- After `done`, the reader is clear for the next pipelined message. Bytes of
+  that message are never returned as body data.
+
+The whole-body `read_request_body`/`read_request` APIs remain unchanged for
+callers that want one complete `Request`. A caller that abandons a stream
+before `done` must close the connection rather than parse the next message.
 
 ## Encoding
 
@@ -271,6 +319,42 @@ once, because it describes the selected GET representation. For 1xx and 204
 responses the body must be empty and framing headers are rejected, so the
 encoder emits none. A non-empty body in any no-body context is
 `UnexpectedBody`.
+
+### Chunked response frames
+
+```woozy
+pub func encode_response_chunked_head(response Response, request_method string) Vec[u8] throws Error
+pub func encode_response_chunk_data(data Vec[u8]) Vec[u8] throws Error
+pub func encode_response_chunk_end(trailers Vec[Header]) Vec[u8] throws Error
+```
+
+These are frame-only encoders for a streamed HTTP/1.1 chunked response. The
+caller sends exactly one head, zero or more non-empty data frames, and exactly
+one end frame:
+
+- `encode_response_chunked_head` validates the same reason, status, header
+  names/values, method and status body policy as `encode_response_head`. It
+  requires `HTTP/1.1`, a body-permitting request/status combination, and no
+  supplied `Content-Length` or `Transfer-Encoding`; those cases throw
+  `UnexpectedFraming`. A non-empty `response.body` is rejected as
+  `UnexpectedBody` rather than silently dropped; send body bytes only through
+  `encode_response_chunk_data`. A non-empty `response.trailers` is rejected as
+  `UnsupportedTrailers`; pass trailers to the end encoder. The head emits one
+  canonical `Transfer-Encoding: chunked`.
+- `encode_response_chunk_data` emits one lowercase hexadecimal size line,
+  data and CRLF. Empty data would encode a zero-size chunk and terminate the
+  response prematurely, so it throws `InvalidChunkSize`. There is no
+  zero-length data frame.
+- `encode_response_chunk_end` emits the terminal `0` chunk followed by the
+  supplied fields and the final empty line. Trailer names/values use the same
+  token/field-byte validation as initial headers. Framing and
+  connection-control names (`Content-Length`, `Transfer-Encoding`, `Host`,
+  `Connection`, `Trailer`, `TE`, `Upgrade`, `Keep-Alive`,
+  `Proxy-Connection`) throw `ForbiddenTrailer`.
+
+The standard `encode_response`/`encode_response_head` remain
+`Content-Length`-only and continue to reject trailers. HEAD, 1xx, 204 and 304
+responses must use the length-framed head, not the chunked head.
 
 ## Socket reader and writer
 
@@ -313,13 +397,41 @@ reparsing all previous bytes.
 bytes following it. A second call therefore observes pipelined messages
 without loss. `pending(reader)` returns the retained byte count.
 
+### Server retry, drain and finalize sequence
+
+A streaming server follows this sequence for one request:
+
+1. Call `read_request_head`. On `Error.Io(os.Error.WouldBlock)`, wait for
+   readability (for example with `net.poll`) and call `read_request_head`
+   again with the same reader. Do not create a new reader or drop buffered
+   bytes.
+2. Choose a fixed positive bound and repeatedly call
+   `read_request_body_part(reader, bound)`. A returned piece may be shorter
+   than the bound when only that much decoded input is available; consume its
+   `data` before the next call. On `WouldBlock` (which occurs only when no
+   decoded bytes are available), wait for readability and retry the same call
+   with the same reader; the framing cursor/phase and pending state are
+   retained. Do not call `read_request_body` or `read_request` for that
+   message once streaming has started.
+3. Stop only when `done` is true. Use `trailers` from that final piece. The
+   reader now starts at the next pipelined request, so a later
+   `read_request_head`/`read_request` observes it without loss. If the
+   connection is closed or a protocol error occurs before `done`, close the
+   connection; do not parse another request from that stream.
+4. For a chunked response, send exactly one
+   `encode_response_chunked_head`, one non-empty
+   `encode_response_chunk_data` frame per piece, and exactly one
+   `encode_response_chunk_end` with the final trailers. Use `net.send_all` for
+   each frame. Never send an empty data frame as a terminator; only the end
+   encoder emits the zero-size chunk.
+
 All I/O failures are `Error.Io(os.Error)`. The reader retries
 `os.Error.Interrupted`; `WouldBlock` is surfaced through `Error.Io` so
 nonblocking callers can decide when to poll. `write_*` uses `net.send_all` and
 surfaces short-write and OS errors as `Error.Io`. `read_request_head` and
-`read_response_head` do not consume a body; a caller must finish it with the
-matching body function, use the combined read function, or close the
-connection.
+`read_response_head` do not consume a body; a caller must finish it with
+`read_request_body_part`, `read_request_body`, the combined read function, or
+close the connection.
 
 ## Errors
 
@@ -367,6 +479,11 @@ pub enum Error {
 
 Every public operation that can fail throws only `http.Error`; I/O is wrapped
 in `Io` rather than mixing `os.Error` and codec errors in one signature.
+
+`ReadOrder` also covers misuse of the incremental API: a zero `max_bytes`, a
+body-part call without an in-progress request head, and mixing
+`read_request_body_part` with `read_request_body`/`read_request` on the same
+message.
 
 ## Known integration notes
 

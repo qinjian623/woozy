@@ -31,5 +31,34 @@ func main() i32 throws strconv.Error {
     var caught = false;
     try { let value = strconv.parse_u64("-1"); } catch error strconv.Error { caught = true; }
     if !caught { return 16; }
+    if strconv.format_i64(strconv.parse_i64("-9223372036854775808")) != "-9223372036854775808" ||
+       strconv.format_u64(strconv.parse_u64("+18446744073709551615")) != "18446744073709551615" { return 18; }
+    try {
+        let value = strconv.parse_u64("18446744073709551616x");
+        return 19;
+    } catch error strconv.Error {
+        switch error { case strconv.Error.OutOfRange: return 20; default: {} }
+    }
+    if strconv.format_f64(strconv.parse_f64("-2e-324")) != "-0" ||
+       strconv.format_f64(strconv.parse_f64("4.9406564584124654e-324")) != "5e-324" ||
+       strconv.format_f32(strconv.parse_f32("+INF")) != "inf" { return 21; }
+    let positive_nan = strconv.parse_f64("NaN");
+    let negative_nan = f64(strconv.parse_f32("-nAn"));
+    if !math.isnan(positive_nan) || math.signbit(positive_nan) ||
+       !math.isnan(negative_nan) || !math.signbit(negative_nan) { return 22; }
+    if strconv.parse_f64("1.7976931348623158e308") != max { return 23; }
+    let long_non_ascii = text.repeat("0", 16384) + "é";
+    try {
+        let value = strconv.parse_i64(long_non_ascii);
+        return 24;
+    } catch error strconv.Error {
+        switch error { case strconv.Error.InvalidSyntax: {} default: return 24; }
+    }
+    try {
+        let value = strconv.parse_u64(long_non_ascii);
+        return 25;
+    } catch error strconv.Error {
+        switch error { case strconv.Error.InvalidSyntax: {} default: return 25; }
+    }
     return 0;
 }
