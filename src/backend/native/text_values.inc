@@ -180,8 +180,95 @@
       end_lifetime(out);
       return result;
     }
-    case SystemOperation::vec_resize:
-      runtime("lang_vec_resize_v1", builder.getVoidTy(), {args[0], args[1], element_storage(element(), args[2])}); break;
+    case SystemOperation::vec_resize: {
+      auto t = element();
+      const auto kind = type(t).kind;
+      const bool scalar = kind == hir::TypeKind::SignedInt ||
+                          kind == hir::TypeKind::UnsignedInt ||
+                          kind == hir::TypeKind::Isize ||
+                          kind == hir::TypeKind::Usize ||
+                          kind == hir::TypeKind::Float;
+      auto *vec = args[0];
+      auto *length = args[1];
+      auto *fill = args[2];
+      if (!scalar || owning(t)) {
+        runtime("lang_vec_resize_v1", builder.getVoidTy(),
+                {vec, length, element_storage(t, fill)});
+        break;
+      }
+
+      // A scalar fill is already an SSA snapshot. Within capacity, preserve
+      // the runtime's no-op and iteration-pin order around a typed fill loop.
+      auto *function = builder.GetInsertBlock()->getParent();
+      auto block = [&](const char *name) {
+        return llvm::BasicBlock::Create(context, name, function);
+      };
+      auto *changed = block("vec.resize.changed");
+      auto *slow = block("vec.resize.grow_storage");
+      auto *in_place = block("vec.resize.in_place");
+      auto *shorten = block("vec.resize.shorten");
+      auto *loop = block("vec.resize.fill");
+      auto *publish = block("vec.resize.publish");
+      auto *done = block("vec.resize.done");
+      auto *old = vec_field(vec, 1, builder.getInt64Ty());
+      builder.CreateCondBr(builder.CreateICmpEQ(length, old), done, changed);
+      builder.SetInsertPoint(changed);
+      auto *capacity = vec_field(vec, 8, builder.getInt64Ty());
+      builder.CreateCondBr(builder.CreateICmpUGT(length, capacity), slow,
+                           in_place);
+
+      builder.SetInsertPoint(slow);
+      runtime("lang_vec_resize_v1", builder.getVoidTy(),
+              {vec, length, element_storage(t, fill)});
+      builder.CreateBr(done);
+
+      builder.SetInsertPoint(in_place);
+      auto *iterations = vec_field(vec, 4, builder.getInt64Ty());
+      iterations->setAtomic(llvm::AtomicOrdering::Acquire);
+      iterations->setAlignment(llvm::Align(8));
+      guard(builder.CreateICmpNE(iterations, builder.getInt64(0)), 8, i.source);
+      auto *data = vec_field(vec, 5, builder.getPtrTy());
+      auto *ready = builder.GetInsertBlock();
+      builder.CreateCondBr(builder.CreateICmpULT(length, old), shorten, loop);
+
+      builder.SetInsertPoint(shorten);
+      auto *initialized = vec_field(vec, 2, builder.getInt64Ty());
+      auto *keep = builder.CreateSelect(
+          builder.CreateICmpULT(initialized, length), initialized, length);
+      builder.CreateBr(publish);
+
+      builder.SetInsertPoint(loop);
+      auto *index = builder.CreatePHI(builder.getInt64Ty(), 2);
+      index->addIncoming(old, ready);
+      auto *address = builder.CreateGEP(lower_type(t), data, index);
+      vec_memory(builder.CreateStore(fill, address), false);
+      auto *next = builder.CreateAdd(index, builder.getInt64(1));
+      index->addIncoming(next, loop);
+      auto *back_edge = builder.CreateCondBr(
+          builder.CreateICmpEQ(next, length), publish, loop);
+      if (module.getTargetTriple().str() == "x86_64-unknown-linux-gnu" &&
+          machine->getOptLevel() == llvm::CodeGenOptLevel::Default) {
+        // Keep the optimized fill loop within an x86 instruction cache line.
+        auto *alignment = llvm::MDNode::get(
+            context, {llvm::MDString::get(context, "llvm.loop.align"),
+                      llvm::ConstantAsMetadata::get(builder.getInt32(64))});
+        auto *loop_id = llvm::MDNode::getDistinct(context, {nullptr, alignment});
+        loop_id->replaceOperandWith(0, loop_id);
+        back_edge->setMetadata(llvm::LLVMContext::MD_loop, loop_id);
+      }
+
+      builder.SetInsertPoint(publish);
+      auto *prefix = builder.CreatePHI(builder.getInt64Ty(), 2);
+      prefix->addIncoming(keep, shorten);
+      prefix->addIncoming(length, loop);
+      vec_memory(builder.CreateStore(
+                     prefix, builder.CreateStructGEP(vec_type, vec, 2)), true);
+      vec_memory(builder.CreateStore(
+                     length, builder.CreateStructGEP(vec_type, vec, 1)), true);
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+      break;
+    }
     case SystemOperation::vec_clear: {
       if (owning(element())) {
         runtime("lang_vec_clear_v1", builder.getVoidTy(), {args[0]});

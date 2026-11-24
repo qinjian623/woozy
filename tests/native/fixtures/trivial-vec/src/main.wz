@@ -92,6 +92,16 @@ func main() i32 {
     }
     vec.push(ints, 17);
     if ints_alias[0] != 17 || vec.len(ints_alias) != 1 { return 21; }
+    vec.resize(ints_alias, saved_capacity, -13);
+    if vec.len(ints) != saved_capacity || ints[0] != 17 ||
+       ints[saved_capacity-1] != -13 { return 23; }
+    {
+        let pin = slice.view(ints, 0, 1);
+        vec.resize(ints_alias, saved_capacity, 99);
+        if slice.len(pin) != 1 || ints[0] != 17 { return 24; }
+    }
+    vec.resize(ints_alias, 1, 99);
+    if vec.len(ints) != 1 || ints[0] != 17 { return 25; }
     vec.clear(nested_self);
     if vec.len(nested) != 0 { return 22; }
     return 0;

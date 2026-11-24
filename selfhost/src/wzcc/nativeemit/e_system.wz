@@ -676,6 +676,18 @@ func e_vec_pop_inline(element usize, state inout Emitter) bool throws Error {
     }
 }
 
+func e_vec_resize_inline(element usize, state inout Emitter) bool throws Error {
+    if owning(element, inout state) { return false; }
+    switch type_of(state, element).kind {
+        case model.TypeKind.SignedInt: return true;
+        case model.TypeKind.UnsignedInt: return true;
+        case model.TypeKind.Isize: return true;
+        case model.TypeKind.Usize: return true;
+        case model.TypeKind.Float: return true;
+        default: return false;
+    }
+}
+
 // The same acquire load of LangVec.iterations the runtime uses.  The inline pop
 // must not weaken the active-iteration pin check.
 func e_vec_iterations_acquire(vec Value, state inout Emitter) Value throws Error {
@@ -911,14 +923,87 @@ func e_value_system_call(instruction nativeir.Instruction,
                     return option.Option[Value].Some(joined);
                 }
                 if operation == 41 {
-                    let fill = element_storage(element, args[2], inout state);
-                    var actual Vec[Value] = [];
-                    vec.push(actual, args[0]);
-                    vec.push(actual, args[1]);
-                    vec.push(actual, fill);
-                    runtime("lang_vec_resize_v1", "void", actual, inout state);
-                    return option.Option[Value].Some(Value(type_name: "i8",
-                        reference: "0"));
+                    if e_vec_resize_inline(element, inout state) {
+                        let function_index = current_function(state);
+                        let capacity_check = new_block(function_index, "vec.resize.capacity", inout state);
+                        let fallback = new_block(function_index, "vec.resize.runtime", inout state);
+                        let checked = new_block(function_index, "vec.resize.checked", inout state);
+                        let shrink = new_block(function_index, "vec.resize.shrink", inout state);
+                        let loop = new_block(function_index, "vec.resize.loop", inout state);
+                        let publish = new_block(function_index, "vec.resize.publish", inout state);
+                        let done = new_block(function_index, "vec.resize.done", inout state);
+                        let length = vec_field(args[0], 1, "i64", inout state);
+                        let unchanged = c_icmp("eq", "i64", length.reference, args[1].reference, inout state);
+                        c_cond_branch(unchanged, done, capacity_check, inout state);
+
+                        position(capacity_check, inout state);
+                        let capacity = vec_field(args[0], 8, "i64", inout state);
+                        let too_large = c_icmp("ugt", "i64", args[1].reference, capacity.reference, inout state);
+                        c_cond_branch(too_large, fallback, checked, inout state);
+
+                        position(fallback, inout state);
+                        let fill = element_storage(element, args[2], inout state);
+                        runtime("lang_vec_resize_v1", "void", [args[0], args[1], fill], inout state);
+                        c_branch(done, inout state);
+
+                        position(checked, inout state);
+                        let iterations = e_vec_iterations_acquire(args[0], inout state);
+                        let pinned = c_icmp("ne", "i64", iterations.reference, "0", inout state);
+                        guard(pinned, 8, instruction.source, inout state);
+                        let data = vec_field(args[0], 5, "ptr", inout state);
+                        let ready = here(state);
+                        let smaller = c_icmp("ult", "i64", args[1].reference, length.reference, inout state);
+                        c_cond_branch(smaller, shrink, loop, inout state);
+
+                        position(shrink, inout state);
+                        let initialized = vec_field(args[0], 2, "i64", inout state);
+                        let clamp = c_icmp("ugt", "i64", initialized.reference, args[1].reference, inout state);
+                        let kept = result("i64", "select i1 " + clamp.reference + ", i64 " + args[1].reference + ", i64 " + initialized.reference, inout state);
+                        let shrink_end = here(state);
+                        c_branch(publish, inout state);
+
+                        position(loop, inout state);
+                        let index = c_phi_begin("i64", inout state);
+                        let layout = lower_type(element, inout state);
+                        let address = result("ptr", "getelementptr " + layout + ", ptr " + data.reference + ", i64 " + index.value.reference, inout state);
+                        c_store_tagged(args[2], address, inout state);
+                        let next = c_binop("add", "i64", index.value.reference, "1", inout state);
+                        let complete = c_icmp("eq", "i64", next.reference, args[1].reference, inout state);
+                        let loop_end = here(state);
+                        if state.options.optimization == 2 &&
+                           state.options.triple == "x86_64-unknown-linux-gnu" {
+                            let alignment = define_metadata("llvm.loop.align.64",
+                                "!{!\"llvm.loop.align\", i32 64}", inout state);
+                            let id = number(vec.len(state.metadata));
+                            let loop_metadata = define_metadata("vec.resize.loop." + id,
+                                "distinct !{!" + id + ", " + alignment + "}", inout state);
+                            terminate("br i1 " + complete.reference + ", label " +
+                                publish.reference + ", label " + loop.reference +
+                                ", !llvm.loop " + loop_metadata, inout state);
+                        } else {
+                            c_cond_branch(complete, publish, loop, inout state);
+                        }
+                        c_phi_set(index, [CPhiIncoming(value: length, block: ready),
+                            CPhiIncoming(value: next, block: loop_end)], inout state);
+
+                        position(publish, inout state);
+                        let prefix = c_phi_begin("i64", inout state);
+                        c_phi_set(prefix, [CPhiIncoming(value: kept, block: shrink_end),
+                            CPhiIncoming(value: args[1], block: loop_end)], inout state);
+                        let initialized_field = c_gep(VEC_TYPE, args[0], 2, inout state);
+                        let length_field = c_gep(VEC_TYPE, args[0], 1, inout state);
+                        let suffix = vec_memory(true, inout state);
+                        append("store i64 " + prefix.value.reference + ", ptr " +
+                            initialized_field.reference + suffix, inout state);
+                        append("store i64 " + args[1].reference + ", ptr " +
+                            length_field.reference + suffix, inout state);
+                        c_branch(done, inout state);
+                        position(done, inout state);
+                    } else {
+                        let fill = element_storage(element, args[2], inout state);
+                        runtime("lang_vec_resize_v1", "void", [args[0], args[1], fill], inout state);
+                    }
+                    return option.Option[Value].Some(Value(type_name: "i8", reference: "0"));
                 }
                 if operation == 42 {
                     if owning(element, inout state) {
