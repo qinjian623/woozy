@@ -131,6 +131,11 @@ func test_deque_wrap_growth() i32 {
     }
     if !some_i32(deque.peek_front(queue), 2) { return 51; }
     if !some_i32(deque.peek_back(queue), 10) { return 52; }
+    // Refill the old prefix that the wrapped growth moved out of the live range.
+    deque.push_front(queue, -1);
+    deque.push_front(queue, -2);
+    if !some_i32(deque.pop_front(queue), -2) { return 59; }
+    if !some_i32(deque.pop_front(queue), -1) { return 59; }
     for var index usize = 0; index < 9; index += 1 {
         if !some_i32(deque.pop_front(queue), grown[index]) { return 53; }
     }
