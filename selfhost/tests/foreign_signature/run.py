@@ -31,9 +31,9 @@ ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
 # signature checks in the C++ and Wz registries. 216-227 are reserved for
 # independent pending operations.
-EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229)
+EXPECTED_OPERATION_IDS = tuple(range(216)) + (228, 229, 230)
 EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
-NEW_OPERATIONS = (213, 214, 215, 228, 229)
+NEW_OPERATIONS = (213, 214, 215, 228, 229, 230)
 
 
 def fail(message: str) -> None:
@@ -187,6 +187,8 @@ def validate_registry_entries() -> None:
               '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
         229: ('{SystemOperation::vec_try_move_trivial, "__woozy_vec_try_move_trivial", '
               '"bool", {"Vec[A]", "usize", "usize", "usize"}, 4, "std/vec", 1},'),
+        230: ('{SystemOperation::text_load8, "__woozy_text_load8", '
+              '"Option[u64]", {"string", "usize"}, 2, "std/text"},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -204,6 +206,9 @@ def validate_registry_entries() -> None:
         229: ('OperationSpec(operation: 229, name: "__woozy_vec_try_move_trivial", '
               'result: "bool", parameters: ["Vec[A]", "usize", "usize", "usize"], '
               'owner: "std/vec", type_arity: 1)'),
+        230: ('OperationSpec(operation: 230, name: "__woozy_text_load8", '
+              'result: "Option[u64]", parameters: ["string", "usize"], '
+              'owner: "std/text", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:

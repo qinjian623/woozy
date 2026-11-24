@@ -53,7 +53,8 @@ enum class SystemOperation : uint16_t {
   // 216-227 are reserved for independent pending operations; the explicit
   // value keeps this operation stable when those entries are appended.
   unicode_text_take = 228,
-  vec_try_move_trivial = 229
+  vec_try_move_trivial = 229,
+  text_load8 = 230
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -142,7 +143,7 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 59> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 60> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
@@ -152,6 +153,7 @@ inline constexpr std::array<SystemOperationSpec, 59> value_system_operations{{
   {SystemOperation::text_from_bytes, "__woozy_text_from_bytes", "Result[string,i32]", {"Vec[u8]"}, 1, "std/text"},
   {SystemOperation::text_from_rune, "__woozy_text_from_rune", "Result[string,i32]", {"u32"}, 1, "std/text"},
   {SystemOperation::text_bytes, "__woozy_text_bytes", "Vec[u8]", {"string"}, 1, "std/text"},
+  {SystemOperation::text_load8, "__woozy_text_load8", "Option[u64]", {"string", "usize"}, 2, "std/text"},
   {SystemOperation::vec_empty, "__woozy_vec_empty", "Vec[A]", {}, 0, "std/vec", 1},
   {SystemOperation::vec_make, "__woozy_vec_make", "Vec[A]", {"usize", "A"}, 2, "std/vec", 1},
   {SystemOperation::vec_len, "__woozy_vec_len", "usize", {"Vec[A]"}, 1, "std/vec", 1},

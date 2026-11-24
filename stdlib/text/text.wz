@@ -165,12 +165,51 @@ pub func find_last(value string, needle string) option.Option[usize] {
     }
     return option.Option[usize].Some(index);
 }
+func count_words(value string, target u8) option.Option[usize] {
+    let byte_count = byte_len(value);
+    let repeated = u64(target) * 0x0101010101010101;
+    var total usize = 0;
+    var offset usize = 0;
+    for byte_count - offset >= 8 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,offset) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        let x = word ^ repeated;
+        let zero_flags = ~(((x & 0x7f7f7f7f7f7f7f7f) + 0x7f7f7f7f7f7f7f7f) |
+            x | 0x7f7f7f7f7f7f7f7f);
+        total += usize((((zero_flags >> 7) * 0x0101010101010101) >> 56));
+        offset += 8;
+    }
+    let remaining = byte_count - offset;
+    if remaining != 0 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,byte_count-8) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        let x = word ^ repeated;
+        var zero_flags = ~(((x & 0x7f7f7f7f7f7f7f7f) + 0x7f7f7f7f7f7f7f7f) |
+            x | 0x7f7f7f7f7f7f7f7f);
+        zero_flags = zero_flags & (~u64(0) << ((8-remaining)*8));
+        total += usize((((zero_flags >> 7) * 0x0101010101010101) >> 56));
+    }
+    return option.Option[usize].Some(total);
+}
 pub func count(value string, needle string) usize {
     if needle == "" { return len(value)+1; }
     if byte_len(needle) > byte_len(value) { return 0; }
     if byte_len(needle) == 1 {
         let target = u8(needle[0]);
-        if byte_len(value) <= 32 && byte_len(value) == len(value) {
+        let value_bytes = byte_len(value);
+        if value_bytes >= 8 {
+            switch count_words(value,target) {
+                case option.Option.Some(total): return total;
+                case option.Option.None: {}
+            }
+        }
+        if value_bytes <= 32 && value_bytes == len(value) {
             var total usize = 0;
             for var index usize = 0; index < len(value); index += 1 {
                 if value[index] == u32(target) { total += 1; }

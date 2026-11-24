@@ -1743,6 +1743,10 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             return tags['Ok'], (chr(rune),)
         if operation == 'text_bytes':
             return Vec.create(element, args[0].encode('utf-8'))
+        # Python text has no persistent UTF-8 byte buffer. Let Woozy use its
+        # byte-scan fallback, which encodes input once per count.
+        if operation == 'text_load8':
+            return tags['None'], ()
         if operation == 'vec_empty': return Vec.create(element, [])
         if operation == 'vec_make':
             result = Vec.create(element, [])

@@ -112,6 +112,42 @@ func check_count() i32 {
     return 0;
 }
 
+func check_word_counts() i32 {
+    let needles = ["\0", "@", "A", "`", "a", "\u{7e}", "\u{7f}", "\u{1}"];
+    let units = ["@A\0", "\u{7e}\u{7f}\0", "\0\u{1}\u{2}", "`a\0"];
+    for unit in units {
+        let unit_length = text.len(unit);
+        for var length usize = 8; length <= 47; length += 1 {
+            let value = text.repeat(unit,length/unit_length) + unit[0:length%unit_length];
+            for needle in needles {
+                let target = needle[0];
+                var expected usize = 0;
+                for var index usize = 0; index < length; index += 1 {
+                    if value[index] == target { expected += 1; }
+                }
+                if text.count(value,needle) != expected { return 1001; }
+            }
+        }
+    }
+    let mixed = text.repeat("中😀@A\0",8);
+    for var start usize = 0; start < 5; start += 1 {
+        for var length usize = 8; length <= 32; length += 1 {
+            let end = start+length;
+            if end > text.len(mixed) { continue; }
+            let value = mixed[start:end];
+            for needle in needles {
+                let target = needle[0];
+                var expected usize = 0;
+                for var index usize = 0; index < text.len(value); index += 1 {
+                    if value[index] == target { expected += 1; }
+                }
+                if text.count(value,needle) != expected { return 1002; }
+            }
+        }
+    }
+    return 0;
+}
+
 func check_split_n() i32 {
     if vec.len(text.split_n("a,b", ",", 0)) != 0 { return 401; }
     if vec.len(text.split_n("", "", 0)) != 0 { return 402; }
@@ -296,6 +332,8 @@ func main() i32 {
     code = check_find_last();
     if code != 0 { return code; }
     code = check_count();
+    if code != 0 { return code; }
+    code = check_word_counts();
     if code != 0 { return code; }
     code = check_split_n();
     if code != 0 { return code; }

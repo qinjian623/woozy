@@ -683,6 +683,27 @@ func e_value_system_call(instruction nativeir.Instruction,
                 let length = e_extract(args[0], 1, "i64", inout state);
                 return option.Option[Value].Some(length);
             }
+            if operation == 230 {
+                let offset = args[1];
+                let bytes = e_text_length(args[0], inout state);
+                let has_bytes = result("i1", "icmp uge i64 " + bytes.reference +
+                    ", 8", inout state);
+                let last = result("i64", "sub i64 " + bytes.reference + ", 8",
+                    inout state);
+                let in_range = result("i1", "icmp ule " + typed(offset) + ", " +
+                    last.reference, inout state);
+                let present = result("i1", "and " + typed(has_bytes) + ", " +
+                    in_range.reference, inout state);
+                let join = e_stdlib_option_begin(instruction.type_id, present,
+                    inout state);
+                let data = e_text_pointer(args[0], inout state);
+                let address = result("ptr", "getelementptr inbounds i8, ptr " +
+                    data.reference + ", " + typed(offset), inout state);
+                let loaded = result("i64", "load i64, ptr " + address.reference +
+                    ", align 1", inout state);
+                let joined = e_stdlib_finish(join, loaded, inout state);
+                return option.Option[Value].Some(joined);
+            }
             if operation == 33 {
                 let receiver_type = value_type(state, instruction.inputs[0]);
                 let address = value_address(receiver_type, args[0], inout state);
