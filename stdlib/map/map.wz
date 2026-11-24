@@ -58,6 +58,8 @@ pub func is_empty[K hash.Hash,V](values Map[K,V]) bool {
     return len(values) == 0;
 }
 
+// Capture the table before calling hash, which can re-enter the Map. Use its
+// result as a separate index so the existing table handle can be borrowed.
 func bucket_index[K hash.Hash](key K, capacity usize) usize {
     return usize(K.hash(key) % u64(capacity));
 }
@@ -100,7 +102,8 @@ func grow[K hash.Hash,V](values Map[K,V], current Vec[Vec[Entry[K,V]]]) {
 pub func insert[K hash.Hash,V](values Map[K,V], key K, value V) option.Option[V] {
     let buckets = values.buckets[0];
     let capacity = vec.len(buckets);
-    let bucket = buckets[bucket_index(key, capacity)];
+    let index = bucket_index(key, capacity);
+    let bucket = buckets[index];
     switch find_index(bucket, key) {
         case option.Option.Some(position): {
             let previous = bucket[position].value;
@@ -122,7 +125,8 @@ pub func insert[K hash.Hash,V](values Map[K,V], key K, value V) option.Option[V]
 // returned Option and can outlive the map.
 pub func get[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
     let buckets = values.buckets[0];
-    let bucket = buckets[bucket_index(key, vec.len(buckets))];
+    let index = bucket_index(key, vec.len(buckets));
+    let bucket = buckets[index];
     switch find_index(bucket, key) {
         case option.Option.Some(position): return option.Option[V].Some(bucket[position].value);
         case option.Option.None: return option.Option[V].None;
@@ -141,7 +145,8 @@ pub func contains[K hash.Hash,V](values Map[K,V], key K) bool {
 // not shrunk.
 pub func remove[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
     let buckets = values.buckets[0];
-    let bucket = buckets[bucket_index(key, vec.len(buckets))];
+    let index = bucket_index(key, vec.len(buckets));
+    let bucket = buckets[index];
     switch find_index(bucket, key) {
         case option.Option.Some(position): {
             let removed = bucket[position].value;
