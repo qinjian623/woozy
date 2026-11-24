@@ -161,30 +161,12 @@ func wz_grapheme_count(value string) usize {
     if total == 0 { return 0; }
     if total == 1 { return 1; }
     if text.byte_len(value) == total {
-        if total <= 256 {
-            var crlf usize = 0;
-            var previous = value[0];
-            for var index usize = 1; index < total; index += 1 {
-                let current = value[index];
-                if previous == 0x0d && current == 0x0a { crlf += 1; }
-                previous = current;
-            }
-            return total - crlf;
-        }
-        let data = text.bytes(value);
         var crlf usize = 0;
-        let end = total - 1;
-        var index usize = 0;
-        for end - index >= 4 {
-            if data[index] == 0x0d && data[index+1] == 0x0a { crlf += 1; }
-            if data[index+1] == 0x0d && data[index+2] == 0x0a { crlf += 1; }
-            if data[index+2] == 0x0d && data[index+3] == 0x0a { crlf += 1; }
-            if data[index+3] == 0x0d && data[index+4] == 0x0a { crlf += 1; }
-            index += 4;
-        }
-        for index < end {
-            if data[index] == 0x0d && data[index+1] == 0x0a { crlf += 1; }
-            index += 1;
+        var previous = value[0];
+        for var index usize = 1; index < total; index += 1 {
+            let current = value[index];
+            if previous == 0x0d && current == 0x0a { crlf += 1; }
+            previous = current;
         }
         return total - crlf;
     }
