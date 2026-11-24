@@ -277,6 +277,7 @@ def ieee(pattern, bits):
 
 _IEEE_PACK = {32: struct.Struct('>f').pack, 64: struct.Struct('>d').pack}
 _F64_UNPACK = struct.Struct('>d').unpack
+_INT_FROM_BYTES = int.from_bytes
 
 
 def _float_bits(value, bits):
@@ -286,7 +287,7 @@ def _float_bits(value, bits):
     NaN payloads follow the host IEEE value rather than a numeric conversion.
     """
     try:
-        return int.from_bytes(_IEEE_PACK[bits](value), 'big')
+        return _INT_FROM_BYTES(_IEEE_PACK[bits](value), 'big')
     except (MemoryError, OverflowError):
         raise Panic('value library allocation failed') from None
 
