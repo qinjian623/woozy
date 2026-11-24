@@ -76,6 +76,24 @@ func binary_text(state EmitState, op hir.BinaryOp, left string, right string,
             right + ")";
     }
     if kind_is(type_value.kind, model.TypeKind.Float) {
+        // CPython compares the stored binary64 values with exactly the IEEE
+        // result the runtime helper forwards to; the helper adds only a call
+        // and a width check. Keep arithmetic and rounding on float_binary.
+        switch op {
+            case hir.BinaryOp.Equal:
+                return "(" + left + " == " + right + ")";
+            case hir.BinaryOp.NotEqual:
+                return "(" + left + " != " + right + ")";
+            case hir.BinaryOp.Less:
+                return "(" + left + " < " + right + ")";
+            case hir.BinaryOp.LessEqual:
+                return "(" + left + " <= " + right + ")";
+            case hir.BinaryOp.Greater:
+                return "(" + left + " > " + right + ")";
+            case hir.BinaryOp.GreaterEqual:
+                return "(" + left + " >= " + right + ")";
+            default: {}
+        }
         return "_rt.float_binary('" + operation + "', " + left + ", " +
             right + ", " + u32_text(type_value.bits) + ")";
     }

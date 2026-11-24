@@ -779,9 +779,29 @@ class Emitter {
                      TypeId operand) const {
     if (type(operand).kind == TypeKind::String)
       return "_rt.text_binary('" + operation(op) + "', " + a + ", " + b + ")";
-    if (type(operand).kind == TypeKind::Float)
+    if (type(operand).kind == TypeKind::Float) {
+      // CPython compares the stored binary64 values with exactly the IEEE
+      // result the runtime helper forwards to; the helper adds only a call
+      // and a width check. Keep arithmetic and rounding on float_binary.
+      switch (op) {
+      case BinaryOp::equal:
+        return "(" + a + " == " + b + ")";
+      case BinaryOp::not_equal:
+        return "(" + a + " != " + b + ")";
+      case BinaryOp::less:
+        return "(" + a + " < " + b + ")";
+      case BinaryOp::less_equal:
+        return "(" + a + " <= " + b + ")";
+      case BinaryOp::greater:
+        return "(" + a + " > " + b + ")";
+      case BinaryOp::greater_equal:
+        return "(" + a + " >= " + b + ")";
+      default:
+        break;
+      }
       return "_rt.float_binary('" + operation(op) + "', " + a + ", " + b +
              ", " + std::to_string(type(operand).bits) + ")";
+    }
     return "_rt.binary('" + operation(op) + "', " + a + ", " + b + ", " +
            numeric(operand) + ")";
   }
