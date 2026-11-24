@@ -246,6 +246,8 @@ add_test(NAME native.alloc_reuse COMMAND lang_native_alloc_reuse_test)
 set_tests_properties(native.alloc_reuse PROPERTIES TIMEOUT 30)
 add_test(NAME native.alloc_reuse_deny_mmap COMMAND lang_native_alloc_reuse_test reuse-deny-mmap)
 set_tests_properties(native.alloc_reuse_deny_mmap PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+add_test(NAME native.alloc_direct_phase_change COMMAND lang_native_alloc_reuse_test direct-phase-change)
+set_tests_properties(native.alloc_direct_phase_change PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 if(LANG_TEST_PYTHON)
   add_test(NAME native.trivial_vec COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_trivial_vec.py --cli $<TARGET_FILE:woozyc>

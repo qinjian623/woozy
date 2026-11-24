@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cerrno>
+#include <string_view>
 
 #if defined(__x86_64__) && defined(__linux__)
 #include <cstdlib>
@@ -26,7 +27,8 @@ constexpr uint64_t kBoundarySizes[] = {
     96,    97,    127,   128,   129,   191,   192,   193,   255,   256,
     257,   383,   384,   385,   511,   512,   513,   767,   768,   769,
     1023,  1024,  1025,  1535,  1536,  1537,  2047,  2048,  2049,  3071,
-    3072,  3073,  4080,  4081,  4096,  4097,  8192,  16384};
+    3072,  3073,  4080,  4081,  4096,  4097,  8192,  16368, 16369,
+    16384, 32752, 32753, 65535, 98304, 131071, 131072};
 
 constexpr uint64_t kAlignments[] = {1, 2, 4, 8, 16, 32, 64, 128,
                                     256, 1024, 4096, 65536, 1u << 20};
@@ -189,10 +191,8 @@ static bool deny_mmap() {
     return false;
   return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) == 0;
 }
-#endif
 
 static int test_reuse_without_mmap() {
-#if defined(__x86_64__) && defined(__linux__)
   // Create several full pages in one class, then release them.  After the
   // filter is installed, only the per-class budget of empty pages may be
   // reused; if all historical peak pages were retained, enough slots for the
@@ -221,10 +221,7 @@ static int test_reuse_without_mmap() {
   for (uint32_t index = 0; index < kCount; ++index)
     lang_free_v1(warm[index]);
 
-  // Keep four exact-size direct mappings warm across the filter.  The 256, 512,
-  // 768 and 1024 KiB requests add about 2.5 MiB of mappings, well inside the
-  // 8 MiB budget; a two-slot allocator can only return the first two, while the
-  // four-slot allocator returns all four.
+  // Warm several distinct exact-size mappings within the byte budget.
   constexpr uint64_t kDirectSizes[] = {256 * 1024, 512 * 1024, 768 * 1024,
                                        1024 * 1024};
   constexpr uint32_t kDirectCount =
@@ -240,8 +237,7 @@ static int test_reuse_without_mmap() {
   if (!deny_mmap())
     return 77;
 
-  // Walk the warmed entries in order: a two-slot cache already fails at the
-  // third, so all four must come back without mmap and verify byte-for-byte.
+  // Each size must be available without mmap.
   for (uint32_t index = 0; index < kDirectCount; ++index) {
     const uint64_t size = kDirectSizes[index];
     void *pointer = lang_alloc_v1(size, 16);
@@ -294,17 +290,63 @@ static int test_reuse_without_mmap() {
   for (uint32_t index = 0; index < live; ++index)
     lang_free_v1(bounded[index]);
 
-  // A request above the small-class ceiling must still take the direct mmap
-  // path, which the filter denies, so it must report OOM as null.
+  // Neither the pool nor the direct cache has storage for this cold request.
   if (lang_alloc_v1(8192, 16) != nullptr)
     return 55;
   return 0;
-#else
-  return 77;
-#endif
 }
 
-#if defined(__x86_64__) && defined(__linux__)
+static int test_direct_phase_change() {
+  // Startup mappings fill the 8 MiB direct cache. Leave their payloads just
+  // below the target map sizes so they round to those exact page multiples.
+  constexpr uint64_t warm_sizes[] = {
+      1 * 1024 * 1024 - 64, 1536 * 1024 - 64,
+      2560 * 1024 - 64, 3 * 1024 * 1024 - 64};
+  for (uint64_t size : warm_sizes) {
+    void *warm = lang_alloc_v1(size, 16);
+    if (!warm)
+      return 90;
+    lang_free_v1(warm);
+  }
+
+  // The steady-state batch has smaller buffers at nonmatching old sizes,
+  // including several of one size simultaneously.
+  constexpr uint64_t hot_sizes[] = {32752, 49187, 84007, 84007, 84007, 121483};
+  constexpr size_t count = sizeof(hot_sizes) / sizeof(hot_sizes[0]);
+  void *hot[count];
+  for (size_t index = 0; index < count; ++index) {
+    hot[index] = lang_alloc_v1(hot_sizes[index], 16);
+    if (!hot[index])
+      return 91;
+  }
+  for (void *pointer : hot)
+    lang_free_v1(pointer);
+
+  if (!deny_mmap())
+    return 77;
+  for (size_t index = 0; index < count; ++index) {
+    hot[index] = lang_alloc_v1(hot_sizes[index], 16);
+    if (!hot[index] || !aligned(hot[index], 16))
+      return 92;
+    fill(hot[index], hot_sizes[index], static_cast<uint8_t>(index + 17));
+  }
+  for (size_t index = 0; index < count; ++index)
+    if (!matches(hot[index], hot_sizes[index], static_cast<uint8_t>(index + 17)))
+      return 93;
+
+  // This batch fits into the oldest startup mapping. The newer mappings
+  // should still be reusable while the oldest is no longer available.
+  void *newer = lang_alloc_v1(warm_sizes[1], 16);
+  if (!newer)
+    return 94;
+  if (lang_alloc_v1(warm_sizes[0], 16))
+    return 95;
+  lang_free_v1(newer);
+  for (void *pointer : hot)
+    lang_free_v1(pointer);
+  return 0;
+}
+
 static int wait_for_test_child(pid_t child) {
   int status = 0;
   for (;;) {
@@ -372,10 +414,8 @@ static int run_pressure_isolated(uint64_t size, uint64_t slack) {
     _exit(test_pressure_child(size, slack));
   return wait_for_test_child(child);
 }
-#endif
 
-static int run_reuse_without_mmap_isolated() {
-#if defined(__x86_64__) && defined(__linux__)
+static int run_reuse_without_mmap_isolated(int (*test)()) {
   // Seccomp must not be installed in the process that owns the sanitizer
   // runtime: returning from main would ask ASan to mmap its cleanup guard
   // while mmap is denied.  The child installs the filter and leaves with
@@ -383,23 +423,21 @@ static int run_reuse_without_mmap_isolated() {
   const pid_t child = fork();
   if (child < 0)
     return 70;
-  if (child == 0) {
-    const int result = test_reuse_without_mmap();
-    _exit(result);
-  }
+  if (child == 0)
+    _exit(test());
 
   return wait_for_test_child(child);
-#else
-  return 77;
-#endif
 }
+#endif
 
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc > 1 && argv[1][0] == 'r' && argv[1][1] == 'e')
-    return run_reuse_without_mmap_isolated();
 #if defined(__x86_64__) && defined(__linux__)
+  if (argc > 1 && std::string_view(argv[1]) == "reuse-deny-mmap")
+    return run_reuse_without_mmap_isolated(test_reuse_without_mmap);
+  if (argc > 1 && std::string_view(argv[1]) == "direct-phase-change")
+    return run_reuse_without_mmap_isolated(test_direct_phase_change);
   // Keep these first: the 4000-byte class must be cold in its isolated child.
   // None of the warmed sizes equals the target. Releasing only the first two
   // slots still leaves too much address space occupied for the 1 MiB request.
@@ -410,6 +448,10 @@ int main(int argc, char **argv) {
     pressure = run_pressure_isolated(262144, 320 * 1024);
   if (pressure)
     return pressure;
+#else
+  (void)argv;
+  if (argc > 1)
+    return 77;
 #endif
   int result = test_invalid_requests();
   if (!result)
