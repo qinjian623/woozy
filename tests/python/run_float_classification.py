@@ -55,6 +55,15 @@ def check_program(program, symbols):
         check_signbit = namespace[symbols["check_signbit"]]
         check_isinf = namespace[symbols["check_isinf"]]
         check_isfinite = namespace[symbols["check_isfinite"]]
+        check_fabs = namespace[symbols["check_fabs"]]
+        check_copysign = namespace[symbols["check_copysign"]]
+        # These functions must return ordinary floats even without a sign flip.
+        for value in (HostFloat(1.0), HostFloat(-1.0)):
+            absolute = check_fabs(value)
+            assert type(absolute) is float and absolute == 1.0
+            for sign in (1.0, -1.0):
+                signed = check_copysign(value, HostFloat(sign))
+                assert type(signed) is float and signed == sign
         cases = (
             ("nan", 1), ("-nan", 1), ("inf", 2), ("-inf", 2),
             ("0.0", 3), ("-0.0", 3), ("5e-324", 3), ("-42.0", 3),
