@@ -330,6 +330,9 @@ def _float_round(numerator, denominator, bits, negative=False):
 
 
 def float_neg(value, bits):
+    if bits == 64 and issubclass(type(value), float):
+        # Bypass subclass overrides and flip the stored double directly.
+        return float.__neg__(value)
     # Changing the sign needs no arithmetic or rounding, including for -0.
     fmt = {32: '>f', 64: '>d'}[bits]
     pattern = int.from_bytes(struct.pack(fmt, value), 'big')

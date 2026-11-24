@@ -32,6 +32,9 @@ class HostFloat(float):
     def __float__(self):
         raise AssertionError("classification invoked host float conversion")
 
+    def __neg__(self):
+        raise AssertionError("negation invoked host override")
+
     def __bool__(self):
         raise AssertionError("classification invoked host truth conversion")
 
@@ -55,6 +58,7 @@ def check_program(program, symbols):
         check_signbit = namespace[symbols["check_signbit"]]
         check_isinf = namespace[symbols["check_isinf"]]
         check_isfinite = namespace[symbols["check_isfinite"]]
+        check_negation = namespace[symbols["check_negation"]]
         check_fabs = namespace[symbols["check_fabs"]]
         check_copysign = namespace[symbols["check_copysign"]]
         # These functions must return ordinary floats even without a sign flip.
@@ -102,6 +106,9 @@ def check_program(program, symbols):
             for candidate in (value, HostFloat(value)):
                 actual = check_signbit(candidate)
                 assert actual is expected, (hex(bits), expected, actual)
+                negated = check_negation(candidate)
+                assert type(negated) is float
+                assert struct.pack(">d", negated) == (bits ^ (1 << 63)).to_bytes(8, "big"), hex(bits)
                 magnitude = bits & 0x7fffffffffffffff
                 infinity = 0x7ff0000000000000
                 expected_class = 1 if magnitude > infinity else 2 if magnitude == infinity else 3

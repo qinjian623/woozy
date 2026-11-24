@@ -13,6 +13,7 @@ func check_signbit(value f64) bool { return math.signbit(value); }
 func check_isinf(value f64) bool { return math.isinf(value); }
 func check_isfinite(value f64) bool { return math.isfinite(value); }
 
+func check_negation(value f64) f64 { return -value; }
 func check_fabs(value f64) f64 { return math.fabs(value); }
 func check_copysign(value f64, sign f64) f64 { return math.copysign(value, sign); }
 
