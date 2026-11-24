@@ -149,29 +149,39 @@ pub func format_rfc3339(value DateTime) string throws Error {
     try { return text.from_bytes(out); }
     catch error text.Error { throw Error.InvalidDate; }
 }
-func decimal(value string, start usize, end usize) i64 throws Error {
-    var result i64 = 0;
-    for var index = start; index < end; index += 1 {
-        let digit = value[index];
-        if digit < 48 || digit > 57 { throw Error.InvalidDate; }
-        result = result*10+i64(digit)-48;
-    }
-    return result;
-}
 pub func parse_rfc3339(value string) os.Timespec throws Error {
     let length = text.len(value);
     // The longest accepted profile is seconds plus "." and nine fractional
     // digits plus a numeric offset (19+1+9+6 = 35). Reject longer input before
     // scanning the fraction so an unbounded digit run is constant-time work.
-    if length < 20 || length > 35 || value[4] != 45 || value[7] != 45 ||
-       (value[10] != 84 && value[10] != 116) || value[13] != 58 || value[16] != 58 { throw Error.InvalidDate; }
+    if length < 20 || length > 35 { throw Error.InvalidDate; }
+    // The accepted grammar is ASCII-only. Equal byte and scalar counts mean
+    // this valid UTF-8 text is ASCII, so reject every other text before the
+    // single bounded byte copy below.
+    if text.byte_len(value) != length { throw Error.InvalidDate; }
+    let b = text.bytes(value);
+    if b[4] != 45 || b[7] != 45 || (b[10] != 84 && b[10] != 116) ||
+       b[13] != 58 || b[16] != 58 { throw Error.InvalidDate; }
+    if b[0] < 48 || b[0] > 57 || b[1] < 48 || b[1] > 57 ||
+       b[2] < 48 || b[2] > 57 || b[3] < 48 || b[3] > 57 ||
+       b[5] < 48 || b[5] > 57 || b[6] < 48 || b[6] > 57 ||
+       b[8] < 48 || b[8] > 57 || b[9] < 48 || b[9] > 57 ||
+       b[11] < 48 || b[11] > 57 || b[12] < 48 || b[12] > 57 ||
+       b[14] < 48 || b[14] > 57 || b[15] < 48 || b[15] > 57 ||
+       b[17] < 48 || b[17] > 57 || b[18] < 48 || b[18] > 57 { throw Error.InvalidDate; }
+    let year = i64(b[0]-48)*1000+i64(b[1]-48)*100+i64(b[2]-48)*10+i64(b[3]-48);
+    let month = i64(b[5]-48)*10+i64(b[6]-48);
+    let day = i64(b[8]-48)*10+i64(b[9]-48);
+    let hour = i64(b[11]-48)*10+i64(b[12]-48);
+    let minute = i64(b[14]-48)*10+i64(b[15]-48);
+    let second = i64(b[17]-48)*10+i64(b[18]-48);
     var nanoseconds i64 = 0;
     var end usize = 19;
-    if value[end] == 46 {
+    if b[end] == 46 {
         end += 1;
         let start = end;
         for end < length {
-            let digit = value[end];
+            let digit = b[end];
             if digit < 48 || digit > 57 { break; }
             nanoseconds = nanoseconds*10+i64(digit)-48;
             end += 1;
@@ -180,17 +190,20 @@ pub func parse_rfc3339(value string) os.Timespec throws Error {
         for var index = end-start; index < 9; index += 1 { nanoseconds *= 10; }
     }
     var offset i64 = 0;
-    if end+1 == length && (value[end] == 90 || value[end] == 122) {}
+    if end+1 == length && (b[end] == 90 || b[end] == 122) {}
     else {
-        if end+6 != length || (value[end] != 43 && value[end] != 45) || value[end+3] != 58 { throw Error.InvalidDate; }
-        let hour = decimal(value,end+1,end+3);
-        let minute = decimal(value,end+4,end+6);
-        if hour > 23 || minute > 59 { throw Error.InvalidDate; }
-        offset = hour*3600+minute*60;
-        if value[end] == 45 { offset = -offset; }
+        if end+6 != length || (b[end] != 43 && b[end] != 45) || b[end+3] != 58 { throw Error.InvalidDate; }
+        if b[end+1] < 48 || b[end+1] > 57 || b[end+2] < 48 || b[end+2] > 57 ||
+           b[end+4] < 48 || b[end+4] > 57 || b[end+5] < 48 || b[end+5] > 57 {
+            throw Error.InvalidDate;
+        }
+        let offset_hour = i64(b[end+1]-48)*10+i64(b[end+2]-48);
+        let offset_minute = i64(b[end+4]-48)*10+i64(b[end+5]-48);
+        if offset_hour > 23 || offset_minute > 59 { throw Error.InvalidDate; }
+        offset = offset_hour*3600+offset_minute*60;
+        if b[end] == 45 { offset = -offset; }
     }
-    let result = to_timestamp(DateTime(year:decimal(value,0,4),month:decimal(value,5,7),
-        day:decimal(value,8,10),hour:decimal(value,11,13),minute:decimal(value,14,16),
-        second:decimal(value,17,19),nanoseconds:nanoseconds));
+    let result = to_timestamp(DateTime(year:year,month:month,day:day,hour:hour,
+        minute:minute,second:second,nanoseconds:nanoseconds));
     return os.Timespec(seconds:result.seconds-offset,nanoseconds:result.nanoseconds);
 }
