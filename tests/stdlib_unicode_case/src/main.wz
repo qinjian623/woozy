@@ -1,0 +1,135 @@
+// Behaviour checks for std/unicode default uppercase and lowercase.
+// main returns 0 on success and a unique non-zero code for the first failure.
+package app;
+
+import "std/text" as text;
+import "std/unicode" as unicode;
+
+func check_basic() i32 {
+    if unicode.upper("") != "" { return 101; }
+    if unicode.lower("") != "" { return 102; }
+    if unicode.upper("Hello, World!") != "HELLO, WORLD!" { return 103; }
+    if unicode.lower("Hello, World!") != "hello, world!" { return 104; }
+    if unicode.upper("abcXYZ") != "ABCXYZ" { return 107; }
+    if unicode.lower("abcXYZ") != "abcxyz" { return 108; }
+    if text.byte_len(unicode.upper("ß")) != 2 { return 109; }
+    if text.byte_len(unicode.lower("İ")) != 3 { return 110; }
+    return 0;
+}
+
+func check_expansions() i32 {
+    if unicode.upper("Straße") != "STRASSE" { return 201; }
+    if unicode.upper("ẞ") != "ẞ" { return 202; }
+    if unicode.lower("ẞ") != "ß" { return 203; }
+    if unicode.lower("İ") != "i\u{307}" { return 204; }
+    if unicode.upper("İ") != "İ" { return 205; }
+    if unicode.upper("ı") != "I" { return 206; }
+    if unicode.lower("I") != "i" { return 207; }
+    if unicode.upper("ﬃ") != "FFI" { return 208; }
+    if unicode.upper("ﬅ") != "ST" { return 209; }
+    if unicode.upper("\u{587}") != "\u{535}\u{552}" { return 210; }
+    if unicode.upper("\u{390}") != "\u{399}\u{308}\u{301}" { return 211; }
+    if unicode.upper("\u{149}") != "\u{2bc}N" { return 212; }
+    if unicode.upper("\u{1f80}") != "\u{1f08}\u{399}" { return 213; }
+    if unicode.upper("\u{1fb7}") != "\u{391}\u{342}\u{399}" { return 214; }
+    if unicode.lower("\u{1f88}") != "\u{1f80}" { return 215; }
+    if unicode.lower("\u{2126}") != "\u{3c9}" { return 216; }
+    if unicode.upper("\u{3c9}") != "\u{3a9}" { return 217; }
+    if unicode.upper("\u{24d0}") != "\u{24b6}" { return 218; }
+    if unicode.lower("\u{24b6}") != "\u{24d0}" { return 219; }
+    return 0;
+}
+
+func check_sigma() i32 {
+    if unicode.lower("Σ") != "σ" { return 301; }
+    if unicode.lower("ΟΣ") != "ος" { return 302; }
+    if unicode.lower("ΟΣΑ") != "οσα" { return 303; }
+    if unicode.lower("ΟΣΣ") != "οσς" { return 304; }
+    if unicode.lower("AΣ") != "aς" { return 305; }
+    if unicode.lower("AΣ-B") != "aς-b" { return 306; }
+    if unicode.lower("Ο-Σ") != "ο-σ" { return 307; }
+    if unicode.lower("\u{2160}Σ") != "\u{2170}ς" { return 308; }
+    if unicode.lower("\u{aa}Σ") != "\u{aa}ς" { return 309; }
+    if unicode.lower("AΣ\u{aa}") != "aσ\u{aa}" { return 310; }
+    return 0;
+}
+
+func check_context() i32 {
+    if unicode.lower("ΑΣ\u{301}") != "ας\u{301}" { return 401; }
+    if unicode.lower("ΑΣ\u{301}Α") != "ασ\u{301}α" { return 402; }
+    if unicode.lower("Σ\u{301}") != "σ\u{301}" { return 403; }
+    if unicode.lower("Ο\u{301}Σ") != "ο\u{301}ς" { return 404; }
+    if unicode.lower("Ο'Σ") != "ο'ς" { return 405; }
+    if unicode.lower("Ο'Σ'") != "ο'ς'" { return 406; }
+    if unicode.lower("Ο'Σ'Α") != "ο'σ'α" { return 407; }
+    if unicode.lower("ΑΣ\u{ad}") != "ας\u{ad}" { return 408; }
+    if unicode.lower("ΑΣ\u{ad}Α") != "ασ\u{ad}α" { return 409; }
+    if unicode.lower("AΣ\u{b7}") != "aς\u{b7}" { return 410; }
+    if unicode.lower("AΣ\u{b7}A") != "aσ\u{b7}a" { return 411; }
+    if unicode.lower("Ο\0Σ") != "ο\0σ" { return 412; }
+    if unicode.lower("ΟΣ\0") != "ος\0" { return 413; }
+    if unicode.lower("A\u{2b0}Σ") != "a\u{2b0}ς" { return 414; }
+    if unicode.lower("\u{2b0}Σ") != "\u{2b0}σ" { return 415; }
+    if unicode.lower("'\u{301}Σ") != "'\u{301}σ" { return 416; }
+    return 0;
+}
+
+func check_identity() i32 {
+    if unicode.upper("中😀\0!") != "中😀\0!" { return 501; }
+    if unicode.lower("中😀\0!") != "中😀\0!" { return 502; }
+    if unicode.upper("\u{378}\u{e000}") != "\u{378}\u{e000}" { return 503; }
+    if unicode.lower("\u{378}\u{e000}") != "\u{378}\u{e000}" { return 504; }
+    if unicode.upper("\u{10400}\u{10428}") != "\u{10400}\u{10400}" { return 505; }
+    if unicode.lower("\u{10400}\u{10428}") != "\u{10428}\u{10428}" { return 506; }
+    if unicode.upper("e\u{301}") != "E\u{301}" { return 507; }
+    if unicode.lower("E\u{301}") != "e\u{301}" { return 508; }
+    if unicode.upper("\0ß\0İ\0") != "\0SS\0İ\0" { return 509; }
+    if unicode.lower("\0ß\0İ\0") != "\0ß\0i\u{307}\0" { return 510; }
+    if unicode.upper("\0") != "\0" || unicode.lower("\0") != "\0" {
+        return 511;
+    }
+    if unicode.upper("\u{fffd}\u{10ffff}") != "\u{fffd}\u{10ffff}" {
+        return 512;
+    }
+    if unicode.lower("\u{fffd}\u{10ffff}") != "\u{fffd}\u{10ffff}" {
+        return 513;
+    }
+    return 0;
+}
+
+func check_long() i32 {
+    let ascii = text.repeat("abcxyz", 4000);
+    if unicode.upper(ascii) != text.repeat("ABCXYZ", 4000) { return 601; }
+    if unicode.lower(text.repeat("ABCXYZ", 4000)) != ascii { return 602; }
+
+    let marks = text.repeat("\u{301}", 4000);
+    if unicode.lower("AΣ" + marks) != "aς" + marks { return 603; }
+    if unicode.lower("AΣ" + marks + "B") != "aσ" + marks + "b" { return 604; }
+
+    let sigmas = "A" + text.repeat("Σ\u{301}", 2000) + "B";
+    if unicode.lower(sigmas) != "a" + text.repeat("σ\u{301}", 2000) + "b" {
+        return 605;
+    }
+
+    let block = "StraßeİΣΟΣﬃ";
+    let mixed = text.repeat(block, 200);
+    if unicode.upper(mixed) != text.repeat("STRASSEİΣΟΣFFI", 200) { return 606; }
+    if unicode.lower(mixed) != text.repeat("straßei\u{307}σοσﬃ", 200) {
+        return 607;
+    }
+    return 0;
+}
+
+func main() i32 {
+    var code = check_basic();
+    if code != 0 { return code; }
+    code = check_expansions();
+    if code != 0 { return code; }
+    code = check_sigma();
+    if code != 0 { return code; }
+    code = check_context();
+    if code != 0 { return code; }
+    code = check_identity();
+    if code != 0 { return code; }
+    return check_long();
+}

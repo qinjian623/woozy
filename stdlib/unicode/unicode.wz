@@ -1,10 +1,14 @@
 package unicode;
+import "std/text" as text;
 import "std/vec" as vec;
 
 pub const VERSION string = "18.0.0";
 pub enum Form { NFC; NFD; NFKC; NFKD; }
 
 pub func normalize(value string, form Form) string {
+    // Valid UTF-8 has equal byte and scalar counts exactly when it is ASCII.
+    // All four Unicode normalization forms leave ASCII unchanged.
+    if text.byte_len(value) == text.len(value) { return value; }
     switch form {
         case Form.NFC: return __woozy_unicode_normalize(value,0);
         case Form.NFD: return __woozy_unicode_normalize(value,1);
@@ -16,7 +20,186 @@ pub func nfc(value string) string { return normalize(value,Form.NFC); }
 pub func nfd(value string) string { return normalize(value,Form.NFD); }
 pub func nfkc(value string) string { return normalize(value,Form.NFKC); }
 pub func nfkd(value string) string { return normalize(value,Form.NFKD); }
-pub func casefold(value string) string { return __woozy_unicode_casefold(value); }
+pub func casefold(value string) string {
+    let total = text.byte_len(value);
+    if total == 0 { return value; }
+    let data = text.bytes(value);
+
+    if total == text.len(value) {
+        var changed = false;
+        for var index usize = 0; index < total; index += 1 {
+            let byte = data[index];
+            if byte >= 0x41 && byte <= 0x5a {
+                data[index] = byte + 0x20;
+                changed = true;
+            }
+        }
+        if !changed { return value; }
+        return string_from_bytes(data);
+    }
+
+    let out = vec.empty[u8]();
+    vec.reserve(out,total);
+    var offset usize = 0;
+    for offset < total {
+        let first = data[offset];
+        if first < 0x80 {
+            if first >= 0x41 && first <= 0x5a {
+                vec.push(out,first+0x20);
+            } else {
+                vec.push(out,first);
+            }
+            offset += 1;
+            continue;
+        }
+        let rune = utf8_rune(data,offset);
+        let next = utf8_next(data,offset);
+        var mapped = casefold_mapping(rune);
+        if mapped == 0 {
+            for offset < next {
+                vec.push(out,data[offset]);
+                offset += 1;
+            }
+        } else {
+            for mapped != 0 {
+                case_append_rune(out,u32(mapped & 0x1fffff));
+                mapped = mapped >> 21;
+            }
+            offset = next;
+        }
+    }
+    return string_from_bytes(out);
+}
+
+// Full default Unicode uppercase conversion. Each code point expands as
+// specified by UnicodeData.txt plus the unconditional SpecialCasing.txt
+// mappings. The result is not locale-sensitive.
+pub func upper(value string) string {
+    let data = text.bytes(value);
+    if text.byte_len(value) == text.len(value) { return ascii_case(value,data,false); }
+    let total = vec.len(data);
+    let out = vec.empty[u8]();
+    vec.reserve(out,total);
+    var offset usize = 0;
+    for offset < total {
+        let byte = data[offset];
+        if byte < 0x80 {
+            if byte >= 0x61 && byte <= 0x7a {
+                vec.push(out,byte-0x20);
+            } else {
+                vec.push(out,byte);
+            }
+            offset += 1;
+            continue;
+        }
+        case_upper(utf8_rune(data,offset),out);
+        offset = utf8_next(data,offset);
+    }
+    return string_from_bytes(out);
+}
+
+// Full default Unicode lowercase conversion, including the Final_Sigma
+// context rule. Locale-specific mappings (for example Turkic) are not used.
+pub func lower(value string) string {
+    let data = text.bytes(value);
+    if text.byte_len(value) == text.len(value) { return ascii_case(value,data,true); }
+    let total = vec.len(data);
+    let out = vec.empty[u8]();
+    vec.reserve(out,total);
+    var offset usize = 0;
+    var before_cased = false;
+    for offset < total {
+        let byte = data[offset];
+        if byte < 0x80 {
+            if byte >= 0x41 && byte <= 0x5a {
+                vec.push(out,byte+0x20);
+                before_cased = true;
+            } else {
+                vec.push(out,byte);
+                if !case_is_case_ignorable(u32(byte)) {
+                    before_cased = byte >= 0x61 && byte <= 0x7a;
+                }
+            }
+            offset += 1;
+            continue;
+        }
+        let rune = utf8_rune(data,offset);
+        let next = utf8_next(data,offset);
+        if rune == 0x3a3 && before_cased && !followed_by_cased(data,next) {
+            case_append_rune(out,0x3c2);
+        } else {
+            case_lower(rune,out);
+        }
+        if !case_is_case_ignorable(rune) {
+            before_cased = case_is_cased(rune);
+        }
+        offset = next;
+    }
+    return string_from_bytes(out);
+}
+
+// text.bytes returns a private copy, so ASCII mappings can update it in place.
+func ascii_case(value string, data Vec[u8], lower bool) string {
+    var first u8 = 0x61;
+    var last u8 = 0x7a;
+    if lower {
+        first = 0x41;
+        last = 0x5a;
+    }
+    let total = vec.len(data);
+    var changed = false;
+    for var index usize = 0; index < total; index += 1 {
+        let byte = data[index];
+        if byte >= first && byte <= last {
+            data[index] = byte ^ 0x20;
+            changed = true;
+        }
+    }
+    if !changed { return value; }
+    return string_from_bytes(data);
+}
+
+func followed_by_cased(data Vec[u8], offset usize) bool {
+    let total = vec.len(data);
+    var current = offset;
+    for current < total {
+        let rune = utf8_rune(data,current);
+        if !case_is_case_ignorable(rune) { return case_is_cased(rune); }
+        current = utf8_next(data,current);
+    }
+    return false;
+}
+
+func utf8_rune(data Vec[u8], offset usize) u32 {
+    let first = u32(data[offset]);
+    if first < 0x80 { return first; }
+    if first < 0xe0 {
+        return ((first & 0x1f) << 6) | (u32(data[offset+1]) & 0x3f);
+    }
+    if first < 0xf0 {
+        return ((first & 0x0f) << 12) | ((u32(data[offset+1]) & 0x3f) << 6) |
+            (u32(data[offset+2]) & 0x3f);
+    }
+    return ((first & 0x07) << 18) | ((u32(data[offset+1]) & 0x3f) << 12) |
+        ((u32(data[offset+2]) & 0x3f) << 6) | (u32(data[offset+3]) & 0x3f);
+}
+
+func utf8_next(data Vec[u8], offset usize) usize {
+    let first = data[offset];
+    if first < 0x80 { return offset+1; }
+    if first < 0xe0 { return offset+2; }
+    if first < 0xf0 { return offset+3; }
+    return offset+4;
+}
+
+func string_from_bytes(data Vec[u8]) string {
+    try {
+        return text.from_bytes(data);
+    } catch error text.Error {
+        // Callers only pass bytes derived from valid UTF-8 scalars.
+        return "";
+    }
+}
 pub func boundaries(value string) Vec[usize] { return __woozy_unicode_boundaries(value); }
 pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-1; }
 pub func graphemes(value string) Vec[string] {
