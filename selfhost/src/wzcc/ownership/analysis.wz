@@ -68,9 +68,9 @@ struct SubjectEntry {
     node usize;
 }
 
-struct EffectEntry {
-    root usize;
-    effects Vec[usize];
+struct BindingEffect {
+    expression usize;
+    inout_argument option.Option[usize];
 }
 
 struct ValueEntry {
@@ -100,9 +100,11 @@ struct Analysis {
     function hir.HirFunction;
     has_function bool;
     parameter_symbols Vec[usize];
-    safe_borrow_receivers Vec[usize];
+    safe_borrow_receivers Vec[bool];
     full_expression_root option.Option[usize];
-    full_expression_effects Vec[EffectEntry];
+    effects_for option.Option[usize];
+    effects_suspend bool;
+    binding_effects Vec[BindingEffect];
     values Vec[ValueEntry];
     local_map Vec[i64];
     declaration_map Vec[i64];
@@ -110,7 +112,6 @@ struct Analysis {
     scope_locals_map Vec[i64];
     prefix_map Vec[i64];
     subject_map Vec[i64];
-    effect_map Vec[i64];
     value_map Vec[i64];
     current_fn_locals Vec[usize];
 }
@@ -751,18 +752,6 @@ func subject_lookup(analysis Analysis, scope usize) i64 {
     return -1;
 }
 
-func effect_lookup(analysis Analysis, node usize) i64 {
-    if node < vec.len(analysis.effect_map) {
-        return analysis.effect_map[node];
-    }
-    for var index usize = 0; index < vec.len(analysis.full_expression_effects); index += 1 {
-        if analysis.full_expression_effects[index].root == node {
-            return i64(index);
-        }
-    }
-    return -1;
-}
-
 func issue(analysis Analysis, id usize, code string, message string) throws Problem {
     let node = node_at(analysis, id);
     throw source_problem(node.source, code, message);
@@ -1034,13 +1023,29 @@ func expr_consumes_symbol(analysis Analysis, expr_id usize, symbol usize)
     return false;
 }
 
-func collect_effects(analysis Analysis, expr_id usize, out Vec[usize])
-    throws Problem {
+func binding_effect(analysis Analysis, expression usize, symbol usize,
+                    inout_argument option.Option[usize]) {
+    let slot = local_lookup(analysis, symbol);
+    if slot < 0 { return; }
+    let index = usize(slot);
+    // A second effect on the same local keeps the retained copy.
+    var argument = inout_argument;
+    if analysis.binding_effects[index].expression == expression {
+        argument = option.Option[usize].None;
+    }
+    analysis.binding_effects[index] = BindingEffect(expression: expression,
+        inout_argument: argument);
+}
+
+func collect_effects(analysis Analysis, expression usize, expr_id usize)
+    bool throws Problem {
     let node = node_at(analysis, expr_id);
     switch node_move(node) {
         case option.Option.Some(value):
             switch value.binding {
-                case option.Option.Some(binding): ids_insert(out, binding);
+                case option.Option.Some(binding):
+                    binding_effect(analysis, expression, binding,
+                        option.Option[usize].None);
                 case option.Option.None: {}
             }
         case option.Option.None: {}
@@ -1048,7 +1053,9 @@ func collect_effects(analysis Analysis, expr_id usize, out Vec[usize])
     if kind_is(kind_of(node), hir.NodeKind.Assign) {
         let place = node_at(analysis, child_at(node, 0));
         switch node_place(place) {
-            case option.Option.Some(value): ids_insert(out, value.symbol);
+            case option.Option.Some(value):
+                binding_effect(analysis, expression, value.symbol,
+                    option.Option[usize].None);
             case option.Option.None: {}
         }
     }
@@ -1058,38 +1065,62 @@ func collect_effects(analysis Analysis, expr_id usize, out Vec[usize])
                 if mode_is(argument.mode, model.ParamMode.Move) ||
                    mode_is(argument.mode, model.ParamMode.Inout) {
                     switch borrow_root(analysis, argument.expression) {
-                        case option.Option.Some(root): ids_insert(out, root);
+                        case option.Option.Some(root): {
+                            var site = option.Option[usize].None;
+                            if mode_is(argument.mode, model.ParamMode.Inout) {
+                                site = option.Option[usize].Some(argument.expression);
+                            }
+                            binding_effect(analysis, expression, root, site);
+                        }
                         case option.Option.None: {}
                     }
                 }
             }
         case option.Option.None: {}
     }
+    var suspends = kind_is(kind_of(node), hir.NodeKind.Await);
     for child in node.children {
-        collect_effects(analysis, child, out);
+        if collect_effects(analysis, expression, child) { suspends = true; }
     }
+    return suspends;
 }
 
-func full_effects(analysis inout Analysis) Vec[usize] throws Problem {
-    var root usize = 0;
+// The node ID tags entries for the current full expression, so older local
+// slots never need to be cleared.
+func full_effect(analysis inout Analysis, symbol usize)
+    option.Option[BindingEffect] throws Problem {
+    var expression usize = 0;
     switch analysis.full_expression_root {
-        case option.Option.Some(value): root = value;
+        case option.Option.Some(value): expression = value;
         case option.Option.None:
             throw internal_problem("ownership full expression root is missing");
     }
-    let found = effect_lookup(analysis, root);
-    if found >= 0 {
-        return analysis.full_expression_effects[usize(found)].effects;
+    var collected = false;
+    switch analysis.effects_for {
+        case option.Option.Some(value): collected = value == expression;
+        case option.Option.None: {}
     }
-    let effects = vec.empty[usize]();
-    collect_effects(analysis, root, effects);
-    let slot = vec.len(analysis.full_expression_effects);
-    vec.push(analysis.full_expression_effects,
-        EffectEntry(root: root, effects: effects));
-    if root < vec.len(analysis.effect_map) {
-        analysis.effect_map[root] = i64(slot);
+    if !collected {
+        let effects = analysis.binding_effects;
+        let count = vec.len(analysis.locals);
+        if vec.len(effects) < count {
+            // There is no HIR node at this one-past-end index.
+            vec.resize(effects, count, BindingEffect(
+                expression: vec.len(analysis.module.nodes),
+                inout_argument: option.Option[usize].None));
+        }
+        let suspends = collect_effects(analysis, expression, expression);
+        analysis.effects_suspend = suspends;
+        analysis.effects_for = option.Option[usize].Some(expression);
     }
-    return effects;
+    let slot = local_lookup(analysis, symbol);
+    if slot >= 0 {
+        let effect = analysis.binding_effects[usize(slot)];
+        if effect.expression == expression {
+            return option.Option[BindingEffect].Some(effect);
+        }
+    }
+    return option.Option[BindingEffect].None;
 }
 
 func integer_index_kind(kind model.TypeKind) bool {
@@ -1228,7 +1259,54 @@ func local_index_can_borrow(analysis inout Analysis, receiver usize,
        !local_index_borrow(inout analysis, receiver, index, reading) {
         return false;
     }
-    return !ids_contains(full_effects(inout analysis), root);
+    return !option.is_some(full_effect(inout analysis, root));
+}
+
+func synchronous_direct_call(analysis Analysis, id usize) bool throws Problem {
+    let node = node_at(analysis, id);
+    switch node_call(node) {
+        case option.Option.Some(call):
+            switch call.kind {
+                case hir.CalleeKind.Direct: {}
+                default: return false;
+            }
+            switch call.direct_symbol {
+                case option.Option.Some(_): {}
+                case option.Option.None: return false;
+            }
+            let result = type_at(analysis.module, node.type_id);
+            return !type_kind_is(result.kind, model.TypeKind.Task);
+        case option.Option.None: return false;
+    }
+}
+
+// A direct, statically known synchronous call that borrows a concrete,
+// non-owning Vec element (or a field of that element) as inout receives only
+// the element address. When the receiver is a direct local Vec binding with a
+// pure integer index and no other effect in this full expression moves,
+// rebinds, or whole-binds that binding, the receiver read may borrow the
+// binding's existing handle instead of retaining a second one. Indirect,
+// foreign, system, async (Task-valued), parameter, computed, owning-element
+// and impure-index receivers keep the copy path.
+func inout_element_receiver_borrow(analysis inout Analysis, call usize,
+                                   argument usize, receiver usize,
+                                   index usize, root usize)
+    bool throws Problem {
+    if !synchronous_direct_call(analysis, call) ||
+       !option.is_some(analysis.full_expression_root) ||
+       !local_index_borrow(inout analysis, receiver, index, false) {
+        return false;
+    }
+    let effect = full_effect(inout analysis, root);
+    if analysis.effects_suspend { return false; }
+    switch effect {
+        case option.Option.Some(value):
+            switch value.inout_argument {
+                case option.Option.Some(site): return site == argument;
+                case option.Option.None: return false;
+            }
+        case option.Option.None: return false;
+    }
 }
 
 func effect_free_assignment_rhs(analysis inout Analysis, id usize,
@@ -1576,6 +1654,27 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
             case option.Option.None: {}
         }
         for argument in arguments {
+            if mode_is(argument.mode, model.ParamMode.Inout) {
+                switch indexed_field_place(analysis, argument.expression) {
+                    case option.Option.Some(indexed):
+                        let place = node_at(analysis, indexed);
+                        if vec.len(place.children) == 2 {
+                            let receiver = place.children[0];
+                            let index = place.children[1];
+                            switch borrow_root(analysis, receiver) {
+                                case option.Option.Some(root):
+                                    if inout_element_receiver_borrow(
+                                           inout analysis, id,
+                                           argument.expression, receiver, index,
+                                           root) {
+                                        analysis.safe_borrow_receivers[receiver] = true;
+                                    }
+                                case option.Option.None: {}
+                            }
+                        }
+                    case option.Option.None: {}
+                }
+            }
             var root = option.Option[usize].None;
             if mode_is(argument.mode, model.ParamMode.Ordinary) {
                 root = borrow_root(analysis, argument.expression);
@@ -1650,7 +1749,8 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
     } else if kind_is(kind, hir.NodeKind.IndexPlace) {
         let receiver = child_at(node, 0);
         let index = child_at(node, 1);
-        let can_borrow = ids_contains(analysis.safe_borrow_receivers, receiver);
+        let receivers = analysis.safe_borrow_receivers;
+        let can_borrow = receiver < vec.len(receivers) && receivers[receiver];
         expr_records(inout analysis, receiver, fe, live, can_borrow);
         expr_records(inout analysis, index, fe, live, false);
     } else if !short_circuit {
@@ -1798,10 +1898,10 @@ func records(analysis inout Analysis, id usize) throws Problem {
                        !expr_consumes_symbol(analysis, index, symbol) &&
                        !expr_consumes_symbol(analysis, child_at(node, 1),
                            symbol) {
-                        ids_insert(analysis.safe_borrow_receivers, receiver);
+                        analysis.safe_borrow_receivers[receiver] = true;
                     } else if local_index_can_borrow(inout analysis,
                             receiver, index, symbol, false) {
-                        ids_insert(analysis.safe_borrow_receivers, receiver);
+                        analysis.safe_borrow_receivers[receiver] = true;
                     }
                 case option.Option.None: {}
             }
@@ -1817,8 +1917,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
                                     receiver, index, symbol, false) &&
                                effect_free_assignment_rhs(inout analysis,
                                     child_at(node, 1), false) {
-                                ids_insert(analysis.safe_borrow_receivers,
-                                    receiver);
+                                analysis.safe_borrow_receivers[receiver] = true;
                             }
                         case option.Option.None: {}
                     }
@@ -3210,16 +3309,17 @@ func new_analysis(module hir.HirModule) Analysis {
         parents: parents, locals: [], declarations: [], scope_nodes: [],
         scope_locals: [], failure_prefix: [], enabled: [],
         active_borrows: [], switch_subjects: [], function: empty_hir_function(),
-        has_function: false, parameter_symbols: [], safe_borrow_receivers: [],
+        has_function: false, parameter_symbols: [],
+        safe_borrow_receivers: vec.make[bool](node_count, false),
         full_expression_root: option.Option[usize].None,
-        full_expression_effects: [], values: [],
+        effects_for: option.Option[usize].None, effects_suspend: false,
+        binding_effects: [], values: [],
         local_map: vec.make[i64](sym_count, -1),
         declaration_map: vec.make[i64](sym_count, -1),
         scope_node_map: vec.make[i64](scope_count, -1),
         scope_locals_map: vec.make[i64](scope_count, -1),
         prefix_map: vec.make[i64](node_count, -1),
         subject_map: vec.make[i64](scope_count, -1),
-        effect_map: vec.make[i64](node_count, -1),
         value_map: vec.make[i64](type_count + 1, -1),
         current_fn_locals: []);
 }

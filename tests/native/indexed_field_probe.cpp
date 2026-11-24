@@ -97,6 +97,33 @@ void require_field_receiver_plan(const hir::HirModule &m,
     need(actual == expected[i], name + ": receiver use differs");
   }
 }
+void require_inout_receiver_plan(const hir::HirModule &m,
+                                 const std::string &name,
+                                 std::vector<hir::UseKind> expected) {
+  std::vector<hir::UseKind> actual;
+  for (const auto &node : m.nodes) {
+    const auto *call = std::get_if<hir::Call>(&node.data);
+    if (!call)
+      continue;
+    for (const auto &arg : call->args) {
+      if (arg.mode != hir::ParamMode::inout)
+        continue;
+      auto place = arg.expression;
+      while (m.nodes[place.value].kind() == hir::NodeKind::field_place)
+        place = m.nodes[place.value].children[0];
+      if (m.nodes[place.value].kind() != hir::NodeKind::index_place)
+        continue;
+      actual.push_back(receiver_use(m, m.nodes[place.value].children[0]));
+    }
+  }
+  need(actual.size() == expected.size(),
+       name + ": inout receiver count differs: got " +
+           std::to_string(actual.size()) + ", expected " +
+           std::to_string(expected.size()));
+  for (size_t i = 0; i < expected.size(); ++i)
+    need(actual[i] == expected[i],
+         name + ": inout receiver use differs at " + std::to_string(i));
+}
 SymbolId symbol_named(const hir::HirModule &m, std::string_view name) {
   for (const auto &s : m.resolved->symbols)
     if (s.name == name)
@@ -215,6 +242,8 @@ int main(int argc, char **argv) {
         root / "tests/native/ownership/indexed-field-nested-fallback/lang.toml";
     const auto compound_manifest =
         root / "tests/native/ownership/indexed-field-compound/lang.toml";
+    const auto inout_element_manifest =
+        root / "tests/inout_places/inout-local-element/lang.toml";
 
     auto valid = checked_module(nested_manifest, sources);
     const auto valid_hir = valid.module();
@@ -476,6 +505,16 @@ int main(int argc, char **argv) {
     require_field_receiver_plan(
         borrow_mixed_hir, "mixed pure, call, and scalar index RHS",
         {hir::UseKind::borrow, hir::UseKind::copy, hir::UseKind::borrow});
+
+    auto inout_element = checked_module(inout_element_manifest, sources);
+    const auto inout_element_hir = inout_element.module();
+    need(hir::verify(inout_element_hir).success(),
+         "inout local element fixture rejected");
+    require_inout_receiver_plan(
+        inout_element_hir, "inout local element receiver plan",
+        {hir::UseKind::borrow, hir::UseKind::borrow, hir::UseKind::borrow,
+         hir::UseKind::copy, hir::UseKind::copy, hir::UseKind::copy,
+         hir::UseKind::borrow, hir::UseKind::borrow});
 
     auto compound = checked_module(compound_manifest, sources);
     require_field_receiver_plan(compound.module(), "call RHS fallback",

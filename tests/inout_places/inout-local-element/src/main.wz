@@ -1,0 +1,78 @@
+package app;
+
+struct Pair {
+    x i32;
+    y i32;
+}
+
+struct Box {
+    value i32;
+    items Vec[i32];
+}
+
+enum Failure { BeforeCall; }
+
+func fail_delta() i32 throws Failure {
+    throw Failure.BeforeCall;
+}
+
+func bump(slot inout i32, delta i32) {
+    slot = slot + delta;
+}
+
+func bump_pair(slot inout Pair) {
+    slot.x = slot.x + 1;
+}
+
+func lookup() usize {
+    return 0;
+}
+
+func make_with(slot inout i32) Vec[i32] {
+    slot = slot + 1;
+    return [9, 8];
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2, 3];
+    var pairs Vec[Pair] = [Pair(x: 1, y: 2), Pair(x: 3, y: 4)];
+    var boxes Vec[Box] = [Box(value: 1, items: [2])];
+    var index usize = 1;
+    // Direct synchronous inout of a concrete non-owning element or field of an
+    // element with a pure integer index borrows the local Vec binding.
+    bump(inout values[index], 10);
+    bump_pair(inout pairs[0]);
+    bump(inout pairs[1].x, 5);
+    // The computed index keeps the retained receiver copy.
+    bump(inout values[lookup()], 100);
+    // An owning element type keeps the retained receiver copy even though the
+    // inout target is the plain scalar field.
+    bump(inout boxes[0].value, 1);
+    if values[0] != 101 || values[1] != 12 || values[2] != 3 {
+        return 1;
+    }
+    if pairs[0].x != 2 || pairs[1].x != 8 {
+        return 2;
+    }
+    if boxes[0].value != 2 {
+        return 3;
+    }
+    // A whole-binding rebind anywhere in the full expression keeps the retained
+    // receiver copy for the inout element receiver read.
+    values = make_with(inout values[1]);
+    if values[0] != 9 || values[1] != 8 {
+        return 4;
+    }
+    // Clean up the first argument's borrow when a later argument throws.
+    var deferred i32 = 0;
+    try {
+        defer { deferred = values[0]; }
+        bump(inout values[0], fail_delta());
+        return 5;
+    } catch err Failure {
+        if deferred != 9 || values[0] != 9 { return 6; }
+        bump(inout values[0], 1);
+        if values[0] != 10 { return 7; }
+    }
+    return 0;
+}

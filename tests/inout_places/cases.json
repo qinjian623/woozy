@@ -2,7 +2,7 @@
   "schema": "compiler-dev/inout-places-fixtures/1",
   "contract": "compiler-dev/1",
   "description": "LANG03 field/index inout places: positive native/Python write-back and rejected overlapping or escaping uses.",
-  "case_count": 21,
+  "case_count": 22,
   "cases": [
     {
       "id": "nested-field",
@@ -171,6 +171,14 @@
       "manifest": "tests/inout_places/reject-dyn-alias/lang.toml",
       "source": "tests/inout_places/reject-dyn-alias/src/main.wz",
       "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "inout-local-element",
+      "kind": "accept",
+      "purpose": "A direct synchronous inout of a concrete non-owning Vec element or element field borrows a direct local Vec binding; computed-index, owning-element and whole-binding rebind cases keep the retained copy.",
+      "manifest": "tests/inout_places/inout-local-element/lang.toml",
+      "source": "tests/inout_places/inout-local-element/src/main.wz",
+      "expected_main_return": 0
     }
   ]
 }

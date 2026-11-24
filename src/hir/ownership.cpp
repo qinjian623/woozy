@@ -684,12 +684,13 @@ class Analysis {
   }
   std::set<uint32_t> safe_borrow_receivers;
   std::set<uint64_t> parameter_symbols;
-  // The evaluated expression root of the full expression currently being
-  // recorded, and its moved/inout/rebound roots collected once. expr_records
-  // visits one full expression many times; nested index reads must not rescan
-  // a large tree for every receiver.
+  // The current full expression's move, inout and rebinding effects. A
+  // binding's entry names its unique inout argument if no other effect can
+  // change the binding. Both index reads and inout places share this cache.
   std::optional<HirNodeId> full_expression_root;
-  std::map<uint64_t, std::set<uint64_t>> full_expression_effects;
+  std::optional<HirNodeId> effects_for;
+  bool effects_suspend = false;
+  std::map<uint64_t, std::optional<HirNodeId>> binding_effects;
 
   bool is_borrowed_param(SymbolId sym) const {
     if (!parameter_symbols.count(sym.value))
@@ -724,31 +725,38 @@ class Analysis {
 
   // Collects the owning roots that this expression may move, borrow as inout,
   // or replace. This mirrors expr_consumes_symbol's effect rules exactly.
-  void collect_effects(HirNodeId expr_id, std::set<uint64_t> &out) const {
+  void binding_effect(SymbolId symbol, std::optional<HirNodeId> inout = {}) {
+    auto [entry, unique] = binding_effects.try_emplace(symbol.value, inout);
+    if (!unique) entry->second.reset();
+  }
+
+  void collect_effects(HirNodeId expr_id) {
     const auto &x = n(expr_id);
+    if (x.kind() == NodeKind::await_) effects_suspend = true;
     if (auto r = std::get_if<Move>(&x.data); r && r->binding)
-      out.insert(r->binding->value);
+      binding_effect(*r->binding);
     if (x.kind() == NodeKind::assign)
       if (auto p = std::get_if<Place>(&n(x.children[0]).data))
-        out.insert(p->symbol.value);
+        binding_effect(p->symbol);
     if (auto args = call_args(x))
       for (const auto &a : *args)
         if (a.mode == ParamMode::move || a.mode == ParamMode::inout)
           if (auto root = borrow_root(a.expression))
-            out.insert(root->value);
+            binding_effect(*root, a.mode == ParamMode::inout
+                                      ? std::optional(a.expression)
+                                      : std::nullopt);
     for (auto c : x.children)
-      collect_effects(c, out);
+      collect_effects(c);
   }
 
-  const std::set<uint64_t> &full_effects() {
-    auto root = *full_expression_root;
-    auto it = full_expression_effects.find(root.value);
-    if (it != full_expression_effects.end())
-      return it->second;
-    std::set<uint64_t> effects;
-    collect_effects(root, effects);
-    return full_expression_effects.emplace(root.value, std::move(effects))
-        .first->second;
+  const auto &full_effects() {
+    if (effects_for != full_expression_root) {
+      binding_effects.clear();
+      effects_suspend = false;
+      collect_effects(*full_expression_root);
+      effects_for = full_expression_root;
+    }
+    return binding_effects;
   }
 
   static bool integer_index_kind(TypeKind kind) {
@@ -833,6 +841,29 @@ class Analysis {
     return full_expression_root &&
            local_index_borrow(receiver, index, reading) &&
            !full_effects().count(root.value);
+  }
+
+  // A direct, statically known synchronous call that borrows a concrete,
+  // non-owning Vec element (or a field of that element) as inout receives only
+  // the element address. When the receiver is a direct local Vec binding with
+  // a pure integer index and no other effect in this full expression moves,
+  // rebinds, or whole-binds that binding, the receiver read may borrow the
+  // binding's existing handle instead of retaining a second one. Indirect,
+  // foreign, system, async (Task-valued), parameter, computed, owning-element
+  // and impure-index receivers keep the copy path.
+  bool inout_element_receiver_borrow(HirNodeId call, HirNodeId argument,
+                                     HirNodeId receiver, HirNodeId index,
+                                     SymbolId root) {
+    const auto &x = n(call);
+    const auto *c = std::get_if<Call>(&x.data);
+    if (!c || c->kind != CalleeKind::direct || !c->direct_symbol ||
+        ty(m, x.type).kind == TypeKind::Task || !full_expression_root ||
+        !local_index_borrow(receiver, index, false))
+      return false;
+    const auto &effects = full_effects();
+    auto found = effects.find(root.value);
+    return !effects_suspend && found != effects.end() &&
+           found->second == argument;
   }
 
   // An assignment target's address survives the complete RHS. Borrowing the
@@ -1008,6 +1039,16 @@ class Analysis {
                                     n(*callee).type});
       }
       for (const auto &a : *args) {
+        if (a.mode == ParamMode::inout)
+          if (auto indexed = indexed_field_place(a.expression);
+              indexed && n(*indexed).children.size() == 2) {
+            auto receiver = n(*indexed).children[0];
+            auto index = n(*indexed).children[1];
+            if (auto root = borrow_root(receiver);
+                root && inout_element_receiver_borrow(id, a.expression,
+                                                      receiver, index, *root))
+              safe_borrow_receivers.insert(receiver.value);
+          }
         auto root = a.mode == ParamMode::ordinary ? borrow_root(a.expression)
                                                   : std::nullopt;
         expr_records(a.expression, fe, live, bool(root));
