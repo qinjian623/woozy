@@ -220,11 +220,17 @@ void copy_bytes_variable(void *destination, const void *source,
     uint64_t i = 0;
     for (; count - i >= kCopyBlockBytes; i += kCopyBlockBytes)
       copy_block(dst + i, src + i);
+    for (; count - i >= sizeof(CopyLane); i += sizeof(CopyLane))
+      copy_word<CopyLane>(dst + i, src + i);
     for (; i < count; ++i) dst[i] = src[i];
   } else {
     while (count >= kCopyBlockBytes) {
       count -= kCopyBlockBytes;
       copy_block(dst + count, src + count);
+    }
+    while (count >= sizeof(CopyLane)) {
+      count -= sizeof(CopyLane);
+      copy_word<CopyLane>(dst + count, src + count);
     }
     for (uint64_t i = count; i > 0; --i) dst[i - 1] = src[i - 1];
   }

@@ -706,16 +706,16 @@ void test_observer_release_order_preserved() {
 }
 
 void test_overlapping_trivial_set() {
-  for (uint64_t stride : {1, 2, 3, 4, 8, 16}) {
+  for (uint64_t stride : {1, 2, 3, 4, 8, 16, 17, 31, 32, 48, 63, 64, 65, 79, 80, 95}) {
     reset_tracking();
-    unsigned char initial[16];
+    unsigned char initial[96];
     for (uint64_t i = 0; i < stride; ++i)
       initial[i] = static_cast<unsigned char>(i + 1);
     LangVec *vec = lang_vec_new_v1(3, stride, nullptr, nullptr);
     for (int i = 0; i < 3; ++i) lang_vec_init_v1(vec, initial);
     auto *middle = static_cast<unsigned char *>(lang_vec_at_v1(vec, 1));
     for (int offset : {-1, 1}) {
-      unsigned char expected[16];
+      unsigned char expected[96];
       std::memcpy(expected, middle + offset, stride);
       lang_vec_set_v1(vec, 1, middle + offset);
       CHECK(std::memcmp(middle, expected, stride) == 0);
