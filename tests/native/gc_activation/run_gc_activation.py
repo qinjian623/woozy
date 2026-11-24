@@ -23,9 +23,10 @@ from gc_ir_contract import (ContractError, check_gc_poll_contract,
                             selftest as contract_selftest)
 
 CASES = {
-    "no-graph-string-vec": False,
-    "graph-self-cycle": True,
-    "graph-thread-cycle": True,
+    # Graph registration, generated field-store guards, runtime Vec setter.
+    "no-graph-string-vec": (False, 0, 0),
+    "graph-self-cycle": (True, 1, 0),
+    "graph-thread-cycle": (True, 0, 1),
 }
 NO_GRAPH_TIMEZONE = "tests/native/timezone/project.toml"
 
@@ -67,7 +68,8 @@ def main() -> int:
     # The contract's own mutation checks run before any real module is judged.
     report["contract_selftest"] = contract_selftest()
 
-    def inspect(manifest: Path, label: str, graph: bool):
+    def inspect(manifest: Path, label: str, graph: bool,
+                guard_count: int, vec_set_count: int):
         row = {"graph": graph, "status": "failed", "runs": []}
         report["cases"][label] = row
         for opt in (0, 2):
@@ -115,6 +117,7 @@ def main() -> int:
                                       poll["inline_word_loads"]),
                 "critical_calls": calls(
                     llvm, "lang_gc_program_enter_critical_v1"),
+                "vec_set_calls": calls(llvm, "lang_vec_set_v1"),
             }
             row.setdefault("llvm", {})[f"O{opt}"] = facts
             if graph:
@@ -124,20 +127,22 @@ def main() -> int:
                 assert facts["init_calls"] == 0, (label, opt, facts)
                 assert facts["register_calls"] == 0, (label, opt, facts)
                 assert facts["world_register_calls"] == 0, (label, opt, facts)
-            # The optimization must not remove safepoints or graph-stable
-            # modification windows; only the program lifecycle is skipped.
+            # The controller poll placement stays the same. Only graph field
+            # writes need generated guards; whole Vec element assignment uses
+            # its runtime setter and the setter's own guard.
             assert facts["finish_calls"] > 0, (label, opt, facts)
             assert facts["poll_sites"] > 0, (label, opt, facts)
             assert facts["poll_positions_exact"], (label, opt, facts)
             assert facts["controller_poll_calls"] == facts["poll_sites"], (
                 label, opt, facts)
             assert facts["direct_poll_calls"] == 0, (label, opt, facts)
-            assert facts["critical_calls"] > 0, (label, opt, facts)
+            assert facts["critical_calls"] == guard_count, (label, opt, facts)
+            assert facts["vec_set_calls"] == vec_set_count, (label, opt, facts)
         row["status"] = "passed"
 
     fixtures = args.root / "tests/native/gc_activation"
-    for label, graph in CASES.items():
-        inspect(fixtures / label / "lang.toml", label, graph)
+    for label, expected in CASES.items():
+        inspect(fixtures / label / "lang.toml", label, *expected)
 
     # The real timezone source is the performance motivation: Vec[u8] and
     # string-only containers cannot create GC graph nodes. Inspect LLVM only;
@@ -182,7 +187,6 @@ def main() -> int:
     assert facts["poll_positions_exact"], facts
     assert facts["controller_poll_calls"] == facts["poll_sites"], facts
     assert facts["direct_poll_calls"] == 0, facts
-    assert facts["critical_calls"] > 0, facts
     report["timezone_no_graph"]["status"] = "passed"
     report["status"] = "passed"
     (args.out / "summary.json").write_text(

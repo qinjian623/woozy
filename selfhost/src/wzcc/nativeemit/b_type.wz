@@ -482,22 +482,21 @@ func call_target(state Emitter, symbol usize) Value throws Error {
     return source_function(state, symbol).code;
 }
 
-func value(state Emitter, value_id usize) Value throws Error {
+func b_value_binding(state Emitter, value_id usize) ValueBinding throws Error {
     for binding in state.frame.values {
         if binding.value_id == value_id {
-            return binding.value;
+            return binding;
         }
     }
     throw invalid("missing emitted value " + number(value_id));
 }
 
+func value(state Emitter, value_id usize) Value throws Error {
+    return b_value_binding(state, value_id).value;
+}
+
 func value_type(state Emitter, value_id usize) usize throws Error {
-    for binding in state.frame.values {
-        if binding.value_id == value_id {
-            return binding.type_id;
-        }
-    }
-    throw invalid("missing emitted value " + number(value_id));
+    return b_value_binding(state, value_id).type_id;
 }
 
 func constant_value(state Emitter, value_id usize) option.Option[Value] {

@@ -7,7 +7,8 @@ struct Node {
 
 func main() i32 {
     var ring Vec[Node] = [Node(value: 1, next: [])];
-    ring[0] = Node(value: 7, next: ring);
+    ring[0].next = ring;
+    ring[0].value = 7;
     if ring[0].value != 7 || ring[0].next[0].value != 7 {
         return 1;
     }

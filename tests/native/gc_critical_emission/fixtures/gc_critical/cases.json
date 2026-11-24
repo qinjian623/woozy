@@ -9,20 +9,25 @@
     "store_string": {"guards": 0, "min_drops": 1},
     "store_weak": {"guards": 0, "min_drops": 1},
     "store_text_aggregate": {"guards": 0, "min_drops": 1},
-    "store_vec": {"guards": 1, "min_drops": 1},
-    "store_fn": {"guards": 1, "min_drops": 1},
-    "store_slice": {"guards": 1, "min_drops": 1},
-    "store_task": {"guards": 1, "min_drops": 1},
-    "store_dyn": {"guards": 1, "min_drops": 1},
-    "store_strong_aggregate": {"guards": 1, "min_drops": 1}
+    "store_vec": {"guards": 0, "min_drops": 1},
+    "store_fn": {"guards": 0, "min_drops": 1},
+    "store_slice": {"guards": 0, "min_drops": 1},
+    "store_task": {"guards": 0, "min_drops": 1},
+    "store_dyn": {"guards": 0, "min_drops": 1},
+    "store_strong_aggregate": {"guards": 0, "min_drops": 1}
   },
   "replace": {
     "replace_string": {"guards": 0, "drops": 1},
     "replace_weak": {"guards": 0, "drops": 1},
     "replace_vec": {"guards": 1, "drops": 1},
-    "replace_strong_aggregate": {"guards": 1, "drops": 1}
+    "replace_strong_aggregate": {"guards": 1, "drops": 1},
+    "replace_local_field": {"guards": 0, "drops": 1, "field_base": "slot"},
+    "replace_heap_field": {"guards": 1, "drops": 1, "field_base": "vec"}
   },
   "store_indirect": {
     "store_indirect_scalar": {"guards": 0}
+  },
+  "frame_store": {
+    "work": {}
   }
 }

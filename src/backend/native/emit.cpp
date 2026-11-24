@@ -61,64 +61,6 @@ void verify_llvm(const llvm::Module &m) {
   if (llvm::verifyModule(m, &stream))
     fail("LLVM verifier: " + stream.str());
 }
-bool is_gc_enter(llvm::CallInst *call) {
-  return call && call->getCalledFunction() &&
-         call->getCalledFunction()->getName() ==
-             "lang_gc_program_enter_critical_v1" &&
-         call->arg_size() == 0 && call->getType()->isIntegerTy(32);
-}
-bool is_gc_leave(llvm::CallInst *call) {
-  return call && call->getCalledFunction() &&
-         call->getCalledFunction()->getName() ==
-             "lang_gc_program_leave_critical_v1" &&
-         call->arg_size() == 1 && call->getType()->isVoidTy();
-}
-bool has_gc_critical_guard_marker(llvm::CallInst *call) {
-  return call &&
-         call->getMetadata("lang.bound.gc.critical.guard.v1") != nullptr;
-}
-// LLVM can prove the guarded store itself dead while retaining the adjacent
-// enter/leave pair around it. Such a pair has no protected graph update left:
-// entering and immediately leaving critical only observes a pending world
-// request (the outer leave is the safepoint). Replace exactly that collapsed
-// form with the request-only runtime poll. Nonempty critical regions, non-
-// adjacent calls, duplicated tokens, and all pre-optimization IR stay intact.
-void sweep_collapsed_gc_critical_pairs(llvm::Module &module,
-                                       llvm::LLVMContext &context) {
-  llvm::Function *poll = nullptr;
-  for (llvm::Function &function : module) {
-    for (llvm::BasicBlock &block : function) {
-      for (auto it = block.begin(); it != block.end();) {
-        auto *enter = llvm::dyn_cast<llvm::CallInst>(&*it);
-        if (!is_gc_enter(enter)) {
-          ++it;
-          continue;
-        }
-        auto *leave = llvm::dyn_cast_or_null<llvm::CallInst>(
-            enter->getNextNode());
-        if (!has_gc_critical_guard_marker(enter) ||
-            !has_gc_critical_guard_marker(leave) || !is_gc_leave(leave) ||
-            enter->getParent() != leave->getParent() ||
-            !enter->hasOneUse() || enter->user_back() != leave ||
-            leave->getArgOperand(0) != enter) {
-          ++it;
-          continue;
-        }
-        if (!poll) {
-          auto callee = module.getOrInsertFunction(
-              "lang_gc_program_poll_request_v1",
-              llvm::FunctionType::get(llvm::Type::getVoidTy(context), false));
-          poll = llvm::cast<llvm::Function>(callee.getCallee());
-        }
-        llvm::IRBuilder<> insert(enter);
-        insert.SetCurrentDebugLocation(enter->getDebugLoc());
-        insert.CreateCall(poll, {});
-        leave->eraseFromParent();
-        it = enter->eraseFromParent();
-      }
-    }
-  }
-}
 class Emitter {
   const ir::Module &input;
   std::optional<ModuleId> package;
@@ -1843,6 +1785,28 @@ class Emitter {
     end_lifetime(out);
     return from_c_storage(sig.result, loaded_out);
   }
+  // Only local, non-suspending slots are outside the traced heap. An
+  // inout slot may address a heap field, and async slots may survive in a
+  // traced coroutine frame. FieldAddress preserves its receiver's provenance.
+  bool gc_stack_slot(LocalSlotId slot) const {
+    return !current_function->async &&
+           !current_function->slots.at(slot.value).inout;
+  }
+
+  void gc_store(llvm::Value *value, llvm::Value *address, TypeId type,
+                bool stack_address) {
+    // Stack owners are external roots through their existing reference
+    // counts. Storing their bits does not publish an edge the GC can trace.
+    // The regular function and loop safepoints still observe stop requests.
+    if (!stack_address && has_strong_edge(type)) {
+      auto *critical = gc_enter_critical();
+      builder.CreateStore(value, address);
+      gc_leave_critical(critical);
+    } else {
+      builder.CreateStore(value, address);
+    }
+  }
+
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
     for (auto v : i.inputs)
@@ -2124,13 +2088,8 @@ class Emitter {
       break;
     case ir::Op::store: {
       const auto slot_type = current_function->slots.at(i.slot.value).type;
-      if (has_strong_edge(slot_type)) {
-        auto *critical = gc_enter_critical();
-        builder.CreateStore(args[0], slots.at(i.slot.value));
-        gc_leave_critical(critical);
-      } else {
-        builder.CreateStore(args[0], slots.at(i.slot.value));
-      }
+      gc_store(args[0], slots.at(i.slot.value), slot_type,
+               gc_stack_slot(i.slot));
       if (active.at(i.slot.value)) builder.CreateStore(builder.getTrue(), active.at(i.slot.value));
       break;
     }
@@ -2172,13 +2131,8 @@ class Emitter {
         auto *old = storage(lower_type(value_type));
         builder.CreateStore(
             builder.CreateLoad(lower_type(value_type), args[0]), old);
-        if (has_strong_edge(value_type)) {
-          auto *critical = gc_enter_critical();
-          builder.CreateStore(args[1], args[0]);
-          gc_leave_critical(critical);
-        } else {
-          builder.CreateStore(args[1], args[0]);
-        }
+        gc_store(args[1], args[0], value_type,
+                 gc_stack_addresses.contains(i.inputs[0]));
         builder.CreateCall(value_op(value_type, false), {old});
       } else {
         builder.CreateStore(args[1], args[0]);
@@ -2186,13 +2140,8 @@ class Emitter {
       break;
     }
     case ir::Op::store_indirect:
-      if (has_strong_edge(value_types.at(i.inputs[0]))) {
-        auto *critical = gc_enter_critical();
-        builder.CreateStore(args[1], args[0]);
-        gc_leave_critical(critical);
-      } else {
-        builder.CreateStore(args[1], args[0]);
-      }
+      gc_store(args[1], args[0], value_types.at(i.inputs[0]),
+               gc_stack_addresses.contains(i.inputs[0]));
       break;
     case ir::Op::enum_test: {
       auto index =
@@ -2354,10 +2303,15 @@ class Emitter {
     if (i.result) {
       values.emplace(*i.result, v);
       value_types.emplace(*i.result, i.type);
+      if ((i.op == ir::Op::address && gc_stack_slot(i.slot)) ||
+          (i.op == ir::Op::field_address &&
+           gc_stack_addresses.contains(i.inputs[0])))
+        gc_stack_addresses.insert(*i.result);
     }
   }
   std::map<size_t, llvm::Value *> iteration_lengths, iteration_indices;
   const ir::Function *current_function = nullptr;
+  std::set<ValueId> gc_stack_addresses;
   void function(const ir::Function &f) {
     builder.SetCurrentDebugLocation({});
     current_function = &f;
@@ -2371,6 +2325,7 @@ class Emitter {
     active.clear(); iteration_lengths.clear(); iteration_indices.clear();
     values.clear();
     value_types.clear();
+    gc_stack_addresses.clear();
     function_value_symbols.clear();
     dynamic_function_values.clear();
     slots.clear();
@@ -3415,8 +3370,6 @@ public:
                                     : llvm::OptimizationLevel::O0);
       pipeline.run(module, modules);
     }
-    if (options.optimization == 2)
-      sweep_collapsed_gc_critical_pairs(module, context);
     verify_llvm(module);
     if (std::getenv("WZ_DUMP_LLVM") != nullptr)
       llvm::errs() << text_ir(module) << "\n";

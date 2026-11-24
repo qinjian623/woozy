@@ -7,7 +7,6 @@ import "app/wzcc/input" as input;
 import "app/wzcc/editorformat" as editorformat;
 import "app/wzcc/editorlsp" as editorlsp;
 import "app/wzcc/lexer" as lexer;
-import "app/wzcc/llvmopt" as llvmopt;
 import "app/wzcc/parser" as parser;
 import "std/io" as io;
 import "std/os" as os;
@@ -141,10 +140,6 @@ pub func run(args Vec[string]) i32 throws os.Error {
     if !options.valid { io.eprintln(options.error); return 2; }
     if options.command == "--version" { io.println(version_text()); return 0; }
     if options.command == "--help" { io.println(help_text()); return 0; }
-    if options.command == "__llvmopt_gc" {
-        let ignored = llvmopt.fold_empty_gc_regions_file(options.path, options.output);
-        return 0;
-    }
     var manager = source.manager();
     if options.command == "lsp" { return editorlsp.run(); }
     if options.command == "capabilities" {

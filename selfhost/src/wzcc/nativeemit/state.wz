@@ -110,7 +110,12 @@ pub struct ExternalSource {
     pub symbol usize;
     pub signature usize;
 }
-pub struct ValueBinding { pub value_id usize; pub type_id usize; pub value Value; }
+pub struct ValueBinding {
+    pub value_id usize;
+    pub type_id usize;
+    pub value Value;
+    pub stack_address bool;
+}
 pub struct ValueConstant { pub value_id usize; pub value Value; }
 pub struct SlotStorage {
     pub address Value;

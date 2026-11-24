@@ -480,30 +480,18 @@
     builder.CreateBr(done);
     builder.SetInsertPoint(done);
   }
-  llvm::MDNode *gc_critical_guard_marker() {
-    return llvm::MDNode::get(
-        context,
-        llvm::MDString::get(context, "lang.bound.gc.critical.guard.v1"));
-  }
-  void mark_gc_critical_guard(llvm::CallInst *call) {
-    call->setMetadata("lang.bound.gc.critical.guard.v1",
-                      gc_critical_guard_marker());
-  }
   llvm::Value *gc_enter_critical() {
     auto callee = module.getOrInsertFunction(
         "lang_gc_program_enter_critical_v1",
         llvm::FunctionType::get(builder.getInt32Ty(), {}, false));
-    auto *call = builder.CreateCall(callee, {});
-    mark_gc_critical_guard(call);
-    return call;
+    return builder.CreateCall(callee, {});
   }
   void gc_leave_critical(llvm::Value *token) {
     auto callee = module.getOrInsertFunction(
         "lang_gc_program_leave_critical_v1",
         llvm::FunctionType::get(builder.getVoidTy(), {builder.getInt32Ty()},
                                 false));
-    auto *call = builder.CreateCall(callee, {token});
-    mark_gc_critical_guard(call);
+    builder.CreateCall(callee, {token});
   }
   llvm::Value *gc_enter_safe() {
     auto callee = module.getOrInsertFunction(

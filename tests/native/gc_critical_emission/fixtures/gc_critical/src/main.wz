@@ -21,6 +21,10 @@ struct StrongBox {
     items Vec[i32];
 }
 
+struct NestedBox {
+    inner StrongBox;
+}
+
 struct Plain {
     tag i32;
 }
@@ -40,8 +44,8 @@ func plain_i32() i32 {
 }
 
 // A: fresh Vec initialization prefixes.  The strong element Vecs register;
-// the Text and Weak element Vecs do not.  Each local Vec slot store still has
-// its own strong-edge guard after the constructor interval.
+// the Text and Weak element Vecs do not. Their local publications do not
+// write a traced graph edge.
 func prefix_strong_nonempty(seed i32) Vec[Node] {
     let value Vec[Node] = [Node(value: seed, callback: plain_i32)];
     return value;
@@ -62,7 +66,7 @@ func prefix_weak_nonstrong(source Vec[Node]) Vec[Weak[Vec[Node]]] {
     return value;
 }
 
-// B: owning local slot stores.  Only the strong-edge slots get a guard.
+// B: synchronous local slot stores. ARC cleanup does not require a store guard.
 func store_string() i32 {
     let value string = "old";
     return 0;
@@ -94,6 +98,7 @@ func store_slice(source Vec[i32]) i32 {
 }
 
 async func work() Unit {
+    let value Vec[i32] = [8];
 }
 
 func store_task() i32 {
@@ -127,6 +132,18 @@ func replace_vec(value inout Vec[i32]) {
 
 func replace_strong_aggregate(value inout StrongBox) {
     value = StrongBox(items: [5]);
+}
+
+func replace_local_field() i32 {
+    var value = NestedBox(inner: StrongBox(items: [1]));
+    value.inner.items = [2, 3];
+    return i32(vec.len(value.inner.items));
+}
+
+func replace_heap_field() i32 {
+    let values = [NestedBox(inner: StrongBox(items: [1]))];
+    values[0].inner.items = [2, 3, 4];
+    return i32(vec.len(values[0].inner.items));
 }
 
 // Control: a non-owning place write is store_indirect and never guarded.
@@ -170,6 +187,9 @@ func main() i32 {
     }
     if text != "new" || scalar != 7 || vec.len(vector) != 2 {
         return 3;
+    }
+    if replace_local_field() != 2 || replace_heap_field() != 3 {
+        return 4;
     }
     return 0;
 }

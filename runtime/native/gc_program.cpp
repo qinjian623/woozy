@@ -205,9 +205,8 @@ extern "C" void lang_gc_program_leave_critical_v1(int32_t entered) noexcept {
 }
 
 extern "C" void lang_gc_program_poll_request_v1(void) noexcept {
-  // The no-request path is the same one-load fast path as the generated
-  // safepoint. Do not call the controller here: this site may be a collapsed
-  // store guard, and pressure collection is not part of the old pair.
+  // Older generated objects call this for a collapsed store guard. Pressure
+  // collection was not part of that guard and must remain separate.
   if (!lang_gc_world_poll_required_v1())
     return;
   if (!lang::native::gc_program::enabled() || main_after_finish())
