@@ -226,6 +226,31 @@ func check_multi_counts() i32 {
             }
         }
     }
+
+    let overlap_patterns = ["aa","aaa","aaaa","aba","abab",
+        "a\0a","\0a\0","a\0\0a","\0\0","\0\0\0","\0\0\0\0"];
+    let overlap_units = ["a","ab","a\0","a\0\0","\0","\0a"];
+    for pattern in overlap_patterns {
+        for unit in overlap_units {
+            let unit_length = text.len(unit);
+            for var length usize = 8; length <= 72; length += 1 {
+                let value = text.repeat(unit,length/unit_length+1);
+                let trimmed = value[0:length];
+                if text.count(trimmed,pattern) != scalar_count(trimmed,pattern) {
+                    return 1118;
+                }
+            }
+        }
+        for var repeats usize = 1; repeats <= 16; repeats += 1 {
+            let sparse = text.repeat(pattern+"x",repeats);
+            for var prefix_length usize = 0; prefix_length < 18; prefix_length += 1 {
+                let value = text.repeat("x",prefix_length)+sparse;
+                if text.count(value,pattern) != scalar_count(value,pattern) {
+                    return 1119;
+                }
+            }
+        }
+    }
     return 0;
 }
 

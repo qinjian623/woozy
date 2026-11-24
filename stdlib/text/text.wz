@@ -201,6 +201,77 @@ func byte_zero_flags(x u64) u64 {
     return ~(((x & 0x7f7f7f7f7f7f7f7f) + 0x7f7f7f7f7f7f7f7f) |
         x | 0x7f7f7f7f7f7f7f7f);
 }
+// Count nonoverlapping matches of 2-4 byte patterns with a border.
+// Each candidate start is the high bit of its byte. With wrapping u64
+// arithmetic, flags & (~flags+1) selects the earliest one. Clear its span
+// and carry any part that reaches into the next window.
+func count_overlap(value string, pattern Vec[u8], byte_count usize,
+    width usize) option.Option[usize] {
+    let first = u64(pattern[0]) * 0x0101010101010101;
+    let second = u64(pattern[1]) * 0x0101010101010101;
+    var third u64 = 0;
+    var fourth u64 = 0;
+    if width >= 3 { third = u64(pattern[2]) * 0x0101010101010101; }
+    if width == 4 { fourth = u64(pattern[3]) * 0x0101010101010101; }
+    let stride = 9-width;
+    let carry_shift = stride*8;
+    var span_factor u64 = 0x0101;
+    if width == 3 { span_factor = 0x010101; }
+    else if width == 4 { span_factor = 0x01010101; }
+    var total usize = 0;
+    var offset usize = 0;
+    var carry u64 = 0;
+    for byte_count-offset >= 8 {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,offset) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        var flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8);
+        if width == 3 {
+            flags = flags & (byte_zero_flags(word ^ third) >> 16);
+        } else if width == 4 {
+            flags = flags & (byte_zero_flags(word ^ third) >> 16) &
+                (byte_zero_flags(word ^ fourth) >> 24);
+        }
+        flags = flags & ~carry;
+        var blocked u64 = 0;
+        for flags != 0 {
+            let selected = flags & (~flags + 1);
+            total += 1;
+            blocked = selected * span_factor;
+            flags = flags & ~blocked;
+        }
+        carry = blocked >> carry_shift;
+        offset += stride;
+    }
+    if offset <= byte_count-width {
+        var word u64 = 0;
+        switch __woozy_text_load8(value,byte_count-8) {
+            case option.Option.Some(loaded): word = loaded;
+            case option.Option.None: return option.Option[usize].None;
+        }
+        var flags = byte_zero_flags(word ^ first) &
+            (byte_zero_flags(word ^ second) >> 8);
+        if width == 3 {
+            flags = flags & (byte_zero_flags(word ^ third) >> 16);
+        } else if width == 4 {
+            flags = flags & (byte_zero_flags(word ^ third) >> 16) &
+                (byte_zero_flags(word ^ fourth) >> 24);
+        }
+        let tail = offset-(byte_count-8);
+        flags = flags & (~u64(0) << (tail*8));
+        carry = carry << (tail*8);
+        flags = flags & ~carry;
+        for flags != 0 {
+            let selected = flags & (~flags + 1);
+            total += 1;
+            flags = flags & ~(selected * span_factor);
+        }
+    }
+    return option.Option[usize].Some(total);
+}
 func count_two(value string, pattern Vec[u8], byte_count usize) option.Option[usize] {
     let first = u64(pattern[0]) * 0x0101010101010101;
     let second = u64(pattern[1]) * 0x0101010101010101;
@@ -341,7 +412,7 @@ pub func count(value string, needle string) usize {
     let pattern = bytes(needle);
     if needle_bytes >= 2 && needle_bytes <= 4 && value_bytes >= 8 {
         // A border is a proper prefix that is also a suffix; only then can
-        // matches overlap, so those patterns use the nonoverlapping KMP path.
+        // matches overlap, so those patterns use the packed greedy path.
         var has_border = pattern[0] == pattern[needle_bytes-1];
         if needle_bytes == 4 &&
             pattern[0] == pattern[2] && pattern[1] == pattern[3] {
@@ -363,6 +434,11 @@ pub func count(value string, needle string) usize {
                     case option.Option.Some(total): return total;
                     case option.Option.None: {}
                 }
+            }
+        } else {
+            switch count_overlap(value,pattern,value_bytes,needle_bytes) {
+                case option.Option.Some(total): return total;
+                case option.Option.None: {}
             }
         }
     }

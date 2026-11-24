@@ -169,14 +169,13 @@ pub func pop_back[T](values Deque[T]) option.Option[T] {
     if state.length == 0 { return option.Option[T].None; }
 
     let ring = state.capacity;
-    let tail = ring - state.head;
     let index = state.length - 1;
-    // The logical index is below the capacity. If it lies beyond the
-    // contiguous tail, subtracting that tail wraps it without a modulo and
-    // without forming head + index, which could overflow near usize.MAX.
-    var position = index;
-    if index >= tail { position -= tail; }
-    else { position = state.head + index; }
+    // head and index are each below ring, so head + index is below 2 * ring and
+    // one conditional subtraction lands on the physical slot. Allocated Option
+    // slots hold at least the tag bytes, so the checked Vec size bound keeps
+    // head + index below usize.MAX and the sum cannot wrap before the compare.
+    var position = state.head + index;
+    if position >= ring { position -= ring; }
     let stored = values.slots[position];
     values.cursor[0] = Cursor(head:state.head,length:state.length - 1,capacity:ring);
     values.slots[position] = option.Option[T].None;
