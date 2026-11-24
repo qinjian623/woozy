@@ -10,7 +10,13 @@ package pythonemit;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "std/option" as option;
+import "std/text" as text;
 import "std/vec" as vec;
+
+func printer_code(value Printer) string throws Failure {
+    try { return text.from_bytes(value.code); }
+    catch error text.Error { throw internal("generated Python is invalid UTF-8"); }
+}
 
 func independent_expression_case(module hir.HirModule,
                                  nodes Vec[hir.HirNode], id usize,
@@ -22,7 +28,7 @@ func independent_expression_case(module hir.HirModule,
     try {
         let value = expression(inout state, id, inout suite);
         print_suite(inout state.printer, suite, 0, 0);
-        return name + "=OK|" + python_string_literal(state.printer.code);
+        return name + "=OK|" + python_string_literal(printer_code(state.printer));
     } catch error Failure {
         return name + "=FAIL|" + failure_text(error);
     }
@@ -38,7 +44,7 @@ func independent_statement_case(module hir.HirModule,
     try {
         statement(inout state, id, inout suite);
         print_suite(inout state.printer, suite, 0, 0);
-        return name + "=OK|" + python_string_literal(state.printer.code);
+        return name + "=OK|" + python_string_literal(printer_code(state.printer));
     } catch error Failure {
         return name + "=FAIL|" + failure_text(error);
     }

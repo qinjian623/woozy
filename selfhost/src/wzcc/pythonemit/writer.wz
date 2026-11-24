@@ -832,14 +832,14 @@ func emit_foreign_access_helpers(program inout Vec[Statement]) {
 // Printing
 
 struct Printer {
-    code string;
+    code Vec[u8];
     source_map Vec[LineSource];
     checking_only bool;
     printed_lines u64;
 }
 
 func printer() Printer {
-    return Printer(code: "", source_map: [], checking_only: false,
+    return Printer(code: [], source_map: [], checking_only: false,
         printed_lines: 0);
 }
 
@@ -866,7 +866,7 @@ func print_line(state inout Printer, text_value string, indent u32,
     if state.checking_only {
         return;
     }
-    state.code = state.code + padding(indent) + text_value + "\n";
+    vec.extend(state.code, text.bytes(padding(indent) + text_value + "\n"));
     state.printed_lines += 1;
     if has_source {
         vec.push(state.source_map, LineSource(line: state.printed_lines,

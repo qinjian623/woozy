@@ -11,6 +11,7 @@ import "app/wzcc/hir" as hir;
 import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/model" as model;
 import "std/option" as option;
+import "std/text" as text;
 import "std/vec" as vec;
 
 func backend_diagnostic(code string, message string, has_source bool,
@@ -391,7 +392,10 @@ func generate_once(module hir.HirModule, entry usize, options Options,
             zero_span(), runner));
     }
     print_suite(inout state.printer, program, 0, 0);
-    return Output(code: state.printer.code, runtime: runtime,
+    var code = "";
+    try { code = text.from_bytes(state.printer.code); }
+    catch error text.Error { throw internal("generated Python is invalid UTF-8"); }
+    return Output(code: code, runtime: runtime,
         source_map: state.printer.source_map, symbols: state.symbols);
 }
 

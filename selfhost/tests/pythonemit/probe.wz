@@ -288,8 +288,9 @@ func map_text(value Printer) string {
     return result;
 }
 
-func code_text(value Printer) string {
-    return text.replace(value.code, "\n", "\\n");
+func code_text(value Printer) string throws Failure {
+    try { return text.replace(text.from_bytes(value.code), "\n", "\\n"); }
+    catch error text.Error { throw internal("generated Python is invalid UTF-8"); }
 }
 
 func basic_checks(out inout Vec[string]) {
