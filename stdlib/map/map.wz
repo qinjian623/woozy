@@ -1,9 +1,10 @@
-// Hash map with separate chaining and independent Vec buckets.
+// Hash map with separate chaining and lazily allocated Vec buckets.
 // With well-distributed hashes, insert/get/remove take amortized O(1) time;
 // doubling and rehashing keep the load factor at or below 0.75.
 //
 // Map is a value struct, but all mutable state lives behind shared Vec
-// handles (buckets[0] holds the bucket vector and size is the size cell).
+// handles. buckets[0] and allocated[0] describe the same bucket table.
+// Untouched slots share an empty Vec, which is replaced before insertion.
 // Copying a Map therefore shares the same logical map, matching the language
 // rule for Vec identity. Operations read buckets[0] at entry, so replacing
 // the bucket vector after growth is visible through every Map alias.
@@ -29,24 +30,27 @@ pub struct Entry[K,V] {
 pub struct Map[K hash.Hash,V] {
     buckets Vec[Vec[Vec[Entry[K,V]]]];
     size Vec[usize];
+    allocated Vec[Vec[bool]];
 }
 
 func empty_buckets[K hash.Hash,V](capacity usize) Vec[Vec[Entry[K,V]]] {
-    // vec.make with a Vec fill would share one inner Vec across every slot,
-    // because copying a Vec handle aliases the same container. Build each
-    // bucket with its own vec.empty call instead.
-    let buckets = vec.empty[Vec[Entry[K,V]]]();
-    vec.reserve(buckets, capacity);
-    for var index usize = 0; index < capacity; index += 1 {
-        vec.push(buckets, vec.empty[Entry[K,V]]());
+    return vec.make[Vec[Entry[K,V]]](capacity, vec.empty[Entry[K,V]]());
+}
+
+func ensure_bucket[K hash.Hash,V](buckets Vec[Vec[Entry[K,V]]], allocated Vec[bool], index usize) Vec[Entry[K,V]] {
+    // Keep allocated buckets even when emptied: an outer probe may hold one.
+    if !allocated[index] {
+        buckets[index] = vec.empty[Entry[K,V]]();
+        allocated[index] = true;
     }
-    return buckets;
+    return buckets[index];
 }
 
 // new creates an empty map with an initial capacity of eight buckets.
 pub func new[K hash.Hash,V]() Map[K,V] {
     let buckets = vec.make[Vec[Vec[Entry[K,V]]]](1, empty_buckets[K,V](INITIAL_CAPACITY));
-    return Map[K,V](buckets: buckets, size: vec.make[usize](1, 0));
+    return Map[K,V](buckets: buckets, size: vec.make[usize](1, 0),
+        allocated: vec.make[Vec[bool]](1, vec.make[bool](INITIAL_CAPACITY, false)));
 }
 
 pub func len[K hash.Hash,V](values Map[K,V]) usize {
@@ -85,15 +89,18 @@ func grow[K hash.Hash,V](values Map[K,V], current Vec[Vec[Entry[K,V]]]) {
     var larger = MAX_USIZE;
     if capacity <= MAX_USIZE / 2 { larger = capacity * 2; }
     let buckets = empty_buckets[K,V](larger);
+    let allocated = vec.make[bool](larger, false);
     for var index usize = 0; index < capacity; index += 1 {
         let bucket = current[index];
         for var position usize = 0; position < vec.len(bucket); position += 1 {
             let entry = bucket[position];
             let target = bucket_index(entry.key, larger);
-            vec.push(buckets[target], entry);
+            vec.push(ensure_bucket[K,V](buckets, allocated, target), entry);
         }
     }
-    // Replace the shared bucket cell; the size cell keeps its identity.
+    // Publish allocation flags first. Releasing their old Vec cannot invoke
+    // a key or value callback.
+    values.allocated[0] = allocated;
     values.buckets[0] = buckets;
 }
 
@@ -101,9 +108,10 @@ func grow[K hash.Hash,V](values Map[K,V], current Vec[Vec[Entry[K,V]]]) {
 // previous value when the key was already present.
 pub func insert[K hash.Hash,V](values Map[K,V], key K, value V) option.Option[V] {
     let buckets = values.buckets[0];
+    let allocated = values.allocated[0];
     let capacity = vec.len(buckets);
     let index = bucket_index(key, capacity);
-    let bucket = buckets[index];
+    let bucket = ensure_bucket[K,V](buckets, allocated, index);
     switch find_index(bucket, key) {
         case option.Option.Some(position): {
             let previous = bucket[position].value;
@@ -166,7 +174,10 @@ pub func remove[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
 // capacity. Existing aliases observe the cleared map.
 pub func clear[K hash.Hash,V](values Map[K,V]) {
     values.size[0] = 0;
-    values.buckets[0] = empty_buckets[K,V](INITIAL_CAPACITY);
+    let buckets = empty_buckets[K,V](INITIAL_CAPACITY);
+    let allocated = vec.make[bool](INITIAL_CAPACITY, false);
+    values.allocated[0] = allocated;
+    values.buckets[0] = buckets;
 }
 
 // keys, values and entries return snapshots. Mutating the map afterwards
