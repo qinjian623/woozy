@@ -1430,6 +1430,7 @@ SymbolId function_named(const HirModule &m, std::string_view name) {
   throw std::runtime_error("probe function missing: " + std::string(name));
 }
 struct IndexReadRecord {
+  HirNodeId node;
   HirNodeId receiver;
   SymbolId function;
   std::optional<UseKind> use;
@@ -1444,7 +1445,8 @@ std::vector<IndexReadRecord> index_receiver_records(const HirModule &m,
     const auto &n = m.nodes[i];
     if (n.kind() != kind)
       continue;
-    IndexReadRecord r{n.children[0],
+    IndexReadRecord r{HirNodeId{i},
+                      n.children[0],
                       m.scopes.at(n.scope.value).function,
                       std::nullopt,
                       std::nullopt,
@@ -1521,10 +1523,12 @@ HirNodeId return_node(const HirModule &m, SymbolId function) {
   throw std::runtime_error("probe return missing");
 }
 
-// A direct trivial-element index read of a real local binding borrows that
-// binding's handle for the complete full expression; every listed negative
-// keeps the old receiver copy and temporary. The receiver is evaluated once
-// and before the index either way, which the shared verifier re-derives.
+// A direct trivial- or concrete-Vec-element index read of a real local
+// binding borrows that binding's handle for the complete full expression; a
+// concrete Vec-element result is still an owned temporary. Every listed
+// negative keeps the old receiver copy and temporary. The receiver is
+// evaluated once and before the index either way, which the shared verifier
+// re-derives.
 void local_index_borrow_tests() {
   for (auto b : {Backend::native, Backend::python}) {
     auto literal = accepted(
@@ -1591,7 +1595,14 @@ void local_index_borrow_tests() {
     const auto &type = *owning.types.find(owning.nodes[r.receiver.value].type);
     if (type.kind == TypeKind::Vec && type.type_args.size() == 1 &&
         owning.types.find(type.type_args[0])->kind == TypeKind::Vec) {
-      expect_use(r, UseKind::copy, true, "owning element read");
+      expect_use(r, UseKind::borrow, false, "owning element read");
+      auto element = type.type_args[0];
+      need(std::any_of(owning.ownership.temporaries.begin(),
+                       owning.ownership.temporaries.end(),
+                       [&](const auto &t) {
+                         return t.producer == r.node && t.type == element;
+                       }),
+           "owning element read result is not an owned temporary");
       owning_checked = true;
     }
   }
