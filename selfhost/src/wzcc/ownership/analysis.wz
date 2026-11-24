@@ -1175,7 +1175,8 @@ func binary_pure(op hir.BinaryOp) bool {
     }
 }
 
-func local_index_borrow(analysis inout Analysis, receiver usize, index usize)
+func local_index_borrow(analysis inout Analysis, receiver usize,
+                        index usize, allow_vec_element bool)
     bool throws Problem {
     let receiver_node = node_at(analysis, receiver);
     var symbol usize = 0;
@@ -1201,21 +1202,29 @@ func local_index_borrow(analysis inout Analysis, receiver usize, index usize)
         return false;
     }
     let element = receiver_type.type_args[0];
-    if contains_type_parameter(analysis.module, element) ||
-       owned(inout analysis, element) {
+    if contains_type_parameter(analysis.module, element) {
+        return false;
+    }
+    let element_type = type_at(analysis.module, element);
+    if owned(inout analysis, element) &&
+       !(allow_vec_element &&
+         type_kind_is(element_type.kind, model.TypeKind.Vec)) {
         return false;
     }
     return pure_integer_index(analysis, index);
 }
 
 func local_index_can_borrow(analysis inout Analysis, receiver usize,
-                            index usize, root usize) bool throws Problem {
+                            index usize, root usize,
+                            allow_vec_element bool) bool throws Problem {
     var has_root = false;
     switch analysis.full_expression_root {
         case option.Option.Some(_): has_root = true;
         case option.Option.None: {}
     }
-    if !has_root || !local_index_borrow(inout analysis, receiver, index) {
+    if !has_root ||
+       !local_index_borrow(inout analysis, receiver, index,
+                           allow_vec_element) {
         return false;
     }
     return !ids_contains(full_effects(inout analysis), root);
@@ -1559,7 +1568,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
                     !expr_consumes_symbol(analysis, index, symbol);
                 if !can_borrow {
                     can_borrow = local_index_can_borrow(inout analysis,
-                        receiver, index, symbol);
+                        receiver, index, symbol, true);
                 }
             case option.Option.None: {}
         }
@@ -1718,7 +1727,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
                            symbol) {
                         ids_insert(analysis.safe_borrow_receivers, receiver);
                     } else if local_index_can_borrow(inout analysis,
-                            receiver, index, symbol) {
+                            receiver, index, symbol, false) {
                         ids_insert(analysis.safe_borrow_receivers, receiver);
                     }
                 case option.Option.None: {}

@@ -795,14 +795,15 @@ class Analysis {
     }
   }
 
-  // A direct trivial-element read or direct element write of a plain local
-  // Vec may borrow the binding's existing handle when the complete full
-  // expression cannot move, inout borrow, or rebind that binding. The binding
-  // owns the Vec through the full expression, so the old receiver copy was only
-  // an extra non-final handle. Parameters keep their separate rule; fields,
-  // computed receivers, owning elements and impure indexes stay on the copy
-  // path.
-  bool local_index_borrow(HirNodeId receiver, HirNodeId index) const {
+  // A direct read of a trivial or concrete Vec element, or a direct
+  // trivial-element write, of a plain local Vec may borrow the binding's
+  // existing handle when the complete full expression cannot move, inout
+  // borrow, or rebind that binding. The binding owns the Vec through the full
+  // expression, so the old receiver copy was only an extra non-final handle.
+  // Parameters keep their separate rule; fields, computed receivers, other
+  // owning elements and impure indexes stay on the copy path.
+  bool local_index_borrow(HirNodeId receiver, HirNodeId index,
+                          bool allow_vec_element) const {
     const auto *read = std::get_if<Read>(&n(receiver).data);
     if (!read || !declarations.count(read->symbol.value) ||
         parameter_symbols.count(read->symbol.value))
@@ -816,7 +817,10 @@ class Analysis {
         receiver_type.type_args.size() != 1)
       return false;
     auto element = receiver_type.type_args[0];
-    if (contains_type_parameter(m, element) || owned(element))
+    if (contains_type_parameter(m, element))
+      return false;
+    if (owned(element) &&
+        !(allow_vec_element && ty(m, element).kind == TypeKind::Vec))
       return false;
     return pure_integer_index(index);
   }
@@ -824,8 +828,9 @@ class Analysis {
   // Shared read/write gate: a plain local trivial-element Vec receiver may
   // borrow its binding handle for this complete full expression.
   bool local_index_can_borrow(HirNodeId receiver, HirNodeId index,
-                              SymbolId root) {
-    return full_expression_root && local_index_borrow(receiver, index) &&
+                              SymbolId root, bool allow_vec_element) {
+    return full_expression_root &&
+           local_index_borrow(receiver, index, allow_vec_element) &&
            !full_effects().count(root.value);
   }
 
@@ -983,7 +988,7 @@ class Analysis {
       auto root = borrow_root(receiver);
       bool can_borrow = root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root);
       if (!can_borrow && root &&
-          local_index_can_borrow(receiver, index, *root))
+          local_index_can_borrow(receiver, index, *root, true))
         can_borrow = true;
       expr_records(receiver, fe, live, can_borrow);
       expr_records(index, fe, live, false);
@@ -1069,7 +1074,7 @@ class Analysis {
         if (root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root) &&
             !expr_consumes_symbol(x.children[1], *root))
           safe_borrow_receivers.insert(receiver.value);
-        else if (root && local_index_can_borrow(receiver, index, *root))
+        else if (root && local_index_can_borrow(receiver, index, *root, false))
           safe_borrow_receivers.insert(receiver.value);
       }
       expr_records(x.children[0], id, live);
