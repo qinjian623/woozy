@@ -29,72 +29,18 @@
     }
     return nullptr;
   }
-  llvm::Value *value_system_call(const ir::Instruction &i,
-                                  llvm::ArrayRef<llvm::Value *> args) {
-    using hir::SystemOperation;
-    const auto sig = type(i.signature);
-    auto pointer = [&](unsigned index) { return value_address(sig.parameters[index].type, args[index]); };
-    switch (*i.system) {
-    case SystemOperation::map_probe_requires_copy:
-      return builder.getInt1(type_owns_c_resource(sig.parameters[0].type, true));
-    case SystemOperation::unicode_normalize:
-    case SystemOperation::unicode_casefold: {
-      auto *out = storage(lower_type(i.type));
-      start_lifetime(out);
-      llvm::Value *status = nullptr;
-      if (*i.system == SystemOperation::unicode_normalize)
-        status = runtime("lang_unicode_normalize_v1", builder.getInt64Ty(),
-                         {out, pointer(0), args[1]});
-      else
-        status = runtime("lang_unicode_casefold_v1", builder.getInt64Ty(),
-                         {out, pointer(0)});
-      guard(builder.CreateICmpSLT(status, builder.getInt64(0)), 10, i.source);
-      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
-      end_lifetime(out);
-      return loaded;
-    }
-    case SystemOperation::unicode_boundaries:
-      return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
-    case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
-    case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
-    case SystemOperation::text_cursor_at: {
-      // Valid UTF-8 has one byte per scalar exactly when it is ASCII.
-      // Endpoints also need no decoding. Keep all other cases, including an
-      // out-of-range index, on the checked runtime path.
-      auto *bytes = builder.CreateExtractValue(args[0], {1});
-      auto *length = builder.CreateExtractValue(args[0], {2});
-      auto *index = args[1];
-      auto *end = builder.CreateICmpEQ(index, length);
-      auto *direct = builder.CreateOr(
-          builder.CreateOr(builder.CreateICmpEQ(index, builder.getInt64(0)), end),
-          builder.CreateAnd(builder.CreateICmpEQ(bytes, length),
-                            builder.CreateICmpULT(index, length)));
-      auto *offset = builder.CreateSelect(end, bytes, index);
-      auto *entry = builder.GetInsertBlock();
-      auto *slow = llvm::BasicBlock::Create(context, "text.offset.runtime", entry->getParent());
-      auto *done = llvm::BasicBlock::Create(context, "text.offset.done", entry->getParent());
-      builder.CreateCondBr(direct, done, slow);
-      builder.SetInsertPoint(slow);
-      auto *decoded = runtime("lang_text_cursor_at_v1", builder.getInt64Ty(),
-                              {pointer(0), index});
-      auto *slow_end = builder.GetInsertBlock();
-      builder.CreateBr(done);
-      builder.SetInsertPoint(done);
-      auto *result = builder.CreatePHI(builder.getInt64Ty(), 2);
-      result->addIncoming(offset, entry);
-      result->addIncoming(decoded, slow_end);
-      return result;
-    }
-    case SystemOperation::text_cursor_read_back:
-      return runtime("lang_text_cursor_read_back_v1", builder.getInt64Ty(), {pointer(0), args[1]});
-    case SystemOperation::text_cursor_read: {
+  // Shared packed cursor read used by both the text system call and String
+  // iteration_read. The address callback is evaluated only on the slow path,
+  // so the fast path does not materialise a temporary text descriptor.
+  llvm::Value *text_cursor_read(
+      llvm::Value *text, llvm::Value *cursor,
+      const std::function<llvm::Value *()> &address) {
       // A bounded lead byte whose continuation bytes and scalar value are the
       // ones the runtime decoder accepts produces the runtime's packed result
       // inline. Bounds, overlong, surrogate and range checks repeat that
       // decoder exactly; every other case, including a truncated tail at the
       // end of the text, keeps the runtime call and its panic behavior.
-      auto *bytes = builder.CreateExtractValue(args[0], {1});
-      auto *cursor = args[1];
+      auto *bytes = builder.CreateExtractValue(text, {1});
       if (cursor->getType() != builder.getInt64Ty())
         cursor = builder.CreateIntCast(cursor, builder.getInt64Ty(), false);
       auto *function = builder.GetInsertBlock()->getParent();
@@ -113,7 +59,7 @@
       builder.CreateCondBr(
           builder.CreateICmpULT(cursor, bytes), inspect, slow);
       builder.SetInsertPoint(inspect);
-      auto *data = builder.CreateExtractValue(args[0], {0});
+      auto *data = builder.CreateExtractValue(text, {0});
       auto *byte = builder.CreateLoad(
           builder.getInt8Ty(),
           builder.CreateGEP(builder.getInt8Ty(), data, cursor));
@@ -190,7 +136,7 @@
       auto *four_packed = decode(four, 4);
       builder.SetInsertPoint(slow);
       auto *decoded = runtime("lang_text_cursor_read_v1",
-                              builder.getInt64Ty(), {pointer(0), args[1]});
+                              builder.getInt64Ty(), {address(), cursor});
       auto *slow_end = builder.GetInsertBlock();
       builder.CreateBr(done);
       builder.SetInsertPoint(done);
@@ -201,7 +147,68 @@
       result->addIncoming(four_packed, four);
       result->addIncoming(decoded, slow_end);
       return result;
+  }
+  llvm::Value *value_system_call(const ir::Instruction &i,
+                                  llvm::ArrayRef<llvm::Value *> args) {
+    using hir::SystemOperation;
+    const auto sig = type(i.signature);
+    auto pointer = [&](unsigned index) { return value_address(sig.parameters[index].type, args[index]); };
+    switch (*i.system) {
+    case SystemOperation::map_probe_requires_copy:
+      return builder.getInt1(type_owns_c_resource(sig.parameters[0].type, true));
+    case SystemOperation::unicode_normalize:
+    case SystemOperation::unicode_casefold: {
+      auto *out = storage(lower_type(i.type));
+      start_lifetime(out);
+      llvm::Value *status = nullptr;
+      if (*i.system == SystemOperation::unicode_normalize)
+        status = runtime("lang_unicode_normalize_v1", builder.getInt64Ty(),
+                         {out, pointer(0), args[1]});
+      else
+        status = runtime("lang_unicode_casefold_v1", builder.getInt64Ty(),
+                         {out, pointer(0)});
+      guard(builder.CreateICmpSLT(status, builder.getInt64(0)), 10, i.source);
+      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
+      end_lifetime(out);
+      return loaded;
     }
+    case SystemOperation::unicode_boundaries:
+      return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
+    case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
+    case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
+    case SystemOperation::text_cursor_at: {
+      // Valid UTF-8 has one byte per scalar exactly when it is ASCII.
+      // Endpoints also need no decoding. Keep all other cases, including an
+      // out-of-range index, on the checked runtime path.
+      auto *bytes = builder.CreateExtractValue(args[0], {1});
+      auto *length = builder.CreateExtractValue(args[0], {2});
+      auto *index = args[1];
+      auto *end = builder.CreateICmpEQ(index, length);
+      auto *direct = builder.CreateOr(
+          builder.CreateOr(builder.CreateICmpEQ(index, builder.getInt64(0)), end),
+          builder.CreateAnd(builder.CreateICmpEQ(bytes, length),
+                            builder.CreateICmpULT(index, length)));
+      auto *offset = builder.CreateSelect(end, bytes, index);
+      auto *entry = builder.GetInsertBlock();
+      auto *slow = llvm::BasicBlock::Create(context, "text.offset.runtime", entry->getParent());
+      auto *done = llvm::BasicBlock::Create(context, "text.offset.done", entry->getParent());
+      builder.CreateCondBr(direct, done, slow);
+      builder.SetInsertPoint(slow);
+      auto *decoded = runtime("lang_text_cursor_at_v1", builder.getInt64Ty(),
+                              {pointer(0), index});
+      auto *slow_end = builder.GetInsertBlock();
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+      auto *result = builder.CreatePHI(builder.getInt64Ty(), 2);
+      result->addIncoming(offset, entry);
+      result->addIncoming(decoded, slow_end);
+      return result;
+    }
+    case SystemOperation::text_cursor_read_back:
+      return runtime("lang_text_cursor_read_back_v1", builder.getInt64Ty(), {pointer(0), args[1]});
+    case SystemOperation::text_cursor_read:
+      return text_cursor_read(args[0], args[1],
+                              [&] { return pointer(0); });
     case SystemOperation::text_count_rune:
       return runtime("lang_text_count_rune_v1", builder.getInt64Ty(), {pointer(0), args[1]});
     case SystemOperation::text_bytes:

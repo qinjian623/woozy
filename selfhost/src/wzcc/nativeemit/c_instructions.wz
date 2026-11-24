@@ -386,8 +386,12 @@ func c_emit_iteration_read(instruction nativeir.Instruction, args Vec[Value],
     switch kind.kind {
         case model.TypeKind.String: {
             // Reading does not advance the byte cursor; next owns the step.
-            let packed = runtime("lang_text_cursor_read_v1", "i64",
-                [entry.address, index], inout state);
+            // Reuse the same checked packed read as __woozy_text_cursor_read
+            // instead of a second runtime call.
+            let collection_layout = lower_type(collection_type, inout state);
+            let collection = c_load(collection_layout, entry.address, inout state);
+            let packed = e_text_cursor_read_value(collection, index, entry.address,
+                false, 0, inout state);
             let scalar = c_binop("lshr", "i64", packed.reference, "32",
                 inout state);
             return result("i32", "trunc i64 " + scalar.reference + " to i32",

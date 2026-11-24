@@ -1931,14 +1931,18 @@ class Emitter {
     }
     case ir::Op::iteration_read: {
       auto *index = builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value));
-      if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::String) {
+      auto collection_type = current_function->slots.at(i.slot.value).type;
+      if (type(collection_type).kind == hir::TypeKind::String) {
         // Reading does not advance the byte cursor, so repeated reads observe
-        // the same scalar and next remains responsible for the sole step.
-        auto *packed = runtime("lang_text_cursor_read_v1", builder.getInt64Ty(),
-                               {slots.at(i.slot.value), index});
+        // the same scalar and next remains responsible for the sole step. Use
+        // the same checked packed read as __woozy_text_cursor_read.
+        auto *collection = builder.CreateLoad(lower_type(collection_type),
+                                               slots.at(i.slot.value));
+        auto *packed = text_cursor_read(
+            collection, index, [&] { return slots.at(i.slot.value); });
         v = builder.CreateTrunc(builder.CreateLShr(packed, builder.getInt64(32)),
                                 builder.getInt32Ty());
-      } else if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::Slice) {
+      } else if (type(collection_type).kind == hir::TypeKind::Slice) {
         auto *address = runtime("lang_slice_at_v1", builder.getPtrTy(),
                                 {slots.at(i.slot.value), index});
         v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));

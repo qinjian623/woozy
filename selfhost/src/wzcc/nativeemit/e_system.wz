@@ -811,9 +811,14 @@ func e_text_decode(width usize, data Value, cursor Value, code Value,
     return packed;
 }
 
-func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
-                        state inout Emitter) Value throws Error {
-    let bytes = e_extract(args[0], 1, "i64", inout state);
+// Shared packed cursor read used by both the text system call and String
+// iteration_read.  `slow_address` is already materialised for iteration;
+// system calls pass c_null() and let the helper build the descriptor address
+// only in the runtime fallback block.
+func e_text_cursor_read_value(text Value, cursor Value, slow_address Value,
+                              compute_address bool, receiver_type usize,
+                              state inout Emitter) Value throws Error {
+    let bytes = e_extract(text, 1, "i64", inout state);
     let function_index = current_function(state);
     let inspect = new_block(function_index, "text.read.inspect", inout state);
     let second_lead = new_block(function_index, "text.read.second", inout state);
@@ -824,13 +829,13 @@ func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
     let four = new_block(function_index, "text.read.four", inout state);
     let slow = new_block(function_index, "text.read.runtime", inout state);
     let done = new_block(function_index, "text.read.done", inout state);
-    let bounded = c_icmp("ult", "i64", args[1].reference, bytes.reference, inout state);
+    let bounded = c_icmp("ult", "i64", cursor.reference, bytes.reference, inout state);
     c_cond_branch(bounded, inspect, slow, inout state);
 
     position(inspect, inout state);
-    let data = e_extract(args[0], 0, "ptr", inout state);
+    let data = e_extract(text, 0, "ptr", inout state);
     let element = result("ptr", "getelementptr i8, ptr " + data.reference +
-        ", i64 " + args[1].reference, inout state);
+        ", i64 " + cursor.reference, inout state);
     let byte = c_load("i8", element, inout state);
     let scalar = result("i64", "zext i8 " + byte.reference + " to i64", inout state);
     let shifted = c_binop("shl", "i64", scalar.reference, "32", inout state);
@@ -841,7 +846,7 @@ func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
     // Lead ranges are the ones decode() accepts.  0xf5..0xff are not scalar
     // prefixes, so the four-byte class ends the chain and the rest is slow.
     position(second_lead, inout state);
-    let remaining = c_binop("sub", "i64", bytes.reference, args[1].reference, inout state);
+    let remaining = c_binop("sub", "i64", bytes.reference, cursor.reference, inout state);
     let code = result("i32", "zext i8 " + byte.reference + " to i32", inout state);
     let second_ready = e_text_ready(code, remaining, "194", "223", 2, inout state);
     c_cond_branch(second_ready, two, third_lead, inout state);
@@ -853,17 +858,19 @@ func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
     c_cond_branch(fourth_ready, four, slow, inout state);
 
     position(two, inout state);
-    let two_packed = e_text_decode(2, data, args[1], code, done, slow, inout state);
+    let two_packed = e_text_decode(2, data, cursor, code, done, slow, inout state);
     position(three, inout state);
-    let three_packed = e_text_decode(3, data, args[1], code, done, slow, inout state);
+    let three_packed = e_text_decode(3, data, cursor, code, done, slow, inout state);
     position(four, inout state);
-    let four_packed = e_text_decode(4, data, args[1], code, done, slow, inout state);
+    let four_packed = e_text_decode(4, data, cursor, code, done, slow, inout state);
 
     position(slow, inout state);
-    let receiver_type = value_type(state, instruction.inputs[0]);
-    let address = value_address(receiver_type, args[0], inout state);
+    var address = slow_address;
+    if compute_address {
+        address = value_address(receiver_type, text, inout state);
+    }
     let decoded = runtime("lang_text_cursor_read_v1", "i64",
-        [address, args[1]], inout state);
+        [address, cursor], inout state);
     let slow_end = here(state);
     c_branch(done, inout state);
 
@@ -874,6 +881,13 @@ func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
         three.reference + " ], [ " + four_packed.reference + ", " +
         four.reference + " ], [ " + decoded.reference + ", " +
         slow_end.reference + " ]", inout state);
+}
+
+func e_text_cursor_read(instruction nativeir.Instruction, args Vec[Value],
+                        state inout Emitter) Value throws Error {
+    let receiver_type = value_type(state, instruction.inputs[0]);
+    return e_text_cursor_read_value(args[0], args[1], c_null(), true,
+        receiver_type, inout state);
 }
 
 func e_value_system_call(instruction nativeir.Instruction,
