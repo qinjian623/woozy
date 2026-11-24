@@ -187,7 +187,11 @@ void copy_bytes_variable(void *destination, const void *source,
   auto *dst = static_cast<unsigned char *>(destination);
   const auto *src = static_cast<const unsigned char *>(source);
   if (dst == src) return;
-  if (reinterpret_cast<uintptr_t>(dst) < reinterpret_cast<uintptr_t>(src)) {
+  const uintptr_t d = reinterpret_cast<uintptr_t>(dst);
+  const uintptr_t s = reinterpret_cast<uintptr_t>(src);
+  // Disjoint ranges can sweep forward even when the destination is higher;
+  // only a higher destination closer than count needs the reverse sweep.
+  if (d < s || d - s >= count) {
     for (uint64_t i = 0; i < count; ++i) dst[i] = src[i];
   } else {
     for (uint64_t i = count; i > 0; --i) dst[i - 1] = src[i - 1];
