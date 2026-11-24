@@ -35,9 +35,96 @@ pub func ends_with(value string, suffix string) bool {
     return len(suffix) <= len(value) && value[len(value)-len(suffix):] == suffix;
 }
 pub func find_from(value string, needle string, start usize) option.Option[usize] {
-    if start > len(value) || len(needle) > len(value)-start { return option.Option[usize].None; }
-    for var index = start; index <= len(value)-len(needle); index += 1 {
-        if value[index:index+len(needle)] == needle { return option.Option[usize].Some(index); }
+    let value_points = len(value);
+    let needle_points = len(needle);
+    if start > value_points { return option.Option[usize].None; }
+    if needle_points == 0 { return option.Option[usize].Some(start); }
+    if needle_points > value_points-start { return option.Option[usize].None; }
+    // Tiny haystacks avoid the byte copy and suffix table used below.
+    if value_points <= 32 {
+        for var index usize = start; index <= value_points-needle_points; index += 1 {
+            if value[index:index+needle_points] == needle {
+                return option.Option[usize].Some(index);
+            }
+        }
+        return option.Option[usize].None;
+    }
+    // Probe a few early starts before paying for the byte copy.
+    var scan_start usize = start;
+    if start < 8 && needle_points <= 8 {
+        let last_start = value_points-needle_points;
+        var index usize = start;
+        var checked usize = 0;
+        for index <= last_start && checked < 8 {
+            if value[index:index+needle_points] == needle {
+                return option.Option[usize].Some(index);
+            }
+            index += 1;
+            checked += 1;
+        }
+        scan_start = index;
+        if scan_start > last_start { return option.Option[usize].None; }
+    }
+    var word_backend = false;
+    switch __woozy_text_load8(value,0) {
+        case option.Option.Some(loaded): word_backend = true;
+        case option.Option.None: {}
+    }
+    if !word_backend {
+        for var index usize = scan_start; index <= value_points-needle_points; index += 1 {
+            if value[index:index+needle_points] == needle {
+                return option.Option[usize].Some(index);
+            }
+        }
+        return option.Option[usize].None;
+    }
+    let haystack = bytes(value);
+    let value_bytes = vec.len(haystack);
+    let needle_bytes = byte_len(needle);
+    var start_byte usize = 0;
+    if scan_start != 0 {
+        if value_points == value_bytes {
+            start_byte = scan_start;
+        } else if value_points-scan_start < scan_start {
+            start_byte = value_bytes;
+            for var index usize = value_points; index > scan_start; index -= 1 {
+                start_byte = utf8_prev(haystack,start_byte);
+            }
+        } else {
+            var offset usize = 0;
+            for var index usize = 0; index < scan_start; index += 1 {
+                offset = utf8_next(haystack,offset);
+            }
+            start_byte = offset;
+        }
+    }
+    if needle_bytes > value_bytes-start_byte {
+        return option.Option[usize].None;
+    }
+    var cursor usize = scan_start;
+    if needle_bytes == 1 {
+        let target = u8(needle[0]);
+        var offset usize = start_byte;
+        for offset < value_bytes {
+            cursor += 1;
+            let byte = haystack[offset];
+            if byte == target {
+                return option.Option[usize].Some(cursor-1);
+            }
+            offset = utf8_next(haystack,offset);
+        }
+        return option.Option[usize].None;
+    }
+    let pattern = bytes(needle);
+    let fallback = match_table(pattern);
+    var matched usize = 0;
+    for var offset usize = start_byte; offset < value_bytes; offset += 1 {
+        let byte = haystack[offset];
+        if (byte & 0xc0) != 0x80 { cursor += 1; }
+        matched = match_byte(pattern,fallback,matched,byte);
+        if matched == needle_bytes {
+            return option.Option[usize].Some(cursor-needle_points);
+        }
     }
     return option.Option[usize].None;
 }
@@ -51,6 +138,14 @@ pub func contains(value string, needle string) bool {
     }
 }
 pub func split(value string, separator string) Vec[string] {
+    if len(value) > 32 {
+        var word_backend = false;
+        switch __woozy_text_load8(value,0) {
+            case option.Option.Some(loaded): word_backend = true;
+            case option.Option.None: {}
+        }
+        if word_backend { return split_n(value,separator,~usize(0)); }
+    }
     let out = vec.empty[string]();
     if len(separator) == 0 {
         for var index usize = 0; index < len(value); index += 1 {
@@ -520,17 +615,26 @@ pub func split_n(value string, separator string, limit usize) Vec[string] {
     }
     let haystack = bytes(value);
     let haystack_bytes = vec.len(haystack);
+    let ascii = haystack_bytes == len(value);
     if separator == "" {
         var offset usize = 0;
         var pieces usize = 0;
         for offset < haystack_bytes && pieces+1 < limit {
             let next = utf8_next(haystack,offset);
-            vec.push(out,text_from_span(haystack,offset,next));
+            if ascii {
+                vec.push(out,value[offset:next]);
+            } else {
+                vec.push(out,text_from_span(haystack,offset,next));
+            }
             pieces += 1;
             offset = next;
         }
         if offset < haystack_bytes {
-            vec.push(out,text_from_span(haystack,offset,haystack_bytes));
+            if ascii {
+                vec.push(out,value[offset:haystack_bytes]);
+            } else {
+                vec.push(out,text_from_span(haystack,offset,haystack_bytes));
+            }
         }
         return out;
     }
@@ -547,13 +651,26 @@ pub func split_n(value string, separator string, limit usize) Vec[string] {
     for var offset usize = 0; offset < haystack_bytes && pieces+1 < limit; offset += 1 {
         matched = match_byte(pattern,fallback,matched,haystack[offset]);
         if matched == pattern_bytes {
-            vec.push(out,text_from_span(haystack,start,offset+1-pattern_bytes));
+            let end = offset+1-pattern_bytes;
+            if ascii {
+                vec.push(out,value[start:end]);
+            } else {
+                vec.push(out,text_from_span(haystack,start,end));
+            }
             pieces += 1;
             start = offset+1;
             matched = 0;
         }
     }
-    vec.push(out,text_from_span(haystack,start,haystack_bytes));
+    if pieces == 0 {
+        vec.push(out,value);
+        return out;
+    }
+    if ascii {
+        vec.push(out,value[start:haystack_bytes]);
+    } else {
+        vec.push(out,text_from_span(haystack,start,haystack_bytes));
+    }
     return out;
 }
 pub func split_lines(value string) Vec[string] {

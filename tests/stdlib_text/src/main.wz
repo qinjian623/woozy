@@ -15,6 +15,12 @@ func none_u(value option.Option[usize]) bool {
         case option.Option.None: return true;
     }
 }
+func same_u_option(left option.Option[usize], right option.Option[usize]) bool {
+    switch left {
+        case option.Option.Some(actual): return some_u(right,actual);
+        case option.Option.None: return none_u(right);
+    }
+}
 func some_s(value option.Option[string], expected string) bool {
     switch value {
         case option.Option.Some(actual): return actual == expected;
@@ -62,6 +68,107 @@ func check_legacy() i32 {
     let runes = text.runes("中😀");
     if vec.len(runes) != 2 || runes[0] != 0x4e2d || runes[1] != 0x1f600 {
         return 120;
+    }
+    return 0;
+}
+
+func reference_find_from(value string, needle string, start usize) option.Option[usize] {
+    let value_length = text.len(value);
+    let needle_length = text.len(needle);
+    if start > value_length || needle_length > value_length-start {
+        return option.Option[usize].None;
+    }
+    for var index usize = start; index <= value_length-needle_length; index += 1 {
+        if value[index:index+needle_length] == needle {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func reference_split(value string, separator string) Vec[string] {
+    let out = vec.empty[string]();
+    if text.len(separator) == 0 {
+        for var index usize = 0; index < text.len(value); index += 1 {
+            vec.push(out,value[index:index+1]);
+        }
+        return out;
+    }
+    var start usize = 0;
+    for true {
+        switch reference_find_from(value,separator,start) {
+            case option.Option.Some(index): {
+                vec.push(out,value[start:index]);
+                start = index+text.len(separator);
+            }
+            case option.Option.None: {
+                vec.push(out,value[start:]);
+                return out;
+            }
+        }
+    }
+}
+
+func check_find_from() i32 {
+    let values = ["", "a", "abc", "中😀é中😀", "a\0b\0c", "aaaaabaaaaab",
+        "ababab", "xxaabxx", "中a中a", "\0中\0😀\0",
+        text.repeat("a",34)+"b", text.repeat("ab",18)+"aab",
+        text.repeat("a",31)+"aaaab", text.repeat("中",30)+"😀a\0b",
+        text.repeat("x",33)+"\0\0", text.repeat("中😀",17)];
+    let needles = ["", "a", "ab", "aab", "aaaab", "abab", "中", "😀",
+        "中😀", "\0", "\0😀", "missing", "aaaaab"];
+    for value in values {
+        let value_length = text.len(value);
+        for needle in needles {
+            for var start usize = 0; start <= value_length+2; start += 1 {
+                let actual = text.find_from(value,needle,start);
+                let expected = reference_find_from(value,needle,start);
+                if !same_u_option(actual,expected) { return 1301; }
+            }
+        }
+    }
+    if !none_u(text.find_from("abc","a",4)) { return 1302; }
+    if !none_u(text.find_from("abc","",4)) { return 1303; }
+    if !some_u(text.find_from("abc","",3),3) { return 1304; }
+    if !some_u(text.find_from("","",0),0) { return 1305; }
+    if !none_u(text.find_from("","a",0)) { return 1306; }
+    if !some_u(text.find_from("中😀é中😀","😀",2),4) { return 1307; }
+    if !some_u(text.find_from("aaaaabaaaaab","aaaab",2),7) { return 1308; }
+    if !none_u(text.find_from("ababab","abab",3)) { return 1309; }
+    if !some_u(text.find_from("a\0b\0c","\0",2),3) { return 1310; }
+    if !some_u(text.find_from("中😀a","a",0),2) { return 1311; }
+    return 0;
+}
+
+func check_split_parity() i32 {
+    let values = ["", "a", "a,", ",a", "a,,b", ",", ",,", "aaaa",
+        "ababab", "中😀é中😀", "a\0b\0c", "a\0\0b\0",
+        text.repeat("ab",20), text.repeat("中😀",17)+","];
+    let separators = [",", "", "aa", "abab", "😀", "中", "\0", "missing"];
+    let unlimited = ~usize(0);
+    for value in values {
+        for separator in separators {
+            let expected_split = reference_split(value,separator);
+            let actual_split = text.split(value,separator);
+            let unlimited_split = text.split_n(value,separator,unlimited);
+            if !same_strings(actual_split,expected_split) { return 1401; }
+            if !same_strings(actual_split,unlimited_split) { return 1402; }
+        }
+    }
+    if !same_strings(text.split("",","), [""]) { return 1403; }
+    if vec.len(text.split("","")) != 0 { return 1404; }
+    if !same_strings(text.split("a,",","), ["a",""]) { return 1405; }
+    if !same_strings(text.split(",a",","), ["","a"]) { return 1406; }
+    if !same_strings(text.split("a,,b",","), ["a","","b"]) { return 1407; }
+    if !same_strings(text.split("aaaa","aa"), ["","",""]) { return 1408; }
+    if !same_strings(text.split("aaaaa","aa"), ["","","a"]) { return 1409; }
+    if !same_strings(text.split("ababab","abab"), ["","ab"]) { return 1410; }
+    if !same_strings(text.split("中😀é中😀","😀"), ["中","é中",""]) {
+        return 1411;
+    }
+    if !same_strings(text.split("a\0b\0c","\0"), ["a","b","c"]) { return 1412; }
+    if !same_strings(text.split("a\0\0b\0","\0"), ["a","","b",""]) {
+        return 1413;
     }
     return 0;
 }
@@ -492,7 +599,11 @@ func check_long_inputs() i32 {
 }
 
 func main() i32 {
-    var code = check_legacy();
+    var code = check_find_from();
+    if code != 0 { return code; }
+    code = check_split_parity();
+    if code != 0 { return code; }
+    code = check_legacy();
     if code != 0 { return code; }
     code = check_find_last();
     if code != 0 { return code; }
