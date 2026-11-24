@@ -57,6 +57,15 @@
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
     case SystemOperation::text_bytes:
       return runtime("lang_text_bytes_v1", builder.getPtrTy(), {pointer(0)});
+    case SystemOperation::unicode_text_take: {
+      auto *out = storage(lower_type(i.type));
+      start_lifetime(out);
+      runtime("lang_unicode_text_take_v1", builder.getVoidTy(),
+              {out, pointer(0), args[1], args[2]});
+      auto *loaded = builder.CreateLoad(lower_type(i.type), out);
+      end_lifetime(out);
+      return loaded;
+    }
     case SystemOperation::text_from_bytes:
     case SystemOperation::text_from_rune: {
       const auto text = type(i.type).type_args.at(0);

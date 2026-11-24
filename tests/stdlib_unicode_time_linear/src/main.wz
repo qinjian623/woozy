@@ -28,6 +28,36 @@ func owned_graphemes() Vec[string] {
     return parts;
 }
 
+func owned_cursor_graphemes() Vec[string] {
+    var source = text.repeat("é👩‍👩‍👧‍👦a\r\n",16);
+    let parts = unicode.graphemes(source);
+    source = "replaced";
+    return parts;
+}
+
+func check_cursor_graphemes() i32 {
+    // More than four clusters force the incremental cursor path. Replacing the
+    // source after the call checks that every result owns the original bytes.
+    let parts = owned_cursor_graphemes();
+    if vec.len(parts) != 64 { return 22; }
+    for var index usize = 0; index < vec.len(parts); index += 1 {
+        let remainder = index%4;
+        if remainder == 0 { if parts[index] != "é" { return 23; } }
+        else if remainder == 1 { if parts[index] != "👩‍👩‍👧‍👦" { return 24; } }
+        else if remainder == 2 { if parts[index] != "a" { return 25; } }
+        else { if parts[index] != "\r\n" { return 26; } }
+    }
+
+    // Pure ASCII keeps the direct-slice path and must stay byte-exact.
+    let ascii = text.repeat("ab",8);
+    let letters = unicode.graphemes(ascii);
+    if vec.len(letters) != 16 { return 27; }
+    for var index usize = 0; index < vec.len(letters); index += 1 {
+        if letters[index] != ascii[index:index+1] { return 28; }
+    }
+    return 0;
+}
+
 func check_unicode() i32 {
     if unicode.VERSION != "18.0.0" { return 1; }
     if !same_points(unicode.boundaries(""), [0]) { return 2; }
@@ -58,6 +88,8 @@ func check_unicode() i32 {
     if !same_strings(unicode.graphemes(mixed), ["a","\0","中","😀",accented]) { return 15; }
 
     if !same_strings(owned_graphemes(), ["a","中","😀",accented]) { return 16; }
+    let cursor_result = check_cursor_graphemes();
+    if cursor_result != 0 { return cursor_result; }
 
     // 8192 * 8 bytes = exactly 64 KiB, with one NUL and two multi-byte
     // graphemes per unit. Every result must remain an independent string.

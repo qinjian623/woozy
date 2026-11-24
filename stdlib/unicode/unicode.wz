@@ -207,9 +207,32 @@ pub func boundaries(value string) Vec[usize] { return wz_grapheme_boundaries(val
 pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-1; }
 pub func graphemes(value string) Vec[string] {
     let points = boundaries(value);
+    if vec.len(points) < 2 { return vec.empty[string](); }
+    // Keep the old O(1)-per-slice path where it is already optimal or where
+    // cursor setup would dominate: inputs with at most four clusters (the old
+    // path then performs only a handful of prefix scans), and pure ASCII.
+    var use_slices = vec.len(points) <= 5;
+    if !use_slices { use_slices = text.byte_len(value) == text.len(value); }
+    if use_slices {
+        let out = vec.empty[string]();
+        for var index usize = 1; index < vec.len(points); index += 1 {
+            vec.push(out,value[points[index-1]:points[index]]);
+        }
+        return out;
+    }
+    return graphemes_cursor(value,points);
+}
+
+// Absolute string slices rescan the prefix to find each code-point offset.
+// Keep the source as one retained owner and advance an opaque cursor by the
+// code-point width of each Wz-computed cluster instead.
+func graphemes_cursor(value string, points Vec[usize]) Vec[string] {
     let out = vec.empty[string]();
+    // The exact result length is already known from the boundary vector.
+    vec.reserve(out,vec.len(points)-1);
+    let cursor = vec.make[u64](1,0);
     for var index usize = 1; index < vec.len(points); index += 1 {
-        vec.push(out,value[points[index-1]:points[index]]);
+        vec.push(out,__woozy_unicode_text_take(value,cursor,points[index]-points[index-1]));
     }
     return out;
 }

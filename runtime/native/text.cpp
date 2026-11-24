@@ -126,6 +126,34 @@ extern "C" void lang_text_slice_v1(LangText *out, const LangText *text,
   }
   output(out, result, text);
 }
+extern "C" void lang_unicode_text_take_v1(LangText *out, const LangText *text,
+                                           LangVec *cursor, uint64_t count) noexcept {
+  if (!out || !text || !cursor) panic(10);
+  if (cursor->stride != sizeof(uint64_t) || cursor->length != 1 ||
+      cursor->initialized != 1 || !cursor->data) panic(10);
+  auto *state = static_cast<uint64_t *>(cursor->data);
+  const uint64_t start = *state;
+  LangText result{};
+  uint64_t end = start;
+  if (text->bytes == text->length) {
+    // ASCII: code-point and byte offsets coincide.
+    if (start > text->length || count > text->length - start) panic(9);
+    end = start + count;
+  } else {
+    if (start > text->bytes) panic(9);
+    for (uint64_t i = 0; i < count; ++i) {
+      if (end >= text->bytes) panic(9);
+      uint32_t rune;
+      if (!decode(text->data, text->bytes, end, rune)) panic(10);
+    }
+  }
+  if (end != start) {
+    result = {text->data + start, end - start, count, text->owner};
+    if (result.owner) lang_handle_retain_v1(result.owner);
+    *state = end;
+  }
+  output(out, result, text);
+}
 extern "C" int64_t lang_text_from_utf8_v1(LangText *out,
                                             const uint8_t *data,
                                             uint64_t bytes) noexcept {

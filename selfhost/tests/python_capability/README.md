@@ -13,7 +13,7 @@
 - `2`：`std/weak`，仍由 `weak_values` 控制；
 - `3`：其余所有操作（含 `std/os`、运行句柄、网络、进程、FFI、async），非 Native/64 时以 `E_CAPABILITY_UNAVAILABLE` / phase `type` / `system operations require the Native/64 profile` 拒绝。
 
-判定读取 typed HIR 的 `Call.kind == System`、`Call.system` 和生成表 `OperationSpec.owner`，不是按 `os_text_length` 等函数名字符串做黑名单。核对过该快照：C++ `value_system_operations` 的 57 个名称与 Wz 生成表中上述 owner 的 57 个名称完全一致，owner 集合相等。
+判定读取 typed HIR 的 `Call.kind == System`、`Call.system` 和生成表 `OperationSpec.owner`，不是按 `os_text_length` 等函数名字符串做黑名单。核对过该快照：C++ `value_system_operations` 的 58 个名称与 Wz 生成表中上述 owner 的 58 个名称完全一致，owner 集合相等。
 
 ## Fixture 与断言
 

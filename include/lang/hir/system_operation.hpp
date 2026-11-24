@@ -48,7 +48,11 @@ enum class SystemOperation : uint16_t {
   // operation number stable; the operation is owned by std/os.
   fs_stat_bytes,
   fs_flock,
-  fs_executable_path
+  fs_executable_path,
+  // Package-private code-point cursor slicing for std/unicode.graphemes.
+  // 216-227 are reserved for independent pending operations; the explicit
+  // value keeps this operation stable when those entries are appended.
+  unicode_text_take = 228
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -137,10 +141,11 @@ inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 57> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 58> value_system_operations{{
   {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
   {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
   {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
+  {SystemOperation::unicode_text_take, "__woozy_unicode_text_take", "string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},
   {SystemOperation::text_len, "__woozy_text_len", "usize", {"string"}, 1, "std/text"},
   {SystemOperation::text_byte_len, "__woozy_text_byte_len", "usize", {"string"}, 1, "std/text"},
   {SystemOperation::text_from_bytes, "__woozy_text_from_bytes", "Result[string,i32]", {"Vec[u8]"}, 1, "std/text"},

@@ -21,6 +21,13 @@ int32_t lang_text_compare_v1(const LangText *a, const LangText *b) noexcept;
 uint32_t lang_text_at_v1(const LangText *text, uint64_t index) noexcept;
 void lang_text_slice_v1(LangText *out, const LangText *text,
                         uint64_t start, uint64_t end) noexcept;
+// Package-private incremental slicing for std/unicode. cursor is a one-element
+// Vec[u64] holding an opaque backend offset (Native byte offset, Python
+// code-point offset). It advances by count code points and returns a retained
+// view of the source, like lang_text_slice_v1. A zero count returns the empty
+// string without advancing the cursor.
+void lang_unicode_text_take_v1(LangText *out, const LangText *text,
+                               LangVec *cursor, uint64_t count) noexcept;
 // Invalid UTF-8/scalars return -EINVAL and initialize out to the empty string.
 int64_t lang_text_from_bytes_v1(LangText *out, const LangVec *bytes) noexcept;
 int64_t lang_text_from_utf8_v1(LangText *out, const uint8_t *data, uint64_t bytes) noexcept;

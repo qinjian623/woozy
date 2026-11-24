@@ -643,6 +643,22 @@ func e_value_system_call(instruction nativeir.Instruction,
                     actual, inout state);
                 return option.Option[Value].Some(value);
             }
+            if operation == 228 {
+                let layout = lower_type(instruction.type_id, inout state);
+                let out = storage(layout, inout state);
+                start_lifetime(out, inout state);
+                let receiver_type = value_type(state, instruction.inputs[0]);
+                let source_address = value_address(receiver_type, args[0], inout state);
+                var actual Vec[Value] = [];
+                vec.push(actual, out);
+                vec.push(actual, source_address);
+                vec.push(actual, args[1]);
+                vec.push(actual, args[2]);
+                runtime("lang_unicode_text_take_v1", "void", actual, inout state);
+                let loaded = e_load(layout, out, inout state);
+                end_lifetime(out, inout state);
+                return option.Option[Value].Some(loaded);
+            }
             if operation == 29 {
                 let length = e_extract(args[0], 2, "i64", inout state);
                 return option.Option[Value].Some(length);

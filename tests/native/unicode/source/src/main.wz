@@ -2,6 +2,13 @@ package app;
 import "std/unicode" as unicode;
 import "std/vec" as vec;
 
+func owned_long_graphemes() Vec[string] {
+    var source = "é中😀e\u{301}👩‍👩‍👧‍👦a\r\n";
+    let parts = unicode.graphemes(source);
+    source = "replaced";
+    return parts;
+}
+
 func main() i32 {
     if unicode.VERSION != "18.0.0" { return 1; }
     let input = "\u{e9}\0\u{ac00}";
@@ -21,6 +28,15 @@ func main() i32 {
     if unicode.grapheme_count("") != 0 || vec.len(unicode.boundaries("")) != 1 ||
        vec.len(unicode.graphemes("")) != 0 { return 10; }
     if unicode.grapheme_count("\0\r\n") != 2 { return 11; }
+    let long_parts = owned_long_graphemes();
+    if vec.len(long_parts) != 7 || long_parts[0] != "é" ||
+       long_parts[1] != "中" || long_parts[2] != "😀" ||
+       long_parts[3] != "e\u{301}" || long_parts[4] != "👩‍👩‍👧‍👦" ||
+       long_parts[5] != "a" || long_parts[6] != "\r\n" { return 13; }
+    let ascii = "abcdefghijklmnop";
+    let ascii_parts = unicode.graphemes(ascii);
+    if vec.len(ascii_parts) != 16 || ascii_parts[0] != "a" ||
+       ascii_parts[15] != "p" { return 14; }
     let captured = vec.empty[string]();
     for var index i32 = 0; index < 100; index += 1 {
         vec.push(captured,unicode.nfc("e\u{301}"));

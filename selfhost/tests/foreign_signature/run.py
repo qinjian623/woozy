@@ -29,9 +29,11 @@ DEFAULT_TIMEOUT = 1800.0
 MODULES = ("model", "types", "hir", "system", "foreign", "signature")
 ORACLE_LIBS = ("liblang_hir.a", "liblang_modules.a", "liblang_frontend.a")
 # The operations added after the original 426 cases also get explicit
-# signature checks in the C++ and Wz registries.
-EXPECTED_OPERATIONS = 216
-NEW_OPERATIONS = (213, 214, 215)
+# signature checks in the C++ and Wz registries. 216-227 are reserved for
+# independent pending operations; this branch adds only explicit op 228.
+EXPECTED_OPERATION_IDS = tuple(range(216)) + (228,)
+EXPECTED_OPERATIONS = len(EXPECTED_OPERATION_IDS)
+NEW_OPERATIONS = (213, 214, 215, 228)
 
 
 def fail(message: str) -> None:
@@ -181,6 +183,8 @@ def validate_registry_entries() -> None:
               '"Result[Unit,i32]", {"i32", "i32"}, 2},'),
         215: ('{SystemOperation::fs_executable_path, "__woozy_os_executable_path", '
               '"i64", {"Vec[u8]", "usize"}, 2},'),
+        228: ('{SystemOperation::unicode_text_take, "__woozy_unicode_text_take", '
+              '"string", {"string", "Vec[u64]", "usize"}, 3, "std/unicode"},'),
     }
     expected_system = {
         213: ('OperationSpec(operation: 213, name: "__woozy_os_stat_bytes", '
@@ -192,6 +196,9 @@ def validate_registry_entries() -> None:
         215: ('OperationSpec(operation: 215, name: "__woozy_os_executable_path", '
               'result: "i64", parameters: ["Vec[u8]", "usize"], '
               'owner: "std/os", type_arity: 0)'),
+        228: ('OperationSpec(operation: 228, name: "__woozy_unicode_text_take", '
+              'result: "string", parameters: ["string", "Vec[u64]", "usize"], '
+              'owner: "std/unicode", type_arity: 0)'),
     }
     for operation in NEW_OPERATIONS:
         if expected_header[operation] not in header:
@@ -215,8 +222,8 @@ def validate_oracle(output: str) -> None:
              f"want {EXPECTED_OPERATIONS * 2}")
     operation_ids = sorted({int(line.split()[1].split(".")[1])
                             for line in operation_cases})
-    if operation_ids != list(range(EXPECTED_OPERATIONS)):
-        fail(f"oracle: operation ids are not 0..{EXPECTED_OPERATIONS - 1}: "
+    if operation_ids != list(EXPECTED_OPERATION_IDS):
+        fail(f"oracle: operation ids differ from the frozen set: "
              f"{operation_ids}")
     if f"operations {EXPECTED_OPERATIONS}" not in lines:
         fail(f"oracle: missing 'operations {EXPECTED_OPERATIONS}' line")
@@ -228,8 +235,9 @@ def validate_oracle(output: str) -> None:
                           if line.split()[1] == f"op.{operation}.none"), "")
         if not module_line.startswith(f"case op.{operation}.module ok "):
             fail(f"oracle: missing successful module case for op.{operation}")
-        if operation == 215:
-            # Its signature has no std/os type, so no module is required.
+        if operation in (215, 228):
+            # These signatures contain only builtin types, so no module is
+            # required for either spelling.
             if none_line != module_line.replace(".module ", ".none ", 1):
                 fail(f"oracle: signature changed without a module for op.{operation}")
             continue

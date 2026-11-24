@@ -47,6 +47,7 @@ pub func operations() Vec[OperationSpec] {
         OperationSpec(operation: 188, name: "__woozy_unicode_normalize", result: "string", parameters: ["string", "i32"], owner: "std/unicode", type_arity: 0),
         OperationSpec(operation: 189, name: "__woozy_unicode_casefold", result: "string", parameters: ["string"], owner: "std/unicode", type_arity: 0),
         OperationSpec(operation: 190, name: "__woozy_unicode_boundaries", result: "Vec[usize]", parameters: ["string"], owner: "std/unicode", type_arity: 0),
+        OperationSpec(operation: 228, name: "__woozy_unicode_text_take", result: "string", parameters: ["string", "Vec[u64]", "usize"], owner: "std/unicode", type_arity: 0),
         OperationSpec(operation: 29, name: "__woozy_text_len", result: "usize", parameters: ["string"], owner: "std/text", type_arity: 0),
         OperationSpec(operation: 30, name: "__woozy_text_byte_len", result: "usize", parameters: ["string"], owner: "std/text", type_arity: 0),
         OperationSpec(operation: 31, name: "__woozy_text_from_bytes", result: "Result[string,i32]", parameters: ["Vec[u8]"], owner: "std/text", type_arity: 0),

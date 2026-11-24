@@ -1717,6 +1717,18 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             return _unicode18_casefold(args[0])
         if operation == 'unicode_boundaries':
             return Vec.create(element, _unicode18_boundaries(args[0]))
+        if operation == 'unicode_text_take':
+            value, cursor, count = args
+            if len(cursor.items) != 1:
+                raise Panic('String cursor out of bounds')
+            start = cursor.items[0]
+            if count < 0:
+                raise Panic('String slice out of bounds')
+            end = start + count
+            if not 0 <= start <= end <= len(value):
+                raise Panic('String slice out of bounds')
+            cursor.items[0] = end
+            return value[start:end]
         if operation == 'text_len': return len(args[0])
         if operation == 'text_byte_len': return len(args[0].encode('utf-8'))
         if operation == 'text_from_bytes':

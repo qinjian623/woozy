@@ -91,6 +91,82 @@ void expect_boundaries(const std::string &input,
   lang_vec_release_v1(boundaries);
   drop(text);
 }
+LangVec *make_cursor() {
+  auto *cursor = lang_vec_new_v1(0, sizeof(uint64_t), nullptr, nullptr);
+  const uint64_t zero = 0;
+  lang_vec_push_v1(cursor, &zero);
+  return cursor;
+}
+
+uint64_t cursor_value(const LangVec *cursor) {
+  return *static_cast<const uint64_t *>(lang_vec_at_v1(
+      const_cast<LangVec *>(cursor), 0));
+}
+
+void expect_text_take() {
+  const std::string input = encode({0x61, 0x4e2d, 0x1f600, 0x65, 0x301});
+  auto text = make(input);
+  auto *cursor = make_cursor();
+  LangText first{}, second{}, third{}, fourth{}, zero{};
+  lang_unicode_text_take_v1(&first, &text, cursor, 1);
+  need(bytes(first) == "a" && first.length == 1 &&
+           first.owner == text.owner && cursor_value(cursor) == 1,
+       "cursor take ASCII cluster");
+  lang_unicode_text_take_v1(&second, &text, cursor, 1);
+  need(bytes(second) == encode({0x4e2d}) && second.length == 1 &&
+           second.owner == text.owner && cursor_value(cursor) == 4,
+       "cursor take three-byte cluster");
+  lang_unicode_text_take_v1(&third, &text, cursor, 1);
+  need(bytes(third) == encode({0x1f600}) && third.length == 1 &&
+           third.owner == text.owner && cursor_value(cursor) == 8,
+       "cursor take four-byte cluster");
+  lang_unicode_text_take_v1(&fourth, &text, cursor, 2);
+  need(bytes(fourth) == encode({0x65, 0x301}) && fourth.length == 2 &&
+           fourth.owner == text.owner && cursor_value(cursor) == input.size(),
+       "cursor take multi-code-point cluster");
+  lang_unicode_text_take_v1(&zero, &text, cursor, 0);
+  need(!zero.owner && !zero.bytes && !zero.length &&
+           cursor_value(cursor) == input.size(),
+       "zero take is empty and does not advance");
+  // Every non-empty take is an owning view. Dropping the source descriptor
+  // must not invalidate results that retained the same owner.
+  drop(text);
+  need(bytes(first) == "a" && bytes(fourth) == encode({0x65, 0x301}),
+       "cursor results outlive the source descriptor");
+  drop(first);
+  drop(second);
+  drop(third);
+  drop(fourth);
+  lang_vec_release_v1(cursor);
+
+  auto ascii = make("abc");
+  auto *ascii_cursor = make_cursor();
+  LangText ab{}, c{}, ascii_zero{};
+  lang_unicode_text_take_v1(&ab, &ascii, ascii_cursor, 2);
+  need(bytes(ab) == "ab" && ab.length == 2 && cursor_value(ascii_cursor) == 2,
+       "ASCII cursor take");
+  lang_unicode_text_take_v1(&c, &ascii, ascii_cursor, 1);
+  need(bytes(c) == "c" && c.length == 1 && cursor_value(ascii_cursor) == 3,
+       "ASCII cursor end");
+  lang_unicode_text_take_v1(&ascii_zero, &ascii, ascii_cursor, 0);
+  need(!ascii_zero.owner && !ascii_zero.bytes && !ascii_zero.length &&
+           cursor_value(ascii_cursor) == 3,
+       "ASCII zero take at end");
+  drop(ab);
+  drop(c);
+  drop(ascii);
+  lang_vec_release_v1(ascii_cursor);
+
+  LangText empty{};
+  auto *empty_cursor = make_cursor();
+  LangText empty_out{};
+  lang_unicode_text_take_v1(&empty_out, &empty, empty_cursor, 0);
+  need(!empty_out.owner && !empty_out.bytes && !empty_out.length &&
+           cursor_value(empty_cursor) == 0,
+       "empty zero take");
+  lang_vec_release_v1(empty_cursor);
+}
+
 } // namespace
 
 int main() {
@@ -134,6 +210,7 @@ int main() {
     expect_boundaries(std::string("A\0B", 3), {0, 1, 2, 3},
                       "embedded NUL has ordinary control boundaries");
     expect_boundaries("", {0}, "empty grapheme boundaries");
+    expect_text_take();
 
     const std::string nul_input("A\0B", 3);
     expect_normalize(nul_input, LANG_UNICODE_NFC, nul_input, 3,
