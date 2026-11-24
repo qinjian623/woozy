@@ -63,6 +63,30 @@ bool count(const uint8_t *data, uint64_t bytes, uint64_t &length) noexcept {
 uint64_t offset_for(const LangText &text, uint64_t index) noexcept {
   // Equal byte and scalar counts imply that this valid UTF-8 is ASCII.
   if (text.bytes == text.length) return index;
+  // Inputs are checked text: valid UTF-8 with an exact scalar count, so the
+  // scalars counted by length end exactly at bytes. Callers bound index by
+  // length, so a suffix end is a constant-time lookup instead of a rescan.
+  if (index == text.length) return text.bytes;
+  // Past the midpoint the shorter side is the tail, so count scalars back
+  // from the byte end instead of decoding index scalars from the front.
+  // Each step skips a scalar's continuation bytes to its leading byte.
+  if (index > text.length / 2) {
+    // Callers bound index by length; keep the step count from wrapping if a
+    // descriptor violates that precondition.
+    if (index > text.length) panic(10);
+    uint64_t remaining = text.length - index;
+    uint64_t offset = text.bytes;
+    while (remaining != 0) {
+      if (!offset) panic(10);
+      --offset;
+      while ((text.data[offset] & 0xc0) == 0x80) {
+        if (!offset) panic(10);
+        --offset;
+      }
+      --remaining;
+    }
+    return offset;
+  }
   uint64_t offset = 0;
   for (uint64_t i = 0; i < index; ++i) {
     uint32_t rune;

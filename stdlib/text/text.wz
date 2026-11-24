@@ -34,21 +34,20 @@ pub func starts_with(value string, prefix string) bool {
 pub func ends_with(value string, suffix string) bool {
     return len(suffix) <= len(value) && value[len(value)-len(suffix):] == suffix;
 }
-pub func find_from(value string, needle string, start usize) option.Option[usize] {
-    let value_points = len(value);
-    let needle_points = len(needle);
-    if start > value_points { return option.Option[usize].None; }
-    if needle_points == 0 { return option.Option[usize].Some(start); }
-    if needle_points > value_points-start { return option.Option[usize].None; }
-    // Tiny haystacks avoid the byte copy and suffix table used below.
-    if value_points <= 32 {
-        for var index usize = start; index <= value_points-needle_points; index += 1 {
-            if value[index:index+needle_points] == needle {
-                return option.Option[usize].Some(index);
-            }
+// Bounded tail match; callers bound scan_start and the remaining codepoints.
+func find_tail(value string, needle string, scan_start usize,
+    needle_points usize) option.Option[usize] {
+    let suffix = value[scan_start:];
+    let suffix_points = len(suffix);
+    for var index usize = 0; index <= suffix_points-needle_points; index += 1 {
+        if suffix[index:index+needle_points] == needle {
+            return option.Option[usize].Some(scan_start+index);
         }
-        return option.Option[usize].None;
     }
+    return option.Option[usize].None;
+}
+func find_large(value string, needle string, start usize, value_points usize,
+    needle_points usize) option.Option[usize] {
     // Probe a few early starts before paying for the byte copy.
     var scan_start usize = start;
     if start < 8 && needle_points <= 8 {
@@ -77,6 +76,9 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
             }
         }
         return option.Option[usize].None;
+    }
+    if scan_start <= value_points && value_points-scan_start <= 16 {
+        return find_tail(value,needle,scan_start,needle_points);
     }
     let haystack = bytes(value);
     let value_bytes = vec.len(haystack);
@@ -127,6 +129,23 @@ pub func find_from(value string, needle string, start usize) option.Option[usize
         }
     }
     return option.Option[usize].None;
+}
+pub func find_from(value string, needle string, start usize) option.Option[usize] {
+    let value_points = len(value);
+    let needle_points = len(needle);
+    if start > value_points { return option.Option[usize].None; }
+    if needle_points == 0 { return option.Option[usize].Some(start); }
+    if needle_points > value_points-start { return option.Option[usize].None; }
+    // Tiny haystacks avoid the byte copy and suffix table used below.
+    if value_points <= 32 {
+        for var index usize = start; index <= value_points-needle_points; index += 1 {
+            if value[index:index+needle_points] == needle {
+                return option.Option[usize].Some(index);
+            }
+        }
+        return option.Option[usize].None;
+    }
+    return find_large(value,needle,start,value_points,needle_points);
 }
 pub func find(value string, needle string) option.Option[usize] {
     return find_from(value,needle,0);
@@ -613,31 +632,43 @@ pub func split_n(value string, separator string, limit usize) Vec[string] {
         vec.push(out,value);
         return out;
     }
-    let haystack = bytes(value);
-    let haystack_bytes = vec.len(haystack);
-    let ascii = haystack_bytes == len(value);
     if separator == "" {
-        var offset usize = 0;
-        var pieces usize = 0;
-        for offset < haystack_bytes && pieces+1 < limit {
-            let next = utf8_next(haystack,offset);
-            if ascii {
-                vec.push(out,value[offset:next]);
-            } else {
-                vec.push(out,text_from_span(haystack,offset,next));
+        let value_points = len(value);
+        let value_bytes = byte_len(value);
+        var word_backend = false;
+        if value_bytes != value_points && value_bytes >= 8 {
+            switch __woozy_text_load8(value,0) {
+                case option.Option.Some(loaded): word_backend = true;
+                case option.Option.None: {}
             }
-            pieces += 1;
-            offset = next;
         }
-        if offset < haystack_bytes {
-            if ascii {
-                vec.push(out,value[offset:haystack_bytes]);
-            } else {
-                vec.push(out,text_from_span(haystack,offset,haystack_bytes));
+        var pieces usize = 0;
+        if word_backend {
+            var remaining = value;
+            for len(remaining) != 0 && pieces+1 < limit {
+                vec.push(out,remaining[0:1]);
+                remaining = remaining[1:];
+                pieces += 1;
             }
+            if len(remaining) != 0 {
+                vec.push(out,remaining);
+            }
+            return out;
+        }
+        var offset usize = 0;
+        for offset < value_points && pieces+1 < limit {
+            vec.push(out,value[offset:offset+1]);
+            pieces += 1;
+            offset += 1;
+        }
+        if offset < value_points {
+            vec.push(out,value[offset:value_points]);
         }
         return out;
     }
+    let haystack = bytes(value);
+    let haystack_bytes = vec.len(haystack);
+    let ascii = haystack_bytes == len(value);
     let pattern = bytes(separator);
     let pattern_bytes = vec.len(pattern);
     if pattern_bytes > haystack_bytes {
