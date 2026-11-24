@@ -830,6 +830,20 @@ func e_value_system_call(instruction nativeir.Instruction,
                         reference: "0"));
                 }
             }
+            if operation == 231 {
+                var actual Vec[Value] = [];
+                vec.push(actual, args[0]);
+                runtime("lang_vec_begin_v1", "i64", actual, inout state);
+                return option.Option[Value].Some(Value(type_name: "i8",
+                    reference: "0"));
+            }
+            if operation == 232 {
+                var actual Vec[Value] = [];
+                vec.push(actual, args[0]);
+                runtime("lang_vec_end_v1", "void", actual, inout state);
+                return option.Option[Value].Some(Value(type_name: "i8",
+                    reference: "0"));
+            }
             return option.Option[Value].None;
         }
     }

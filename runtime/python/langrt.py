@@ -1762,6 +1762,14 @@ def value_call(operation, args, element=None, tags=None, weak_box=False):
             return (tags['Some'], (value,)) if present else (tags['None'], ())
         if operation == 'vec_resize': return args[0].resize(args[1], args[2])
         if operation == 'vec_clear': return args[0].clear()
+        # Private std/heap active-iteration pin. Both Python emitters reach
+        # this generic dispatch by name; the owning Vec stays unchanged.
+        if operation == 'heap_pin_begin':
+            args[0].begin()
+            return None
+        if operation == 'heap_pin_end':
+            args[0].end()
+            return None
         if operation == 'vec_try_move_trivial': return False
         if operation == 'weak_empty': return Weak()
         if operation == 'weak_downgrade':

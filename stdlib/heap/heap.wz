@@ -133,9 +133,13 @@ pub func push[T](values Heap[T], value T) {
     let length = vec.len(values.items);
     let start = length - 1;
     if start == 0 { return; }
-    // Even an empty view pins the whole Vec against structural changes by
-    // the comparator through another Heap alias.
-    let pinned = slice.view(values.items, 0, 0);
+    // Pin the live backing Vec against structural changes by the comparator
+    // through another Heap alias. The private builtin only increments the
+    // active-iteration counter: the Heap parameter owns the Vec for this call,
+    // so no extra strong reference is taken. The defer re-reads the same owner
+    // at block exit; the only early return is above, before this registration.
+    __woozy_heap_pin_begin[T](values.items);
+    defer { __woozy_heap_pin_end[T](values.items); }
     var index = start;
     for index > 0 {
         let parent = (index - 1) / 2;
@@ -162,7 +166,11 @@ pub func pop[T](values Heap[T]) option.Option[T] {
             let length = vec.len(values.items);
             if length > 0 {
                 values.items[0] = value;
-                let pinned = slice.view(values.items, 0, 0);
+                // Same live-owner pin as push. This registration belongs to
+                // the non-empty branch, so the empty-pop None path never
+                // registers or ends a pin.
+                __woozy_heap_pin_begin[T](values.items);
+                defer { __woozy_heap_pin_end[T](values.items); }
                 let end = sift_down(values.items, 0, length, value, values.before);
                 if end != 0 { values.items[end] = value; }
             }
