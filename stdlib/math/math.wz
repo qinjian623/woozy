@@ -38,16 +38,16 @@ pub func fma(value0 f64, value1 f64, value2 f64) f64 { return __woozy_math_fma(v
 pub func ldexp(value0 f64, value1 i32) f64 { return __woozy_math_ldexp(value0, value1); }
 pub func frexp(value0 f64) Fraction { return __woozy_math_frexp(value0); }
 pub func isnan(value0 f64) bool {
-    let bits = __woozy_num_f64_bits(value0);
-    return (bits > 0x7ff0000000000000 && bits < 0x8000000000000000) || bits > 0xfff0000000000000;
+    let magnitude = __woozy_num_f64_bits(value0) & 0x7fffffffffffffff;
+    return magnitude > 0x7ff0000000000000;
 }
 pub func isinf(value0 f64) bool {
-    let bits = __woozy_num_f64_bits(value0);
-    return bits == 0x7ff0000000000000 || bits == 0xfff0000000000000;
+    let magnitude = __woozy_num_f64_bits(value0) & 0x7fffffffffffffff;
+    return magnitude == 0x7ff0000000000000;
 }
 pub func isfinite(value0 f64) bool {
-    let bits = __woozy_num_f64_bits(value0);
-    return bits < 0x7ff0000000000000 || (bits > 0x7fffffffffffffff && bits < 0xfff0000000000000);
+    let magnitude = __woozy_num_f64_bits(value0) & 0x7fffffffffffffff;
+    return magnitude < 0x7ff0000000000000;
 }
 pub func signbit(value0 f64) bool { return __woozy_num_f64_bits(value0) >= 0x8000000000000000; }
 pub func min(left f64, right f64) f64 { if isnan(left) { return left; } if isnan(right) { return right; } if left < right { return left; } if left == 0.0 && right == 0.0 && signbit(left) { return left; } return right; }
