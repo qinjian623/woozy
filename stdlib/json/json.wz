@@ -328,15 +328,27 @@ func key_hash(value string) u64 {
     return state;
 }
 
-func index_grow(table inout Vec[usize], members Vec[Member], count usize) {
-    let larger = vec.make[usize](vec.len(table) * 2, INDEX_EMPTY);
+// A local open-addressed slot keeps the member index and its retained key
+// hash together. Small objects still only pay for the empty table; the wider
+// slots exist only after the index is built. Growth reuses the stored hashes
+// instead of re-hashing resident keys.
+struct IndexSlot {
+    hash u64;
+    member usize;
+}
+
+func empty_slot() IndexSlot { return IndexSlot(hash: 0, member: INDEX_EMPTY); }
+
+func index_grow(table inout Vec[IndexSlot]) {
+    let larger = vec.make[IndexSlot](vec.len(table) * 2, empty_slot());
     let mask = vec.len(larger) - 1;
-    for var index usize = 0; index < count; index += 1 {
-        let key = members[index].name;
-        var slot = usize(key_hash(key)) & mask;
+    for var index usize = 0; index < vec.len(table); index += 1 {
+        let entry = table[index];
+        if entry.member == INDEX_EMPTY { continue; }
+        var slot = usize(entry.hash) & mask;
         for true {
-            if larger[slot] == INDEX_EMPTY {
-                larger[slot] = index;
+            if larger[slot].member == INDEX_EMPTY {
+                larger[slot] = entry;
                 break;
             }
             slot = (slot + 1) & mask;
@@ -345,18 +357,19 @@ func index_grow(table inout Vec[usize], members Vec[Member], count usize) {
     table = larger;
 }
 
-func index_insert(table inout Vec[usize], members Vec[Member], count inout usize, key string, member_index usize) {
+// index_insert stores a member that the caller already proved new.
+func index_insert(table inout Vec[IndexSlot], count inout usize, hash u64, member_index usize) {
     if vec.len(table) == 0 {
-        table = vec.make[usize](32, INDEX_EMPTY);
+        table = vec.make[IndexSlot](32, empty_slot());
     }
     if (count + 1) * 2 > vec.len(table) {
-        index_grow(inout table, members, count);
+        index_grow(inout table);
     }
     let mask = vec.len(table) - 1;
-    var slot = usize(key_hash(key)) & mask;
+    var slot = usize(hash) & mask;
     for true {
-        if table[slot] == INDEX_EMPTY {
-            table[slot] = member_index;
+        if table[slot].member == INDEX_EMPTY {
+            table[slot] = IndexSlot(hash: hash, member: member_index);
             count += 1;
             return;
         }
@@ -364,14 +377,27 @@ func index_insert(table inout Vec[usize], members Vec[Member], count inout usize
     }
 }
 
-func index_find(table Vec[usize], members Vec[Member], key string) usize {
-    if vec.len(table) == 0 { return INDEX_EMPTY; }
+// index_find_or_insert probes once for both outcomes. A new member is written
+// into the empty slot of that same probe, so the ordinary no-grow insertion
+// does not probe twice. Only growth re-probes; duplicate keys never grow the
+// table. A retained hash that matches still needs exact string equality, so a
+// collision cannot hide a distinct key.
+func index_find_or_insert(table inout Vec[IndexSlot], members Vec[Member], count inout usize, key string, hash u64, member_index usize) usize {
     let mask = vec.len(table) - 1;
-    var slot = usize(key_hash(key)) & mask;
+    var slot = usize(hash) & mask;
     for true {
-        let at = table[slot];
-        if at == INDEX_EMPTY { return INDEX_EMPTY; }
-        if members[at].name == key { return at; }
+        let entry = table[slot];
+        if entry.member == INDEX_EMPTY {
+            if (count + 1) * 2 > vec.len(table) {
+                index_grow(inout table);
+                index_insert(inout table, inout count, hash, member_index);
+                return INDEX_EMPTY;
+            }
+            table[slot] = IndexSlot(hash: hash, member: member_index);
+            count += 1;
+            return INDEX_EMPTY;
+        }
+        if entry.hash == hash && members[entry.member].name == key { return entry.member; }
         slot = (slot + 1) & mask;
     }
     return INDEX_EMPTY;
@@ -388,7 +414,7 @@ func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws 
         cursor += 1;
         return Value.Object(members);
     }
-    var table = vec.empty[usize]();
+    var table = vec.empty[IndexSlot]();
     var indexed_count usize = 0;
     var indexed = false;
     var parsed_members usize = 0;
@@ -406,17 +432,18 @@ func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws 
         skip_whitespace(source, inout cursor);
         let member_value = parse_value(source, inout cursor, depth + 1);
         if !indexed && parsed_members >= OBJECT_INDEX_MEMBER_THRESHOLD {
-            table = vec.make[usize](32, INDEX_EMPTY);
+            table = vec.make[IndexSlot](32, empty_slot());
             var count usize = 0;
             for var index usize = 0; index < vec.len(members); index += 1 {
-                index_insert(inout table, members, inout count, members[index].name, index);
+                index_insert(inout table, inout count, key_hash(members[index].name), index);
             }
             indexed_count = count;
             indexed = true;
         }
         var replaced = false;
         if indexed {
-            let found = index_find(table, members, name);
+            let name_hash = key_hash(name);
+            let found = index_find_or_insert(inout table, members, inout indexed_count, name, name_hash, vec.len(members));
             if found != INDEX_EMPTY {
                 members[found].value = member_value;
                 replaced = true;
@@ -431,9 +458,6 @@ func parse_object(source Vec[u8], cursor inout usize, depth usize) Value throws 
             }
         }
         if !replaced {
-            if indexed {
-                index_insert(inout table, members, inout indexed_count, name, vec.len(members));
-            }
             vec.push(members, Member(name: name, value: member_value));
         }
         skip_whitespace(source, inout cursor);

@@ -4,6 +4,7 @@ package app;
 
 import "std/json" as json;
 import "std/option" as option;
+import "std/strconv" as strconv;
 import "std/text" as text;
 import "std/vec" as vec;
 
@@ -282,6 +283,208 @@ func check_depth() i32 {
     return 0;
 }
 
+func append_member(source string, name string, value u64) string {
+    let member = "\"" + name + "\":" + strconv.format_u64(value);
+    if text.len(source) > 1 { return source + "," + member; }
+    return source + member;
+}
+
+// remember applies the documented last-value-wins/first-occurrence rule with a
+// linear scan, independent of the parser's hash index.
+func remember(order Vec[string], finals Vec[u64], name string, value u64) {
+    for var index usize = 0; index < vec.len(order); index += 1 {
+        if order[index] == name {
+            finals[index] = value;
+            return;
+        }
+    }
+    vec.push(order, name);
+    vec.push(finals, value);
+}
+
+func expected_object(order Vec[string], finals Vec[u64]) string {
+    var out = "{";
+    for var index usize = 0; index < vec.len(order); index += 1 {
+        if index != 0 { out += ","; }
+        out += "\"" + order[index] + "\":" + strconv.format_u64(finals[index]);
+    }
+    return out + "}";
+}
+
+// Duplicates cross the member threshold, the first growth and two later
+// growths. Every replacement must keep the first position and the last value.
+func check_index_duplicates() i32 {
+    var source = "{";
+    let order = vec.empty[string]();
+    let finals = vec.empty[u64]();
+    for var index usize = 0; index < 15; index += 1 {
+        let name = "k" + strconv.format_u64(u64(index));
+        source = append_member(source, name, u64(index + 1));
+        remember(order, finals, name, u64(index + 1));
+    }
+    // 16th member: turns the index on and replaces the first member.
+    source = append_member(source, "k0", 101);
+    remember(order, finals, "k0", 101);
+    // 17th and 18th are new; the latter grows a 32-slot table to 64.
+    source = append_member(source, "k15", 102);
+    remember(order, finals, "k15", 102);
+    source = append_member(source, "k16", 103);
+    remember(order, finals, "k16", 103);
+    // A duplicate after the first growth must not append or grow.
+    source = append_member(source, "k1", 104);
+    remember(order, finals, "k1", 104);
+    for var index usize = 17; index < 64; index += 1 {
+        let name = "k" + strconv.format_u64(u64(index));
+        source = append_member(source, name, u64(index + 1));
+        remember(order, finals, name, u64(index + 1));
+    }
+    // Fill the 64-slot table, then a duplicate and a new key that grows it.
+    source = append_member(source, "k32", 105);
+    remember(order, finals, "k32", 105);
+    source = append_member(source, "k64", 106);
+    remember(order, finals, "k64", 106);
+    for var index usize = 65; index < 130; index += 1 {
+        let name = "k" + strconv.format_u64(u64(index));
+        source = append_member(source, name, u64(index + 1));
+        remember(order, finals, name, u64(index + 1));
+    }
+    source = append_member(source, "k2", 107);
+    remember(order, finals, "k2", 107);
+    source = append_member(source, "k64", 108);
+    remember(order, finals, "k64", 108);
+    source = append_member(source, "k129", 109);
+    remember(order, finals, "k129", 109);
+    source = source + "}";
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != expected_object(order, finals) { return 700; }
+        switch json.field(value, "k0") {
+            case option.Option.Some(item): {
+                if json.as_u64(item) != 101 { return 701; }
+            }
+            case option.Option.None: return 702;
+        }
+        switch json.field(value, "k64") {
+            case option.Option.Some(item): {
+                if json.as_u64(item) != 108 { return 703; }
+            }
+            case option.Option.None: return 704;
+        }
+    } catch error json.Error { return 799; }
+    return 0;
+}
+
+// A large duplicate-only object must stay at three members and never append
+// replacements, including after the index has been built.
+func check_duplicate_only_object() i32 {
+    var source = "{";
+    let order = vec.empty[string]();
+    let finals = vec.empty[u64]();
+    for var index usize = 0; index < 81; index += 1 {
+        var name = "a";
+        if index % 3 == 1 { name = "b"; }
+        else if index % 3 == 2 { name = "c"; }
+        source = append_member(source, name, u64(index + 1));
+        remember(order, finals, name, u64(index + 1));
+    }
+    source = source + "}";
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != expected_object(order, finals) { return 710; }
+        if json.serialize(value) != "{\"a\":79,\"b\":80,\"c\":81}" { return 711; }
+    } catch error json.Error { return 719; }
+    return 0;
+}
+
+// Escaped and literal spellings of the same scalar become one key; the first
+// occurrence keeps its position and the later value wins.
+func check_escaped_keys() i32 {
+    let escaped = "\"\\u00e9\":1,\"é\":2,\"\\u00E9\":3,\"\\/x\":4,\"/x\":5,\"\\uD83D\\uDE00\":6,\"😀\":7,\"number\":0,\"number\":1.2300E-42}";
+    var prefix = "{";
+    for var index u64 = 0; index < 32; index += 1 {
+        prefix = append_member(prefix, "p" + strconv.format_u64(index), index);
+    }
+    let source = prefix + "," + escaped;
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != prefix + ",\"é\":3,\"/x\":5,\"😀\":7,\"number\":1.2300E-42}" { return 720; }
+        switch json.field(value, "é") {
+            case option.Option.Some(item): {
+                if json.as_u64(item) != 3 { return 721; }
+            }
+            case option.Option.None: return 722;
+        }
+        switch json.field(value, "😀") {
+            case option.Option.Some(item): {
+                if json.as_u64(item) != 7 { return 723; }
+            }
+            case option.Option.None: return 724;
+        }
+    } catch error json.Error { return 729; }
+    return 0;
+}
+
+// These keys all map to the same initial slot (and remain in one probe chain
+// through the first growth). Equal slots must still resolve by exact string
+// equality rather than by a shared hash prefix.
+func check_slot_collisions() i32 {
+    let keys = ["d13", "d36", "d68", "d79", "d115", "d268", "d552",
+        "d734", "d760", "d999", "d1098", "d1123", "d1325", "d1350",
+        "d1383", "d1396", "d1480"];
+    var source = "{";
+    let order = vec.empty[string]();
+    let finals = vec.empty[u64]();
+    for var index usize = 0; index < vec.len(keys); index += 1 {
+        source = append_member(source, keys[index], u64(index + 1));
+        remember(order, finals, keys[index], u64(index + 1));
+    }
+    source = source + "}";
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != expected_object(order, finals) { return 730; }
+        for var index usize = 0; index < vec.len(keys); index += 1 {
+            switch json.field(value, keys[index]) {
+                case option.Option.Some(item): {
+                    if json.as_u64(item) != u64(index + 1) { return 731; }
+                }
+                case option.Option.None: return 732;
+            }
+        }
+    } catch error json.Error { return 739; }
+    return 0;
+}
+
+// Enough distinct keys to force several doublings, followed by a duplicate
+// of a key from the middle of the table.
+func check_many_keys() i32 {
+    let count usize = 4096;
+    let middle usize = 2048;
+    var source = "{";
+    let order = vec.empty[string]();
+    let finals = vec.empty[u64]();
+    for var index usize = 0; index < count; index += 1 {
+        let name = "s" + strconv.format_u64(u64(index));
+        let value = u64(index) * 3 + 1;
+        source = append_member(source, name, value);
+        vec.push(order, name);
+        vec.push(finals, value);
+    }
+    source = append_member(source, "s" + strconv.format_u64(u64(middle)), 999999);
+    finals[middle] = 999999;
+    source = source + "}";
+    try {
+        let value = json.parse(source);
+        if json.serialize(value) != expected_object(order, finals) { return 740; }
+        switch json.field(value, "s" + strconv.format_u64(u64(middle))) {
+            case option.Option.Some(item): {
+                if json.as_u64(item) != 999999 { return 741; }
+            }
+            case option.Option.None: return 742;
+        }
+    } catch error json.Error { return 749; }
+    return 0;
+}
+
 func main() i32 {
     let compact = check_compact();
     if compact != 0 { return compact; }
@@ -293,5 +496,15 @@ func main() i32 {
     if conversions != 0 { return conversions; }
     let fields = check_field();
     if fields != 0 { return fields; }
+    let duplicates = check_index_duplicates();
+    if duplicates != 0 { return duplicates; }
+    let duplicate_only = check_duplicate_only_object();
+    if duplicate_only != 0 { return duplicate_only; }
+    let escaped = check_escaped_keys();
+    if escaped != 0 { return escaped; }
+    let collisions = check_slot_collisions();
+    if collisions != 0 { return collisions; }
+    let many = check_many_keys();
+    if many != 0 { return many; }
     return check_depth();
 }
