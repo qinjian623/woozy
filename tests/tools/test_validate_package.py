@@ -44,10 +44,26 @@ class PackageFileSelectionTest(unittest.TestCase):
 
 class PackageValidationTest(unittest.TestCase):
     def copy_package(self, destination):
-        package = shutil.copytree(
-            PACKAGE, destination,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "build*", "reports"))
+        def ignore(directory, names):
+            directory = Path(directory)
+            ignored = set()
+            for name in names:
+                path = directory / name
+                if name in validate_package.VCS_DIRECTORIES or name == "__pycache__":
+                    ignored.add(name)
+                elif directory == PACKAGE and name == "reports":
+                    # Only the package-root reports directory is generated;
+                    # development/reports contains tracked review documents.
+                    ignored.add(name)
+                elif validate_package.is_generated_directory(path):
+                    ignored.add(name)
+            return ignored
+
+        package = shutil.copytree(PACKAGE, destination, ignore=ignore)
         self.assertFalse((package / ".git").exists())
+        self.assertTrue((package / "tools" / "build_release.py").is_file())
+        self.assertTrue((package / "development" / "reports" /
+                         "NATIVE_STDLIB_API_REVIEW.md").is_file())
         return package
 
     def validate(self, package):

@@ -230,8 +230,8 @@
         "bad_frame_free": 0,
         "vec_new": 1,
         "vec_free": 1,
-        "vec_retain": 6,
-        "vec_release": 7
+        "vec_retain": 4,
+        "vec_release": 5
       }
     },
     {
