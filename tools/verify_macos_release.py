@@ -85,8 +85,13 @@ def verify(release, version, commit):
                 run([sys.executable, "-B", tooling / "stdlib_project_test.py", compiler,
                      manifest, mode], cwd=work, timeout=240)
         check_chat(compiler, work)
-        run([sys.executable, "-B", ROOT / "tests/native/http_server/run_http_server.py",
-             "--cli", compiler, "--out", work / "http"], cwd=work, timeout=600)
+        http_runner = ROOT / "tests/native/http_server/run_http_server.py"
+        # Allow 600 s each for the server and control builds, plus 300 s for wire tests.
+        http_timeout = 2 * 600 + 300
+        run([sys.executable, "-B", http_runner, "--cli", compiler, "--opt", "0",
+             "--out", work / "http-o0"], cwd=work, timeout=http_timeout)
+        run([sys.executable, "-B", http_runner, "--cli", compiler, "--opt", "2",
+             "--out", work / "http-o2"], cwd=work, timeout=http_timeout)
 
     print("macOS release archive passed", flush=True)
 
