@@ -2519,6 +2519,11 @@ class Emitter {
                               builder.getInt1(false)});
     } else {
       builder.SetInsertPoint(blocks[0]);
+      if (debug)
+        for (size_t s = 0; s < f.slots.size(); ++s)
+          if (const auto &slot = f.slots[s]; slot.parameter && !slot.inout)
+            debug->incoming_parameter(s, fn->getArg(*slot.parameter + parameter_offset),
+                                      blocks[0]);
     }
     for (const auto &slot : f.slots) {
       llvm::Value *storage;

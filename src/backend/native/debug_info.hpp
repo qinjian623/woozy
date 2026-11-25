@@ -254,6 +254,17 @@ public:
       local = di.createLexicalBlockFile(local, p->file, 0);
     return llvm::DILocation::get(context, p->line, p->column, local);
   }
+  void incoming_parameter(size_t slot, llvm::Value *argument,
+                          llvm::BasicBlock *block) {
+    auto it = locals.find(slot);
+    if (it == locals.end()) return;
+    auto *var = it->second;
+    // The caller's argument is live before the callee spills it to the slot.
+    // A whole-function stack declaration would expose uninitialized memory.
+    bounded_locations.insert(slot);
+    auto *loc = llvm::DILocation::get(context, var->getLine(), 0, var->getScope());
+    di.insertDbgValueIntrinsic(argument, var, di.createExpression(), loc, block);
+  }
   void declare(size_t slot, llvm::Value *storage, llvm::BasicBlock *block,
                SourceSpan source = {SourceSnapshotId{0}, 0, 0}) {
     auto it = locals.find(slot);

@@ -612,6 +612,26 @@ func debug_declare(index usize, state inout Emitter) throws Error {
     }
     state.frame.debug_slots[index].declared = true;
 }
+func debug_incoming_parameters(function nativeir.Function, source SourceFunction,
+                               parameter_offset usize, state inout Emitter) throws Error {
+    for var index usize = 0; index < vec.len(state.frame.debug_slots); index += 1 {
+        let debug = state.frame.debug_slots[index];
+        let slot = function.slots[debug.slot];
+        if !slot.is_inout && debug.variable != "" && debug.location != "" {
+            switch slot.parameter {
+                case option.Option.Some(parameter_index): {
+                    // Describe the argument until the stack slot is initialized.
+                    let argument = parameter(state, source.text_index,
+                        usize(parameter_index) + parameter_offset);
+                    append("#dbg_value(" + typed(argument) + ", " + debug.variable +
+                        ", !DIExpression(), " + debug.location + ")", inout state);
+                    state.frame.debug_slots[index].dynamic_storage = true;
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+}
 func debug_parameters(state inout Emitter) throws Error {
     for var index usize = 0; index < vec.len(state.frame.debug_slots); index += 1 {
         if state.frame.debug_slots[index].parameter { debug_declare(index, inout state); }

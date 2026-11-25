@@ -496,6 +496,9 @@ func emit_function(native_index usize, state inout Emitter) throws Error {
     if !is_async {
         let first = state.frame.blocks[0];
         position(first, inout state);
+        if state.options.debug_info {
+            debug_incoming_parameters(function, source, parameter_offset, inout state);
+        }
     }
     b_declare_slots(function, source, parameter_offset, inout state);
     if capturing {
