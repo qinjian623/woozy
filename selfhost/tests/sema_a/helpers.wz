@@ -18,7 +18,8 @@ import "std/text" as text;
 import "std/vec" as vec;
 
 func a_test_empty_checker(module hir.HirModule) Checker {
-    return Checker(m:module,occurrences:[],definitions:[],signatures:[],trait_signature_context:[],
+    return Checker(m:module,selected_body_module:option.Option[usize].None,selected_templates:[],
+        occurrences:[],definitions:[],signatures:[],trait_signature_context:[],
         parameters:[],locals:[],constants:[],evaluating:[],function:0,scope:0,cleanup_depth:0,
         async_function:false,current_result:0,current_async_error:option.Option[usize].None,
         unsafe_depth:0,c_named_types:[],unit:0,boolean:0,i64_type:0,loops:[],break_targets:[],

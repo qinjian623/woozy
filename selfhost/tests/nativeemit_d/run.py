@@ -224,8 +224,11 @@ def command_allow(label, argv, expected=0, timeout=None):
 def copy_package(source_root, project, package):
     target = project / 'src/wzcc' / package
     target.mkdir(parents=True, exist_ok=True)
-    for source in sorted((source_root / package).glob('*.wz')):
-        shutil.copy2(source, target / source.name)
+    for source in sorted((source_root / package).rglob('*.wz')):
+        relative = source.relative_to(source_root / package)
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 def build_base_project(label):
     project = WORK / ('project-' + label)

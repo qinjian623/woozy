@@ -121,6 +121,7 @@ func b_empty_checker_value() Checker {
     let resolved = model.ResolvedProject(project: model.empty_project(),
         symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
     return Checker(m: hir_empty_module_for_test(resolved),
+        selected_body_module: option.Option[usize].None, selected_templates: [],
         occurrences: [], definitions: [], signatures: [],
         trait_signature_context: [], parameters: [], locals: [], constants: [],
         evaluating: [], function: 0, scope: 0, cleanup_depth: 0,

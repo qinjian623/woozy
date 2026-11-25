@@ -108,7 +108,7 @@ func foreign_property_decl(id usize, identity string,
         json_pointer: "", identity: identity, module: "demo", name: "size",
         host_attribute: [],
         detail: model.ForeignDetail.Property(model.BindingProperty(
-            owner_type: "demo.Point", name: identity, type_name: type_name,
+            owner_type: "demo.Point", name: "size", type_name: type_name,
             getter: ["size"], setter: [], error_type: "lang.py.Error")),
         stable_identity: identity);
 }
