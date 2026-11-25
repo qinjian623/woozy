@@ -44,7 +44,8 @@ jobs:
             -DLANG_ENABLE_LLVM=ON "-DLLVM_DIR=$llvm/lib/cmake/llvm" \
             "-DCMAKE_C_COMPILER=$llvm/bin/clang" "-DCMAKE_CXX_COMPILER=$llvm/bin/clang++" \
             "-Dzstd_STATIC_LIBRARY=/usr/lib/$(gcc -print-multiarch)/libzstd.a"
-          cmake --build "$seed" --target woozyc --parallel 2
+          cmake --build "$seed" --parallel 2 --target woozyc \
+            lang_stdlib_fs_at_runtime_test lang_stdlib_fs_copy_runtime_test
           python3.12 -B tools/validate_package.py
           ctest --test-dir "$seed" --output-on-failure -R '^(tooling\.(release_archive|editor_cli)|stdlib\.)'
           "$seed/woozyc" build --project selfhost/lang.toml --package-objects --opt 0 \
