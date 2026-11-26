@@ -1,0 +1,371 @@
+package debug;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "std/map" as map;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Linux x86_64 lang-native-scalars/1 and lang-native-values/1 descriptions.
+// Only metadata is written here. In particular, no call to lower_type (whose
+// named-type cache cannot be entered through recursive reference fields).
+//
+// Scalar/nominal IDs share DebugState.types. Reserve each non-scalar metadata
+// ID before following its children, then fill it in; Vec[Node], Slice[Node]
+// and function fields can consequently refer back to Node without new state.
+
+
+struct DebugTypeLayout {
+    pub known bool;
+    pub size usize;
+    pub alignment usize;
+    pub offsets Vec[usize];
+}
+func debug_layout_value(size usize, alignment usize) DebugTypeLayout {
+    return DebugTypeLayout(known: true, size: size, alignment: alignment, offsets: []);
+}
+func debug_layout_unknown() DebugTypeLayout {
+    return DebugTypeLayout(known: false, size: 0, alignment: 1, offsets: []);
+}
+func debug_align(value usize, alignment usize) usize {
+    return value + (alignment - value % alignment) % alignment;
+}
+// These are LLVM allocation sizes, including internal and tail padding. The
+// fixed DATA_LAYOUT gives i1 an 8-bit allocation and all pointers 64 bits.
+// nativelayout supplies substituted fields in precisely b_struct_body order.
+// Reference types are leaves here: their pointee size never changes storage.
+func debug_fields_layout(fields Vec[hir.FieldDecl], depth usize,
+                         state inout emitcore.Emitter) DebugTypeLayout throws emitcore.Error {
+    var result = debug_layout_value(0, 1);
+    for field in fields {
+        let child = debug_storage_layout(field.type_id, depth + 1, inout state);
+        if !child.known { return debug_layout_unknown(); }
+        result.size = debug_align(result.size, child.alignment);
+        vec.push(result.offsets, result.size);
+        result.size += child.size;
+        if child.alignment > result.alignment { result.alignment = child.alignment; }
+    }
+    result.size = debug_align(result.size, result.alignment);
+    return result;
+}
+func debug_storage_layout(type_id usize, depth usize,
+                          state inout emitcore.Emitter) DebugTypeLayout throws emitcore.Error {
+    if depth > 128 { return debug_layout_unknown(); }
+    let value = emitcore.type_of(state, type_id);
+    switch value.kind {
+        case model.TypeKind.Unit: return debug_layout_value(1, 1);
+        case model.TypeKind.Bool: return debug_layout_value(1, 1);
+        case model.TypeKind.SignedInt: {
+            let bytes = usize(value.bits) / 8;
+            if bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8 {
+                return debug_layout_value(bytes, bytes);
+            }
+        }
+        case model.TypeKind.UnsignedInt: {
+            let bytes = usize(value.bits) / 8;
+            if bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8 {
+                return debug_layout_value(bytes, bytes);
+            }
+        }
+        case model.TypeKind.Float: {
+            if value.bits == 32 { return debug_layout_value(4, 4); }
+            if value.bits == 64 { return debug_layout_value(8, 8); }
+        }
+        case model.TypeKind.Isize: return debug_layout_value(8, 8);
+        case model.TypeKind.Usize: return debug_layout_value(8, 8);
+        case model.TypeKind.String: return debug_layout_value(32, 8);
+        case model.TypeKind.Function: return debug_layout_value(16, 8);
+        case model.TypeKind.Weak: return debug_layout_value(16, 8);
+        case model.TypeKind.TraitObject: return debug_layout_value(16, 8);
+        case model.TypeKind.Slice: return debug_layout_value(24, 8);
+        case model.TypeKind.Vec: return debug_layout_value(8, 8);
+        case model.TypeKind.ThreadHandle: return debug_layout_value(8, 8);
+        case model.TypeKind.MutexHandle: return debug_layout_value(8, 8);
+        case model.TypeKind.CondvarHandle: return debug_layout_value(8, 8);
+        case model.TypeKind.AtomicI64Handle: return debug_layout_value(8, 8);
+        case model.TypeKind.IpcHandle: return debug_layout_value(8, 8);
+        case model.TypeKind.Task: return debug_layout_value(8, 8);
+        case model.TypeKind.NominalStruct: {
+            let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None, inout state);
+            return debug_fields_layout(fields, depth, inout state);
+        }
+        case model.TypeKind.NominalEnum: {
+            // b_enum_body is {i32, payload_0, payload_1, ...}, NOT a union.
+            // Each variant has its own padded struct and its own byte offset.
+            var result = debug_layout_value(4, 4);
+            let declaration = emitcore.aggregate_declaration(state, type_id);
+            for variant in declaration.variants {
+                let fields = emitcore.aggregate_fields(type_id,
+                    option.Option[usize].Some(variant.symbol), inout state);
+                let child = debug_fields_layout(fields, depth + 1, inout state);
+                if !child.known { return debug_layout_unknown(); }
+                result.size = debug_align(result.size, child.alignment);
+                vec.push(result.offsets, result.size);
+                result.size += child.size;
+                if child.alignment > result.alignment { result.alignment = child.alignment; }
+            }
+            result.size = debug_align(result.size, result.alignment);
+            return result;
+        }
+        default: {}
+    }
+    // FFI record sizes come from their C descriptors, not Woozy nominals.
+    // Leave them explicitly unavailable until those descriptors are modeled.
+    return debug_layout_unknown();
+}
+func debug_type_name(type_id usize, state emitcore.Emitter) string throws emitcore.Error {
+    let value = emitcore.type_of(state, type_id);
+    var prefix = "";
+    switch value.kind {
+        case model.TypeKind.Task: prefix = "Task";
+        case model.TypeKind.Vec: prefix = "Vec";
+        case model.TypeKind.Slice: prefix = "Slice";
+        case model.TypeKind.Weak: prefix = "Weak";
+        case model.TypeKind.NominalStruct: prefix = state.input.hir.resolved.symbols[value.declaration].name;
+        case model.TypeKind.NominalEnum: prefix = state.input.hir.resolved.symbols[value.declaration].name;
+        case model.TypeKind.TraitObject: prefix = "dyn " + state.input.hir.resolved.symbols[value.declaration].name;
+        case model.TypeKind.Function: {
+            let parameters = vec.empty[string]();
+            for parameter in value.parameters {
+                var mode = "";
+                switch parameter.mode {
+                    case model.ParamMode.Inout: mode = "inout ";
+                    case model.ParamMode.Move: mode = "move ";
+                    default: {}
+                }
+                vec.push(parameters, mode + debug_type_name(parameter.type_id, state));
+            }
+            var name = "func(" + text.join(parameters, ", ") + ") " + debug_type_name(value.result, state);
+            switch value.throws_type {
+                case option.Option.Some(error): name += " throws " + debug_type_name(error, state);
+                case option.Option.None: {}
+            }
+            return name;
+        }
+        case model.TypeKind.Unit: return "Unit";
+        case model.TypeKind.TypeParameter: return "<uninstantiated type>";
+        case model.TypeKind.Error: return "<error type>";
+        case model.TypeKind.CForeignPointer: return "<C pointer>";
+        case model.TypeKind.CForeignBuffer: return "<C buffer>";
+        case model.TypeKind.CForeignRecord: return "<C record>";
+        case model.TypeKind.CForeignResource: return "<C resource>";
+        case model.TypeKind.CForeignCallback: return "<C callback>";
+        case model.TypeKind.CForeignOpaque: return "<C opaque>";
+        case model.TypeKind.ForeignOpaque: return "<foreign opaque>";
+        case model.TypeKind.ForeignCallable: return "<foreign callable>";
+        default: return emitcore.type_key(state, type_id);
+    }
+    if vec.len(value.type_args) != 0 {
+        let args = vec.empty[string]();
+        for arg in value.type_args { vec.push(args, debug_type_name(arg, state)); }
+        prefix += "[" + text.join(args, ", ") + "]";
+    }
+    return prefix;
+}
+func debug_type_list(members Vec[string], state inout emitcore.Emitter) string {
+    return emitcore.debug_node("!{" + text.join(members, ", ") + "}", inout state);
+}
+func debug_type_basic(name string, bits usize, encoding string,
+                      state inout emitcore.Emitter) string throws emitcore.Error {
+    return emitcore.debug_node("!DIBasicType(name: " + emitcore.debug_quote(name) + ", size: " +
+        emitcore.number(bits) + ", encoding: " + encoding + ")", inout state);
+}
+func debug_type_pointer(base string, state inout emitcore.Emitter) string {
+    return emitcore.debug_node("!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " +
+        base + ", size: 64, align: 64)", inout state);
+}
+func debug_type_member(scope string, name string, base string, size usize,
+                       alignment usize, offset usize,
+                       state inout emitcore.Emitter) string throws emitcore.Error {
+    return emitcore.debug_node("!DIDerivedType(tag: DW_TAG_member, name: " + emitcore.debug_quote(name) +
+        ", scope: " + scope + ", baseType: " + base + ", size: " + emitcore.number(size * 8) +
+        ", align: " + emitcore.number(alignment * 8) + ", offset: " + emitcore.number(offset * 8) + ")", inout state);
+}
+func debug_type_record(name string, layout DebugTypeLayout, members Vec[string],
+                       state inout emitcore.Emitter) string throws emitcore.Error {
+    return "distinct !DICompositeType(tag: DW_TAG_structure_type, name: " + emitcore.debug_quote(name) +
+        ", size: " + emitcore.number(layout.size * 8) + ", align: " + emitcore.number(layout.alignment * 8) +
+        ", elements: " + debug_type_list(members, inout state) + ")";
+}
+func debug_type_fields(scope string, fields Vec[hir.FieldDecl], layout DebugTypeLayout,
+                       state inout emitcore.Emitter) Vec[string] throws emitcore.Error {
+    let members = vec.empty[string]();
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        let field = fields[index];
+        let storage = debug_storage_layout(field.type_id, 0, inout state);
+        let base = debug_type_storage(field.type_id, inout state);
+        let name = state.input.hir.resolved.symbols[field.symbol].name;
+        vec.push(members, debug_type_member(scope, name, base, storage.size,
+            storage.alignment, layout.offsets[index], inout state));
+    }
+    return members;
+}
+func debug_type_storage(type_id usize, state inout emitcore.Emitter) string throws emitcore.Error {
+    let value = emitcore.type_of(state, type_id);
+    // Unit is void in a source signature, but an i8 when actually stored as a
+    // field or a Vec element. Do not put DWARF void in a real storage member.
+    switch value.kind {
+        case model.TypeKind.Unit: return debug_type_basic("Unit", 8, "DW_ATE_unsigned", inout state);
+        default: return debug_type(type_id, inout state);
+    }
+}
+func debug_type_enum(scope string, name string, type_id usize, layout DebugTypeLayout,
+                     state inout emitcore.Emitter) string throws emitcore.Error {
+    let declaration = emitcore.aggregate_declaration(state, type_id);
+    let tag_type = debug_type_basic(name + ".tag", 32, "DW_ATE_unsigned", inout state);
+    let tag = debug_type_member(scope, "tag", tag_type, 4, 4, 0, inout state);
+    let part_index = vec.len(state.metadata);
+    let part = emitcore.debug_node("!{}", inout state);
+    let variants = vec.empty[string]();
+    for var index usize = 0; index < vec.len(declaration.variants); index += 1 {
+        let variant = declaration.variants[index];
+        let fields = emitcore.aggregate_fields(type_id,
+            option.Option[usize].Some(variant.symbol), inout state);
+        let payload_layout = debug_fields_layout(fields, 0, inout state);
+        let payload_index = vec.len(state.metadata);
+        let payload = emitcore.debug_node("!{}", inout state);
+        let variant_name = state.input.hir.resolved.symbols[variant.symbol].name;
+        let fields_meta = debug_type_fields(payload, fields, payload_layout, inout state);
+        let payload_body = debug_type_record(name + "." + variant_name,
+            payload_layout, fields_meta, inout state);
+        state.metadata[payload_index].body = payload_body;
+        // LLVM lowers this member to DW_TAG_variant with DW_AT_discr_value.
+        // GDB can then read ONLY the selected payload. The other payload slots
+        // may contain uninitialized bytes and must never be ordinary members.
+        vec.push(variants, emitcore.debug_node("!DIDerivedType(tag: DW_TAG_member, name: " +
+            emitcore.debug_quote(variant_name) + ", scope: " + part + ", baseType: " + payload +
+            ", size: " + emitcore.number(payload_layout.size * 8) + ", align: " +
+            emitcore.number(payload_layout.alignment * 8) + ", offset: " + emitcore.number(layout.offsets[index] * 8) +
+            ", extraData: i32 " + emitcore.number(index) + ")", inout state));
+    }
+    let elements = debug_type_list(variants, inout state);
+    state.metadata[part_index].body = "!DICompositeType(tag: DW_TAG_variant_part, scope: " +
+        scope + ", size: " + emitcore.number(layout.size * 8) + ", align: " +
+        emitcore.number(layout.alignment * 8) + ", discriminator: " + tag + ", elements: " + elements + ")";
+    return debug_type_record(name, layout, [tag, part], inout state);
+}
+// Field names below follow runtime/native/{vec,slice,text,weak}.hpp exactly.
+// Printers: Vec[T] is a pointer to this typed descriptor; data is T*, length
+// is the live element count. Slice[T] has owner/start/length; its element i is
+// owner.data[start+i], not a fabricated inline data pointer. string.data is
+// UTF-8, bytes is its byte count, length is its Unicode scalar count; NUL is
+// allowed. No artificial len alias is added to either descriptor.
+func debug_type_vec_body(scope string, element usize,
+                         state inout emitcore.Emitter) string throws emitcore.Error {
+    let name = "Vec[" + debug_type_name(element, state) + "]";
+    var element_type = debug_type_storage(element, inout state);
+    let element_layout = debug_storage_layout(element, 0, inout state);
+    if element_layout.known && element_layout.size == 0 {
+        // stride() uses one i8 for an empty aggregate. Preserve one-byte
+        // pointer arithmetic in GDB while retaining the source element name.
+        let element_name = debug_type_name(element, state);
+        let padded = debug_type_record(element_name, debug_layout_value(1, 1), [], inout state);
+        element_type = emitcore.debug_node(padded, inout state);
+    }
+    let data = debug_type_pointer(element_type, inout state);
+    let word = debug_type_basic("u64", 64, "DW_ATE_unsigned", inout state);
+    let opaque = debug_type_pointer("null", inout state);
+    let members = vec.empty[string]();
+    let names = ["refs", "length", "initialized", "stride", "iterations", "data", "copy", "drop", "capacity", "weak_control"];
+    for var index usize = 0; index < vec.len(names); index += 1 {
+        var base = word;
+        if index == 5 { base = data; }
+        if index == 6 || index == 7 || index == 9 { base = opaque; }
+        vec.push(members, debug_type_member(scope, names[index], base, 8, 8, index * 8, inout state));
+    }
+    return debug_type_record(name, debug_layout_value(80, 8), members, inout state);
+}
+func debug_type(type_id usize, state inout emitcore.Emitter) string throws emitcore.Error {
+    let value = emitcore.type_of(state, type_id);
+    switch value.kind { case model.TypeKind.Unit: return "null"; default: {} }
+    let debug = emitcore.debug_context(state);
+    switch map.get(debug.types, type_id) {
+        case option.Option.Some(found): return found;
+        case option.Option.None: {}
+    }
+    let scalar = debug_scalar(type_id, inout state);
+    if scalar != "" { return scalar; }
+    let index = vec.len(state.metadata);
+    let result = emitcore.debug_node("!{}", inout state);
+    let ignored = map.insert(debug.types, type_id, result);
+    let name = debug_type_name(type_id, state);
+    let layout = debug_storage_layout(type_id, 0, inout state);
+    var body = "!DIBasicType(tag: DW_TAG_unspecified_type, name: " +
+        emitcore.debug_quote(name + " <layout unavailable>") + ")";
+    if layout.known {
+        switch value.kind {
+            case model.TypeKind.NominalStruct: {
+                let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None, inout state);
+                let members = debug_type_fields(result, fields, layout, inout state);
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            case model.TypeKind.NominalEnum: body = debug_type_enum(result, name, type_id, layout, inout state);
+            case model.TypeKind.Vec: {
+                let descriptor_index = vec.len(state.metadata);
+                let descriptor = emitcore.debug_node("!{}", inout state);
+                let descriptor_body = debug_type_vec_body(descriptor,
+                    emitcore.b_type_arg(value, 0), inout state);
+                state.metadata[descriptor_index].body = descriptor_body;
+                body = "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + descriptor + ", size: 64, align: 64)";
+            }
+            case model.TypeKind.Slice: {
+                let descriptor_index = vec.len(state.metadata);
+                let descriptor = emitcore.debug_node("!{}", inout state);
+                let descriptor_body = debug_type_vec_body(descriptor,
+                    emitcore.b_type_arg(value, 0), inout state);
+                state.metadata[descriptor_index].body = descriptor_body;
+                let owner = debug_type_pointer(descriptor, inout state);
+                let word = debug_type_basic("u64", 64, "DW_ATE_unsigned", inout state);
+                let members = [debug_type_member(result, "owner", owner, 8, 8, 0, inout state),
+                    debug_type_member(result, "start", word, 8, 8, 8, inout state),
+                    debug_type_member(result, "length", word, 8, 8, 16, inout state)];
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            case model.TypeKind.String: {
+                let byte = debug_type_basic("u8", 8, "DW_ATE_unsigned", inout state);
+                let data = debug_type_pointer(byte, inout state);
+                let word = debug_type_basic("u64", 64, "DW_ATE_unsigned", inout state);
+                let opaque = debug_type_pointer("null", inout state);
+                let members = [debug_type_member(result, "data", data, 8, 8, 0, inout state),
+                    debug_type_member(result, "bytes", word, 8, 8, 8, inout state),
+                    debug_type_member(result, "length", word, 8, 8, 16, inout state),
+                    debug_type_member(result, "owner", opaque, 8, 8, 24, inout state)];
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            case model.TypeKind.Function: {
+                // code is an env-first thunk, possibly with typed-error output
+                // pointers. Do not label it as the source callable signature.
+                let opaque = debug_type_pointer("null", inout state);
+                let members = [debug_type_member(result, "code", opaque, 8, 8, 0, inout state),
+                    debug_type_member(result, "env", opaque, 8, 8, 8, inout state)];
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            case model.TypeKind.Weak: {
+                // Expose control/code addresses without following target: its
+                // lifetime can end independently, and it is not a strong T*.
+                let opaque = debug_type_pointer("null", inout state);
+                let members = [debug_type_member(result, "control", opaque, 8, 8, 0, inout state),
+                    debug_type_member(result, "code", opaque, 8, 8, 8, inout state)];
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            case model.TypeKind.TraitObject: {
+                let opaque = debug_type_pointer("null", inout state);
+                let members = [debug_type_member(result, "data", opaque, 8, 8, 0, inout state),
+                    debug_type_member(result, "vtable", opaque, 8, 8, 8, inout state)];
+                body = debug_type_record(name, layout, members, inout state);
+            }
+            default: {
+                // Runtime handles and Task promises are pointer values. Their
+                // target-specific tail/frame is unavailable, not an invented
+                // full LangHandle or a source-level result value.
+                let target = emitcore.debug_node("!DICompositeType(tag: DW_TAG_structure_type, name: " +
+                    emitcore.debug_quote(name + " <runtime opaque>") + ", flags: DIFlagFwdDecl)", inout state);
+                body = "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + target + ", size: 64, align: 64)";
+            }
+        }
+    }
+    state.metadata[index].body = body;
+    return result;
+}

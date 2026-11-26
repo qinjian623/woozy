@@ -1,5 +1,6 @@
 // CPP check.cpp:6799-6898. Public phase forwarding does not grant HIR trust.
 package sema;
+import "app/wzcc/sema/core" as semacore;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/frontcache" as frontcache;
@@ -58,15 +59,15 @@ func check_internal(message string) hir.HirResult {
     return result;
 }
 
-func check_error(error Error) hir.HirResult {
+func check_error(error semacore.Error) hir.HirResult {
     switch error {
-        case Error.Rejected(diagnostic, failure): {
+        case semacore.Error.Rejected(diagnostic, failure): {
             var result = check_empty_result();
             result.failure = failure;
             result.diagnostics = check_copy_diagnostics([diagnostic]);
             return result;
         }
-        case Error.Support(support): {
+        case semacore.Error.Support(support): {
             switch support {
                 case model.SupportError.Invalid(message): return check_internal(message);
                 case model.SupportError.Limit(message): return check_internal(message);
@@ -92,9 +93,9 @@ func check_native(backend model.Backend) bool {
 }
 
 func check_config(project model.Project, supplied option.Option[model.CheckConfig])
-    model.CheckConfig throws Error {
+    model.CheckConfig throws semacore.Error {
     if project.backend != "native" && project.backend != "python" {
-        throw internal_error("invalid project backend");
+        throw semacore.internal_error("invalid project backend");
     }
     var backend = model.Backend.Native;
     if project.backend == "python" { backend = model.Backend.Python; }
@@ -103,13 +104,13 @@ func check_config(project model.Project, supplied option.Option[model.CheckConfi
         case option.Option.Some(value): {
             if check_native(value.backend) != check_native(config.backend) ||
                value.word_bits != config.word_bits {
-                throw internal_error("CheckConfig does not match Project target");
+                throw semacore.internal_error("CheckConfig does not match Project target");
             }
         }
         case option.Option.None: {}
     }
     if config.word_bits != 32 && config.word_bits != 64 {
-        throw internal_error("target word_bits must be 32 or 64");
+        throw semacore.internal_error("target word_bits must be 32 or 64");
     }
     return config;
 }
@@ -131,7 +132,7 @@ func check_types_unverified_cached(input model.ResolveResult,
                 cancelled.state = model.PhaseState.Cancelled;
                 return cancelled;
             }
-            return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+            return check_error(semacore.Error.Rejected(diagnostic: ownership.diagnostics[0],
                 failure: ownership.failure));
         }
         var result = check_empty_result();
@@ -141,7 +142,7 @@ func check_types_unverified_cached(input model.ResolveResult,
         result.has_value = true;
         result.value = checker.m;
         return result;
-    } catch error Error { return check_error(error); }
+    } catch error semacore.Error { return check_error(error); }
 }
 
 func check_types_package_cached(input model.ResolveResult,
@@ -158,7 +159,7 @@ func check_types_package_cached(input model.ResolveResult,
                 cancelled.state = model.PhaseState.Cancelled;
                 return cancelled;
             }
-            return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+            return check_error(semacore.Error.Rejected(diagnostic: ownership.diagnostics[0],
                 failure: ownership.failure));
         }
         var result = check_empty_result();
@@ -168,7 +169,7 @@ func check_types_package_cached(input model.ResolveResult,
         result.has_value = true;
         result.value = checker.m;
         return result;
-    } catch error Error { return check_error(error); }
+    } catch error semacore.Error { return check_error(error); }
 }
 
 pub func check_types(input model.ResolveResult,
@@ -255,17 +256,17 @@ func check_types_package_templates(input model.ResolveResult,
         var checker = make_checker(input.value, actual_config);
         let ownership = run_checker_templates(inout checker, cache, package_id, templates);
         return package_body_result(checker, ownership);
-    } catch error Error { return check_error(error); }
+    } catch error semacore.Error { return check_error(error); }
 }
 
-func package_body_result(checker Checker, ownership model.UnitResult) hir.HirResult {
+func package_body_result(checker semacore.Checker, ownership model.UnitResult) hir.HirResult {
     if !check_success(ownership.state, ownership.has_value, ownership.diagnostics) {
         if vec.len(ownership.diagnostics) == 0 {
             var cancelled = check_empty_result();
             cancelled.state = model.PhaseState.Cancelled;
             return cancelled;
         }
-        return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+        return check_error(semacore.Error.Rejected(diagnostic: ownership.diagnostics[0],
             failure: ownership.failure));
     }
     var result = check_empty_result();
@@ -278,7 +279,7 @@ func package_body_result(checker Checker, ownership model.UnitResult) hir.HirRes
 }
 
 pub struct PreparedPackages {
-    checker Checker;
+    checker semacore.Checker;
     function_count usize;
     entry option.Option[usize];
 }
@@ -312,7 +313,7 @@ pub func prepare_packages(input model.ResolveResult,
         }
         return option.Option[PreparedPackages].Some(
             PreparedPackages(checker: checker, function_count: count, entry: entry));
-    } catch error Error { return option.Option[PreparedPackages].None; }
+    } catch error semacore.Error { return option.Option[PreparedPackages].None; }
 }
 
 pub func check_prepared_package(prepared PreparedPackages, mode hirverify.VerifyMode,
@@ -324,7 +325,7 @@ pub func check_prepared_package(prepared PreparedPackages, mode hirverify.Verify
 func check_prepared_types(prepared PreparedPackages, cache frontcache.Context,
     package_id usize) hir.HirResult {
     try {
-        var checker = clone_checker(prepared.checker);
+        var checker = semacore.clone_checker(prepared.checker);
         let input = model.ResolveResult(state: model.PhaseState.Complete,
             failure: model.FailureKind.Internal, diagnostics: [], has_value: true,
             value: checker.m.resolved);
@@ -332,7 +333,7 @@ func check_prepared_types(prepared PreparedPackages, cache frontcache.Context,
         let ownership = run_checker_bodies(inout checker, cache,
             option.Option[usize].Some(package_id), templates);
         return package_body_result(checker, ownership);
-    } catch error Error { return check_error(error); }
+    } catch error semacore.Error { return check_error(error); }
 }
 
 pub func check_project_package_templates(input model.ResolveResult,

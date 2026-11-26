@@ -7,6 +7,9 @@
 // and linked against the published native runtime by run.py.  Nothing here
 // constructs a VerifiedModule or calls a classifier/verifier stub.
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/systemops" as emitsystem;
+import "app/wzcc/nativeemit/values" as emitvalues;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -88,20 +91,20 @@ func branch_param(mode model.ParamMode, type_id usize) model.ParameterType {
     return model.ParameterType(mode: mode, type_id: type_id);
 }
 
-func branch_intern(value model.Type, ctx inout types.Context) usize throws Error {
+func branch_intern(value model.Type, ctx inout types.Context) usize throws emitcore.Error {
     try { return types.intern(inout ctx, value); }
     catch error types.Error { throw c_driver_bad("branch type interning failed"); }
 }
 
 func branch_function_type(parameters Vec[model.ParameterType], result usize,
-                          ctx inout types.Context) usize throws Error {
+                          ctx inout types.Context) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Function);
     value.parameters = parameters;
     value.result = result;
     return branch_intern(value, inout ctx);
 }
 
-func branch_setup() BranchFixture throws Error {
+func branch_setup() BranchFixture throws emitcore.Error {
     var project = model.empty_project();
     project.package_name = "nativeemit_c_branch";
     project.modules = [
@@ -129,7 +132,7 @@ func branch_setup() BranchFixture throws Error {
     symbols[B_METHOD] = branch_symbol(B_METHOD, "call",
         model.SymbolKind.Trait, 0);
     for symbol in [B_FN, B_ORD, B_MOVE, B_DYN, B_ENTRY, B_CAPTURE] {
-        symbols[symbol] = branch_symbol(symbol, "test" + number(symbol),
+        symbols[symbol] = branch_symbol(symbol, "test" + emitcore.number(symbol),
             model.SymbolKind.Function, 0);
     }
     let resolved = model.ResolvedProject(project: project, symbols: symbols,
@@ -265,186 +268,186 @@ func branch_empty(op nativeir.Op, type_id usize) nativeir.Instruction {
     return instruction;
 }
 
-func branch_source_record(state inout Emitter, symbol usize,
+func branch_source_record(state inout emitcore.Emitter, symbol usize,
                           signature_id usize, text_index usize,
-                          code Value) {
-    vec.push(state.b.source_functions, SourceFunction(symbol: symbol,
+                          code emitcore.Value) {
+    vec.push(state.b.source_functions, emitcore.SourceFunction(symbol: symbol,
         signature: signature_id, native_index: 0, text_index: text_index,
         hir_index: option.Option[usize].None, code: code));
 }
 
 // Emit the source functions the C helpers call.  They are real LLVM bodies,
 // not declarations that only satisfy a type check.
-func branch_emit_sources(fixture BranchFixture, state inout Emitter) throws Error {
-    let receiver_layout = lower_type(fixture.receiver_type, inout state);
-    var source = new_function("lang.test.fn.200",
-        Signature(result: "i32", parameters: ["i32"]), "internal", "",
+func branch_emit_sources(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
+    let receiver_layout = emitcore.lower_type(fixture.receiver_type, inout state);
+    var source = emitcore.new_function("lang.test.fn.200",
+        emitcore.Signature(result: "i32", parameters: ["i32"]), "internal", "",
         inout state);
-    var code = function_reference(state, source);
-    var entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    let argument = parameter(state, source, 0);
-    let sum = result("i32", "add i32 " + argument.reference + ", 1",
+    var code = emitcore.function_reference(state, source);
+    var entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let argument = emitcore.parameter(state, source, 0);
+    let sum = emitcore.result("i32", "add i32 " + argument.reference + ", 1",
         inout state);
-    terminate("ret i32 " + sum.reference, inout state);
+    emitcore.terminate("ret i32 " + sum.reference, inout state);
     branch_source_record(inout state, B_FN, fixture.fn_type, source, code);
 
-    source = new_function("lang.test.fn.201",
-        Signature(result: "i32", parameters: [receiver_layout, "i32"]),
+    source = emitcore.new_function("lang.test.fn.201",
+        emitcore.Signature(result: "i32", parameters: [receiver_layout, "i32"]),
         "internal", "", inout state);
-    code = function_reference(state, source);
-    entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    let ordinary_argument = parameter(state, source, 1);
-    let ordinary_sum = result("i32", "add i32 " + ordinary_argument.reference +
+    code = emitcore.function_reference(state, source);
+    entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let ordinary_argument = emitcore.parameter(state, source, 1);
+    let ordinary_sum = emitcore.result("i32", "add i32 " + ordinary_argument.reference +
         ", 1", inout state);
-    terminate("ret i32 " + ordinary_sum.reference, inout state);
+    emitcore.terminate("ret i32 " + ordinary_sum.reference, inout state);
     branch_source_record(inout state, B_ORD, fixture.method_type, source, code);
 
-    source = new_function("lang.test.fn.202",
-        Signature(result: "i32", parameters: [receiver_layout, "i32"]),
+    source = emitcore.new_function("lang.test.fn.202",
+        emitcore.Signature(result: "i32", parameters: [receiver_layout, "i32"]),
         "internal", "", inout state);
-    code = function_reference(state, source);
-    entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    let move_receiver = parameter(state, source, 0);
-    let move_argument = parameter(state, source, 1);
-    let move_slot = storage(receiver_layout, inout state);
-    c_store(move_receiver, move_slot, inout state);
-    let move_drop = value_op(fixture.receiver_type, false, inout state);
-    let ignored_move = c_call(move_drop, [move_slot], "void", inout state);
-    let move_sum = result("i32", "add i32 " + move_argument.reference + ", 2",
+    code = emitcore.function_reference(state, source);
+    entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let move_receiver = emitcore.parameter(state, source, 0);
+    let move_argument = emitcore.parameter(state, source, 1);
+    let move_slot = emitcore.storage(receiver_layout, inout state);
+    emitvalues.c_store(move_receiver, move_slot, inout state);
+    let move_drop = emitvalues.value_op(fixture.receiver_type, false, inout state);
+    let ignored_move = emitvalues.c_call(move_drop, [move_slot], "void", inout state);
+    let move_sum = emitcore.result("i32", "add i32 " + move_argument.reference + ", 2",
         inout state);
-    terminate("ret i32 " + move_sum.reference, inout state);
+    emitcore.terminate("ret i32 " + move_sum.reference, inout state);
     branch_source_record(inout state, B_MOVE, fixture.move_method_type, source,
         code);
 
-    source = new_function("lang.test.fn.203",
-        Signature(result: "i32", parameters: ["i32", "i32"]), "internal", "",
+    source = emitcore.new_function("lang.test.fn.203",
+        emitcore.Signature(result: "i32", parameters: ["i32", "i32"]), "internal", "",
         inout state);
-    code = function_reference(state, source);
-    entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    let dyn_receiver = parameter(state, source, 0);
-    let dyn_argument = parameter(state, source, 1);
-    let dyn_sum = result("i32", "add i32 " + dyn_receiver.reference + ", " +
+    code = emitcore.function_reference(state, source);
+    entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let dyn_receiver = emitcore.parameter(state, source, 0);
+    let dyn_argument = emitcore.parameter(state, source, 1);
+    let dyn_sum = emitcore.result("i32", "add i32 " + dyn_receiver.reference + ", " +
         dyn_argument.reference, inout state);
-    terminate("ret i32 " + dyn_sum.reference, inout state);
+    emitcore.terminate("ret i32 " + dyn_sum.reference, inout state);
     branch_source_record(inout state, B_DYN, fixture.dyn_fn_type, source, code);
 
-    source = new_function("lang.test.fn.204",
-        Signature(result: "i64", parameters: [receiver_layout]), "internal", "",
+    source = emitcore.new_function("lang.test.fn.204",
+        emitcore.Signature(result: "i64", parameters: [receiver_layout]), "internal", "",
         inout state);
-    code = function_reference(state, source);
-    entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    terminate("ret i64 42", inout state);
+    code = emitcore.function_reference(state, source);
+    entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    emitcore.terminate("ret i64 42", inout state);
     branch_source_record(inout state, B_ENTRY, fixture.entry_type, source, code);
 
     // Dynamic-capture entry: env-first ABI, ignores the captured payload and
     // returns argument + 3.  The environment construction itself is the real
     // C function_value/make_environment path exercised below.
-    source = new_function("lang.test.fn.205",
-        Signature(result: "i32", parameters: ["ptr", "i32"]), "internal", "",
+    source = emitcore.new_function("lang.test.fn.205",
+        emitcore.Signature(result: "i32", parameters: ["ptr", "i32"]), "internal", "",
         inout state);
-    code = function_reference(state, source);
-    entry = new_block(source, "entry", inout state);
-    position(entry, inout state);
-    let capture_argument = parameter(state, source, 1);
-    let capture_sum = result("i32", "add i32 " + capture_argument.reference +
+    code = emitcore.function_reference(state, source);
+    entry = emitcore.new_block(source, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let capture_argument = emitcore.parameter(state, source, 1);
+    let capture_sum = emitcore.result("i32", "add i32 " + capture_argument.reference +
         ", 3", inout state);
-    terminate("ret i32 " + capture_sum.reference, inout state);
+    emitcore.terminate("ret i32 " + capture_sum.reference, inout state);
     branch_source_record(inout state, B_CAPTURE, fixture.fn_type, source, code);
 }
 
-func branch_main(state inout Emitter) throws Error {
-    let index = new_function("main", Signature(result: "i32", parameters: []),
+func branch_main(state inout emitcore.Emitter) throws emitcore.Error {
+    let index = emitcore.new_function("main", emitcore.Signature(result: "i32", parameters: []),
         "", "", inout state);
-    let entry = new_block(index, "entry", inout state);
-    position(entry, inout state);
+    let entry = emitcore.new_block(index, "entry", inout state);
+    emitcore.position(entry, inout state);
 }
 
-func branch_expect(value Value, expected usize, failure i32,
-                   state inout Emitter) throws Error {
-    let origin = here(state);
+func branch_expect(value emitcore.Value, expected usize, failure i32,
+                   state inout emitcore.Emitter) throws emitcore.Error {
+    let origin = emitcore.here(state);
     let function_index = origin.function_index;
-    let ok = new_block(function_index, "check.ok", inout state);
-    let bad = new_block(function_index, "check.bad", inout state);
-    let same = c_icmp("eq", value.type_name, value.reference, number(expected),
+    let ok = emitcore.new_block(function_index, "check.ok", inout state);
+    let bad = emitcore.new_block(function_index, "check.bad", inout state);
+    let same = emitvalues.c_icmp("eq", value.type_name, value.reference, emitcore.number(expected),
         inout state);
-    c_cond_branch(same, ok, bad, inout state);
-    position(bad, inout state);
-    c_ret(c_int("i32", usize(failure)), inout state);
-    position(ok, inout state);
+    emitvalues.c_cond_branch(same, ok, bad, inout state);
+    emitcore.position(bad, inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", usize(failure)), inout state);
+    emitcore.position(ok, inout state);
 }
 
-func branch_vec_refs(value Value, state inout Emitter) Value throws Error {
-    let address = c_gep(VEC_TYPE, value, 0, inout state);
-    return c_load("i64", address, inout state);
+func branch_vec_refs(value emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let address = emitvalues.c_gep(emitcore.VEC_TYPE, value, 0, inout state);
+    return emitvalues.c_load("i64", address, inout state);
 }
 
-func branch_make_env(fields Vec[usize], children Vec[Value],
-                     state inout Emitter) Value throws Error {
+func branch_make_env(fields Vec[usize], children Vec[emitcore.Value],
+                     state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     if vec.len(fields) != vec.len(children) {
-        throw invalid("branch environment child count");
+        throw emitcore.invalid("branch environment child count");
     }
-    let layout = env_record_type(fields, inout state);
-    let row = storage(layout, inout state);
+    let layout = emitvalues.env_record_type(fields, inout state);
+    let row = emitcore.storage(layout, inout state);
     for var index usize = 0; index < vec.len(fields); index += 1 {
-        let address = c_gep(layout, row, index, inout state);
-        c_store(children[index], address, inout state);
+        let address = emitvalues.c_gep(layout, row, index, inout state);
+        emitvalues.c_store(children[index], address, inout state);
     }
-    let bytes = allocation_size(layout);
-    let empty = c_icmp("eq", "i64", bytes.reference, "0", inout state);
-    let stride = result("i64", "select i1 " + empty.reference +
+    let bytes = emitcore.allocation_size(layout);
+    let empty = emitvalues.c_icmp("eq", "i64", bytes.reference, "0", inout state);
+    let stride = emitcore.result("i64", "select i1 " + empty.reference +
         ", i64 1, i64 " + bytes.reference, inout state);
-    let copy_op = env_record_op(fields, true, inout state);
-    let drop_op = env_record_op(fields, false, inout state);
-    let environment = runtime("lang_vec_new_v1", "ptr",
-        [c_int("i64", 1), stride, copy_op, drop_op], inout state);
-    let data_address = c_gep(VEC_TYPE, environment, 5, inout state);
-    let data = c_load("ptr", data_address, inout state);
+    let copy_op = emitvalues.test_env_record_op(fields, true, inout state);
+    let drop_op = emitvalues.test_env_record_op(fields, false, inout state);
+    let environment = emitcore.runtime("lang_vec_new_v1", "ptr",
+        [emitvalues.c_int("i64", 1), stride, copy_op, drop_op], inout state);
+    let data_address = emitvalues.c_gep(emitcore.VEC_TYPE, environment, 5, inout state);
+    let data = emitvalues.c_load("ptr", data_address, inout state);
     for var index usize = 0; index < vec.len(fields); index += 1 {
-        let field_type = lower_type(fields[index], inout state);
-        let source_address = c_gep(layout, row, index, inout state);
-        let loaded = c_load(field_type, source_address, inout state);
-        let target_address = c_gep(layout, data, index, inout state);
-        c_store(loaded, target_address, inout state);
+        let field_type = emitcore.lower_type(fields[index], inout state);
+        let source_address = emitvalues.c_gep(layout, row, index, inout state);
+        let loaded = emitvalues.c_load(field_type, source_address, inout state);
+        let target_address = emitvalues.c_gep(layout, data, index, inout state);
+        emitvalues.c_store(loaded, target_address, inout state);
     }
-    let initialized_address = c_gep(VEC_TYPE, environment, 2, inout state);
-    c_store(c_int("i64", 1), initialized_address, inout state);
+    let initialized_address = emitvalues.c_gep(emitcore.VEC_TYPE, environment, 2, inout state);
+    emitvalues.c_store(emitvalues.c_int("i64", 1), initialized_address, inout state);
     return environment;
 }
 
-func branch_store_fn(fn_value Value, type_name string,
-                     state inout Emitter) Value throws Error {
-    let slot = storage(type_name, inout state);
-    c_store(fn_value, slot, inout state);
+func branch_store_fn(fn_value emitcore.Value, type_name string,
+                     state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let slot = emitcore.storage(type_name, inout state);
+    emitvalues.c_store(fn_value, slot, inout state);
     return slot;
 }
 
-func branch_bind(value_id usize, type_id usize, item Value,
-                 state inout Emitter) {
-    vec.push(state.frame.values, ValueBinding(value_id: value_id,
+func branch_bind(value_id usize, type_id usize, item emitcore.Value,
+                 state inout emitcore.Emitter) {
+    vec.push(state.frame.values, emitcore.ValueBinding(value_id: value_id,
         type_id: type_id, value: item, stack_address: false));
 }
 
-func branch_receiver_value(fn_value Value, receiver_type usize,
-                           state inout Emitter) Value throws Error {
-    let layout = lower_type(receiver_type, inout state);
-    let row = storage(layout, inout state);
-    let field = c_gep(layout, row, 0, inout state);
-    c_store(fn_value, field, inout state);
-    return c_load(layout, row, inout state);
+func branch_receiver_value(fn_value emitcore.Value, receiver_type usize,
+                           state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let layout = emitcore.lower_type(receiver_type, inout state);
+    let row = emitcore.storage(layout, inout state);
+    let field = emitvalues.c_gep(layout, row, 0, inout state);
+    emitvalues.c_store(fn_value, field, inout state);
+    return emitvalues.c_load(layout, row, inout state);
 }
 
 // ---- function/environment branch -------------------------------------------
 
-func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
+func branch_fn_main(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
     branch_emit_sources(fixture, inout state);
     branch_main(inout state);
-    let thunk = function_thunk(B_FN, inout state);
-    let called = c_call(thunk, [c_null(), c_int("i32", 41)], "i32",
+    let thunk = emitvalues.test_function_thunk(B_FN, inout state);
+    let called = emitvalues.c_call(thunk, [emitvalues.c_null(), emitvalues.c_int("i32", 41)], "i32",
         inout state);
     branch_expect(called, 42, 10, inout state);
 
@@ -453,8 +456,8 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     var instruction = branch_empty(nativeir.Op.Function, fixture.fn_type);
     instruction.function = B_FN;
     instruction.result = option.Option[usize].Some(1);
-    let function_value_result = function_value(instruction, [], inout state);
-    switch function_value_info(state, 1) {
+    let function_value_result = emitvalues.function_value(instruction, [], inout state);
+    switch emitvalues.test_function_value_info(state, 1) {
         case option.Option.Some(info): {
             if info.symbol != B_FN || info.dynamic {
                 throw c_driver_bad("function value info is wrong");
@@ -462,42 +465,42 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
         }
         case option.Option.None: throw c_driver_bad("missing function value info");
     }
-    let fn_code = c_extract("ptr", function_value_result, 0, inout state);
-    let fn_environment = c_extract("ptr", function_value_result, 1, inout state);
-    let via_value = c_call(fn_code, [c_null(), c_int("i32", 41)], "i32",
+    let fn_code = emitvalues.c_extract("ptr", function_value_result, 0, inout state);
+    let fn_environment = emitvalues.c_extract("ptr", function_value_result, 1, inout state);
+    let via_value = emitvalues.c_call(fn_code, [emitvalues.c_null(), emitvalues.c_int("i32", 41)], "i32",
         inout state);
     branch_expect(via_value, 42, 11, inout state);
-    let null_env = c_icmp("eq", "ptr", fn_environment.reference, "null",
+    let null_env = emitvalues.c_icmp("eq", "ptr", fn_environment.reference, "null",
         inout state);
     branch_expect(null_env, 1, 12, inout state);
 
     // A real environment row: captured i32, then a Fn field that owns a second
     // environment.  Copy/drop must retain/release the nested environment.
-    let nested = branch_make_env([fixture.i32_type], [c_int("i32", 7)],
+    let nested = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 7)],
         inout state);
-    let fn_with_env = c_function_value_of(thunk, nested, inout state);
-    let fn_copy = value_op(fixture.fn_type, true, inout state);
-    let fn_drop = value_op(fixture.fn_type, false, inout state);
-    let fn_slot = branch_store_fn(fn_with_env, FN_TYPE, inout state);
-    let ignored_copy = c_call(fn_copy, [fn_slot], "void", inout state);
+    let fn_with_env = emitsystem.test_c_function_value_of(thunk, nested, inout state);
+    let fn_copy = emitvalues.value_op(fixture.fn_type, true, inout state);
+    let fn_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let fn_slot = branch_store_fn(fn_with_env, emitcore.FN_TYPE, inout state);
+    let ignored_copy = emitvalues.c_call(fn_copy, [fn_slot], "void", inout state);
     let vec_refs_1 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_1, 2, 13, inout state);
-    let ignored_drop = c_call(fn_drop, [fn_slot], "void", inout state);
+    let ignored_drop = emitvalues.c_call(fn_drop, [fn_slot], "void", inout state);
     let vec_refs_2 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_2, 1, 14, inout state);
 
     let environment = branch_make_env([fixture.fn_type], [fn_with_env],
         inout state);
-    let env_layout = env_record_type([fixture.fn_type], inout state);
-    let env_row = storage(env_layout, inout state);
-    let env_row_value = c_gep(env_layout, env_row, 0, inout state);
-    c_store(fn_with_env, env_row_value, inout state);
-    let env_copy = env_record_op([fixture.fn_type], true, inout state);
-    let env_drop = env_record_op([fixture.fn_type], false, inout state);
-    let ignored_env_copy = c_call(env_copy, [env_row], "void", inout state);
+    let env_layout = emitvalues.env_record_type([fixture.fn_type], inout state);
+    let env_row = emitcore.storage(env_layout, inout state);
+    let env_row_value = emitvalues.c_gep(env_layout, env_row, 0, inout state);
+    emitvalues.c_store(fn_with_env, env_row_value, inout state);
+    let env_copy = emitvalues.test_env_record_op([fixture.fn_type], true, inout state);
+    let env_drop = emitvalues.test_env_record_op([fixture.fn_type], false, inout state);
+    let ignored_env_copy = emitvalues.c_call(env_copy, [env_row], "void", inout state);
     let vec_refs_3 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_3, 2, 15, inout state);
-    let ignored_env_drop = c_call(env_drop, [env_row], "void", inout state);
+    let ignored_env_drop = emitvalues.c_call(env_drop, [env_row], "void", inout state);
     let vec_refs_4 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_4, 1, 16, inout state);
 
@@ -506,14 +509,14 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     // copy, so two calls keep the receiver environment at its original count.
     // A separate environment keeps this ownership independent of the Fn value
     // tests above.
-    let receiver_env = branch_make_env([fixture.i32_type], [c_int("i32", 8)],
+    let receiver_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 8)],
         inout state);
-    let receiver_fn = c_function_value_of(thunk, receiver_env, inout state);
-    let receiver_layout = lower_type(fixture.receiver_type, inout state);
-    let receiver_row = storage(receiver_layout, inout state);
-    let receiver_field = c_gep(receiver_layout, receiver_row, 0, inout state);
-    c_store(receiver_fn, receiver_field, inout state);
-    let receiver_value = c_load(receiver_layout, receiver_row, inout state);
+    let receiver_fn = emitsystem.test_c_function_value_of(thunk, receiver_env, inout state);
+    let receiver_layout = emitcore.lower_type(fixture.receiver_type, inout state);
+    let receiver_row = emitcore.storage(receiver_layout, inout state);
+    let receiver_field = emitvalues.c_gep(receiver_layout, receiver_row, 0, inout state);
+    emitvalues.c_store(receiver_fn, receiver_field, inout state);
+    let receiver_value = emitvalues.c_load(receiver_layout, receiver_row, inout state);
     let bound_env = branch_make_env([fixture.receiver_type], [receiver_value],
         inout state);
     let ordinary_schema = hir.FunctionValue(symbol: B_ORD, type_args: [],
@@ -526,20 +529,20 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
         bound: option.Option[hir.BoundReceiver].Some(
             hir.BoundReceiver(type_id: fixture.receiver_type,
                 mode: model.ParamMode.Move)));
-    let ordinary_adapter = bound_adapter(ordinary_schema, inout state);
-    let move_adapter = bound_adapter(move_schema, inout state);
-    var bound_result = c_call(ordinary_adapter, [bound_env, c_int("i32", 5)],
+    let ordinary_adapter = emitvalues.test_bound_adapter(ordinary_schema, inout state);
+    let move_adapter = emitvalues.test_bound_adapter(move_schema, inout state);
+    var bound_result = emitvalues.c_call(ordinary_adapter, [bound_env, emitvalues.c_int("i32", 5)],
         "i32", inout state);
     branch_expect(bound_result, 6, 17, inout state);
-    bound_result = c_call(ordinary_adapter, [bound_env, c_int("i32", 6)],
+    bound_result = emitvalues.c_call(ordinary_adapter, [bound_env, emitvalues.c_int("i32", 6)],
         "i32", inout state);
     branch_expect(bound_result, 7, 18, inout state);
     let vec_refs_5 = branch_vec_refs(receiver_env, inout state);
     branch_expect(vec_refs_5, 1, 19, inout state);
-    bound_result = c_call(move_adapter, [bound_env, c_int("i32", 5)], "i32",
+    bound_result = emitvalues.c_call(move_adapter, [bound_env, emitvalues.c_int("i32", 5)], "i32",
         inout state);
     branch_expect(bound_result, 7, 20, inout state);
-    bound_result = c_call(move_adapter, [bound_env, c_int("i32", 6)], "i32",
+    bound_result = emitvalues.c_call(move_adapter, [bound_env, emitvalues.c_int("i32", 6)], "i32",
         inout state);
     branch_expect(bound_result, 8, 21, inout state);
     let vec_refs_6 = branch_vec_refs(receiver_env, inout state);
@@ -549,9 +552,9 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     // consistency checks in function_value, then make_environment's memcpy,
     // vec_memory and gc_register_fields.  The captured Fn owns a real
     // environment whose release is observed after dropping the closure.
-    let capture_env = branch_make_env([fixture.i32_type], [c_int("i32", 11)],
+    let capture_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 11)],
         inout state);
-    let captured_fn = c_function_value_of(thunk, capture_env, inout state);
+    let captured_fn = emitsystem.test_c_function_value_of(thunk, capture_env, inout state);
     branch_bind(1000, fixture.fn_type, captured_fn, inout state);
     var capture_instruction = branch_empty(nativeir.Op.Function,
         fixture.fn_type);
@@ -560,7 +563,7 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     capture_instruction.origin = option.Option[usize].Some(0);
     capture_instruction.result = option.Option[usize].Some(1001);
     let ignored_capture = emit_instruction(capture_instruction, inout state);
-    switch function_value_info(state, 1001) {
+    switch emitvalues.test_function_value_info(state, 1001) {
         case option.Option.Some(info): {
             if info.symbol != B_CAPTURE || !info.dynamic {
                 throw c_driver_bad("dynamic capture info is wrong");
@@ -568,26 +571,26 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
         }
         case option.Option.None: throw c_driver_bad("missing dynamic capture info");
     }
-    let dynamic_fn = value(state, 1001);
-    let dynamic_code = c_extract("ptr", dynamic_fn, 0, inout state);
-    let dynamic_env = c_extract("ptr", dynamic_fn, 1, inout state);
-    let dynamic_called = c_call(dynamic_code, [dynamic_env, c_int("i32", 41)],
+    let dynamic_fn = emitcore.value(state, 1001);
+    let dynamic_code = emitvalues.c_extract("ptr", dynamic_fn, 0, inout state);
+    let dynamic_env = emitvalues.c_extract("ptr", dynamic_fn, 1, inout state);
+    let dynamic_called = emitvalues.c_call(dynamic_code, [dynamic_env, emitvalues.c_int("i32", 41)],
         "i32", inout state);
     branch_expect(dynamic_called, 44, 23, inout state);
     let vec_refs_7 = branch_vec_refs(capture_env, inout state);
     branch_expect(vec_refs_7, 1, 24, inout state);
-    let dynamic_slot = branch_store_fn(dynamic_fn, FN_TYPE, inout state);
-    let dynamic_drop = value_op(fixture.fn_type, false, inout state);
-    let ignored_dynamic = c_call(dynamic_drop, [dynamic_slot], "void",
+    let dynamic_slot = branch_store_fn(dynamic_fn, emitcore.FN_TYPE, inout state);
+    let dynamic_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let ignored_dynamic = emitvalues.c_call(dynamic_drop, [dynamic_slot], "void",
         inout state);
 
     // Formal bound FunctionValue for ordinary and move Self.  Each uses a
     // distinct receiver environment; function_value calls bound_adapter and
     // make_environment, and two calls per adapter check the repeated-call
     // control.
-    let ordinary_env = branch_make_env([fixture.i32_type], [c_int("i32", 12)],
+    let ordinary_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 12)],
         inout state);
-    let ordinary_fn = c_function_value_of(thunk, ordinary_env, inout state);
+    let ordinary_fn = emitsystem.test_c_function_value_of(thunk, ordinary_env, inout state);
     let ordinary_receiver = branch_receiver_value(ordinary_fn,
         fixture.receiver_type, inout state);
     branch_bind(1100, fixture.receiver_type, ordinary_receiver, inout state);
@@ -598,25 +601,25 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     ordinary_instruction.origin = option.Option[usize].Some(1);
     ordinary_instruction.result = option.Option[usize].Some(1101);
     let ignored_ordinary = emit_instruction(ordinary_instruction, inout state);
-    let ordinary_value = value(state, 1101);
-    let ordinary_code = c_extract("ptr", ordinary_value, 0, inout state);
-    let ordinary_environment = c_extract("ptr", ordinary_value, 1, inout state);
-    var formal_bound = c_call(ordinary_code,
-        [ordinary_environment, c_int("i32", 5)], "i32", inout state);
+    let ordinary_value = emitcore.value(state, 1101);
+    let ordinary_code = emitvalues.c_extract("ptr", ordinary_value, 0, inout state);
+    let ordinary_environment = emitvalues.c_extract("ptr", ordinary_value, 1, inout state);
+    var formal_bound = emitvalues.c_call(ordinary_code,
+        [ordinary_environment, emitvalues.c_int("i32", 5)], "i32", inout state);
     branch_expect(formal_bound, 6, 25, inout state);
-    formal_bound = c_call(ordinary_code,
-        [ordinary_environment, c_int("i32", 6)], "i32", inout state);
+    formal_bound = emitvalues.c_call(ordinary_code,
+        [ordinary_environment, emitvalues.c_int("i32", 6)], "i32", inout state);
     branch_expect(formal_bound, 7, 26, inout state);
     let vec_refs_8 = branch_vec_refs(ordinary_env, inout state);
     branch_expect(vec_refs_8, 1, 27, inout state);
-    let ordinary_slot = branch_store_fn(ordinary_value, FN_TYPE, inout state);
-    let ordinary_function_drop = value_op(fixture.fn_type, false, inout state);
-    let ignored_ordinary_drop = c_call(ordinary_function_drop, [ordinary_slot],
+    let ordinary_slot = branch_store_fn(ordinary_value, emitcore.FN_TYPE, inout state);
+    let ordinary_function_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let ignored_ordinary_drop = emitvalues.c_call(ordinary_function_drop, [ordinary_slot],
         "void", inout state);
 
-    let move_env = branch_make_env([fixture.i32_type], [c_int("i32", 13)],
+    let move_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 13)],
         inout state);
-    let move_fn = c_function_value_of(thunk, move_env, inout state);
+    let move_fn = emitsystem.test_c_function_value_of(thunk, move_env, inout state);
     let move_receiver = branch_receiver_value(move_fn, fixture.receiver_type,
         inout state);
     branch_bind(1200, fixture.receiver_type, move_receiver, inout state);
@@ -627,49 +630,49 @@ func branch_fn_main(fixture BranchFixture, state inout Emitter) throws Error {
     move_instruction.origin = option.Option[usize].Some(2);
     move_instruction.result = option.Option[usize].Some(1201);
     let ignored_move = emit_instruction(move_instruction, inout state);
-    let move_value = value(state, 1201);
-    let move_code = c_extract("ptr", move_value, 0, inout state);
-    let move_environment = c_extract("ptr", move_value, 1, inout state);
-    formal_bound = c_call(move_code, [move_environment, c_int("i32", 5)],
+    let move_value = emitcore.value(state, 1201);
+    let move_code = emitvalues.c_extract("ptr", move_value, 0, inout state);
+    let move_environment = emitvalues.c_extract("ptr", move_value, 1, inout state);
+    formal_bound = emitvalues.c_call(move_code, [move_environment, emitvalues.c_int("i32", 5)],
         "i32", inout state);
     branch_expect(formal_bound, 7, 28, inout state);
-    formal_bound = c_call(move_code, [move_environment, c_int("i32", 6)],
+    formal_bound = emitvalues.c_call(move_code, [move_environment, emitvalues.c_int("i32", 6)],
         "i32", inout state);
     branch_expect(formal_bound, 8, 29, inout state);
     let vec_refs_9 = branch_vec_refs(move_env, inout state);
     branch_expect(vec_refs_9, 1, 30, inout state);
-    let move_slot = branch_store_fn(move_value, FN_TYPE, inout state);
-    let move_function_drop = value_op(fixture.fn_type, false, inout state);
-    let ignored_move_drop = c_call(move_function_drop, [move_slot], "void",
+    let move_slot = branch_store_fn(move_value, emitcore.FN_TYPE, inout state);
+    let move_function_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let ignored_move_drop = emitvalues.c_call(move_function_drop, [move_slot], "void",
         inout state);
 
-    let ignored_bound = runtime("lang_vec_release_v1", "void", [bound_env],
+    let ignored_bound = emitcore.runtime("lang_vec_release_v1", "void", [bound_env],
         inout state);
-    let ignored_environment = runtime("lang_vec_release_v1", "void",
+    let ignored_environment = emitcore.runtime("lang_vec_release_v1", "void",
         [environment], inout state);
-    c_ret(c_int("i32", 0), inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", 0), inout state);
 }
 
 // ---- Weak branch ------------------------------------------------------------
 
-func branch_option_tag(option_type usize, value Value,
-                       state inout Emitter) Value throws Error {
-    let layout = lower_type(option_type, inout state);
-    let slot = storage(layout, inout state);
-    c_store(value, slot, inout state);
-    let tag_address = c_gep(layout, slot, 0, inout state);
-    return c_load("i32", tag_address, inout state);
+func branch_option_tag(option_type usize, value emitcore.Value,
+                       state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let layout = emitcore.lower_type(option_type, inout state);
+    let slot = emitcore.storage(layout, inout state);
+    emitvalues.c_store(value, slot, inout state);
+    let tag_address = emitvalues.c_gep(layout, slot, 0, inout state);
+    return emitvalues.c_load("i32", tag_address, inout state);
 }
 
-func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
+func branch_weak_main(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
     branch_emit_sources(fixture, inout state);
     branch_main(inout state);
     let empty_signature = branch_fn_type_for_weak(fixture, 0, inout state);
     var empty = branch_empty(nativeir.Op.SystemCall, fixture.weak_type);
     empty.signature = empty_signature;
     empty.system = option.Option[u32].Some(201);
-    var empty_result = c_unit();
-    switch weak_system_call(empty, [], inout state) {
+    var empty_result = emitvalues.test_c_unit();
+    switch emitsystem.test_weak_system_call(empty, [], inout state) {
         case option.Option.Some(value): { empty_result = value; }
         case option.Option.None: throw c_driver_bad("weak empty was not handled");
     }
@@ -677,8 +680,8 @@ func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
     var upgrade = branch_empty(nativeir.Op.SystemCall, fixture.option_type);
     upgrade.signature = upgrade_signature;
     upgrade.system = option.Option[u32].Some(203);
-    var upgraded = c_unit();
-    switch weak_system_call(upgrade, [empty_result], inout state) {
+    var upgraded = emitvalues.test_c_unit();
+    switch emitsystem.test_weak_system_call(upgrade, [empty_result], inout state) {
         case option.Option.Some(value): { upgraded = value; }
         case option.Option.None: throw c_driver_bad("weak empty upgrade was not handled");
     }
@@ -686,9 +689,9 @@ func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
     branch_expect(option_tag_1, 0, 30, inout state);
 
     // Immortal function: {null, code} upgrades to Some without an environment.
-    let thunk = function_thunk(B_FN, inout state);
-    let immortal = c_weak_value(c_null(), thunk, inout state);
-    switch weak_system_call(upgrade, [immortal], inout state) {
+    let thunk = emitvalues.test_function_thunk(B_FN, inout state);
+    let immortal = emitsystem.test_c_weak_value(emitvalues.c_null(), thunk, inout state);
+    switch emitsystem.test_weak_system_call(upgrade, [immortal], inout state) {
         case option.Option.Some(value): { upgraded = value; }
         case option.Option.None: throw c_driver_bad("immortal weak upgrade was not handled");
     }
@@ -697,18 +700,18 @@ func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
 
     // Live then dead: downgrade a real environment, upgrade while alive, drop
     // the upgraded function, release the strong target, then upgrade again.
-    let environment = branch_make_env([fixture.i32_type], [c_int("i32", 9)],
+    let environment = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 9)],
         inout state);
-    let live_function = c_function_value_of(thunk, environment, inout state);
+    let live_function = emitsystem.test_c_function_value_of(thunk, environment, inout state);
     var downgrade = branch_empty(nativeir.Op.SystemCall, fixture.weak_type);
     downgrade.signature = branch_fn_type_for_weak(fixture, 1, inout state);
     downgrade.system = option.Option[u32].Some(202);
-    var weak_live = c_unit();
-    switch weak_system_call(downgrade, [live_function], inout state) {
+    var weak_live = emitvalues.test_c_unit();
+    switch emitsystem.test_weak_system_call(downgrade, [live_function], inout state) {
         case option.Option.Some(value): { weak_live = value; }
         case option.Option.None: throw c_driver_bad("weak downgrade was not handled");
     }
-    switch weak_system_call(upgrade, [weak_live], inout state) {
+    switch emitsystem.test_weak_system_call(upgrade, [weak_live], inout state) {
         case option.Option.Some(value): { upgraded = value; }
         case option.Option.None: throw c_driver_bad("live weak upgrade was not handled");
     }
@@ -716,36 +719,36 @@ func branch_weak_main(fixture BranchFixture, state inout Emitter) throws Error {
     branch_expect(option_tag_3, 1, 32, inout state);
     let vec_refs_7 = branch_vec_refs(environment, inout state);
     branch_expect(vec_refs_7, 2, 33, inout state);
-    let upgraded_payload = c_extract("{ " + FN_TYPE + " }", upgraded, 2,
+    let upgraded_payload = emitvalues.c_extract("{ " + emitcore.FN_TYPE + " }", upgraded, 2,
         inout state);
-    let upgraded_function = c_extract(FN_TYPE, upgraded_payload, 0,
+    let upgraded_function = emitvalues.c_extract(emitcore.FN_TYPE, upgraded_payload, 0,
         inout state);
-    let dropped_function = branch_store_fn(upgraded_function, FN_TYPE,
+    let dropped_function = branch_store_fn(upgraded_function, emitcore.FN_TYPE,
         inout state);
-    let function_drop = value_op(fixture.fn_type, false, inout state);
-    let ignored_function = c_call(function_drop, [dropped_function], "void",
+    let function_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let ignored_function = emitvalues.c_call(function_drop, [dropped_function], "void",
         inout state);
     let vec_refs_8 = branch_vec_refs(environment, inout state);
     branch_expect(vec_refs_8, 1, 34, inout state);
-    let ignored_strong = runtime("lang_vec_release_v1", "void", [environment],
+    let ignored_strong = emitcore.runtime("lang_vec_release_v1", "void", [environment],
         inout state);
-    switch weak_system_call(upgrade, [weak_live], inout state) {
+    switch emitsystem.test_weak_system_call(upgrade, [weak_live], inout state) {
         case option.Option.Some(value): { upgraded = value; }
         case option.Option.None: throw c_driver_bad("dead weak upgrade was not handled");
     }
     let option_tag_4 = branch_option_tag(fixture.option_type, upgraded, inout state);
     branch_expect(option_tag_4, 0, 35, inout state);
-    let weak_drop = value_op(fixture.weak_type, false, inout state);
-    let weak_layout = lower_type(fixture.weak_type, inout state);
-    let weak_slot = storage(weak_layout, inout state);
-    c_store(weak_live, weak_slot, inout state);
-    let ignored_weak = c_call(weak_drop, [weak_slot], "void", inout state);
-    c_ret(c_int("i32", 0), inout state);
+    let weak_drop = emitvalues.value_op(fixture.weak_type, false, inout state);
+    let weak_layout = emitcore.lower_type(fixture.weak_type, inout state);
+    let weak_slot = emitcore.storage(weak_layout, inout state);
+    emitvalues.c_store(weak_live, weak_slot, inout state);
+    let ignored_weak = emitvalues.c_call(weak_drop, [weak_slot], "void", inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", 0), inout state);
 }
 
 // Weak empty/downgrade signatures are synthesized here from the fixture types.
 func branch_fn_type_for_weak(fixture BranchFixture, kind u32,
-                             state inout Emitter) usize throws Error {
+                             state inout emitcore.Emitter) usize throws emitcore.Error {
     // kind 0: empty() -> Weak[Fn], 1: downgrade(Fn) -> Weak[Fn],
     // 2: upgrade(Weak[Fn]) -> Option[Fn].
     var context = state.storage_types;
@@ -766,116 +769,116 @@ func branch_fn_type_for_weak(fixture BranchFixture, kind u32,
 
 // ---- dyn trait branch -------------------------------------------------------
 
-func branch_dyn_main(fixture BranchFixture, state inout Emitter) throws Error {
+func branch_dyn_main(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
     branch_emit_sources(fixture, inout state);
     branch_main(inout state);
-    let table = trait_vtable(fixture.dyn_type, fixture.i32_type, [B_DYN],
+    let table = emitvalues.trait_vtable(fixture.dyn_type, fixture.i32_type, [B_DYN],
         inout state);
-    let box = runtime("lang_vec_new_v1", "ptr",
-        [c_int("i64", 1), c_int("i64", 4), c_null(), c_null()], inout state);
-    let data_address = c_gep(VEC_TYPE, box, 5, inout state);
-    let data = c_load("ptr", data_address, inout state);
-    c_store(c_int("i32", 7), data, inout state);
-    let initialized = c_gep(VEC_TYPE, box, 2, inout state);
-    c_store(c_int("i64", 1), initialized, inout state);
+    let box = emitcore.runtime("lang_vec_new_v1", "ptr",
+        [emitvalues.c_int("i64", 1), emitvalues.c_int("i64", 4), emitvalues.c_null(), emitvalues.c_null()], inout state);
+    let data_address = emitvalues.c_gep(emitcore.VEC_TYPE, box, 5, inout state);
+    let data = emitvalues.c_load("ptr", data_address, inout state);
+    emitvalues.c_store(emitvalues.c_int("i32", 7), data, inout state);
+    let initialized = emitvalues.c_gep(emitcore.VEC_TYPE, box, 2, inout state);
+    emitvalues.c_store(emitvalues.c_int("i64", 1), initialized, inout state);
     let vec_refs_9 = branch_vec_refs(box, inout state);
     branch_expect(vec_refs_9, 1, 40, inout state);
 
     // vtable slot 2 is the method thunk; slot 0/1 are drop/clone wrappers.
-    let method_slot = result("ptr", "getelementptr ptr, ptr " + table.reference +
+    let method_slot = emitcore.result("ptr", "getelementptr ptr, ptr " + table.reference +
         ", i32 2", inout state);
-    let method = c_load("ptr", method_slot, inout state);
-    let dispatched = c_call(method, [data, c_int("i32", 5)], "i32",
+    let method = emitvalues.c_load("ptr", method_slot, inout state);
+    let dispatched = emitvalues.c_call(method, [data, emitvalues.c_int("i32", 5)], "i32",
         inout state);
     branch_expect(dispatched, 12, 41, inout state);
 
-    var fat = Value(type_name: DYN_TYPE, reference: "zeroinitializer");
-    fat = c_insert(DYN_TYPE, fat, data, 0, inout state);
-    fat = c_insert(DYN_TYPE, fat, table, 1, inout state);
-    let slot = storage(DYN_TYPE, inout state);
-    c_store(fat, slot, inout state);
-    let clone = value_op(fixture.dyn_type, true, inout state);
-    let drop = value_op(fixture.dyn_type, false, inout state);
-    let ignored_clone = c_call(clone, [slot], "void", inout state);
+    var fat = emitcore.Value(type_name: emitcore.DYN_TYPE, reference: "zeroinitializer");
+    fat = emitvalues.c_insert(emitcore.DYN_TYPE, fat, data, 0, inout state);
+    fat = emitvalues.c_insert(emitcore.DYN_TYPE, fat, table, 1, inout state);
+    let slot = emitcore.storage(emitcore.DYN_TYPE, inout state);
+    emitvalues.c_store(fat, slot, inout state);
+    let clone = emitvalues.value_op(fixture.dyn_type, true, inout state);
+    let drop = emitvalues.value_op(fixture.dyn_type, false, inout state);
+    let ignored_clone = emitvalues.c_call(clone, [slot], "void", inout state);
     let vec_refs_10 = branch_vec_refs(box, inout state);
     branch_expect(vec_refs_10, 2, 42, inout state);
-    let ignored_drop_one = c_call(drop, [slot], "void", inout state);
+    let ignored_drop_one = emitvalues.c_call(drop, [slot], "void", inout state);
     let vec_refs_11 = branch_vec_refs(box, inout state);
     branch_expect(vec_refs_11, 1, 43, inout state);
-    let ignored_drop_two = c_call(drop, [slot], "void", inout state);
-    c_ret(c_int("i32", 0), inout state);
+    let ignored_drop_two = emitvalues.c_call(drop, [slot], "void", inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", 0), inout state);
 }
 
 // ---- thread branch ----------------------------------------------------------
 
-func branch_thread_main(fixture BranchFixture, state inout Emitter) throws Error {
+func branch_thread_main(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
     branch_emit_sources(fixture, inout state);
     branch_main(inout state);
-    let bridge = thread_bridge(fixture.entry_type, inout state);
-    let thunk = function_thunk(B_ENTRY, inout state);
-    let entry_value = c_function_value_of(thunk, c_null(), inout state);
-    let nested = branch_make_env([fixture.i32_type], [c_int("i32", 1)],
+    let bridge = emitvalues.test_thread_bridge(fixture.entry_type, inout state);
+    let thunk = emitvalues.test_function_thunk(B_ENTRY, inout state);
+    let entry_value = emitsystem.test_c_function_value_of(thunk, emitvalues.c_null(), inout state);
+    let nested = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 1)],
         inout state);
-    let inner_function = c_function_value_of(thunk, nested, inout state);
-    let receiver_layout = lower_type(fixture.receiver_type, inout state);
-    let receiver_slot = storage(receiver_layout, inout state);
-    let thread_receiver_field = c_gep(receiver_layout, receiver_slot, 0,
+    let inner_function = emitsystem.test_c_function_value_of(thunk, nested, inout state);
+    let receiver_layout = emitcore.lower_type(fixture.receiver_type, inout state);
+    let receiver_slot = emitcore.storage(receiver_layout, inout state);
+    let thread_receiver_field = emitvalues.c_gep(receiver_layout, receiver_slot, 0,
         inout state);
-    c_store(inner_function, thread_receiver_field, inout state);
-    let receiver_value = c_load(receiver_layout, receiver_slot, inout state);
+    emitvalues.c_store(inner_function, thread_receiver_field, inout state);
+    let receiver_value = emitvalues.c_load(receiver_layout, receiver_slot, inout state);
     let vec_refs_12 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_12, 1, 50, inout state);
 
     var spawn = branch_empty(nativeir.Op.Call, fixture.thread_type);
     spawn.signature = fixture.spawn_type;
-    let handle = thread_spawn(spawn, [entry_value, receiver_value], inout state);
-    let waited = runtime("lang_thread_wait_v1", "i64", [handle], inout state);
+    let handle = emitvalues.thread_spawn(spawn, [entry_value, receiver_value], inout state);
+    let waited = emitcore.runtime("lang_thread_wait_v1", "i64", [handle], inout state);
     branch_expect(waited, 0, 51, inout state);
-    let result_value = runtime("lang_thread_result_v1", "i64", [handle],
+    let result_value = emitcore.runtime("lang_thread_result_v1", "i64", [handle],
         inout state);
     branch_expect(result_value, 42, 52, inout state);
-    let ignored_handle = runtime("lang_handle_release_v1", "void", [handle],
+    let ignored_handle = emitcore.runtime("lang_handle_release_v1", "void", [handle],
         inout state);
     // The runtime copied and then dropped the context.  Only the caller's
     // receiver value still owns the nested environment.
     let vec_refs_13 = branch_vec_refs(nested, inout state);
     branch_expect(vec_refs_13, 1, 53, inout state);
-    let receiver_drop = value_op(fixture.receiver_type, false, inout state);
-    c_store(receiver_value, receiver_slot, inout state);
-    let ignored_receiver = c_call(receiver_drop, [receiver_slot], "void",
+    let receiver_drop = emitvalues.value_op(fixture.receiver_type, false, inout state);
+    emitvalues.c_store(receiver_value, receiver_slot, inout state);
+    let ignored_receiver = emitvalues.c_call(receiver_drop, [receiver_slot], "void",
         inout state);
-    c_ret(c_int("i32", 0), inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", 0), inout state);
 }
 
 // ---- formal NativeIR instruction loop --------------------------------------
 
 // This branch goes through B's real `emit_instruction` group dispatch.  C owns
 // TraitObject/TraitCall; E owns SystemCall and forwards Weak and ThreadSpawn.
-func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
+func branch_ops_main(fixture BranchFixture, state inout emitcore.Emitter) throws emitcore.Error {
     branch_emit_sources(fixture, inout state);
     branch_main(inout state);
 
-    branch_bind(2000, fixture.i32_type, c_int("i32", 7), inout state);
+    branch_bind(2000, fixture.i32_type, emitvalues.c_int("i32", 7), inout state);
     var trait_object = branch_empty(nativeir.Op.TraitObject, fixture.dyn_type);
     trait_object.inputs = [2000];
     trait_object.methods = [B_DYN];
     trait_object.result = option.Option[usize].Some(2001);
     let ignored_object = emit_instruction(trait_object, inout state);
-    let dynamic_value = value(state, 2001);
+    let dynamic_value = emitcore.value(state, 2001);
 
-    branch_bind(2002, fixture.i32_type, c_int("i32", 5), inout state);
+    branch_bind(2002, fixture.i32_type, emitvalues.c_int("i32", 5), inout state);
     var trait_call = branch_empty(nativeir.Op.TraitCall, fixture.i32_type);
     trait_call.inputs = [2001, 2002];
     trait_call.signature = fixture.dyn_fn_type;
     trait_call.bits = 0;
     trait_call.result = option.Option[usize].Some(2003);
     let ignored_call = emit_instruction(trait_call, inout state);
-    let dispatched = value(state, 2003);
+    let dispatched = emitcore.value(state, 2003);
     branch_expect(dispatched, 12, 60, inout state);
-    let dynamic_slot = storage(DYN_TYPE, inout state);
-    c_store(dynamic_value, dynamic_slot, inout state);
-    let dynamic_drop = value_op(fixture.dyn_type, false, inout state);
-    let ignored_dynamic_drop = c_call(dynamic_drop, [dynamic_slot], "void",
+    let dynamic_slot = emitcore.storage(emitcore.DYN_TYPE, inout state);
+    emitvalues.c_store(dynamic_value, dynamic_slot, inout state);
+    let dynamic_drop = emitvalues.value_op(fixture.dyn_type, false, inout state);
+    let ignored_dynamic_drop = emitvalues.c_call(dynamic_drop, [dynamic_slot], "void",
         inout state);
 
     // Weak empty/upgrade and live/dead through the formal SystemCall group.
@@ -884,7 +887,7 @@ func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
     weak_empty.system = option.Option[u32].Some(201);
     weak_empty.result = option.Option[usize].Some(2010);
     let ignored_weak_empty = emit_instruction(weak_empty, inout state);
-    let empty_weak = value(state, 2010);
+    let empty_weak = emitcore.value(state, 2010);
     var weak_upgrade = branch_empty(nativeir.Op.SystemCall,
         fixture.option_type);
     weak_upgrade.signature = branch_fn_type_for_weak(fixture, 2, inout state);
@@ -892,15 +895,15 @@ func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
     weak_upgrade.inputs = [2010];
     weak_upgrade.result = option.Option[usize].Some(2011);
     let ignored_empty_upgrade = emit_instruction(weak_upgrade, inout state);
-    let empty_option = value(state, 2011);
+    let empty_option = emitcore.value(state, 2011);
     let empty_tag = branch_option_tag(fixture.option_type, empty_option,
         inout state);
     branch_expect(empty_tag, 0, 61, inout state);
 
-    let weak_env = branch_make_env([fixture.i32_type], [c_int("i32", 9)],
+    let weak_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 9)],
         inout state);
-    let weak_entry = function_thunk(B_FN, inout state);
-    let weak_fn = c_function_value_of(weak_entry, weak_env, inout state);
+    let weak_entry = emitvalues.test_function_thunk(B_FN, inout state);
+    let weak_fn = emitsystem.test_c_function_value_of(weak_entry, weak_env, inout state);
     branch_bind(2020, fixture.fn_type, weak_fn, inout state);
     var weak_downgrade = branch_empty(nativeir.Op.SystemCall,
         fixture.weak_type);
@@ -912,41 +915,41 @@ func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
     weak_upgrade.inputs = [2021];
     weak_upgrade.result = option.Option[usize].Some(2022);
     let ignored_live_upgrade = emit_instruction(weak_upgrade, inout state);
-    let live_option = value(state, 2022);
+    let live_option = emitcore.value(state, 2022);
     let live_tag = branch_option_tag(fixture.option_type, live_option,
         inout state);
     branch_expect(live_tag, 1, 62, inout state);
-    let live_payload = c_extract("{ " + FN_TYPE + " }", live_option, 2,
+    let live_payload = emitvalues.c_extract("{ " + emitcore.FN_TYPE + " }", live_option, 2,
         inout state);
-    let live_function = c_extract(FN_TYPE, live_payload, 0, inout state);
-    let live_slot = branch_store_fn(live_function, FN_TYPE, inout state);
-    let live_drop = value_op(fixture.fn_type, false, inout state);
-    let ignored_live_drop = c_call(live_drop, [live_slot], "void", inout state);
+    let live_function = emitvalues.c_extract(emitcore.FN_TYPE, live_payload, 0, inout state);
+    let live_slot = branch_store_fn(live_function, emitcore.FN_TYPE, inout state);
+    let live_drop = emitvalues.value_op(fixture.fn_type, false, inout state);
+    let ignored_live_drop = emitvalues.c_call(live_drop, [live_slot], "void", inout state);
     let weak_refs = branch_vec_refs(weak_env, inout state);
     branch_expect(weak_refs, 1, 63, inout state);
-    let ignored_weak_strong = runtime("lang_vec_release_v1", "void", [weak_env],
+    let ignored_weak_strong = emitcore.runtime("lang_vec_release_v1", "void", [weak_env],
         inout state);
     weak_upgrade.inputs = [2021];
     weak_upgrade.result = option.Option[usize].Some(2023);
     let ignored_dead_upgrade = emit_instruction(weak_upgrade, inout state);
-    let dead_option = value(state, 2023);
+    let dead_option = emitcore.value(state, 2023);
     let dead_tag = branch_option_tag(fixture.option_type, dead_option,
         inout state);
     branch_expect(dead_tag, 0, 64, inout state);
-    let weak_layout = lower_type(fixture.weak_type, inout state);
-    let weak_slot = storage(weak_layout, inout state);
-    let weak_value = value(state, 2021);
-    c_store(weak_value, weak_slot, inout state);
-    let weak_drop = value_op(fixture.weak_type, false, inout state);
-    let ignored_weak_drop = c_call(weak_drop, [weak_slot], "void", inout state);
+    let weak_layout = emitcore.lower_type(fixture.weak_type, inout state);
+    let weak_slot = emitcore.storage(weak_layout, inout state);
+    let weak_value = emitcore.value(state, 2021);
+    emitvalues.c_store(weak_value, weak_slot, inout state);
+    let weak_drop = emitvalues.value_op(fixture.weak_type, false, inout state);
+    let ignored_weak_drop = emitvalues.c_call(weak_drop, [weak_slot], "void", inout state);
 
     // ThreadSpawn through the formal SystemCall group.
-    let thread_entry_code = function_thunk(B_ENTRY, inout state);
-    let entry_value = c_function_value_of(thread_entry_code, c_null(),
+    let thread_entry_code = emitvalues.test_function_thunk(B_ENTRY, inout state);
+    let entry_value = emitsystem.test_c_function_value_of(thread_entry_code, emitvalues.c_null(),
         inout state);
-    let thread_env = branch_make_env([fixture.i32_type], [c_int("i32", 1)],
+    let thread_env = branch_make_env([fixture.i32_type], [emitvalues.c_int("i32", 1)],
         inout state);
-    let inner_fn = c_function_value_of(thread_entry_code, thread_env,
+    let inner_fn = emitsystem.test_c_function_value_of(thread_entry_code, thread_env,
         inout state);
     let receiver_value = branch_receiver_value(inner_fn, fixture.receiver_type,
         inout state);
@@ -958,33 +961,33 @@ func branch_ops_main(fixture BranchFixture, state inout Emitter) throws Error {
     spawn.inputs = [2030, 2031];
     spawn.result = option.Option[usize].Some(2032);
     let ignored_spawn = emit_instruction(spawn, inout state);
-    let handle = value(state, 2032);
-    let waited = runtime("lang_thread_wait_v1", "i64", [handle], inout state);
+    let handle = emitcore.value(state, 2032);
+    let waited = emitcore.runtime("lang_thread_wait_v1", "i64", [handle], inout state);
     branch_expect(waited, 0, 65, inout state);
-    let thread_result = runtime("lang_thread_result_v1", "i64", [handle],
+    let thread_result = emitcore.runtime("lang_thread_result_v1", "i64", [handle],
         inout state);
     branch_expect(thread_result, 42, 66, inout state);
-    let ignored_handle = runtime("lang_handle_release_v1", "void", [handle],
+    let ignored_handle = emitcore.runtime("lang_handle_release_v1", "void", [handle],
         inout state);
     let thread_refs = branch_vec_refs(thread_env, inout state);
     branch_expect(thread_refs, 1, 67, inout state);
-    let receiver_layout = lower_type(fixture.receiver_type, inout state);
-    let receiver_slot = storage(receiver_layout, inout state);
-    c_store(receiver_value, receiver_slot, inout state);
-    let receiver_drop = value_op(fixture.receiver_type, false, inout state);
-    let ignored_receiver = c_call(receiver_drop, [receiver_slot], "void",
+    let receiver_layout = emitcore.lower_type(fixture.receiver_type, inout state);
+    let receiver_slot = emitcore.storage(receiver_layout, inout state);
+    emitvalues.c_store(receiver_value, receiver_slot, inout state);
+    let receiver_drop = emitvalues.value_op(fixture.receiver_type, false, inout state);
+    let ignored_receiver = emitvalues.c_call(receiver_drop, [receiver_slot], "void",
         inout state);
-    c_ret(c_int("i32", 0), inout state);
+    emitvalues.test_c_ret(emitvalues.c_int("i32", 0), inout state);
 }
 
 // ---- public test entry ------------------------------------------------------
 
-func branch_build(name string, optimization u32) string throws Error {
+func branch_build(name string, optimization u32) string throws emitcore.Error {
     let fixture = branch_setup();
     var options = default_options();
     options.optimization = optimization;
-    var state = new_emitter(fixture.module, options);
-    declare_runtime_types(inout state);
+    var state = emitcore.new_emitter(fixture.module, core_settings(options));
+    emitcore.declare_runtime_types(inout state);
     if name == "fn" {
         branch_fn_main(fixture, inout state);
     } else if name == "weak" {
@@ -998,9 +1001,9 @@ func branch_build(name string, optimization u32) string throws Error {
     } else {
         throw c_driver_bad("unknown branch fixture " + name);
     }
-    return c_driver_join(sections(state));
+    return c_driver_join(emitcore.sections(state));
 }
 
-pub func c_branch_module(name string, optimization u32) string throws Error {
+pub func c_branch_module(name string, optimization u32) string throws emitcore.Error {
     return branch_build(name, optimization);
 }

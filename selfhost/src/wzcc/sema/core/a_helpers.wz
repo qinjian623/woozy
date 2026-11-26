@@ -1,0 +1,493 @@
+// Internal helpers shared by the A-side (types, declarations, generics).
+// Every name is prefixed so it cannot collide with B's algorithms.
+package core;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/sema/borrow" as borrow;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func a_copy_ids(values Vec[usize]) Vec[usize] {
+    var out=vec.empty[usize]();
+    for value in values {vec.push(out,value);}
+    return out;
+}
+pub func a_copy_substitutions(values Vec[model.Substitution]) Vec[model.Substitution] {
+    var out=vec.empty[model.Substitution]();
+    for value in values {vec.push(out,model.Substitution(symbol:value.symbol,type_id:value.type_id));}
+    return out;
+}
+func a_copy_parameters(values Vec[hir.Parameter]) Vec[hir.Parameter] {
+    var out=vec.empty[hir.Parameter]();
+    for value in values {vec.push(out,hir.Parameter(symbol:value.symbol,label:value.label));}
+    return out;
+}
+pub func a_copy_parameter_types(values Vec[model.ParameterType]) Vec[model.ParameterType] {
+    var out=vec.empty[model.ParameterType]();
+    for value in values {vec.push(out,model.ParameterType(mode:value.mode,type_id:value.type_id));}
+    return out;
+}
+pub func a_copy_trait_ref(value hir.TraitRef) hir.TraitRef {
+    return hir.TraitRef(declaration:value.declaration,args:a_copy_ids(value.args));
+}
+func a_copy_optional_trait(value option.Option[hir.TraitRef]) option.Option[hir.TraitRef] {
+    switch value {
+        case option.Option.Some(item):return option.Option[hir.TraitRef].Some(a_copy_trait_ref(item));
+        case option.Option.None:return option.Option[hir.TraitRef].None;
+    }
+}
+pub func a_copy_generic_params(values Vec[hir.GenericParam]) Vec[hir.GenericParam] {
+    var out=vec.empty[hir.GenericParam]();
+    for value in values {
+        vec.push(out,hir.GenericParam(symbol:value.symbol,
+            trait_ref:a_copy_optional_trait(value.trait_ref),source:value.source));
+    }
+    return out;
+}
+func a_copy_fields(values Vec[hir.FieldDecl]) Vec[hir.FieldDecl] {
+    var out=vec.empty[hir.FieldDecl]();
+    for value in values {vec.push(out,value);}
+    return out;
+}
+func a_copy_variants(values Vec[hir.VariantDecl]) Vec[hir.VariantDecl] {
+    var out=vec.empty[hir.VariantDecl]();
+    for value in values {
+        vec.push(out,hir.VariantDecl(symbol:value.symbol,
+            payload:a_copy_fields(value.payload),source:value.source));
+    }
+    return out;
+}
+func a_copy_methods(values Vec[hir.MethodPrototype]) Vec[hir.MethodPrototype] {
+    let out=vec.empty[hir.MethodPrototype]();
+    for value in values {
+        vec.push(out,hir.MethodPrototype(symbol:value.symbol,signature:value.signature,
+            parameters:a_copy_parameters(value.parameters),source:value.source));
+    }
+    return out;
+}
+pub func a_kind(kind model.TypeKind,expected model.TypeKind) bool {
+    return model.type_kind_id(kind)==model.type_kind_id(expected);
+}
+pub func a_mode(mode model.ParamMode,expected model.ParamMode) bool {
+    switch mode {
+        case model.ParamMode.Ordinary: {
+            switch expected {case model.ParamMode.Ordinary:return true;default:return false;}
+        }
+        case model.ParamMode.Inout: {
+            switch expected {case model.ParamMode.Inout:return true;default:return false;}
+        }
+        case model.ParamMode.Move: {
+            switch expected {case model.ParamMode.Move:return true;default:return false;}
+        }
+    }
+}
+pub func a_symbol_kind(kind model.SymbolKind,expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind)==model.symbol_kind_id(expected);
+}
+func a_option_usize(value option.Option[usize]) usize {
+    switch value {case option.Option.Some(item):return item;case option.Option.None:return 0;}
+}
+pub func a_option_some_usize(value option.Option[usize],expected usize) bool {
+    switch value {case option.Option.Some(item):return item==expected;case option.Option.None:return false;}
+}
+func a_ids_equal(left Vec[usize],right Vec[usize]) bool {
+    if vec.len(left)!=vec.len(right) {return false;}
+    for var index usize=0;index<vec.len(left);index+=1 {
+        if left[index]!=right[index] {return false;}
+    }
+    return true;
+}
+pub func a_trait_equal(left hir.TraitRef,right hir.TraitRef) bool {
+    return left.declaration==right.declaration && a_ids_equal(left.args,right.args);
+}
+func a_optional_trait_some_equal(value option.Option[hir.TraitRef],expected hir.TraitRef) bool {
+    switch value {
+        case option.Option.Some(item):return a_trait_equal(item,expected);
+        case option.Option.None:return false;
+    }
+}
+func a_optional_trait_equal(left option.Option[hir.TraitRef],right option.Option[hir.TraitRef]) bool {
+    switch left {
+        case option.Option.Some(item): {
+            switch right {
+                case option.Option.Some(other):return a_trait_equal(item,other);
+                case option.Option.None:return false;
+            }
+        }
+        case option.Option.None: {
+            switch right {case option.Option.Some(other):return false;case option.Option.None:return true;}
+        }
+    }
+}
+func a_key_less(left NodeKey,right NodeKey) bool {
+    if left.module!=right.module {return left.module<right.module;}
+    if left.file!=right.file {return left.file<right.file;}
+    return left.node<right.node;
+}
+func a_node_symbol_get(entries Vec[NodeSymbolEntry],key NodeKey) option.Option[usize] {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_key_less(entries[mid].key,key) {low=mid+1;} else {high=mid;}
+    }
+    if low<vec.len(entries) && same_node_key(entries[low].key,key) {
+        return option.Option[usize].Some(entries[low].symbol);
+    }
+    return option.Option[usize].None;
+}
+func a_usize_lower_bound(entries Vec[usize],value usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid]<value {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+func a_symbol_type_pos(entries Vec[SymbolTypeEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_symbol_type_get(entries Vec[SymbolTypeEntry],symbol usize) option.Option[usize] {
+    let pos=a_symbol_type_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[usize].Some(entries[pos].type_id);
+    }
+    return option.Option[usize].None;
+}
+pub func a_symbol_type_set(entries Vec[SymbolTypeEntry],symbol usize,type_id usize) {
+    let pos=a_symbol_type_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].type_id=type_id;return;}
+    vec.push(entries,SymbolTypeEntry(symbol:0,type_id:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=SymbolTypeEntry(symbol:symbol,type_id:type_id);
+}
+func a_symbol_type_remove(entries Vec[SymbolTypeEntry],symbol usize) {
+    let pos=a_symbol_type_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos>=n || entries[pos].symbol!=symbol {return;}
+    var cursor=pos;for cursor+1<n {entries[cursor]=entries[cursor+1];cursor+=1;}
+    var dropped=vec.pop(entries);
+}
+func a_trait_signature_pos(entries Vec[TraitSignatureEntry],method usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].method<method {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_trait_signature_get(entries Vec[TraitSignatureEntry],method usize) option.Option[TraitSignatureEntry] {
+    let pos=a_trait_signature_pos(entries,method);
+    if pos<vec.len(entries) && entries[pos].method==method {
+        return option.Option[TraitSignatureEntry].Some(entries[pos]);
+    }
+    return option.Option[TraitSignatureEntry].None;
+}
+pub func a_trait_signature_set(entries Vec[TraitSignatureEntry],method usize,trait_self usize,callback bool) {
+    let pos=a_trait_signature_pos(entries,method);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].method==method {
+        entries[pos].trait_self=trait_self;
+        entries[pos].trait_self_callback=callback;
+        return;
+    }
+    vec.push(entries,TraitSignatureEntry(method:0,trait_self:0,trait_self_callback:false));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=TraitSignatureEntry(method:method,trait_self:trait_self,trait_self_callback:callback);
+}
+func a_generic_params_pos(entries Vec[GenericParamsEntry],owner usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].owner<owner {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_generic_params_get(entries Vec[GenericParamsEntry],owner usize) option.Option[Vec[hir.GenericParam]] {
+    let pos=a_generic_params_pos(entries,owner);
+    if pos<vec.len(entries) && entries[pos].owner==owner {
+        return option.Option[Vec[hir.GenericParam]].Some(entries[pos].params);
+    }
+    return option.Option[Vec[hir.GenericParam]].None;
+}
+pub func a_generic_params_set(entries Vec[GenericParamsEntry],owner usize,params Vec[hir.GenericParam]) {
+    let pos=a_generic_params_pos(entries,owner);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].owner==owner {entries[pos].params=params;return;}
+    vec.push(entries,GenericParamsEntry(owner:0,params:[]));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=GenericParamsEntry(owner:owner,params:params);
+}
+func a_parameters_pos(entries Vec[ParametersEntry],owner usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].owner<owner {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_parameters_get(entries Vec[ParametersEntry],owner usize) option.Option[Vec[hir.Parameter]] {
+    let pos=a_parameters_pos(entries,owner);
+    if pos<vec.len(entries) && entries[pos].owner==owner {
+        return option.Option[Vec[hir.Parameter]].Some(entries[pos].values);
+    }
+    return option.Option[Vec[hir.Parameter]].None;
+}
+func a_parameters_ensure_slot(entries Vec[ParametersEntry],owner usize) usize {
+    let pos=a_parameters_pos(entries,owner);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].owner==owner {return pos;}
+    vec.push(entries,ParametersEntry(owner:0,values:[]));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=ParametersEntry(owner:owner,values:vec.empty[hir.Parameter]());
+    return pos;
+}
+pub func a_parameters_ensure(entries Vec[ParametersEntry],owner usize) {
+    let ignored=a_parameters_ensure_slot(entries,owner);
+}
+pub func a_parameters_push(entries Vec[ParametersEntry],owner usize,value hir.Parameter) {
+    let pos=a_parameters_ensure_slot(entries,owner);
+    vec.push(entries[pos].values,value);
+}
+func a_bound_pos(entries Vec[BoundEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_bound_get(entries Vec[BoundEntry],symbol usize) option.Option[option.Option[hir.TraitRef]] {
+    let pos=a_bound_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[option.Option[hir.TraitRef]].Some(entries[pos].trait_ref);
+    }
+    return option.Option[option.Option[hir.TraitRef]].None;
+}
+pub func a_bound_set(entries Vec[BoundEntry],symbol usize,trait_ref option.Option[hir.TraitRef]) {
+    let pos=a_bound_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].trait_ref=trait_ref;return;}
+    vec.push(entries,BoundEntry(symbol:0,trait_ref:option.Option[hir.TraitRef].None));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=BoundEntry(symbol:symbol,trait_ref:trait_ref);
+}
+func a_body_pos(entries Vec[BodyEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_body_get(entries Vec[BodyEntry],symbol usize) option.Option[model.NodeRef] {
+    let pos=a_body_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[model.NodeRef].Some(entries[pos].source);
+    }
+    return option.Option[model.NodeRef].None;
+}
+pub func a_body_set(entries Vec[BodyEntry],symbol usize,source model.NodeRef) {
+    let pos=a_body_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].source=source;return;}
+    vec.push(entries,BodyEntry(symbol:0,source:source));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=BodyEntry(symbol:symbol,source:source);
+}
+pub func a_template_get(entries Vec[TemplateIdEntry],symbol usize) option.Option[usize] {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    if low<vec.len(entries) && entries[low].symbol==symbol {
+        return option.Option[usize].Some(entries[low].index);
+    }
+    return option.Option[usize].None;
+}
+func a_ids_cmp(left Vec[usize],right Vec[usize]) i32 {
+    if vec.len(left)!=vec.len(right) {
+        if vec.len(left)<vec.len(right) {return -1;}
+        return 1;
+    }
+    for var index usize=0;index<vec.len(left);index+=1 {
+        if left[index]!=right[index] {
+            if left[index]<right[index] {return -1;}
+            return 1;
+        }
+    }
+    return 0;
+}
+func a_instance_key_cmp(left InstanceKey,right InstanceKey) i32 {
+    if left.origin!=right.origin {
+        if left.origin<right.origin {return -1;}
+        return 1;
+    }
+    return a_ids_cmp(left.args,right.args);
+}
+func a_instance_pos(entries Vec[InstanceEntry],key InstanceKey) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_instance_key_cmp(entries[mid].key,key)<0 {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_instance_get(entries Vec[InstanceEntry],key InstanceKey) option.Option[usize] {
+    let pos=a_instance_pos(entries,key);
+    if pos<vec.len(entries) && a_instance_key_cmp(entries[pos].key,key)==0 {
+        return option.Option[usize].Some(entries[pos].symbol);
+    }
+    return option.Option[usize].None;
+}
+pub func a_instance_set(entries Vec[InstanceEntry],key InstanceKey,symbol usize) {
+    let pos=a_instance_pos(entries,key);
+    let n=vec.len(entries);
+    if pos<n && a_instance_key_cmp(entries[pos].key,key)==0 {entries[pos].symbol=symbol;return;}
+    vec.push(entries,InstanceEntry(key:key,symbol:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=InstanceEntry(key:key,symbol:symbol);
+}
+func a_trait_key_cmp(left TraitKey,right TraitKey) i32 {
+    if left.actual!=right.actual {
+        if left.actual<right.actual {return -1;}
+        return 1;
+    }
+    if left.declaration!=right.declaration {
+        if left.declaration<right.declaration {return -1;}
+        return 1;
+    }
+    return a_ids_cmp(left.args,right.args);
+}
+func a_trait_key_pos(entries Vec[TraitResultEntry],key TraitKey) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if a_trait_key_cmp(entries[mid].key,key)<0 {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_trait_key_get(entries Vec[TraitResultEntry],key TraitKey) option.Option[bool] {
+    let pos=a_trait_key_pos(entries,key);
+    if pos<vec.len(entries) && a_trait_key_cmp(entries[pos].key,key)==0 {
+        return option.Option[bool].Some(entries[pos].value);
+    }
+    return option.Option[bool].None;
+}
+pub func a_trait_results_set(entries Vec[TraitResultEntry],key TraitKey,value bool) {
+    let pos=a_trait_key_pos(entries,key);
+    let n=vec.len(entries);
+    if pos<n && a_trait_key_cmp(entries[pos].key,key)==0 {entries[pos].value=value;return;}
+    vec.push(entries,TraitResultEntry(key:key,value:false));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=TraitResultEntry(key:key,value:value);
+}
+func a_trait_key_equal(left TraitKey,right TraitKey) bool {
+    return left.actual==right.actual && left.declaration==right.declaration && a_ids_equal(left.args,right.args);
+}
+func a_trait_keys_contains(entries Vec[TraitKey],key TraitKey) bool {
+    for entry in entries {if a_trait_key_equal(entry,key) {return true;}}
+    return false;
+}
+pub func a_trait_keys_insert(entries Vec[TraitKey],key TraitKey) bool {
+    if a_trait_keys_contains(entries,key) {return false;}
+    vec.push(entries,key);return true;
+}
+pub func a_trait_keys_remove(entries Vec[TraitKey],key TraitKey) {
+    for var index usize=0;index<vec.len(entries);index+=1 {
+        if a_trait_key_equal(entries[index],key) {
+            var cursor=index;
+            for cursor+1<vec.len(entries) {entries[cursor]=entries[cursor+1];cursor+=1;}
+            let dropped=vec.pop(entries);return;
+        }
+    }
+}
+pub func a_contains(entries Vec[usize],value usize) bool {
+    let pos=a_usize_lower_bound(entries,value);
+    return pos<vec.len(entries) && entries[pos]==value;
+}
+pub func a_insert(entries Vec[usize],value usize) bool {
+    let pos=a_usize_lower_bound(entries,value);
+    let n=vec.len(entries);
+    if pos<n && entries[pos]==value {return false;}
+    vec.push(entries,0);
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=value;
+    return true;
+}
+pub func a_contains_string(entries Vec[string],value string) bool {
+    for entry in entries {if entry==value {return true;}}
+    return false;
+}
+pub func a_nominal_id_get(entries Vec[borrow.NominalIdEntry],symbol usize) option.Option[usize] {
+    return borrow.nominal_id_get(entries,symbol);
+}
+pub func a_nominal_id_set(entries Vec[borrow.NominalIdEntry],symbol usize,index usize) {
+    borrow.nominal_id_set(entries,symbol,index);
+}
+func a_c_named_pos(entries Vec[CNamedTypeEntry],c_type u32) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].c_type<c_type {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+pub func a_c_named_get(entries Vec[CNamedTypeEntry],c_type u32) option.Option[usize] {
+    let pos=a_c_named_pos(entries,c_type);
+    if pos<vec.len(entries) && entries[pos].c_type==c_type {
+        return option.Option[usize].Some(entries[pos].type_id);
+    }
+    return option.Option[usize].None;
+}
+pub func a_c_named_set(entries Vec[CNamedTypeEntry],c_type u32,type_id usize) {
+    let pos=a_c_named_pos(entries,c_type);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].c_type==c_type {entries[pos].type_id=type_id;return;}
+    vec.push(entries,CNamedTypeEntry(c_type:0,type_id:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=CNamedTypeEntry(c_type:c_type,type_id:type_id);
+}
+pub func a_impl_index_of(state inout Checker,target usize) option.Option[usize] throws Error {
+    for var index usize=0;index<vec.len(state.m.impls);index+=1 {
+        for method in state.m.impls[index].methods {if method==target {return option.Option[usize].Some(index);}}
+    }
+    return option.Option[usize].None;
+}
+pub func a_impl_method(state inout Checker,target usize) bool throws Error {
+    switch a_impl_index_of(inout state,target) {
+        case option.Option.Some(index):return true;
+        case option.Option.None:return false;
+    }
+}
+pub func a_private_runtime_type_name(name string) bool {
+    return name=="__woozy_Thread" || name=="__woozy_Mutex" ||
+        name=="__woozy_Condvar" || name=="__woozy_AtomicI64" ||
+        name=="__woozy_IpcHandle";
+}
+pub func a_private_runtime_type_module(path string) bool {
+    return path=="std/thread" || path=="std/sync" || path=="std/ipc";
+}
+pub func a_module_path(state inout Checker,module_id usize) string throws Error {
+    if module_id>=vec.len(state.m.resolved.project.modules) {throw internal_error("invalid sema module reference");}
+    return state.m.resolved.project.modules[module_id].logical_path;
+}
+pub func a_foreign_export(state inout Checker,symbol_id usize) option.Option[model.ForeignExport] throws Error {
+    let value=symbol(inout state,symbol_id);
+    switch value.foreign {
+        case option.Option.Some(ref): {
+            if ref.module>=vec.len(state.m.resolved.project.modules) {throw internal_error("invalid foreign module reference");}
+            if ref.index>=vec.len(state.m.resolved.project.modules[ref.module].foreign_exports) {throw internal_error("invalid foreign export reference");}
+            return option.Option[model.ForeignExport].Some(state.m.resolved.project.modules[ref.module].foreign_exports[ref.index]);
+        }
+        case option.Option.None:return option.Option[model.ForeignExport].None;
+    }
+}
+func a_noop_function(value hir.FunctionValue) hir.FunctionValue {return value;}
+pub func a_noop_function_throws(value hir.FunctionValue) hir.FunctionValue throws model.SupportError {return value;}

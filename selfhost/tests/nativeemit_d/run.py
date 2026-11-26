@@ -232,15 +232,17 @@ def copy_package(source_root, project, package):
 
 def build_base_project(label):
     project = WORK / ('project-' + label)
-    for package_dir in sorted(CANDIDATE.iterdir()):
+    base = CANDIDATE if CANDIDATE is not None else SOURCE_ROOT
+    for package_dir in sorted(base.iterdir()):
         if package_dir.is_dir() and any(package_dir.glob('*.wz')):
-            copy_package(CANDIDATE, project, package_dir.name)
-    # Overlay only the production files under test.  B/C/E stay the frozen real
-    # candidate; no other worker's source is copied back into production.
+            copy_package(base, project, package_dir.name)
+    # Apply the selected emitter override at its package-relative paths.
     native = project / 'src/wzcc/nativeemit'
     native.mkdir(parents=True, exist_ok=True)
-    for source in sorted(NATIVEEMIT.glob('*.wz')):
-        shutil.copy2(source, native / source.name)
+    for source in sorted(NATIVEEMIT.rglob('*.wz')):
+        destination = native / source.relative_to(NATIVEEMIT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
     (project / 'lang.toml').write_text(
         'schema_version=1\n[package]\nname="nativeemit_d_' + label + '"\n'
         'source_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n')
@@ -250,21 +252,23 @@ def prerequisite_reason():
     missing = []
     if not NATIVEEMIT.is_dir():
         missing.append(str(NATIVEEMIT))
-    for name in ['state.wz', 'text.wz']:
+    for name in ['core/state.wz', 'core/text.wz']:
         if not (NATIVEEMIT / name).is_file():
             missing.append(str(NATIVEEMIT / name))
-    if not list(NATIVEEMIT.glob('d_*.wz')):
+    if not list(NATIVEEMIT.rglob('d_*.wz')):
         missing.append(str(NATIVEEMIT / 'd_*.wz'))
     if CANDIDATE is None:
         for pattern, label in [('b_*.wz', 'B'), ('c_*.wz', 'C'), ('e_*.wz', 'E')]:
-            if not list(NATIVEEMIT.glob(pattern)):
+            if not list(NATIVEEMIT.rglob(pattern)):
                 missing.append(f'production nativeemit {label} ({pattern})')
         for package in ['nativelayout', 'valueops']:
             if not list((SOURCE_ROOT / package).glob('*.wz')):
                 missing.append(str(SOURCE_ROOT / package))
     else:
+        if not (CANDIDATE / 'nativeemit/core/state.wz').is_file():
+            missing.append(str(CANDIDATE / 'nativeemit/core/state.wz'))
         for pattern, label in [('b_*.wz', 'B'), ('c_*.wz', 'C'), ('e_*.wz', 'E')]:
-            if not list((CANDIDATE / 'nativeemit').glob(pattern)):
+            if not list((CANDIDATE / 'nativeemit').rglob(pattern)):
                 missing.append(f'candidate nativeemit {label} ({pattern})')
         for package in ['nativelayout', 'valueops']:
             if not list((CANDIDATE / package).glob('*.wz')):
@@ -339,7 +343,7 @@ result = {'status': 'failed', 'work_dir': str(WORK), 'd_files': [],
           'public_emit': 'not_run', 'cases': [], 'records_file': str(WORK / 'commands.json')}
 opt = 0
 try:
-    d_files = sorted(NATIVEEMIT.glob('d_*.wz'))
+    d_files = sorted(NATIVEEMIT.rglob('d_*.wz'))
     if not d_files:
         raise RuntimeError('no d_*.wz files found in ' + str(NATIVEEMIT))
     for source in d_files:
@@ -390,6 +394,8 @@ try:
         if args.only in ('all', 'raw'):
             project = build_base_project('raw')
             shutil.copy2(HERE / 'raw/driver.wz', project / 'src/wzcc/nativeemit/review_d.wz')
+            shutil.copy2(HERE / 'raw/values_probe.wz',
+                         project / 'src/wzcc/nativeemit/values/d_fixture_test.wz')
             shutil.copy2(HERE / 'raw/main.wz', project / 'src/main.wz')
             command('raw-check', [STAGE0, 'check', '--project', project / 'lang.toml',
                     '--backend', 'native', '--format', 'json'])

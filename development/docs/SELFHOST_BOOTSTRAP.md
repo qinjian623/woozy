@@ -4,23 +4,23 @@
 
 `selfhost/bootstrap.py` 把同一份编译器和标准库源码复制到固定目录，再依次构建 stage1、stage2、stage3。stage1 使用现有 C++ 编译器；后两代只能使用上一代 Woozy 编译器，以及指定目录里的 opt、llc、Clang 和 LLD。运行库使用构建目录中已有的两个静态库。
 
-用 Make 按源码包自举时，执行 `make -C selfhost bootstrap`。第一代用 C++ 种子生成分包对象，第二、三代用上一代 Woozy 编译器执行 `--source-make`。GNU Make 为每个源码包编译对象，再合并对象和链接。执行检查也会核对 Make、shell 和 mkdir 的路径。
+按源码包自举时，第一代用 C++ 种子的 `--package-objects` 入口，仍需 Ninja。第二、三代用上一代 Woozy 编译器执行 `--source-make`，编译器直接安排每个源码包的编译，汇总对象后链接。第二、三代的执行记录只允许上一代编译器和冻结的 LLVM 工具。
 
 ```sh
-make -C selfhost bootstrap \
-  OUT="$PWD/build/selfhost-bootstrap" \
-  STAGE0="$PWD/build/woozy-stdlib-native/woozyc" \
-  RUNTIME_DIR="$PWD/build/woozy-stdlib-native/native" \
-  JOBS=6
+python3 -B selfhost/bootstrap.py --source-make \
+  --out-dir "$PWD/build/selfhost-bootstrap" \
+  --stage0 "$PWD/build/woozy-stdlib-native/woozyc" \
+  --runtime-dir "$PWD/build/woozy-stdlib-native/native" \
+  --opt 0 --jobs 6
 ```
 
-从仓库根目录运行这条命令。自举默认在仓库旁的 `toolchains/` 查找 LLVM 和兼容库，也可用 `WOOZY_TOOLCHAIN_ROOT` 指向目标机器上的同一目录布局。第二代起需要 Linux 的 `strace`，默认从 `PATH` 查找，可通过 `STRACE` 指定。
+从仓库根目录运行这条命令。自举默认在仓库旁的 `toolchains/` 查找 LLVM 和兼容库，也可用 `WOOZY_TOOLCHAIN_ROOT` 指向目标机器上的同一目录布局。第二代起需要 Linux 的 `strace`，默认从 `PATH` 查找，可通过 `--strace` 指定。
 
-也可从其他目录用 `make -f '/absolute/path to/repo/selfhost/Makefile' bootstrap` 独立调用；两种调用都允许通过 `MAKEFILES` 预载其他 Makefile，但不支持通过 `include` 或多份 `-f` 混用该入口。`OUT`、`STAGE0`、`RUNTIME_DIR` 和 `STRACE` 按字面值传给脚本；例如在 shell 中写 `OUT='/path with spaces/$name'`，不要为了 Make 额外转义 `$`。`PYTHON` 仍可指定命令及参数，例如 `PYTHON='python3 -I'`。
+习惯使用 Make 的开发者仍可运行 `make -C selfhost bootstrap`，也可从其他目录用 `make -f '/absolute/path to/repo/selfhost/Makefile' bootstrap` 独立调用；两种调用都允许通过 `MAKEFILES` 预载其他 Makefile，但不支持通过 `include` 或多份 `-f` 混用该入口。`OUT`、`STAGE0`、`RUNTIME_DIR` 和 `STRACE` 按字面值传给脚本；例如在 shell 中写 `OUT='/path with spaces/$name'`，不要为了 Make 额外转义 `$`。`PYTHON` 仍可指定命令及参数，例如 `PYTHON='python3 -I'`。
 
-Make 入口默认构建三代，使用 `OPT=0`，每个包仍执行 LLVM 验证。可指定 `OPT=2`，或用 `STAGES=2` 只构建到第二代。下游 GNU Make 使用 `-jJOBS`，不继承外层 Make 的选项、jobserver、额外 Makefile 或命令行变量覆盖。该入口省略对象缓存。
+Python 脚本默认构建三代，`--stages 2` 只构建到第二代。用 `--opt 0` 或 `--opt 2` 选择优化级别，每个包都执行 LLVM 校验。第二、三代用 `--jobs` 设置同时编译的包数，默认 1，省略对象缓存。可选的 Make 入口默认使用 `OPT=0`，并把 `STAGES`、`OPT` 和 `JOBS` 直接传给 Python 脚本。
 
-`OPT=0` 构建第二代及后续版本时，脚本会把本次构建进程的栈上限提高到至少 16 MiB。系统硬上限低于 16 MiB 时，脚本会报错。
+`--opt 0` 构建第二代及后续版本时，脚本会把本次构建进程的栈上限提高到至少 16 MiB。系统硬上限低于 16 MiB 时，脚本会报错。
 
 自举源码按目录分包。`hirverify` 保留公共验证入口，声明、调用、节点、控制流、泛型实例和后端检查由六个子包实现。`semaeffects` 处理控制流和错误效果，`nativeadapter` 生成 C 适配器。各源码包生成自己的 LLVM IR 和对象文件，`OPT=2` 时每包完整执行一次 O2 和逐遍校验，再按固定顺序链接。
 
@@ -56,7 +56,7 @@ python3 selfhost/bootstrap.py \
 
 ## macOS arm64
 
-使用已经能在 Mac 上运行的 Wz 版 `woozyc` 作为第一代。准备好 GNU Make、LLVM 22.1.8、macOS SDK，以及 [Darwin 运行库](INCREMENTAL_COMPILATION.md#macos-arm64-构建)。以下命令从仓库根目录运行。
+使用能在 Mac 上运行并支持 `--source-make --jobs N` 的 Wz 版 `woozyc` 作为第一代。准备好 LLVM 22.1.8、macOS SDK，以及 [Darwin 运行库](INCREMENTAL_COMPILATION.md#macos-arm64-构建)。以下命令从仓库根目录运行。
 
 ```sh
 python3 selfhost/bootstrap_macos.py \
@@ -68,6 +68,6 @@ python3 selfhost/bootstrap_macos.py \
 
 输出目录必须是新目录。标准库默认取自种子旁的 `stdlib/`，也可用 `--stdlib` 指定。脚本只在本次自举的进程内将栈上限提高到至少 16 MiB。即使选了 `--opt 2`，输入的种子也可能是 O0 编译出来的。
 
-第二、三代各由上一代通过源码 Make 构建。每个包保留 LLVM 校验，生成的 Mach-O 归档用 SDK 链接。脚本运行两个新编译器检查项目，最后逐字节比较两代可执行文件。每代日志及 `result.json` 在输出目录内。
+第二、三代各由上一代通过 `--source-make` 按源码包构建。每个包保留 LLVM 校验，生成的 Mach-O 归档用 SDK 链接。脚本运行两个新编译器检查项目，最后逐字节比较两代可执行文件。每代日志及 `result.json` 在输出目录内。
 
 Apple Silicon 实机用移植期间的固定源码快照完成了 O0 和 O2 两轮自举。每轮的第二、三代各编译 76 个源码包，两个可执行文件逐字节相同。

@@ -19,6 +19,8 @@
 //   7 completed Task with an owning Task error; same clear idempotence check
 //   8 cancelled Task whose owning result was never written; clear is a no-op
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/values" as emitvalues;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -39,40 +41,40 @@ func rd_span() model.Span {
     return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
 }
 
-func rd_type(m inout nir.Module, t model.Type) usize throws Error {
+func rd_type(m inout nir.Module, t model.Type) usize throws emitcore.Error {
     try { return types.intern(inout m.hir.types, t); }
-    catch error types.Error { throw invalid("raw driver type invalid"); }
+    catch error types.Error { throw emitcore.invalid("raw driver type invalid"); }
 }
 
-func rd_unit(m inout nir.Module) usize throws Error {
+func rd_unit(m inout nir.Module) usize throws emitcore.Error {
     return rd_type(inout m, model.empty_type(model.TypeKind.Unit));
 }
 
-func rd_i32(m inout nir.Module) usize throws Error {
+func rd_i32(m inout nir.Module) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.SignedInt);
     t.bits = 32;
     return rd_type(inout m, t);
 }
 
-func rd_vec(m inout nir.Module, element usize) usize throws Error {
+func rd_vec(m inout nir.Module, element usize) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.Vec);
     t.type_args = [element];
     return rd_type(inout m, t);
 }
 
-func rd_task(m inout nir.Module, value usize, error usize) usize throws Error {
+func rd_task(m inout nir.Module, value usize, error usize) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.Task);
     t.type_args = [value, error];
     return rd_type(inout m, t);
 }
 
-func rd_fn(m inout nir.Module, result usize) usize throws Error {
+func rd_fn(m inout nir.Module, result usize) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.Function);
     t.result = result;
     return rd_type(inout m, t);
 }
 
-func rd_fn_param(m inout nir.Module, parameter usize, result usize) usize throws Error {
+func rd_fn_param(m inout nir.Module, parameter usize, result usize) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.Function);
     t.parameters = [model.ParameterType(mode: model.ParamMode.Ordinary,
         type_id: parameter)];
@@ -173,16 +175,16 @@ func rd_owner_slot(type_id usize, identity u64) nir.Slot {
         owning_parameter: false, binding: o.Option[usize].Some(usize(identity)));
 }
 
-func rd_find_function(state Emitter, name string) usize throws Error {
+func rd_find_function(state emitcore.Emitter, name string) usize throws emitcore.Error {
     for var index usize = 0; index < vec.len(state.functions); index += 1 {
         if state.functions[index].name == name { return index; }
     }
-    throw invalid("generated function is missing: " + name);
+    throw emitcore.invalid("generated function is missing: " + name);
 }
 
 // ---- control cases ---------------------------------------------------------
 
-func rd_control(which usize) string throws Error {
+func rd_control(which usize) string throws emitcore.Error {
     var m = rd_input();
     let unit = rd_unit(inout m);
     let integer = rd_i32(inout m);
@@ -198,17 +200,17 @@ func rd_control(which usize) string throws Error {
         vec.push(blocks, rd_block(nir.Exit.ErrorReturn, [0], [], [constant], []));
     }
     vec.push(m.functions, rd_function(1, signature, true, [], blocks));
-    var state = new_emitter(m, default_options());
-    declare_runtime_types(inout state);
+    var state = emitcore.new_emitter(m, core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
     declare_source_functions(inout state);
     emit_function(0, inout state);
     emit_main(1, inout state);
-    return text.join(sections(state), "");
+    return text.join(emitcore.sections(state), "");
 }
 
 // ---- await cases -----------------------------------------------------------
 
-func rd_await(which usize) string throws Error {
+func rd_await(which usize) string throws emitcore.Error {
     var m = rd_input();
     let unit = rd_unit(inout m);
     let integer = rd_i32(inout m);
@@ -243,16 +245,16 @@ func rd_await(which usize) string throws Error {
     vec.push(m.functions, rd_function(0, child_signature, true, [], child_blocks));
     vec.push(m.functions, rd_function(1, parent_signature, true, [], blocks));
 
-    var state = new_emitter(m, default_options());
-    declare_runtime_types(inout state);
+    var state = emitcore.new_emitter(m, core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
     declare_source_functions(inout state);
     emit_function(0, inout state);
     emit_function(1, inout state);
     emit_main(1, inout state);
-    return text.join(sections(state), "");
+    return text.join(emitcore.sections(state), "");
 }
 
-func task_type_for(m inout nir.Module, value usize, error usize) usize throws Error {
+func task_type_for(m inout nir.Module, value usize, error usize) usize throws emitcore.Error {
     return rd_task(inout m, value, error);
 }
 
@@ -268,46 +270,46 @@ func await_terminator(future_id usize, signature usize, targets Vec[usize])
 
 // ---- Vec strong-edge trace and clear ---------------------------------------
 
-func rd_vec_trace() string throws Error {
+func rd_vec_trace() string throws emitcore.Error {
     var m = rd_input();
     let integer = rd_i32(inout m);
     let inner = rd_vec(inout m, integer);
     let outer = rd_vec(inout m, inner);
-    var state = new_emitter(m, default_options());
-    declare_runtime_types(inout state);
-    let main_index = new_function("main", Signature(result: "i32", parameters: []),
+    var state = emitcore.new_emitter(m, core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
+    let main_index = emitcore.new_function("main", emitcore.Signature(result: "i32", parameters: []),
         "", "", inout state);
-    let entry = new_block(main_index, "entry", inout state);
-    position(entry, inout state);
-    let init = runtime("lang_gc_program_init_v1", "i64", [], inout state);
+    let entry = emitcore.new_block(main_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let init = emitcore.runtime("lang_gc_program_init_v1", "i64", [], inout state);
 
-    var outer_args = vec.empty[Value]();
-    vec.push(outer_args, Value(type_name: "i64", reference: "0"));
-    vec.push(outer_args, Value(type_name: "i64", reference: "8"));
-    vec.push(outer_args, Value(type_name: "ptr", reference: "null"));
-    vec.push(outer_args, Value(type_name: "ptr", reference: "null"));
-    let outer_value = runtime("lang_vec_new_v1", "ptr", outer_args, inout state);
-    var inner_args = vec.empty[Value]();
-    vec.push(inner_args, Value(type_name: "i64", reference: "0"));
-    vec.push(inner_args, Value(type_name: "i64", reference: "4"));
-    vec.push(inner_args, Value(type_name: "ptr", reference: "null"));
-    vec.push(inner_args, Value(type_name: "ptr", reference: "null"));
-    let inner_value = runtime("lang_vec_new_v1", "ptr", inner_args, inout state);
+    var outer_args = vec.empty[emitcore.Value]();
+    vec.push(outer_args, emitcore.Value(type_name: "i64", reference: "0"));
+    vec.push(outer_args, emitcore.Value(type_name: "i64", reference: "8"));
+    vec.push(outer_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    vec.push(outer_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    let outer_value = emitcore.runtime("lang_vec_new_v1", "ptr", outer_args, inout state);
+    var inner_args = vec.empty[emitcore.Value]();
+    vec.push(inner_args, emitcore.Value(type_name: "i64", reference: "0"));
+    vec.push(inner_args, emitcore.Value(type_name: "i64", reference: "4"));
+    vec.push(inner_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    vec.push(inner_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    let inner_value = emitcore.runtime("lang_vec_new_v1", "ptr", inner_args, inout state);
     // lang_vec_new_v1 leaves initialized=0; push copies the element and
     // publishes initialized=1, which is the prefix the GC trace walks.
-    let element_slot = storage("ptr", inout state);
-    d_store("ptr", inner_value, element_slot, inout state);
-    var push_args = vec.empty[Value]();
+    let element_slot = emitcore.storage("ptr", inout state);
+    emitvalues.test_d_store("ptr", inner_value, element_slot, inout state);
+    var push_args = vec.empty[emitcore.Value]();
     vec.push(push_args, outer_value);
     vec.push(push_args, element_slot);
-    let push = runtime("lang_vec_push_v1", "void", push_args, inout state);
-    gc_register_vec(outer_value, inner, inout state);
-    let finish = runtime("lang_gc_program_finish_v1", "i64", [], inout state);
-    var release_args = vec.empty[Value]();
+    let push = emitcore.runtime("lang_vec_push_v1", "void", push_args, inout state);
+    emitvalues.gc_register_vec(outer_value, inner, inout state);
+    let finish = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+    var release_args = vec.empty[emitcore.Value]();
     vec.push(release_args, outer_value);
-    let release = runtime("lang_vec_release_v1", "void", release_args, inout state);
-    terminate("ret i32 0", inout state);
-    return text.join(sections(state), "");
+    let release = emitcore.runtime("lang_vec_release_v1", "void", release_args, inout state);
+    emitcore.terminate("ret i32 0", inout state);
+    return text.join(emitcore.sections(state), "");
 }
 
 // ---- owning Task payload: normal, error, cancel, repeated clear ------------
@@ -320,7 +322,7 @@ func weak_slot(type_id usize, parameter_index u32, identity u64) nir.Slot {
         owning_parameter: false, binding: o.Option[usize].Some(usize(identity)));
 }
 
-func rd_own(which usize) string throws Error {
+func rd_own(which usize) string throws emitcore.Error {
     var m = rd_input();
     let unit = rd_unit(inout m);
     let grandchild = rd_task(inout m, unit, unit);
@@ -382,95 +384,95 @@ func rd_own(which usize) string throws Error {
             canceller_slots, canceller_blocks));
     }
 
-    var state = new_emitter(m, default_options());
-    declare_runtime_types(inout state);
+    var state = emitcore.new_emitter(m, core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
     declare_source_functions(inout state);
     emit_function(0, inout state);
     emit_function(1, inout state);
     if which == 8 { emit_function(2, inout state); }
 
-    let main_index = new_function("main", Signature(result: "i32", parameters: []),
+    let main_index = emitcore.new_function("main", emitcore.Signature(result: "i32", parameters: []),
         "", "", inout state);
-    let entry = new_block(main_index, "entry", inout state);
-    position(entry, inout state);
-    let init = runtime("lang_gc_program_init_v1", "i64", [], inout state);
-    let target = call_target(state, 0);
-    let task = call(Signature(result: "ptr", parameters: []), target, [],
+    let entry = emitcore.new_block(main_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let init = emitcore.runtime("lang_gc_program_init_v1", "i64", [], inout state);
+    let target = emitcore.call_target(state, 0);
+    let task = emitcore.call(emitcore.Signature(result: "ptr", parameters: []), target, [],
         inout state);
-    var spawn_args = vec.empty[Value]();
+    var spawn_args = vec.empty[emitcore.Value]();
     vec.push(spawn_args, task);
-    let spawn = runtime("lang_async_spawn_v1", "void", spawn_args, inout state);
-    var canceller_task = Value(type_name: "ptr", reference: "null");
+    let spawn = emitcore.runtime("lang_async_spawn_v1", "void", spawn_args, inout state);
+    var canceller_task = emitcore.Value(type_name: "ptr", reference: "null");
     if which == 8 {
-        let canceller_target = call_target(state, 3);
-        var canceller_args = vec.empty[Value]();
+        let canceller_target = emitcore.call_target(state, 3);
+        var canceller_args = vec.empty[emitcore.Value]();
         vec.push(canceller_args, task);
-        canceller_task = call(Signature(result: "ptr", parameters: ["ptr"]),
+        canceller_task = emitcore.call(emitcore.Signature(result: "ptr", parameters: ["ptr"]),
             canceller_target, canceller_args, inout state);
-        var sprawl_args = vec.empty[Value]();
+        var sprawl_args = vec.empty[emitcore.Value]();
         vec.push(sprawl_args, canceller_task);
-        let sprawl = runtime("lang_async_spawn_v1", "void", sprawl_args,
+        let sprawl = emitcore.runtime("lang_async_spawn_v1", "void", sprawl_args,
             inout state);
     }
-    var run_args = vec.empty[Value]();
+    var run_args = vec.empty[emitcore.Value]();
     vec.push(run_args, task);
-    let run = runtime("lang_async_run_until_v1", "void", run_args, inout state);
+    let run = emitcore.runtime("lang_async_run_until_v1", "void", run_args, inout state);
     if which == 8 {
-        var run_canceller_args = vec.empty[Value]();
+        var run_canceller_args = vec.empty[emitcore.Value]();
         vec.push(run_canceller_args, canceller_task);
-        let run_canceller = runtime("lang_async_run_until_v1", "void",
+        let run_canceller = emitcore.runtime("lang_async_run_until_v1", "void",
             run_canceller_args, inout state);
     }
-    let shutdown = runtime("lang_async_shutdown_v1", "void", [], inout state);
-    let finish = runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+    let shutdown = emitcore.runtime("lang_async_shutdown_v1", "void", [], inout state);
+    let finish = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
 
     // The generated clear callback expects exactly the typed frame metadata.
     // Child has no owner slots, so its metadata record is { ptr }.
-    let metadata_type = define_type("lang.async.frame.meta.0", "{ ptr }",
+    let metadata_type = emitcore.define_type("lang.async.frame.meta.0", "{ ptr }",
         inout state);
-    let metadata = entry_result("ptr", "alloca " + metadata_type, inout state);
-    let promise_field = d_gep(metadata_type, metadata, 0, inout state);
-    var promise_args = vec.empty[Value]();
+    let metadata = emitcore.entry_result("ptr", "alloca " + metadata_type, inout state);
+    let promise_field = emitvalues.test_d_gep(metadata_type, metadata, 0, inout state);
+    var promise_args = vec.empty[emitcore.Value]();
     vec.push(promise_args, task);
-    let promise = runtime("lang_async_promise_v1", "ptr", promise_args, inout state);
-    d_store("ptr", promise, promise_field, inout state);
+    let promise = emitcore.runtime("lang_async_promise_v1", "ptr", promise_args, inout state);
+    emitvalues.test_d_store("ptr", promise, promise_field, inout state);
     let clear_index = rd_find_function(state, "lang.async.frame.clear.0");
-    let clear_value = function_reference(state, clear_index);
-    var clear_args = vec.empty[Value]();
+    let clear_value = emitcore.function_reference(state, clear_index);
+    var clear_args = vec.empty[emitcore.Value]();
     vec.push(clear_args, metadata);
-    let clear_one = call(Signature(result: "void", parameters: ["ptr"]),
+    let clear_one = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
         clear_value, clear_args, inout state);
-    var clear_two_args = vec.empty[Value]();
+    var clear_two_args = vec.empty[emitcore.Value]();
     vec.push(clear_two_args, metadata);
-    let clear_two = call(Signature(result: "void", parameters: ["ptr"]),
+    let clear_two = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
         clear_value, clear_two_args, inout state);
 
-    let task_layout = promise_type(child, inout state);
-    let claimed_address = d_gep(task_layout.type_name, promise, 1, inout state);
-    let claimed = d_load("i32", claimed_address, inout state);
-    let status_address = d_gep(task_layout.type_name, promise, 0, inout state);
-    let status = d_load("i32", status_address, inout state);
-    let ten = Value(type_name: "i32", reference: "10");
-    let scaled = result("i32", "mul " + typed(claimed) + ", " + ten.reference,
+    let task_layout = emitvalues.promise_type(child, inout state);
+    let claimed_address = emitvalues.test_d_gep(task_layout.type_name, promise, 1, inout state);
+    let claimed = emitvalues.test_d_load("i32", claimed_address, inout state);
+    let status_address = emitvalues.test_d_gep(task_layout.type_name, promise, 0, inout state);
+    let status = emitvalues.test_d_load("i32", status_address, inout state);
+    let ten = emitcore.Value(type_name: "i32", reference: "10");
+    let scaled = emitcore.result("i32", "mul " + emitcore.typed(claimed) + ", " + ten.reference,
         inout state);
-    let answer = result("i32", "add " + typed(scaled) + ", " + status.reference,
+    let answer = emitcore.result("i32", "add " + emitcore.typed(scaled) + ", " + status.reference,
         inout state);
 
-    var release_args = vec.empty[Value]();
+    var release_args = vec.empty[emitcore.Value]();
     vec.push(release_args, task);
-    let release = runtime("lang_async_task_release_v1", "void", release_args,
+    let release = emitcore.runtime("lang_async_task_release_v1", "void", release_args,
         inout state);
     if which == 8 {
-        var release_canceller_args = vec.empty[Value]();
+        var release_canceller_args = vec.empty[emitcore.Value]();
         vec.push(release_canceller_args, canceller_task);
-        let release_canceller = runtime("lang_async_task_release_v1", "void",
+        let release_canceller = emitcore.runtime("lang_async_task_release_v1", "void",
             release_canceller_args, inout state);
     }
-    terminate("ret " + typed(answer), inout state);
-    return text.join(sections(state), "");
+    emitcore.terminate("ret " + emitcore.typed(answer), inout state);
+    return text.join(emitcore.sections(state), "");
 }
 
-func sleep_i64(m inout nir.Module) usize throws Error {
+func sleep_i64(m inout nir.Module) usize throws emitcore.Error {
     var t = model.empty_type(model.TypeKind.SignedInt);
     t.bits = 64;
     return rd_type(inout m, t);
@@ -485,7 +487,7 @@ func block_terminator(kind nir.Exit, inputs Vec[usize]) nir.Terminator {
 
 // ---- entry point -----------------------------------------------------------
 
-pub func review_d_ir(which usize) string throws Error {
+pub func review_d_ir(which usize) string throws emitcore.Error {
     if which == 0 || which == 1 || which == 2 { return rd_control(which); }
     if which == 3 || which == 4 { return rd_await(which); }
     if which == 5 { return rd_vec_trace(); }

@@ -1,0 +1,99 @@
+// Per-module and per-function verifier state.
+//
+// Body carries the independent CFG copy plus the precomputed analyses that the
+// instruction, ownership and cleanup checks consume.
+package state;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativelayout" as nativelayout;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/containers" as nvcontainers;
+import "app/wzcc/nativeverify/support" as nvsupport;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct FunctionEntry {
+    pub symbol usize;
+    pub signature usize;
+}
+
+pub struct ModuleState {
+    pub h hir.HirModule;
+    pub config model.CheckConfig;
+    pub functions Vec[nativeir.Function];
+    pub symbols Vec[FunctionEntry];
+    pub externals Vec[hirverify.ExternalFunction];
+}
+
+pub struct RequiredCheck {
+    pub block usize;
+    pub position usize;
+    pub origin usize;
+    pub receiver usize;
+    pub index usize;
+    pub source model.Span;
+}
+
+pub struct Body {
+    pub m ModuleState;
+    pub f nativeir.Function;
+    pub signature model.Type;
+    pub aggregates nativelayout.AggregateTypes;
+    pub definitions nvcontainers.DefinitionMap;
+    pub instructions nvcontainers.InstructionMap;
+    pub address_roots nvcontainers.AddressRootMap;
+    pub address_writes nvcontainers.ValueCountMap;
+    pub address_inout_roots nvcontainers.NodeSet;
+    pub predecessors Vec[nvcontainers.BoolSet];
+    pub reachable nvcontainers.BoolSet;
+    pub dom Vec[nvcontainers.BoolSet];
+    pub facts Vec[nvcontainers.FactSet];
+    pub initialized Vec[nvcontainers.BoolSet];
+    pub initialized_out Vec[nvcontainers.BoolSet];
+    pub constant_roots nvcontainers.ConstantRootList;
+    pub system_order nvcontainers.NodeOrderMap;
+    pub system_loop_sources Vec[model.Span];
+    pub system_in Vec[option.Option[usize]];
+    pub system_out Vec[option.Option[usize]];
+    pub required_checks Vec[RequiredCheck];
+    pub impossible nvcontainers.BoolSet;
+}
+
+func function_entry_compare(left FunctionEntry, right FunctionEntry) i32 {
+    return nvsupport.usize_compare(left.symbol, right.symbol);
+}
+
+// std::map::emplace keeps the first entry for a duplicate symbol.
+pub func symbol_add(state inout Vec[FunctionEntry], symbol usize,
+                signature usize) {
+    let entry = FunctionEntry(symbol: symbol, signature: signature);
+    let at = nvsupport.sorted_position(state, entry, function_entry_compare);
+    if at < vec.len(state) && function_entry_compare(state[at], entry) == 0 {
+        return;
+    }
+    vec.push(state, entry);
+    for var index usize = vec.len(state) - 1; index > at; index -= 1 {
+        state[index] = state[index - 1];
+    }
+    state[at] = entry;
+}
+
+pub func symbol_find(state Vec[FunctionEntry], symbol usize)
+    option.Option[usize] {
+    let at = nvsupport.sorted_index(state, FunctionEntry(symbol: symbol, signature: 0),
+        function_entry_compare);
+    if at < vec.len(state) {
+        return option.Option[usize].Some(state[at].signature);
+    }
+    return option.Option[usize].None;
+}
+
+pub func slot_require(state Body, index usize) nativeir.Slot
+    throws nvsupport.VerifyError {
+    if index >= vec.len(state.f.slots) {
+        throw nvsupport.support(model.SupportError.Invalid("invalid native slot index"));
+    }
+    return state.f.slots[index];
+}

@@ -1,0 +1,30 @@
+// Staged with the values package for the C fixture only.
+package values;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "std/option" as option;
+
+pub func test_env_record_op(fields Vec[usize], copy bool,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return env_record_op(fields, copy, inout state);
+}
+pub func test_bound_adapter(schema hir.FunctionValue,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return bound_adapter(schema, inout state);
+}
+pub func test_c_ret(value emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    c_ret(value, inout state);
+}
+pub func test_c_unit() emitcore.Value { return c_unit(); }
+pub func test_thread_bridge(entry_type usize,
+    state inout emitcore.Emitter) emitcore.ThreadBridge throws emitcore.Error {
+    return thread_bridge(entry_type, inout state);
+}
+pub func test_function_thunk(symbol usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return function_thunk(symbol, inout state);
+}
+pub func test_function_value_info(state emitcore.Emitter,
+    value_id usize) option.Option[emitcore.FunctionValueInfo] {
+    return function_value_info(state, value_id);
+}

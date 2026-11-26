@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check only sema common helpers using the real current shared records.
 
-The temporary sema package contains production state/errors/common plus the
+The temporary sema/core package contains production state/errors/common plus the
 same-package tests. It deliberately excludes clone and unfinished checker
 algorithms; this is not a claim that the full Checker builds. Other packages
 link to the current repository sources. No algorithm stubs are created.
@@ -32,10 +32,13 @@ def stage_project(work: Path) -> Path:
     project = work / "project"
     modules = project / "src" / "wzcc"
     sema = modules / "sema"
-    sema.mkdir(parents=True)
+    core = sema / "core"
+    core.mkdir(parents=True)
+    sema_source = SELFHOST / "sema"
     for name in SEMA_FILES:
-        shutil.copy2(SELFHOST / "sema" / name, sema / name)
-    shutil.copy2(HERE / "helpers.wz", sema / "helpers.wz")
+        shutil.copy2(sema_source / "core" / name, core / name)
+    shutil.copytree(sema_source / "borrow", sema / "borrow")
+    shutil.copy2(HERE / "helpers.wz", core / "helpers.wz")
     for module in sorted(SELFHOST.iterdir()):
         if module.is_dir() and module.name != "sema":
             (modules / module.name).symlink_to(module, target_is_directory=True)

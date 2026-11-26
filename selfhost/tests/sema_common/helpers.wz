@@ -1,5 +1,5 @@
 // Tests only: staged beside state/errors/common, never installed as sema algorithms.
-package sema;
+package core;
 import "app/wzcc/bigint" as bigint;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;

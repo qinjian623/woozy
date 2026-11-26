@@ -1,0 +1,110 @@
+// Per-instruction checks: string/pattern binary operations.
+package ops;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/containers" as nvcontainers;
+import "app/wzcc/nativeverify/state" as nvstate;
+import "app/wzcc/nativeverify/support" as nvsupport;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func pattern_find(pattern_value hir.Pattern, span model.Span,
+                  expected option.Option[nativeir.Instruction],
+                  found inout bool) {
+    switch pattern_value.literal {
+        case option.Option.Some(literal): {
+            var text_value = "";
+            var is_text = false;
+            switch literal {
+                case hir.PatternLiteral.StringLiteral(value):
+                    text_value = value.utf8; is_text = true;
+                default: {}
+            }
+            if is_text && nvsupport.same_span(pattern_value.source.span, span) {
+                switch expected {
+                    case option.Option.Some(value): {
+                        if nvsupport.op_is(value.op, nativeir.Op.StringLiteral) &&
+                           value.utf8 == text_value {
+                            found = true;
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    for child in pattern_value.payload {
+        pattern_find(child, span, expected, inout found);
+    }
+}
+
+pub func check_text_binary(state nvstate.Body, instruction nativeir.Instruction,
+                       args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    var has_origin = false;
+    var origin_id usize = 0;
+    switch instruction.origin {
+        case option.Option.Some(value): has_origin = true; origin_id = value;
+        case option.Option.None: {}
+    }
+    if has_origin && origin_id < vec.len(state.m.h.nodes) &&
+       nvsupport.kind_is(hir.node_kind(state.m.h.nodes[origin_id].data),
+           hir.NodeKind.Binary) {
+        let origin = source_operation(state, instruction.origin,
+            hir.NodeKind.Binary, instruction.type_id, args,
+            instruction.source);
+        switch origin.data {
+            case hir.NodeData.Binary(binary): {
+                nvsupport.need(nvsupport.binary_op_id(binary.op) ==
+                         nvsupport.binary_op_id(instruction.binary),
+                     "text binary operator differs from source",
+                     instruction.source);
+            }
+            default: {}
+        }
+    } else if has_origin {
+        let origin = nvsupport.hir_node(state.m.h, origin_id);
+        switch origin.data {
+            case hir.NodeData.Assign(assign): {
+                nvsupport.need(nvsupport.option_binary_is(assign.compound, instruction.binary) &&
+                         nvsupport.binary_op_id(instruction.binary) ==
+                             nvsupport.binary_op_id(hir.BinaryOp.Add) &&
+                         vec.len(origin.children) == 2 &&
+                         nvsupport.hir_node(state.m.h,
+                             origin.children[0]).type_id ==
+                             instruction.type_id &&
+                         nvsupport.same_span(origin.source.span, instruction.source) &&
+                         nvsupport.same_span(args[1].source,
+                             nvsupport.hir_node(state.m.h,
+                                 origin.children[1]).source.span),
+                     "text compound operator differs from source",
+                     instruction.source);
+            }
+            default: {
+                nvsupport.need(false, "text compound operator differs from source",
+                    instruction.source);
+            }
+        }
+    } else {
+        var pattern = false;
+        let expected = nvcontainers.instruction_find(state.instructions,
+            instruction.inputs[1]);
+        for node in state.m.h.nodes {
+            switch node.data {
+                case hir.NodeData.Switch(switch_value): {
+                    for arm in switch_value.arms {
+                        pattern_find(arm.pattern, instruction.source, expected,
+                            inout pattern);
+                    }
+                }
+                default: {}
+            }
+        }
+        nvsupport.need(pattern &&
+                 nvsupport.binary_op_id(instruction.binary) ==
+                     nvsupport.binary_op_id(hir.BinaryOp.Equal),
+             "text binary without source or real pattern", instruction.source);
+    }
+}

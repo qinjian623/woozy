@@ -49,8 +49,9 @@ EXPECTED = {
     "opt": "fc19bcd0ab81c35746c93aad355e8bb81f34ab070e98014cf06ce8433e91d4b1",
 }
 
-SEMA_FILES = tuple(sorted(path.name for path in SEMA.glob("*.wz")
-                          if path.name != "check.wz"))
+SEMA_FILES = tuple(path.relative_to(SEMA).as_posix()
+                   for path in sorted(SEMA.rglob("*.wz"))
+                   if path != SEMA / "check.wz")
 BENCH = re.compile(
     r"BENCH scale=(\d+) product_insert_ns=(-?\d+) "
     r"oracle_insert_ns=(-?\d+) product_lookup_ns=(-?\d+) "
@@ -208,7 +209,9 @@ def stage_project(work: Path) -> Path:
     sema = source_root / "wzcc" / "sema"
     sema.mkdir(parents=True)
     for name in SEMA_FILES:
-        shutil.copy2(SEMA / name, sema / name)
+        target = sema / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SEMA / name, target)
     shutil.copy2(HERE / "node_index_test.wz", sema / "node_index_test.wz")
     for module in sorted(SELFHOST.iterdir()):
         if module.is_dir() and module.name != "sema":
@@ -474,8 +477,8 @@ def main() -> int:
                 separators=(",", ":")).encode()).hexdigest(),
             "changed_during_run": changed_sources,
             "three_files_before": {
-                name: source_before[f"wzcc/sema/{name}"]
-                for name in ("common.wz", "run.wz", "b_call.wz")},
+                Path(name).name: source_before[f"wzcc/sema/{name}"]
+                for name in ("core/common.wz", "run.wz", "b_call.wz")},
         },
         "test_source": {
             "files": len(test_before),

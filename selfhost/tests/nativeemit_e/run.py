@@ -26,8 +26,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--woozyc', default=str(ROOT / 'build/woozy-stdlib-native/woozyc'))
 parser.add_argument('--toolchain-root', default=str(ROOT.parent / 'toolchains'))
 parser.add_argument('--source-root', default=str(ROOT / 'selfhost/src/wzcc'))
-parser.add_argument('--e-source', default=str(HERE.parents[1] / 'src/wzcc/nativeemit'),
-                    help='directory holding the E files under test')
+parser.add_argument('--e-source', default=None,
+                    help='directory holding the E files under test (default source-root/nativeemit)')
 parser.add_argument('--work-dir', default=None)
 parser.add_argument('--timeout', type=float, default=240)
 args = parser.parse_args()
@@ -38,7 +38,8 @@ if args.work_dir:
 WORK = Path(tempfile.mkdtemp(prefix='woozy-nativeemit-e-',
                             dir=Path(args.work_dir).expanduser().resolve() if args.work_dir else None))
 SOURCE_ROOT = Path(args.source_root).expanduser().resolve()
-E_SOURCE = Path(args.e_source).expanduser().resolve()
+E_SOURCE = (Path(args.e_source).expanduser().resolve()
+            if args.e_source else SOURCE_ROOT / 'nativeemit')
 TOOLCHAIN = Path(args.toolchain_root).expanduser().resolve()
 TOOLS = TOOLCHAIN / 'llvm-22.1.8/bin'
 CLANG = TOOLS / 'clang'
@@ -122,6 +123,7 @@ try:
     packages = ['model', 'types', 'hir', 'nativeir', 'nativeemit',
                 'nativelayout', 'valueops', 'nativeverify', 'hirverify']
     copied = []
+    c_layout = Path('core/c_abi_types.wz')
     has_backend_deps = (SOURCE_ROOT / 'nativelayout').is_dir() and \
         (SOURCE_ROOT / 'valueops').is_dir()
     for package in packages:
@@ -131,19 +133,30 @@ try:
         target = PROJECT / 'src/wzcc' / package
         target.mkdir(parents=True, exist_ok=True)
         package_sources = []
-        for source in sorted(source_dir.glob('*.wz')):
-            if package == 'nativeemit' and source.name.startswith('e_'):
+        for source in sorted(source_dir.rglob('*.wz')):
+            relative = source.relative_to(source_dir)
+            if package == 'nativeemit' and (source.name.startswith('e_') or relative == c_layout):
                 continue
             if package == 'nativeemit' and not has_backend_deps and \
                     source.name[:2] in ('b_', 'c_', 'd_'):
                 continue
-            package_sources.append(source)
+            package_sources.append((source, relative))
         if package == 'nativeemit':
-            package_sources.extend(sorted(E_SOURCE.glob('e_*.wz')))
-        for source in package_sources:
-            (target / source.name).write_bytes(source.read_bytes())
+            expected_e = {path.relative_to(source_dir) for path in source_dir.rglob('e_*.wz')}
+            selected_e = {path.relative_to(E_SOURCE) for path in E_SOURCE.rglob('e_*.wz')}
+            if (source_dir / c_layout).is_file():
+                expected_e.add(c_layout)
+            if (E_SOURCE / c_layout).is_file():
+                selected_e.add(c_layout)
+            if not selected_e or not expected_e <= selected_e:
+                raise RuntimeError(f'E source paths differ between {E_SOURCE} and {source_dir}')
+            package_sources.extend((E_SOURCE / path, path) for path in sorted(selected_e))
+        for source, relative in package_sources:
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
             inputs.append({'source': str(source), 'sha256': sha(source)})
-            copied.append(package + '/' + source.name)
+            copied.append(package + '/' + str(relative))
     (PROJECT / 'src/main.wz').write_bytes((HERE / 'main.wz').read_bytes())
     inputs.append({'source': str(HERE / 'main.wz'), 'sha256': sha(HERE / 'main.wz')})
     # SH31 added interface to the shared nativeemit state/emit files.  Copy the

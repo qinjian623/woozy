@@ -1,0 +1,17 @@
+// Staged with the values package for the raw async/GC fixture only.
+package values;
+
+import "app/wzcc/nativeemit/core" as emitcore;
+
+pub func test_d_gep(type_name string, base emitcore.Value, index usize,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return d_gep(type_name, base, index, inout state);
+}
+pub func test_d_load(type_name string, address emitcore.Value,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return d_load(type_name, address, inout state);
+}
+pub func test_d_store(type_name string, value emitcore.Value, address emitcore.Value,
+    state inout emitcore.Emitter) throws emitcore.Error {
+    d_store(type_name, value, address, inout state);
+}

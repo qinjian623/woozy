@@ -1,0 +1,89 @@
+// Inout call borrow checking (CPP check.cpp call borrow analysis).
+package borrow;
+
+import "app/wzcc/semaeffects" as effects;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func check_call_borrows(module hir.HirModule,
+                            nominal_ids Vec[NominalIdEntry],
+                            r model.NodeRef, args Vec[hir.CallArg],
+                            children Vec[usize],
+                            indirect_callee bool) throws effects.Error {
+    let borrowed = vec.empty[PlaceAccess]();
+    var container_borrow = false;
+    for argument in args {
+        if mode_is(argument.mode, model.ParamMode.Inout) {
+            var root usize = 0;
+            switch place_root(module, argument.expression) {
+                case option.Option.Some(value): root = value;
+                case option.Option.None:
+                    throw reject(r,
+                        "inout place has no binding-backed storage root",
+                        "E_CALL_ARGUMENT");
+            }
+            let path = place_path(module, argument.expression);
+            if path_contains_index(path) { container_borrow = true; }
+            for prior in borrowed {
+                if places_overlap(prior.root, prior.path, root, path) {
+                    throw reject(r,
+                        "overlapping or possibly aliased inout storage in call",
+                        "E_CALL_ARGUMENT");
+                }
+            }
+            vec.push(borrowed, PlaceAccess(root: root, path: path));
+        }
+    }
+    if container_borrow && indirect_callee {
+        throw reject(r,
+            "indirect callee may retain or resize the borrowed Vec storage",
+            "E_CALL_ARGUMENT");
+    }
+    let risks = vec.empty[usize]();
+    for root in children {
+        var inout_place = false;
+        for argument in args {
+            if mode_is(argument.mode, model.ParamMode.Inout) &&
+               argument.expression == root { inout_place = true; }
+        }
+        let accesses = vec.empty[PlaceAccess]();
+        if inout_place {
+            collect_place_index_paths(module, root, accesses);
+            for access in accesses {
+                for borrow in borrowed {
+                    if places_overlap(borrow.root, borrow.path, access.root,
+                                      access.path) {
+                        throw reject(r,
+                            "inout binding is also accessed by this call",
+                            "E_CALL_ARGUMENT");
+                    }
+                }
+            }
+            if container_borrow {
+                collect_place_index_risks(module, nominal_ids, root, risks);
+            }
+        } else {
+            collect_access_paths(module, root, accesses);
+            for access in accesses {
+                for borrow in borrowed {
+                    if places_overlap(borrow.root, borrow.path, access.root,
+                                      access.path) {
+                        throw reject(r,
+                            "inout binding is also accessed by this call",
+                            "E_CALL_ARGUMENT");
+                    }
+                }
+            }
+            if container_borrow {
+                collect_alias_risks(module, nominal_ids, root, risks);
+            }
+        }
+    }
+    if vec.len(risks) != 0 {
+        throw reject(r,
+            "argument may alias a shared container while its element is borrowed by inout",
+            "E_CALL_ARGUMENT");
+    }
+}

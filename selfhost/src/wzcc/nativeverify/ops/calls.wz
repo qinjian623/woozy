@@ -1,0 +1,498 @@
+// Per-instruction checks: calls, C bindings, traits and system calls.
+package ops;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "app/wzcc/nativeverify/containers" as nvcontainers;
+import "app/wzcc/nativeverify/state" as nvstate;
+import "app/wzcc/nativeverify/support" as nvsupport;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func c_decl_kind_id(kind model.CDeclKind) u32 {
+    switch kind {
+        case model.CDeclKind.Record: return 0;
+        case model.CDeclKind.Resource: return 1;
+        case model.CDeclKind.Callback: return 2;
+        case model.CDeclKind.Opaque: return 3;
+    }
+}
+
+func c_type_decl(project model.Project, id u32) model.CTypeDecl
+    throws nvsupport.VerifyError {
+    if id == 0 || usize(id) > vec.len(project.c_types) {
+        throw nvsupport.support(model.SupportError.Invalid("C type declaration index"));
+    }
+    return project.c_types[usize(id) - 1];
+}
+
+func call_argument(call hir.Call, index usize) hir.CallArg
+    throws nvsupport.VerifyError {
+    if index >= vec.len(call.args) {
+        throw nvsupport.support(model.SupportError.Invalid("missing call argument"));
+    }
+    return call.args[index];
+}
+
+pub func check_system_call(state inout nvstate.Body, instruction nativeir.Instruction,
+                       args Vec[nvcontainers.Definition],
+                       previous_system inout option.Option[usize])
+    throws nvsupport.VerifyError {
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "system call without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.Call(call): {
+            let kind = nvsupport.callee_kind_id(call.kind);
+            nvsupport.need(kind == nvsupport.callee_kind_id(hir.CalleeKind.System) &&
+                     option.is_some(call.system) &&
+                     nvsupport.option_u32_equal(instruction.system, call.system) &&
+                     call.signature == instruction.signature &&
+                     nvsupport.hir_scope_function(state.m.h, source.scope) ==
+                         state.f.symbol,
+                 "system operation/signature differs from verified HIR",
+                 instruction.source);
+            nvsupport.need(nvsupport.same_span(instruction.source, source.source.span),
+                 "system operation source differs from HIR", instruction.source);
+            let position = nvcontainers.node_order_find(state.system_order, origin_id);
+            var order usize = 0;
+            var present = false;
+            switch position {
+                case option.Option.Some(value): order = value; present = true;
+                case option.Option.None: {}
+            }
+            var ordered = present;
+            if present {
+                switch previous_system {
+                    case option.Option.Some(value): ordered = order > value;
+                    case option.Option.None: {}
+                }
+            }
+            nvsupport.need(ordered, "system operation order differs from HIR evaluation",
+                 instruction.source);
+            previous_system = option.Option[usize].Some(order);
+            let cs = nvsupport.require_type(state.m.h, instruction.signature,
+                instruction.source);
+            nvsupport.need(nvsupport.type_is(cs.kind, model.TypeKind.Function) &&
+                     !option.is_some(cs.throws_type) &&
+                     instruction.type_id == cs.result,
+                 "invalid system call signature/result", instruction.source);
+            require_arity(args, vec.len(cs.parameters), instruction.source);
+            for var index usize = 0; index < vec.len(cs.parameters);
+                index += 1 {
+                let argument_type = operand_type(state, args, index,
+                    instruction.source);
+                nvsupport.need(nvsupport.param_mode_id(cs.parameters[index].mode) ==
+                         nvsupport.param_mode_id(model.ParamMode.Ordinary) &&
+                         args[index].type_id == cs.parameters[index].type_id,
+                     "system argument type/mode mismatch",
+                     instruction.source);
+                let argument = call_argument(call, index);
+                nvsupport.need(argument.parameter_index == u32(index),
+                     "system argument order differs from HIR",
+                     instruction.source);
+                var operand = instruction.inputs[index];
+                var visited = nvcontainers.node_set();
+                for true {
+                    nvsupport.need(nvcontainers.node_set_insert(inout visited, operand),
+                         "system argument value cycle", instruction.source);
+                    let definition = nvcontainers.instruction_find(state.instructions,
+                        operand);
+                    var follow = false;
+                    var next_value usize = 0;
+                    switch definition {
+                        case option.Option.Some(value): {
+                            if nvsupport.op_is(value.op, nativeir.Op.Copy) ||
+                               nvsupport.op_is(value.op, nativeir.Op.Borrow) {
+                                nvsupport.need(vec.len(value.inputs) == 1,
+                                     "invalid system argument copy/borrow",
+                                     instruction.source);
+                                follow = true;
+                                next_value = value.inputs[0];
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                    if follow {
+                        operand = next_value;
+                        continue;
+                    }
+                    break;
+                }
+                let definition = nvcontainers.definition_require(state.definitions, operand);
+                let expression = nvsupport.hir_node(state.m.h, argument.expression);
+                nvsupport.need(nvsupport.same_span(definition.source, expression.source.span),
+                     "system argument value differs from HIR operand",
+                     instruction.source);
+            }
+        }
+        default: {
+            nvsupport.need(false, "system operation/signature differs from verified HIR",
+                instruction.source);
+        }
+    }
+}
+
+pub func check_foreign_call(state inout nvstate.Body, instruction nativeir.Instruction,
+                        args Vec[nvcontainers.Definition],
+                        previous_system inout option.Option[usize])
+    throws nvsupport.VerifyError {
+    nvsupport.need(!option.is_some(instruction.system) &&
+             option.is_some(instruction.c_callable),
+         "C call missing frozen metadata", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "C call without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.Call(call): {
+            let kind = nvsupport.callee_kind_id(call.kind);
+            nvsupport.need(kind == nvsupport.callee_kind_id(hir.CalleeKind.CForeign) &&
+                     nvsupport.option_u32_equal(call.c_callable,
+                         instruction.c_callable) &&
+                     call.signature == instruction.signature &&
+                     nvsupport.hir_scope_function(state.m.h, source.scope) ==
+                         state.f.symbol,
+                 "C call metadata differs from HIR", instruction.source);
+            let cs = nvsupport.require_type(state.m.h, instruction.signature,
+                instruction.source);
+            nvsupport.need(nvsupport.type_is(cs.kind, model.TypeKind.Function) &&
+                     !option.is_some(cs.throws_type) &&
+                     instruction.type_id == cs.result,
+                 "C call signature/result", instruction.source);
+            let callable_index = usize(nvsupport.option_u32_value(instruction.c_callable));
+            nvsupport.need(callable_index >= 1 &&
+                     callable_index <= vec.len(
+                         state.m.h.resolved.project.c_callables),
+                 "C callable index", instruction.source);
+            let position = nvcontainers.node_order_find(state.system_order, origin_id);
+            var order usize = 0;
+            var present = false;
+            switch position {
+                case option.Option.Some(value): order = value; present = true;
+                case option.Option.None: {}
+            }
+            var ordered = present;
+            if present {
+                switch previous_system {
+                    case option.Option.Some(value): ordered = order > value;
+                    case option.Option.None: {}
+                }
+            }
+            nvsupport.need(ordered, "C call order differs from HIR evaluation",
+                 instruction.source);
+            previous_system = option.Option[usize].Some(order);
+            require_arity(args, vec.len(cs.parameters), instruction.source);
+            for var index usize = 0; index < vec.len(cs.parameters);
+                index += 1 {
+                let argument_type = operand_type(state, args, index,
+                    instruction.source);
+                let argument = call_argument(call, index);
+                nvsupport.need(argument.parameter_index == u32(index) &&
+                         argument.source_index == u32(index) &&
+                         !option.is_some(argument.label) &&
+                         nvsupport.param_mode_id(argument.mode) ==
+                             nvsupport.param_mode_id(model.ParamMode.Ordinary),
+                     "C argument order/mode differs from HIR",
+                     instruction.source);
+                let wanted = nvsupport.require_type(state.m.h,
+                    cs.parameters[index].type_id, instruction.source);
+                if nvsupport.type_is(wanted.kind, model.TypeKind.CForeignCallback) {
+                    let expression = nvsupport.hir_node(state.m.h, argument.expression);
+                    nvsupport.need(nvsupport.kind_is(hir.node_kind(expression.data),
+                             hir.NodeKind.FunctionValue) &&
+                             args[index].type_id == expression.type_id &&
+                             !args[index].address,
+                         "C callback argument type/identity",
+                         instruction.source);
+                } else {
+                    let actual = argument_type;
+                    var compatible = args[index].type_id ==
+                                     cs.parameters[index].type_id;
+                    if !compatible {
+                        compatible = (nvsupport.type_is(wanted.kind,
+                                          model.TypeKind.CForeignPointer) ||
+                                      nvsupport.type_is(wanted.kind,
+                                          model.TypeKind.CForeignBuffer)) &&
+                                     nvsupport.type_is(actual.kind, wanted.kind) &&
+                                     wanted.bits == 0 && actual.bits == 1 &&
+                                     nvsupport.usize_vec_equal(actual.type_args,
+                                         wanted.type_args);
+                    }
+                    nvsupport.need(compatible && !args[index].address,
+                         "C argument type/mode mismatch", instruction.source);
+                }
+            }
+        }
+        default: {
+            nvsupport.need(false, "C call metadata differs from HIR", instruction.source);
+        }
+    }
+}
+
+pub func check_c_field_read(state inout nvstate.Body, instruction nativeir.Instruction,
+                        args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 1, instruction.source);
+    nvsupport.need(instruction.c_type != 0, "C field metadata", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "C field without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.CFieldRead(field): {
+            nvsupport.need(field.c_type == instruction.c_type &&
+                     field.field == instruction.c_field &&
+                     source.type_id == instruction.type_id &&
+                     vec.len(source.children) == 1,
+                 "C field differs from HIR", instruction.source);
+            let receiver = operand_type(state, args, 0, instruction.source);
+            nvsupport.need(nvsupport.type_is(receiver.kind, model.TypeKind.CForeignRecord) &&
+                     receiver.c_type == instruction.c_type,
+                 "C field receiver type", instruction.source);
+            let declaration = c_type_decl(state.m.h.resolved.project,
+                instruction.c_type);
+            nvsupport.need(c_decl_kind_id(declaration.kind) ==
+                     c_decl_kind_id(model.CDeclKind.Record) &&
+                     usize(instruction.c_field) < vec.len(declaration.fields),
+                 "C field declaration", instruction.source);
+            var scratch = types.clone_context(state.m.h.types);
+            var expected usize = 0;
+            try {
+                expected = foreign.c_type_id(state.m.h.resolved.project,
+                    inout scratch,
+                    declaration.fields[usize(instruction.c_field)].type_ref);
+            } catch error model.SupportError {
+                throw nvsupport.support(error);
+            }
+            nvsupport.need(expected == instruction.type_id, "C field result type",
+                instruction.source);
+        }
+        default: {
+            nvsupport.need(false, "C field differs from HIR", instruction.source);
+        }
+    }
+}
+
+pub func check_c_read(state inout nvstate.Body, instruction nativeir.Instruction,
+                  args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 2, instruction.source);
+    let receiver = operand_type(state, args, 0, instruction.source);
+    let pointer = nvsupport.op_is(instruction.op, nativeir.Op.CPtrRead);
+    var expected_kind = model.TypeKind.CForeignBuffer;
+    if pointer {
+        expected_kind = model.TypeKind.CForeignPointer;
+    }
+    nvsupport.need(nvsupport.type_is(receiver.kind, expected_kind) &&
+             vec.len(receiver.type_args) == 1 &&
+             instruction.type_id == receiver.type_args[0] &&
+             !args[0].address,
+         "C indexed read receiver/result", instruction.source);
+    let index = operand_type(state, args, 1, instruction.source);
+    nvsupport.need(nvsupport.integer(index.kind) && !args[1].address,
+         "C indexed read index type", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "C indexed read without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    let is_read = nvsupport.kind_is(hir.node_kind(source.data), hir.NodeKind.IndexRead);
+    let is_place = nvsupport.kind_is(hir.node_kind(source.data), hir.NodeKind.IndexPlace);
+    nvsupport.need((is_read || is_place) && vec.len(source.children) == 2 &&
+             source.type_id == instruction.type_id,
+         "C indexed read differs from HIR", instruction.source);
+    if is_place {
+        nvsupport.need(receiver.bits == 1,
+             "C compound read of read-only pointer", instruction.source);
+    }
+}
+
+pub func check_c_write(state inout nvstate.Body, instruction nativeir.Instruction,
+                   args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 3, instruction.source);
+    let receiver = operand_type(state, args, 0, instruction.source);
+    let pointer = nvsupport.op_is(instruction.op, nativeir.Op.CPtrWrite);
+    var expected_kind = model.TypeKind.CForeignBuffer;
+    if pointer {
+        expected_kind = model.TypeKind.CForeignPointer;
+    }
+    nvsupport.need(nvsupport.type_is(receiver.kind, expected_kind) &&
+             vec.len(receiver.type_args) == 1 && receiver.bits == 1 &&
+             args[2].type_id == receiver.type_args[0] && !args[0].address &&
+             !args[2].address,
+         "C indexed write receiver/result", instruction.source);
+    let index = operand_type(state, args, 1, instruction.source);
+    nvsupport.need(nvsupport.integer(index.kind) && !args[1].address,
+         "C indexed write index type", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "C indexed write without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    nvsupport.need(nvsupport.kind_is(hir.node_kind(source.data), hir.NodeKind.IndexPlace) &&
+             vec.len(source.children) == 2,
+         "C indexed write differs from HIR", instruction.source);
+}
+
+pub func check_trait_object(state inout nvstate.Body, instruction nativeir.Instruction,
+                        args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 1, instruction.source);
+    operand_type(state, args, 0, instruction.source);
+    nvsupport.need(nvsupport.type_is(nvsupport.require_type(state.m.h, instruction.type_id,
+             instruction.source).kind, model.TypeKind.TraitObject),
+         "trait object constructor type", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "trait object constructor without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.TraitObjectInit(init): {
+            let object_type = nvsupport.require_type(state.m.h, instruction.type_id,
+                instruction.source);
+            nvsupport.need(nvsupport.kind_is(hir.node_kind(source.data),
+                     hir.NodeKind.TraitObjectInit) &&
+                     nvsupport.hir_scope_function(state.m.h, source.scope) ==
+                         state.f.symbol &&
+                     init.trait_ref.declaration == instruction.variant &&
+                     init.concrete == args[0].type_id &&
+                     nvsupport.usize_vec_equal(init.methods, instruction.methods) &&
+                     nvsupport.usize_vec_equal(object_type.type_args, init.trait_ref.args) &&
+                     nvsupport.same_span(source.source.span, instruction.source),
+                 "trait object constructor differs from HIR",
+                 instruction.source);
+        }
+        default: {
+            nvsupport.need(false, "trait object constructor differs from HIR",
+                instruction.source);
+        }
+    }
+}
+
+pub func check_trait_call(state inout nvstate.Body, instruction nativeir.Instruction,
+                      args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "trait call without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.TraitDispatch(dispatch): {
+            nvsupport.need(nvsupport.kind_is(hir.node_kind(source.data),
+                     hir.NodeKind.TraitDispatch) &&
+                     nvsupport.hir_scope_function(state.m.h, source.scope) ==
+                         state.f.symbol,
+                 "trait call origin differs from HIR", instruction.source);
+            let cs = nvsupport.require_type(state.m.h, instruction.signature,
+                instruction.source);
+            nvsupport.need(nvsupport.type_is(cs.kind, model.TypeKind.Function) &&
+                     !option.is_some(cs.throws_type) &&
+                     dispatch.signature == instruction.signature &&
+                     u64(dispatch.index) == instruction.bits &&
+                     dispatch.method == instruction.field &&
+                     instruction.type_id == cs.result,
+                 "trait call ABI signature differs from HIR",
+                 instruction.source);
+            nvsupport.need(nvsupport.type_is(operand_type(state, args, 0,
+                     instruction.source).kind, model.TypeKind.TraitObject),
+                 "trait call receiver is not dyn", instruction.source);
+            require_arity(args, vec.len(cs.parameters) + 1,
+                instruction.source);
+            for var index usize = 0; index < vec.len(cs.parameters);
+                index += 1 {
+                nvsupport.need(args[index + 1].type_id == cs.parameters[index].type_id &&
+                         !args[index + 1].address &&
+                         nvsupport.param_mode_id(cs.parameters[index].mode) ==
+                             nvsupport.param_mode_id(model.ParamMode.Ordinary),
+                     "trait call argument type/mode", instruction.source);
+            }
+            nvsupport.need(nvsupport.same_span(source.source.span, instruction.source),
+                 "trait call source span differs from HIR", instruction.source);
+        }
+        default: {
+            nvsupport.need(false, "trait call origin differs from HIR",
+                instruction.source);
+        }
+    }
+}
+
+pub func check_call(state inout nvstate.Body, instruction nativeir.Instruction,
+                args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    nvsupport.need(!option.is_some(instruction.system),
+         "system metadata on ordinary call", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "call without HIR origin", instruction.source);
+    let source = state.m.h.nodes[origin_id];
+    switch source.data {
+        case hir.NodeData.Call(call): {
+            nvsupport.need(call.signature == instruction.signature &&
+                     nvsupport.hir_scope_function(state.m.h, source.scope) ==
+                         state.f.symbol,
+                 "call origin/signature differs from HIR", instruction.source);
+            let cs = nvsupport.require_type(state.m.h, instruction.signature,
+                instruction.source);
+            nvsupport.need(nvsupport.type_is(cs.kind, model.TypeKind.Function) &&
+                     !option.is_some(cs.throws_type),
+                 "call signature is not function", instruction.source);
+            require_arity(args, vec.len(cs.parameters) + 1,
+                instruction.source);
+            operand_type(state, args, 0, instruction.source);
+            nvsupport.need(args[0].type_id == instruction.signature &&
+                     instruction.type_id == cs.result,
+                 "callee/result type mismatch", instruction.source);
+            for var index usize = 0; index < vec.len(cs.parameters);
+                index += 1 {
+                nvsupport.need(args[index + 1].type_id ==
+                         cs.parameters[index].type_id &&
+                         args[index + 1].address ==
+                             (nvsupport.param_mode_id(cs.parameters[index].mode) ==
+                              nvsupport.param_mode_id(model.ParamMode.Inout)),
+                     "call argument type/mode mismatch", instruction.source);
+            }
+        }
+        default: {
+            nvsupport.need(false, "call origin/signature differs from HIR",
+                instruction.source);
+        }
+    }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the Wz required exit/call obligations with src/ir/obligations.hpp.
 
-trace.wz is a package-internal test scaffold staged into nativeverify; it
+trace.wz is a test scaffold staged into nativeverify/obligations; it
 builds a hand-written HIR control tree (call error exit + nested defer, return
 with two defers and a nested throwing call, ForIn with continue/break, an
 exhaustive switch with return/break arms, try/catch and await error/cancel) and
@@ -11,8 +11,8 @@ byte-for-byte at O0 and O2.
 
 Packages that are accepted in the repository are staged from ROOT; packages
 still landing elsewhere are supplied with --extra-source.  No stub package is
-created.  This test needs no hirverify: it exercises the obligation algorithm
-on builder HIR data and claims no HIR verification success.
+created. The trace exercises the obligation algorithm on builder HIR data;
+the project check resolves the other verifier files with their real imports.
 """
 
 from __future__ import annotations
@@ -28,6 +28,9 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
+sys.path.insert(0, str(HERE.parents[1]))
+from wzcc_closure import complete_import_closure  # noqa: E402
+
 DEFAULT_STAGE0 = ROOT / "build/woozy-stdlib-native/woozyc"
 DEFAULT_HIR_LIBRARY = ROOT / "build/woozy-stdlib-native/liblang_hir.a"
 DEFAULT_TIMEOUT = 300.0
@@ -100,6 +103,23 @@ def find_package(package: str, extras: list[pathlib.Path]) -> pathlib.Path | Non
     return None
 
 
+def stage_project(work: pathlib.Path, sources: dict[str, pathlib.Path]) -> pathlib.Path:
+    project = work / "project"
+    src = project / "src"
+    modules = src / "wzcc"
+    modules.mkdir(parents=True)
+    for package, path in sources.items():
+        shutil.copytree(path, modules / package)
+    verifier = modules / "nativeverify"
+    shutil.copy2(HERE / "trace.wz", verifier / "obligations/trace.wz")
+    # This test covers verifier internals without including the public facade.
+    (verifier / "nativeverify.wz").unlink()
+    shutil.copy2(HERE / "main.wz", src / "main.wz")
+    shutil.copy2(HERE / "lang.toml", project / "lang.toml")
+    complete_import_closure(src, ROOT / "selfhost/src/wzcc")
+    return project
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     stage0 = pathlib.Path(args.woozyc).expanduser().resolve()
@@ -136,18 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     env = environment(toolchain)
     print(f"stage0: {stage0}")
     print(f"work-dir: {work}")
-    (work / "project/src/wzcc").mkdir(parents=True)
-    for package, path in sources.items():
-        target = work / "project/src/wzcc" / package
-        shutil.copytree(path, target)
-        if package == "nativeverify":
-            shutil.copy2(HERE / "trace.wz", target / "trace.wz")
-            if "hirverify" not in sources:
-                # The facade's only dependency is the contract-frozen
-                # hirverify; all obligation logic is still checked here.
-                (target / "nativeverify.wz").unlink()
-    shutil.copy2(HERE / "main.wz", work / "project/src/main.wz")
-    shutil.copy2(HERE / "lang.toml", work / "project/lang.toml")
+    project = stage_project(work, sources)
     oracle = work / "oracle"
     command = [
         "c++", "-std=c++23", "-O2",
@@ -160,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
               "compile oracle")
     expected = run([str(oracle)], "oracle", work, env, args.timeout)
     expect_ok(expected, "oracle")
-    manifest = str(work / "project/lang.toml")
+    manifest = str(project / "lang.toml")
     expect_ok(run([str(stage0), "check", "--project", manifest,
                    "--backend", "native"], "Wz check", work, env,
                   args.timeout), "Wz check")

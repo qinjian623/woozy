@@ -1,0 +1,246 @@
+// Alias/shared-storage risk collection for inout call borrow checking.
+package borrow;
+
+import "app/wzcc/semaeffects" as effects;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func support_from_type_error(error types.Error) model.SupportError {
+    switch error {
+        case types.Error.Invalid(message): return model.SupportError.Invalid(message);
+    }
+}
+
+func may_hold_shared(module hir.HirModule,
+                     nominal_ids Vec[NominalIdEntry], root usize)
+    bool throws effects.Error {
+    let active = vec.empty[usize]();
+    var scratch = types.clone_context(module.types);
+    return may_hold_shared_visit(module, nominal_ids, inout scratch, root,
+        active);
+}
+
+func may_hold_shared_visit(module hir.HirModule,
+                           nominal_ids Vec[NominalIdEntry],
+                           scratch inout types.Context,
+                           id usize, active Vec[usize])
+    bool throws effects.Error {
+    var value_type = model.empty_type(model.TypeKind.Error);
+    switch types.find(scratch, id) {
+        case option.Option.Some(value): value_type = value;
+        case option.Option.None: return true;
+    }
+    let kind = value_type.kind;
+    if effects.b_type_kind_is(kind, model.TypeKind.Vec) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Slice) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Weak) ||
+       effects.b_type_kind_is(kind, model.TypeKind.TraitObject) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Function) ||
+       effects.b_type_kind_is(kind, model.TypeKind.TypeParameter) ||
+       effects.b_type_kind_is(kind, model.TypeKind.Task) {
+        return true;
+    }
+    if !effects.b_type_kind_is(kind, model.TypeKind.NominalStruct) &&
+       !effects.b_type_kind_is(kind, model.TypeKind.NominalEnum) {
+        return false;
+    }
+    var declaration = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Error,
+        params: [], fields: [], variants: [],
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+    var found = false;
+    switch nominal_id_get(nominal_ids, value_type.declaration) {
+        case option.Option.Some(index): {
+            if index < vec.len(module.nominals) {
+                declaration = module.nominals[index];
+                found = true;
+            }
+        }
+        case option.Option.None: {
+            for candidate in module.nominals {
+                if candidate.symbol == value_type.declaration {
+                    declaration = candidate;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    if !found || vec.len(value_type.type_args) != vec.len(declaration.params) {
+        return true;
+    }
+    if effects.b_vec_contains(active, id) { return false; }
+    effects.b_insert_sorted(active, id);
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(declaration.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: declaration.params[index].symbol,
+            type_id: value_type.type_args[index]));
+    }
+    var result = false;
+    for field in declaration.fields {
+        var concrete = field.type_id;
+        try { concrete = types.substitute(field.type_id, substitutions,
+            inout scratch); }
+        catch error types.Error {
+            throw effects.Error.Support(support_from_type_error(error));
+        }
+        if may_hold_shared_visit(module, nominal_ids, inout scratch, concrete,
+                                 active) {
+            result = true;
+        }
+    }
+    for variant in declaration.variants {
+        for field in variant.payload {
+            var concrete = field.type_id;
+            try { concrete = types.substitute(field.type_id, substitutions,
+                inout scratch); }
+            catch error types.Error {
+                throw effects.Error.Support(support_from_type_error(error));
+            }
+            if may_hold_shared_visit(module, nominal_ids, inout scratch,
+                                     concrete, active) {
+                result = true;
+            }
+        }
+    }
+    effects.b_remove_id(active, id);
+    return result;
+}
+
+func collect_alias_risks(module hir.HirModule,
+                         nominal_ids Vec[NominalIdEntry], id usize,
+                         out Vec[usize]) throws effects.Error {
+    let n = module.nodes[id];
+    let kind = hir.node_kind(n.data);
+    let storage = effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+        effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace);
+    var move_binding = false;
+    switch effects.b_node_move(n) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding): move_binding = true;
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    if (storage || effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) ||
+        move_binding) && may_hold_shared(module, nominal_ids, n.type_id) {
+        vec.push(out, n.type_id);
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) || move_binding {
+        return;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+        switch place_root(module, id) {
+            case option.Option.Some(root): {
+                collect_place_index_risks(module, nominal_ids, id, out);
+                return;
+            }
+            case option.Option.None: {}
+        }
+    }
+    for child_id in n.children {
+        collect_alias_risks(module, nominal_ids, child_id, out);
+    }
+}
+
+func collect_place_index_risks(module hir.HirModule,
+                               nominal_ids Vec[NominalIdEntry], id usize,
+                               out Vec[usize]) throws effects.Error {
+    let n = module.nodes[id];
+    let kind = hir.node_kind(n.data);
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+        if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
+        collect_place_index_risks(module, nominal_ids, n.children[0], out);
+        return;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+        if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
+        collect_place_index_risks(module, nominal_ids, n.children[0], out);
+        collect_alias_risks(module, nominal_ids, n.children[1], out);
+    }
+}
+
+func collect_access_paths(module hir.HirModule, id usize,
+                          out Vec[PlaceAccess]) throws effects.Error {
+    let n = module.nodes[id];
+    let kind = hir.node_kind(n.data);
+    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.Place) {
+        switch place_root(module, id) {
+            case option.Option.Some(root):
+                vec.push(out, PlaceAccess(root: root, path: vec.empty[PlacePath]()));
+            case option.Option.None: {}
+        }
+        return;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+        switch place_root(module, id) {
+            case option.Option.Some(root):
+                vec.push(out, PlaceAccess(root: root,
+                    path: place_path(module, id)));
+            case option.Option.None: {}
+        }
+        return;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
+        switch place_root(module, id) {
+            case option.Option.Some(root):
+                vec.push(out, PlaceAccess(root: root,
+                    path: place_path(module, id)));
+            case option.Option.None: {}
+        }
+        if vec.len(n.children) >= 2 {
+            collect_access_paths(module, n.children[1], out);
+        }
+        return;
+    }
+    switch effects.b_node_move(n) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding):
+                    vec.push(out, PlaceAccess(root: binding,
+                        path: vec.empty[PlacePath]()));
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    for child_id in n.children {
+        collect_access_paths(module, child_id, out);
+    }
+}
+
+func collect_place_index_paths(module hir.HirModule, id usize,
+                               out Vec[PlaceAccess]) throws effects.Error {
+    let n = module.nodes[id];
+    let kind = hir.node_kind(n.data);
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
+        if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
+        collect_place_index_paths(module, n.children[0], out);
+        return;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+        if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
+        collect_place_index_paths(module, n.children[0], out);
+        collect_access_paths(module, n.children[1], out);
+    }
+}

@@ -10,7 +10,6 @@ from pathlib import Path
 import platform
 import re
 import resource
-import shlex
 import shutil
 import sys
 
@@ -59,16 +58,17 @@ def arm64_members(archive, readobj, command):
 def verify_objects(objects, opt, llvm, command):
     report = load_json(objects / "make-report.json")
     packages = report["packages"]
-    if (not packages or report["target"] != OBJECT_TARGET or report["opt"] != opt
+    if (report.get("schema_version") != 1 or report.get("phase") != "source-make"
+            or not packages or report["target"] != OBJECT_TARGET or report["opt"] != opt
             or report["cache_dir"] or any(row["action"] != "compiled" or row["opt_jobs"] != 1
                                           or row["llc_jobs"] != 1 for row in packages)):
-        raise RuntimeError(f"incomplete verified source Make report: {objects}")
+        raise RuntimeError(f"incomplete verified source-package report: {objects}")
     archive = objects / "program.a"
     expected = [f"pkg-{row['package']}.o" for row in packages]
     members = command([llvm / "llvm-ar", "t", archive]).splitlines()
     if (len(set(expected)) != len(expected) or sorted(members) != sorted(expected)
             or arm64_members(archive, llvm / "llvm-readobj", command) != len(expected)):
-        raise RuntimeError(f"archive members differ from source Make report: {archive}")
+        raise RuntimeError(f"archive members differ from source-package report: {archive}")
     return len(members)
 
 
@@ -112,28 +112,6 @@ def bootstrap_stack():
     return soft, ()
 
 
-def bootstrap_tools(llvm, directory):
-    directory.mkdir()
-    for name in ("opt", "llc", "llvm-ar"):
-        command = shlex.quote(str(llvm / name))
-        body = "#!/bin/sh\n"
-        if name == "llc":
-            # An older seed can emit Darwin objects with LLVM's faulty GlobalISel.
-            # Use SelectionDAG in both generations, including when the seed
-            # doesn't already pass the flag itself.
-            body += ('for flag do\n'
-                     '  case "$flag" in\n'
-                     f'    -global-isel=0) exec {command} "$@" ;;\n'
-                     '  esac\n'
-                     'done\n'
-                     'if [ "$1" != --version ]; then set -- -global-isel=0 "$@"; fi\n')
-        body += f'exec {command} "$@"\n'
-        launcher = directory / name
-        launcher.write_text(body)
-        launcher.chmod(0o755)
-    return directory
-
-
 def bootstrap(args):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise RuntimeError("native bootstrap requires macOS arm64")
@@ -150,17 +128,11 @@ def bootstrap(args):
     try:
         env = os.environ.copy()
         for name in ("MAKEFLAGS", "GNUMAKEFLAGS", "MAKEFILES", "MAKEOVERRIDES",
-                     "MFLAGS", "MAKELEVEL", "MAKE_RESTARTS", "WOOZYC"):
+                     "MFLAGS", "MAKELEVEL", "MAKE_RESTARTS", "WOOZY_MAKE", "WOOZYC"):
             env.pop(name, None)
-        make = shutil.which(env.get("WOOZY_MAKE") or "make")
-        if make is None:
-            raise RuntimeError("GNU Make is required")
         llvm = args.llvm_bin.resolve()
-        env.update(WOOZY_LLVM_BIN=str(llvm), WOOZY_MAKE=str(Path(make).resolve()),
-                   MAKEFLAGS=f"-j{args.jobs}")
+        env["WOOZY_LLVM_BIN"] = str(llvm)
         command = partial(run_command, cwd=output, env=env, timeout=args.timeout, prefix=prefix)
-        if not command([make, "--version"]).startswith("GNU Make "):
-            raise RuntimeError("source Make requires GNU Make")
         version = load_json(ROOT / "contracts/toolchain.lock.json")["llvm_version"]
         for tool in LLVM_TOOLS:
             binary = _required_file(llvm / tool, f"LLVM {tool}")
@@ -171,7 +143,6 @@ def bootstrap(args):
         clang = command(["xcrun", "--sdk", "macosx", "--find", "clang"]).strip()
         if not Path(sdk).is_dir() or not Path(clang).is_file():
             raise RuntimeError("macOS SDK and its Clang are required")
-        env["WOOZY_LLVM_BIN"] = str(bootstrap_tools(llvm, output / "llvm-bootstrap"))
         frozen = output / "inputs"
         project = freeze_project(args.project, frozen / "compiler")
         check_project = freeze_project(args.check_project, frozen / "check")
@@ -204,7 +175,8 @@ def bootstrap(args):
             result["stages"].append(record)
             print(f"Building macOS stage {number}", flush=True)
             require_ok(command([compiler, "build", "--project", project, "--out-dir", objects,
-                                "--source-make", "--objects-only", "--target", OBJECT_TARGET,
+                                "--source-make", "--jobs", str(args.jobs), "--objects-only",
+                                "--target", OBJECT_TARGET,
                                 "--opt", args.opt, "--format", "json"], log=log),
                        f"stage {number} build; see {log}")
             if _all_tree_hashes(frozen) != frozen_inputs or digest(compiler) != record["compiler_sha256"]:
@@ -232,7 +204,8 @@ def bootstrap(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", type=Path, required=True, help="native arm64 Woozy-written compiler")
+    parser.add_argument("--seed", type=Path, required=True,
+                        help="native arm64 Woozy-written compiler with --source-make --jobs support")
     parser.add_argument("--llvm-bin", type=Path, required=True, help="pinned LLVM tools directory")
     parser.add_argument("--runtime-archive", type=Path, required=True, help="liblang_darwin_core.a")
     parser.add_argument("--out-dir", type=Path, required=True, help="a new output directory")

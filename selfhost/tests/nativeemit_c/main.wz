@@ -4,6 +4,7 @@
 // `program <branch> <0|2>` prints one real C emission branch at the requested
 // optimization setting.
 package app;
+import "app/wzcc/nativeemit/core" as emitcore;
 
 import "app/wzcc/nativeemit" as nativeemit;
 import "std/io" as io;
@@ -24,9 +25,9 @@ func main() i32 throws os.Error {
             }
             text = nativeemit.c_branch_module(arguments[1], optimization);
         }
-    } catch error nativeemit.Error {
+    } catch error emitcore.Error {
         switch error {
-            case nativeemit.Error.Failure(code, kind, message): {
+            case emitcore.Error.Failure(code, kind, message): {
                 io.eprintln(code + ": " + message);
             }
         }

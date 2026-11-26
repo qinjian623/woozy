@@ -8,6 +8,7 @@
 // block parameters-free branch/conditional CFG, reverse post order, string
 // literal storage, the executable main wrapper and the GC poll at entry.
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -20,16 +21,16 @@ import "std/vec" as vec;
 // ---- pure helper checks -----------------------------------------------------
 
 pub func b_harness_pure() i32 {
-    if b_integer_literal(0, 1) != "false" { return 1; }
-    if b_integer_literal(1, 1) != "true" { return 2; }
-    if b_integer_literal(255, 8) != "-1" { return 3; }
-    if b_integer_literal(128, 8) != "-128" { return 4; }
-    if b_integer_literal(127, 8) != "127" { return 5; }
-    if b_integer_literal(4294967295, 32) != "-1" { return 6; }
-    if b_integer_literal(2147483648, 32) != "-2147483648" { return 7; }
-    if b_integer_literal(12, 32) != "12" { return 8; }
-    if b_integer_literal(18446744073709551615, 64) != "-1" { return 9; }
-    if b_integer_literal(9223372036854775808, 64) != "-9223372036854775808" {
+    if emitcore.b_integer_literal(0, 1) != "false" { return 1; }
+    if emitcore.b_integer_literal(1, 1) != "true" { return 2; }
+    if emitcore.b_integer_literal(255, 8) != "-1" { return 3; }
+    if emitcore.b_integer_literal(128, 8) != "-128" { return 4; }
+    if emitcore.b_integer_literal(127, 8) != "127" { return 5; }
+    if emitcore.b_integer_literal(4294967295, 32) != "-1" { return 6; }
+    if emitcore.b_integer_literal(2147483648, 32) != "-2147483648" { return 7; }
+    if emitcore.b_integer_literal(12, 32) != "12" { return 8; }
+    if emitcore.b_integer_literal(18446744073709551615, 64) != "-1" { return 9; }
+    if emitcore.b_integer_literal(9223372036854775808, 64) != "-9223372036854775808" {
         return 10;
     }
     if b_all_ones(8) != 255 { return 11; }
@@ -40,48 +41,48 @@ pub func b_harness_pure() i32 {
     if b_wide_literal(false, 18446744073709551615) != "18446744073709551615" {
         return 16;
     }
-    let narrow = b_float_bits_of(b_float_value(4294967295, 32).reference);
+    let narrow = emitcore.b_float_bits_of(emitcore.b_float_value(4294967295, 32).reference);
     switch narrow {
         case option.Option.Some(item): {
             if item != 4294967295 { return 17; }
         }
         case option.Option.None: return 17;
     }
-    let wide = b_float_bits_of(b_float_value(18446744073709551615, 64).reference);
+    let wide = emitcore.b_float_bits_of(emitcore.b_float_value(18446744073709551615, 64).reference);
     switch wide {
         case option.Option.Some(item): {
             if item != 18446744073709551615 { return 18; }
         }
         case option.Option.None: return 18;
     }
-    if b_float_value(0, 32).reference != "bitcast (i32 0 to float)" { return 19; }
-    if b_float_value(0, 64).reference != "bitcast (i64 0 to double)" { return 20; }
+    if emitcore.b_float_value(0, 32).reference != "bitcast (i32 0 to float)" { return 19; }
+    if emitcore.b_float_value(0, 64).reference != "bitcast (i64 0 to double)" { return 20; }
     // Conversion bounds: -1.0, -2^63, 2^63, 2^64 for both widths.
-    if b_float_pow2(0, true, 64).reference !=
+    if emitcore.b_float_pow2(0, true, 64).reference !=
        "bitcast (i64 13830554455654793216 to double)" { return 21; }
-    if b_float_pow2(63, false, 64).reference !=
+    if emitcore.b_float_pow2(63, false, 64).reference !=
        "bitcast (i64 4890909195324358656 to double)" { return 22; }
-    if b_float_pow2(64, false, 64).reference !=
+    if emitcore.b_float_pow2(64, false, 64).reference !=
        "bitcast (i64 4895412794951729152 to double)" { return 23; }
-    if b_float_pow2(63, true, 64).reference !=
+    if emitcore.b_float_pow2(63, true, 64).reference !=
        "bitcast (i64 14114281232179134464 to double)" { return 24; }
-    if b_float_pow2(0, true, 32).reference != "bitcast (i32 3212836864 to float)" {
+    if emitcore.b_float_pow2(0, true, 32).reference != "bitcast (i32 3212836864 to float)" {
         return 25;
     }
-    if b_float_pow2(63, true, 32).reference != "bitcast (i32 3741319168 to float)" {
+    if emitcore.b_float_pow2(63, true, 32).reference != "bitcast (i32 3741319168 to float)" {
         return 26;
     }
-    if b_float_pow2(64, false, 32).reference !=
+    if emitcore.b_float_pow2(64, false, 32).reference !=
        "bitcast (i32 1602224128 to float)" { return 27; }
-    let none = b_float_bits_of("not a constant");
+    let none = emitcore.b_float_bits_of("not a constant");
     switch none {
         case option.Option.Some(item): return 28;
         case option.Option.None: {}
     }
     // Canonical literal spelling round-trips through the LLVM-independent
     // signed printer for every width the backend uses.
-    if b_integer_literal(255, 64) != "255" { return 29; }
-    if b_integer_literal(18446744073709551614, 64) != "-2" { return 30; }
+    if emitcore.b_integer_literal(255, 64) != "255" { return 29; }
+    if emitcore.b_integer_literal(18446744073709551614, 64) != "-2" { return 30; }
     return 0;
 }
 
@@ -96,58 +97,58 @@ func b_harness_source(node usize) hir.HirSource {
         span: b_harness_span());
 }
 
-func b_harness_int(state inout types.Context, bits u32) usize throws Error {
+func b_harness_int(state inout types.Context, bits u32) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.SignedInt);
     value.bits = bits;
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test int type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test int type"); }
 }
 
-func b_harness_float(state inout types.Context, bits u32) usize throws Error {
+func b_harness_float(state inout types.Context, bits u32) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Float);
     value.bits = bits;
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test float type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test float type"); }
 }
 
-func b_harness_type(kind model.TypeKind, state inout types.Context) usize throws Error {
+func b_harness_type(kind model.TypeKind, state inout types.Context) usize throws emitcore.Error {
     let value = model.empty_type(kind);
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test type"); }
 }
 
-func b_harness_vec(element usize, state inout types.Context) usize throws Error {
+func b_harness_vec(element usize, state inout types.Context) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Vec);
     value.type_args = [element];
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test vec type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test vec type"); }
 }
 
 func b_harness_nominal(kind model.TypeKind, declaration usize,
-                       state inout types.Context) usize throws Error {
+                       state inout types.Context) usize throws emitcore.Error {
     var value = model.empty_type(kind);
     value.declaration = declaration;
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test nominal type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test nominal type"); }
 }
 
 func b_harness_function(result usize, parameters Vec[model.ParameterType],
-                        state inout types.Context) usize throws Error {
+                        state inout types.Context) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Function);
     value.result = result;
     value.parameters = parameters;
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern test function type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern test function type"); }
 }
 
 func b_harness_throws(result usize, parameters Vec[model.ParameterType],
-                      error_type usize, state inout types.Context) usize throws Error {
+                      error_type usize, state inout types.Context) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Function);
     value.result = result;
     value.parameters = parameters;
     value.throws_type = option.Option[usize].Some(error_type);
     try { return types.intern(inout state, value); }
-    catch error types.Error { throw invalid("cannot intern throwing type"); }
+    catch error types.Error { throw emitcore.invalid("cannot intern throwing type"); }
 }
 
 func b_harness_constant(result usize, type_id usize,
@@ -409,7 +410,7 @@ func b_harness_empty_slot() nativeir.Slot {
         owning_parameter: false, binding: option.Option[usize].None);
 }
 
-pub func b_harness_emit() Vec[string] throws Error {
+pub func b_harness_emit() Vec[string] throws emitcore.Error {
     var context = types.context();
     let i32_type = b_harness_int(inout context, 32);
     let i64_type = b_harness_int(inout context, 64);
@@ -709,15 +710,17 @@ pub func b_harness_emit() Vec[string] throws Error {
             b_harness_terminator(nativeir.Exit.Return, [0], []))],
         source: b_harness_span(), handlers: []));
 
-    var state = new_emitter(cfg, default_options());
+    var state = emitcore.new_emitter(cfg, emitcore.Settings(
+        triple: "x86_64-unknown-linux-gnu", cpu: "generic", features: "",
+        optimization: 0, debug_info: false));
     // Root sets the executable entry before emitting functions, exactly as
     // src/backend/native/emit.cpp::run does; B.emit_main repeats and validates.
     state.gc_entry_symbol = option.Option[usize].Some(10);
-    declare_runtime_types(inout state);
+    emitcore.declare_runtime_types(inout state);
     declare_source_functions(inout state);
     for var index usize = 0; index < vec.len(state.input.functions); index += 1 {
         emit_function(index, inout state);
     }
     emit_main(10, inout state);
-    return sections(state);
+    return emitcore.sections(state);
 }

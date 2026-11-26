@@ -350,6 +350,29 @@ func main() i32 throws os.Error {
         sequence_manager.revision == 2 &&
         vec.len(sequence_manager.snapshots) == 2);
 
+    // Multi-chunk read across 4 KiB and 64 KiB boundaries preserves exact
+    // original bytes and normalized output.
+    let chunk_unit_original Vec[u8] = [
+        0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,
+        0x38,0x39,0x61,0x62,0x63,0x64,0x65,0x66,
+        0xC3,0xA9,0x0D,0x0A
+    ];
+    let chunk_unit_normalized Vec[u8] = [
+        0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,
+        0x38,0x39,0x61,0x62,0x63,0x64,0x65,0x66,
+        0xC3,0xA9,0x0A
+    ];
+    let multi_original Vec[u8] = [0xEF,0xBB,0xBF];
+    let multi_normalized = vec.empty[u8]();
+    for var repeat usize = 0; repeat < 3500; repeat += 1 {
+        vec.extend(multi_original, chunk_unit_original);
+        vec.extend(multi_normalized, chunk_unit_normalized);
+    }
+    var multi_manager = source.manager();
+    let multi = input.read(base+"/multi-chunk.bin", inout multi_manager);
+    check_valid(inout state, "multi-chunk BOM+CRLF+UTF-8", multi,
+        multi_manager, multi_original, multi_normalized, 1, 1, 1);
+
     io.println("SUMMARY\t"+strconv.format_i64(i64(state.passed))+"\t"+
         strconv.format_i64(i64(state.failed)));
     if state.failed != 0 { return 1; }

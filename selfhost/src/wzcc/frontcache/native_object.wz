@@ -9,10 +9,9 @@ import "std/vec" as vec;
 
 const DARWIN_OBJECT_TARGET string = "arm64-apple-macosx11.0.0";
 
-func darwin_object_inputs(root string, tools string, scheduler string,
-                          objects_only bool) Vec[string] throws os.Error {
+func darwin_object_inputs(root string, tools string, objects_only bool) Vec[string] throws os.Error {
     let inputs = [os.executable_path(), tools + "/opt", tools + "/llc",
-        tools + "/llvm-ar", scheduler];
+        tools + "/llvm-ar"];
     if !objects_only {
         vec.push(inputs, root + "/runtime/liblang_darwin_core.a");
         vec.push(inputs, tools + "/clang");
@@ -29,7 +28,10 @@ pub func configure(directory string, optimization string, target string) Context
     let root = resources.directory();
     let tools = resources.llvm_bin(root);
     var paths Vec[string] = [];
-    if target == DARWIN_OBJECT_TARGET { paths = darwin_object_inputs(root, tools, resources.ninja(), false); }
+    if target == DARWIN_OBJECT_TARGET {
+        paths = darwin_object_inputs(root, tools, false);
+        vec.push(paths, resources.ninja());
+    }
     else { paths = [os.executable_path(), root + "/runtime/liblang_native_runtime.a", root + "/runtime/liblang_hosted_runtime.a",
         tools + "/opt", tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.ninja()]; }
     for path in paths {
@@ -38,7 +40,7 @@ pub func configure(directory string, optimization string, target string) Context
     cache.fingerprint = hash_bytes(bytes); return cache;
 }
 
-// The key binds the compiler, scheduler, target, optimization and LLVM tools.
+// The key binds the compiler, target, optimization and LLVM tools.
 // Executable builds also include the runtime and link tools.
 pub func configure_source_make(directory string, optimization string,
                                target string, objects_only bool) Context throws os.Error {
@@ -50,10 +52,10 @@ pub func configure_source_make(directory string, optimization string,
     let tools = resources.llvm_bin(root);
     var paths Vec[string] = [];
     if target == DARWIN_OBJECT_TARGET {
-        paths = darwin_object_inputs(root, tools, resources.make(), objects_only);
+        paths = darwin_object_inputs(root, tools, objects_only);
     } else { paths = [os.executable_path(), root + "/runtime/liblang_native_runtime.a",
         root + "/runtime/liblang_hosted_runtime.a", tools + "/opt",
-        tools + "/llc", tools + "/clang", tools + "/ld.lld", resources.make()]; }
+        tools + "/llc", tools + "/clang", tools + "/ld.lld"]; }
     for path in paths {
         put_string(bytes, file_digest(cache, path));
     }

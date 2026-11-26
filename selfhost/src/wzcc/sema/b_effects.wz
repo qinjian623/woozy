@@ -1,5 +1,6 @@
 // Post-body effect/exit annotation and function-body checking (CPP 5896-6188).
 package sema;
+import "app/wzcc/sema/core" as semacore;
 
 import "app/wzcc/semaeffects" as effects;
 
@@ -8,20 +9,20 @@ import "app/wzcc/model" as model;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func annotate(state inout Checker, function hir.HirFunction) throws Error {
+func annotate(state inout semacore.Checker, function hir.HirFunction) throws semacore.Error {
     var captured_error = state.current_async_error;
     try { effects.annotate(inout state.m, captured_error, function); }
-    catch problem effects.Error { throw effect_error(inout state, problem); }
+    catch problem effects.Error { throw semacore.effect_error(inout state, problem); }
 }
 
-func b_body_find(state inout Checker, symbol_id usize)
-    option.Option[model.NodeRef] throws Error {
+func b_body_find(state inout semacore.Checker, symbol_id usize)
+    option.Option[model.NodeRef] throws semacore.Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    return a_body_get(state.bodies, symbol_id);
+    return semacore.a_body_get(state.bodies, symbol_id);
 }
 
-func b_template_id_set(state inout Checker, symbol_id usize, index usize) { let b_module=state.m;
+func b_template_id_set(state inout semacore.Checker, symbol_id usize, index usize) { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     var low usize = 0;
     var high = vec.len(state.template_ids);
@@ -35,39 +36,39 @@ func b_template_id_set(state inout Checker, symbol_id usize, index usize) { let 
         state.template_ids[low].index = index;
         return;
     }
-    vec.push(state.template_ids, TemplateIdEntry(symbol: symbol_id,
+    vec.push(state.template_ids, semacore.TemplateIdEntry(symbol: symbol_id,
         index: index));
     var cursor = n;
     for cursor > low {
         state.template_ids[cursor] = state.template_ids[cursor - 1];
         cursor -= 1;
     }
-    state.template_ids[low] = TemplateIdEntry(symbol: symbol_id,
+    state.template_ids[low] = semacore.TemplateIdEntry(symbol: symbol_id,
         index: index);
 }
 
-func check_body(state inout Checker, id usize) throws Error { let b_module=state.m;
+func check_body(state inout semacore.Checker, id usize) throws semacore.Error { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     state.function = id;
     var r = model.NodeRef(module: 0, file: 0, node: 0);
     switch b_body_find(inout state, id) {
         case option.Option.Some(value): r = value;
-        case option.Option.None: throw internal_error("missing sema body");
+        case option.Option.None: throw semacore.internal_error("missing sema body");
     }
     let signature = b_signature_or_internal(inout state, id);
-    b_locals_clear(inout state);
+    semacore.b_locals_clear(inout state);
     state.loops = vec.empty[usize]();
     state.break_targets = vec.empty[usize]();
     state.cleanup_depth = 0;
-    state.active_params = b_generic_params(inout state, id);
-    b_captures_clear(inout state);
-    switch b_closures_find(inout state, id) {
+    state.active_params = semacore.b_generic_params(inout state, id);
+    semacore.b_captures_clear(inout state);
+    switch semacore.b_closures_find(inout state, id) {
         case option.Option.Some(info): {
             state.current_captures = b_copy_captures(info.bindings);
             for binding in info.bindings {
-                b_capture_origin_set(inout state, binding.origin, binding.local);
-                b_capture_local_set(inout state, binding.local, binding);
-                b_locals_set(inout state, binding.local, Local(
+                semacore.b_capture_origin_set(inout state, binding.origin, binding.local);
+                semacore.b_capture_local_set(inout state, binding.local, binding);
+                semacore.b_locals_set(inout state, binding.local, semacore.Local(
                     type_id: binding.type_id, writable: false,
                     ordinary_parameter: false, read_only_capture: true));
             }
@@ -76,22 +77,22 @@ func check_body(state inout Checker, id usize) throws Error { let b_module=state
     }
     state.scope = new_scope(inout state, r, option.Option[usize].None);
     var parameters = vec.empty[hir.Parameter]();
-    switch b_parameters_find(inout state, id) {
+    switch semacore.b_parameters_find(inout state, id) {
         case option.Option.Some(value): parameters = value;
-        case option.Option.None: throw internal_error("missing sema parameters");
+        case option.Option.None: throw semacore.internal_error("missing sema parameters");
     }
-    let signature_type = lookup_type(inout state, signature);
-    state.async_function = has_async_marker(inout state, r);
+    let signature_type = semacore.lookup_type(inout state, signature);
+    state.async_function = semacore.has_async_marker(inout state, r);
     state.current_async_error = option.Option[usize].None;
     if state.async_function {
-        let task_type = lookup_type(inout state, signature_type.result);
+        let task_type = semacore.lookup_type(inout state, signature_type.result);
         if !effects.b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
            vec.len(task_type.type_args) < 2 {
-            throw internal_error("async signature is not a Task");
+            throw semacore.internal_error("async signature is not a Task");
         }
         state.current_result = task_type.type_args[0];
         let error_id = task_type.type_args[1];
-        if !effects.b_type_kind_is(lookup_type(inout state, error_id).kind,
+        if !effects.b_type_kind_is(semacore.lookup_type(inout state, error_id).kind,
                            model.TypeKind.Unit) {
             state.current_async_error = option.Option[usize].Some(error_id);
         }
@@ -101,27 +102,27 @@ func check_body(state inout Checker, id usize) throws Error { let b_module=state
     }
     for var index usize = 0; index < vec.len(parameters); index += 1 {
         if index >= vec.len(signature_type.parameters) {
-            throw internal_error("function parameter/signature mismatch");
+            throw semacore.internal_error("function parameter/signature mismatch");
         }
         let parameter_type = signature_type.parameters[index];
-        b_locals_set(inout state, parameters[index].symbol, Local(
+        semacore.b_locals_set(inout state, parameters[index].symbol, semacore.Local(
             type_id: parameter_type.type_id,
-            writable: b_mode_is(parameter_type.mode, model.ParamMode.Inout),
-            ordinary_parameter: b_mode_is(parameter_type.mode,
+            writable: semacore.b_mode_is(parameter_type.mode, model.ParamMode.Inout),
+            ordinary_parameter: semacore.b_mode_is(parameter_type.mode,
                 model.ParamMode.Ordinary),
             read_only_capture: false));
     }
-    let body_ref = b_child_m(b_module, r,
-        vec.len(b_ast_m(b_module, r).children) - 1);
+    let body_ref = semacore.b_child_m(b_module, r,
+        vec.len(semacore.b_ast_m(b_module, r).children) - 1);
     let body = block(inout state, body_ref, true);
     if state.current_result != b_unit && flow(inout state, body.id, 0).falls {
-        throw reject(inout state, r,
+        throw semacore.reject(inout state, r,
             "non-Unit function has a reachable normal exit without return",
             "E_TYPE_MISMATCH");
     }
     let function = hir.HirFunction(symbol: id, signature: signature,
         parameters: parameters, body: body.id, scope: state.scope,
-        source: source(inout state, r), captures: state.current_captures,
+        source: semacore.source(inout state, r), captures: state.current_captures,
         is_async: state.async_function);
     annotate(inout state, function);
     if vec.len(state.active_params) == 0 {

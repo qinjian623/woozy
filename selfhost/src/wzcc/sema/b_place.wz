@@ -1,406 +1,55 @@
-// Writable places, alias paths and inout borrow checks (CPP 2454-2864).
+// Writable place construction and inout place type checks (CPP 2454-2864).
 package sema;
+import "app/wzcc/sema/core" as semacore;
+import "app/wzcc/sema/typecheck" as sematypes;
 
 import "app/wzcc/semaeffects" as effects;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
-import "app/wzcc/types" as types;
+import "app/wzcc/sema/borrow" as borrow;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func place_root(state inout Checker, id usize) option.Option[usize] throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if id >= vec.len(state.m.nodes) {
-        throw internal_error("invalid place node");
-    }
-    let n = state.m.nodes[id];
-    switch effects.b_node_read(n) {
-        case option.Option.Some(value):
-            return option.Option[usize].Some(value.symbol);
-        case option.Option.None: {}
-    }
-    switch effects.b_node_place(n) {
-        case option.Option.Some(value):
-            return option.Option[usize].Some(value.symbol);
-        case option.Option.None: {}
-    }
-    let kind = hir.node_kind(n.data);
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
-        if vec.len(n.children) == 0 {
-            throw internal_error("place has no receiver");
-        }
-        return place_root(inout state, n.children[0]);
-    }
-    return option.Option[usize].None;
-}
-
-func check_inout_place_type(state inout Checker, r model.NodeRef,
-                            type_id usize) throws Error {
+func check_inout_place_type(state inout semacore.Checker, r model.NodeRef,
+                            type_id usize) throws semacore.Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    if !owning_inout_type(inout state, type_id,
+    if !sematypes.owning_inout_type(inout state, type_id,
             option.Option[usize].None) &&
-       !template_inout_type(inout state, type_id) {
-        let reason = owning_inout_reason(inout state, type_id,
+       !sematypes.template_inout_type(inout state, type_id) {
+        let reason = sematypes.owning_inout_reason(inout state, type_id,
             option.Option[usize].None);
         if reason == "" {
-            throw unavailable(inout state, r,
+            throw semacore.unavailable(inout state, r,
                 "inout requires a whole Woozy value place");
         }
-        throw unavailable(inout state, r, reason);
+        throw semacore.unavailable(inout state, r, reason);
     }
 }
 
-func place_path(state inout Checker, id usize) Vec[PlacePath] throws Error { let b_module=state.m;
+func place_root(state inout semacore.Checker, id usize) option.Option[usize] throws semacore.Error {
+    try { return borrow.place_root(state.m, id); }
+    catch problem effects.Error { throw semacore.effect_error(inout state, problem); }
+}
+
+func place(state inout semacore.Checker, r model.NodeRef, inout_mode bool) semacore.Expr throws semacore.Error { let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = state.m.nodes[id];
-    let kind = hir.node_kind(n.data);
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
-        if vec.len(n.children) == 0 {
-            throw internal_error("field place has no receiver");
-        }
-        let path = place_path(inout state, n.children[0]);
-        var field usize = 0;
-        if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
-            switch n.data {
-                case hir.NodeData.FieldPlace(value): field = value.field;
-                default: throw internal_error("field place payload mismatch");
-            }
-        } else {
-            switch n.data {
-                case hir.NodeData.FieldRead(value): field = value.field;
-                default: throw internal_error("field read payload mismatch");
-            }
-        }
-        vec.push(path, PlacePath(is_index: false, known: true, value: u64(field)));
-        return path;
+    let n = semacore.b_ast_m(b_module, r);
+    if semacore.b_kind_is(n.kind, model.AstKind.Parenthesized) {
+        return place(inout state, semacore.b_child_m(b_module, r, 0), inout_mode);
     }
-    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
-        if vec.len(n.children) < 2 {
-            throw internal_error("index place has no index");
-        }
-        let path = place_path(inout state, n.children[0]);
-        let index = state.m.nodes[n.children[1]];
-        let index_kind = hir.node_kind(index.data);
-        var known = false;
-        var value = u64(n.children[1]);
-        if effects.b_node_kind_is(index_kind, hir.NodeKind.IntegerLiteral) {
-            known = true;
-            switch index.data {
-                case hir.NodeData.IntegerLiteral(literal): value = literal.bits;
-                default: {}
-            }
-        }
-        vec.push(path, PlacePath(is_index: true, known: known, value: value));
-        return path;
-    }
-    return vec.empty[PlacePath]();
-}
-
-func b_paths_overlap(a Vec[PlacePath], b Vec[PlacePath]) bool {
-    var length = vec.len(a);
-    if vec.len(b) < length { length = vec.len(b); }
-    for var index usize = 0; index < length; index += 1 {
-        if a[index].is_index || b[index].is_index {
-            if !a[index].is_index || !b[index].is_index { return true; }
-            if a[index].known && b[index].known &&
-               a[index].value == b[index].value { continue; }
-            if a[index].known && b[index].known { return false; }
-            return true;
-        }
-        if a[index].value != b[index].value { return false; }
-    }
-    return true;
-}
-
-func container_path(path Vec[PlacePath]) ContainerPath {
-    let indexes = vec.empty[PlacePath]();
-    let fields = vec.empty[u64]();
-    for part in path {
-        if part.is_index {
-            vec.push(indexes, part);
-            vec.clear(fields);
-        } else if vec.len(indexes) != 0 {
-            vec.push(fields, part.value);
-        }
-    }
-    return ContainerPath(indexes: indexes, fields: fields);
-}
-
-func container_overlap(a ContainerPath, b ContainerPath) bool {
-    if vec.len(a.indexes) != vec.len(b.indexes) { return true; }
-    if vec.len(a.indexes) == 0 { return true; }
-    let left = a.indexes[vec.len(a.indexes) - 1];
-    let right = b.indexes[vec.len(b.indexes) - 1];
-    if !left.known || !right.known { return true; }
-    if left.value != right.value { return false; }
-    var length = vec.len(a.fields);
-    if vec.len(b.fields) < length { length = vec.len(b.fields); }
-    for var index usize = 0; index < length; index += 1 {
-        if a.fields[index] != b.fields[index] { return false; }
-    }
-    return true;
-}
-
-func places_overlap(root_a usize, a Vec[PlacePath], root_b usize,
-                    b Vec[PlacePath]) bool {
-    let ca = container_path(a);
-    let cb = container_path(b);
-    if vec.len(ca.indexes) != 0 && vec.len(cb.indexes) != 0 {
-        return container_overlap(ca, cb);
-    }
-    return root_a == root_b && b_paths_overlap(a, b);
-}
-
-func may_hold_shared(state inout Checker, root usize) bool throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let active = vec.empty[usize]();
-    var scratch = types.clone_context(state.m.types);
-    return b_may_hold_shared_visit(inout state, inout scratch, root, active);
-}
-
-func b_may_hold_shared_visit(state inout Checker, scratch inout types.Context,
-                             id usize, active Vec[usize]) bool throws Error {
-    let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    var value_type = model.empty_type(model.TypeKind.Error);
-    switch types.find(scratch, id) {
-        case option.Option.Some(value): value_type = value;
-        case option.Option.None: return true;
-    }
-    let kind = value_type.kind;
-    if effects.b_type_kind_is(kind, model.TypeKind.Vec) ||
-       effects.b_type_kind_is(kind, model.TypeKind.Slice) ||
-       effects.b_type_kind_is(kind, model.TypeKind.Weak) ||
-       effects.b_type_kind_is(kind, model.TypeKind.TraitObject) ||
-       effects.b_type_kind_is(kind, model.TypeKind.Function) ||
-       effects.b_type_kind_is(kind, model.TypeKind.TypeParameter) ||
-       effects.b_type_kind_is(kind, model.TypeKind.Task) {
-        return true;
-    }
-    if !effects.b_type_kind_is(kind, model.TypeKind.NominalStruct) &&
-       !effects.b_type_kind_is(kind, model.TypeKind.NominalEnum) {
-        return false;
-    }
-    var declaration = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Error,
-        params: [], fields: [], variants: [],
-        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
-            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
-    var found = false;
-    switch a_nominal_id_get(state.nominal_ids, value_type.declaration) {
-        case option.Option.Some(index): {
-            if index < vec.len(state.m.nominals) {
-                declaration = state.m.nominals[index];
-                found = true;
-            }
-        }
-        case option.Option.None: {
-            for candidate in state.m.nominals {
-                if candidate.symbol == value_type.declaration {
-                    declaration = candidate;
-                    found = true;
-                    break;
-                }
-            }
-        }
-    }
-    if !found || vec.len(value_type.type_args) != vec.len(declaration.params) {
-        return true;
-    }
-    if effects.b_vec_contains(active, id) { return false; }
-    effects.b_insert_sorted(active, id);
-    let substitutions = vec.empty[model.Substitution]();
-    for var index usize = 0; index < vec.len(declaration.params); index += 1 {
-        vec.push(substitutions, model.Substitution(
-            symbol: declaration.params[index].symbol,
-            type_id: value_type.type_args[index]));
-    }
-    var result = false;
-    for field in declaration.fields {
-        var concrete = field.type_id;
-        try { concrete = types.substitute(field.type_id, substitutions,
-            inout scratch); }
-        catch error types.Error { throw Error.Support(support_from_type_error(error)); }
-        if b_may_hold_shared_visit(inout state, inout scratch, concrete, active) {
-            result = true;
-        }
-    }
-    for variant in declaration.variants {
-        for field in variant.payload {
-            var concrete = field.type_id;
-            try { concrete = types.substitute(field.type_id, substitutions,
-                inout scratch); }
-            catch error types.Error { throw Error.Support(support_from_type_error(error)); }
-            if b_may_hold_shared_visit(inout state, inout scratch, concrete, active) {
-                result = true;
-            }
-        }
-    }
-    effects.b_remove_id(active, id);
-    return result;
-}
-
-func collect_alias_risks(state inout Checker, id usize, out Vec[usize]) throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = state.m.nodes[id];
-    let kind = hir.node_kind(n.data);
-    let storage = effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
-        effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
-        effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-        effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-        effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-        effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace);
-    var move_binding = false;
-    switch effects.b_node_move(n) {
-        case option.Option.Some(value):
-            switch value.binding {
-                case option.Option.Some(binding): move_binding = true;
-                case option.Option.None: {}
-            }
-        case option.Option.None: {}
-    }
-    if (storage || effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) ||
-        move_binding) && may_hold_shared(inout state, n.type_id) {
-        vec.push(out, n.type_id);
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.Place) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FunctionValue) || move_binding {
-        return;
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
-        switch place_root(inout state, id) {
-            case option.Option.Some(root): {
-                collect_place_index_risks(inout state, id, out);
-                return;
-            }
-            case option.Option.None: {}
-        }
-    }
-    for child_id in n.children {
-        collect_alias_risks(inout state, child_id, out);
-    }
-}
-
-func collect_place_index_risks(state inout Checker, id usize,
-                               out Vec[usize]) throws Error {
-    let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = state.m.nodes[id];
-    let kind = hir.node_kind(n.data);
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
-        if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
-        collect_place_index_risks(inout state, n.children[0], out);
-        return;
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
-        if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
-        collect_place_index_risks(inout state, n.children[0], out);
-        collect_alias_risks(inout state, n.children[1], out);
-    }
-}
-
-func collect_access_paths(state inout Checker, id usize,
-                          out Vec[PlaceAccess]) throws Error {
-    let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = state.m.nodes[id];
-    let kind = hir.node_kind(n.data);
-    if effects.b_node_kind_is(kind, hir.NodeKind.Read) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.Place) {
-        switch place_root(inout state, id) {
-            case option.Option.Some(root):
-                vec.push(out, PlaceAccess(root: root, path: vec.empty[PlacePath]()));
-            case option.Option.None: {}
-        }
-        return;
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
-        switch place_root(inout state, id) {
-            case option.Option.Some(root):
-                vec.push(out, PlaceAccess(root: root,
-                    path: place_path(inout state, id)));
-            case option.Option.None: {}
-        }
-        return;
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) {
-        switch place_root(inout state, id) {
-            case option.Option.Some(root):
-                vec.push(out, PlaceAccess(root: root,
-                    path: place_path(inout state, id)));
-            case option.Option.None: {}
-        }
-        if vec.len(n.children) >= 2 {
-            collect_access_paths(inout state, n.children[1], out);
-        }
-        return;
-    }
-    switch effects.b_node_move(n) {
-        case option.Option.Some(value):
-            switch value.binding {
-                case option.Option.Some(binding):
-                    vec.push(out, PlaceAccess(root: binding,
-                        path: vec.empty[PlacePath]()));
-                case option.Option.None: {}
-            }
-        case option.Option.None: {}
-    }
-    for child_id in n.children {
-        collect_access_paths(inout state, child_id, out);
-    }
-}
-
-func collect_place_index_paths(state inout Checker, id usize,
-                               out Vec[PlaceAccess]) throws Error {
-    let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = state.m.nodes[id];
-    let kind = hir.node_kind(n.data);
-    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
-        if vec.len(n.children) == 0 { throw internal_error("field place has no receiver"); }
-        collect_place_index_paths(inout state, n.children[0], out);
-        return;
-    }
-    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
-       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
-        if vec.len(n.children) < 2 { throw internal_error("index place has no index"); }
-        collect_place_index_paths(inout state, n.children[0], out);
-        collect_access_paths(inout state, n.children[1], out);
-    }
-}
-
-func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Error { let b_module=state.m;
-    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let n = b_ast_m(b_module, r);
-    if b_kind_is(n.kind, model.AstKind.Parenthesized) {
-        return place(inout state, b_child_m(b_module, r, 0), inout_mode);
-    }
-    if b_kind_is(n.kind, model.AstKind.NeutralBracket) {
-        let base = expression(inout state, b_child_m(b_module, r, 0),
+    if semacore.b_kind_is(n.kind, model.AstKind.NeutralBracket) {
+        let base = expression(inout state, semacore.b_child_m(b_module, r, 0),
             option.Option[usize].None);
-        let receiver = lookup_type(inout state, base.value.type_id);
+        let receiver = semacore.lookup_type(inout state, base.value.type_id);
         if effects.b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
             if inout_mode {
-                throw unavailable(inout state, r,
+                throw semacore.unavailable(inout state, r,
                     "external indexed inout is not supported");
             }
             if vec.len(n.children) != 2 {
-                throw reject(inout state, r,
+                throw semacore.reject(inout state, r,
                     "external indexing requires exactly one index",
                     "E_TYPE_MISMATCH");
             }
@@ -409,111 +58,111 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
             switch index_id {
                 case option.Option.Some(value): binding = value;
                 case option.Option.None:
-                    throw unavailable(inout state, r,
+                    throw semacore.unavailable(inout state, r,
                         "external indexing is not declared");
             }
             let declaration = b_foreign_indexer_declaration(inout state, binding);
             if !declaration.writable {
-                throw unavailable(inout state, r,
+                throw semacore.unavailable(inout state, r,
                     "external indexing is read-only");
             }
-            let index_type = declared_foreign_type(inout state,
+            let index_type = sematypes.declared_foreign_type(inout state,
                 declaration.index_type);
-            let index = expression(inout state, b_child_m(b_module, r, 1),
+            let index = expression(inout state, semacore.b_child_m(b_module, r, 1),
                 option.Option[usize].Some(index_type));
             b_match(inout state, r, index.value.type_id,
                 option.Option[usize].Some(index_type));
-            let record = b_foreign_binding(inout state, binding);
+            let record = semacore.b_foreign_binding(inout state, binding);
             let access = hir.ForeignRead(binding: binding,
                 access: option.Option[hir.ForeignAccessKind].Some(
                     hir.ForeignAccessKind.IndexPlace),
                 start: option.Option[usize].None, end: option.Option[usize].None);
-            return Expr(id: node(inout state, r, record.type_id,
+            return semacore.Expr(id: semacore.node(inout state, r, record.type_id,
                            hir.NodeData.ForeignRead(value: access),
                            [base.id, index.id]),
-                value: b_empty_value(record.type_id));
+                value: semacore.b_empty_value(record.type_id));
         }
         if effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
            effects.b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
             if inout_mode {
-                throw unavailable(inout state, r,
+                throw semacore.unavailable(inout state, r,
                     "C pointer/buffer inout is not supported");
             }
             if state.unsafe_depth == 0 {
-                throw reject(inout state, r,
+                throw semacore.reject(inout state, r,
                     "C pointer/buffer indexing requires unsafe",
                     "E_TYPE_MISMATCH");
             }
             if receiver.bits == 0 {
-                throw reject(inout state, r,
+                throw semacore.reject(inout state, r,
                     "C pointer/buffer is read-only", "E_TYPE_MISMATCH");
             }
             if vec.len(n.children) != 2 {
-                throw reject(inout state, r,
+                throw semacore.reject(inout state, r,
                     "C pointer requires one index", "E_CALL_ARGUMENT");
             }
-            let index = expression(inout state, b_child_m(b_module, r, 1),
+            let index = expression(inout state, semacore.b_child_m(b_module, r, 1),
                 option.Option[usize].None);
-            if !integer(inout state, index.value.type_id) {
-                throw reject(inout state, r,
+            if !semacore.integer(inout state, index.value.type_id) {
+                throw semacore.reject(inout state, r,
                     "C pointer index must be integer", "E_TYPE_MISMATCH");
             }
             if vec.len(receiver.type_args) == 0 {
-                throw internal_error("C pointer has no pointee");
+                throw semacore.internal_error("C pointer has no pointee");
             }
             let type_id = receiver.type_args[0];
-            if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
+            if effects.b_type_kind_is(semacore.lookup_type(inout state, type_id).kind,
                               model.TypeKind.Unit) {
-                throw reject(inout state, r,
+                throw semacore.reject(inout state, r,
                     "void pointer cannot be indexed", "E_TYPE_MISMATCH");
             }
-            return Expr(id: node(inout state, r, type_id,
+            return semacore.Expr(id: semacore.node(inout state, r, type_id,
                            hir.NodeData.IndexPlace(value: hir.IndexPlace()),
                            [base.id, index.id]),
-                value: b_empty_value(type_id));
+                value: semacore.b_empty_value(type_id));
         }
         if !effects.b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
            !effects.b_type_kind_is(receiver.kind, model.TypeKind.Slice) {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "index receiver must be Vec or Slice", "E_TYPE_MISMATCH");
         }
         if vec.len(n.children) != 2 {
-            throw reject(inout state, r, "indexing requires one index",
+            throw semacore.reject(inout state, r, "indexing requires one index",
                 "E_TYPE_MISMATCH");
         }
-        let index = expression(inout state, b_child_m(b_module, r, 1),
+        let index = expression(inout state, semacore.b_child_m(b_module, r, 1),
             option.Option[usize].None);
-        if !integer(inout state, index.value.type_id) {
-            throw reject(inout state, r, "index must be integer", "E_TYPE_MISMATCH");
+        if !semacore.integer(inout state, index.value.type_id) {
+            throw semacore.reject(inout state, r, "index must be integer", "E_TYPE_MISMATCH");
         }
         if vec.len(receiver.type_args) == 0 {
-            throw internal_error("container has no element type");
+            throw semacore.internal_error("container has no element type");
         }
         let type_id = receiver.type_args[0];
         if inout_mode {
             switch place_root(inout state, base.id) {
                 case option.Option.Some(root): {}
                 case option.Option.None:
-                    throw reject(inout state, r,
+                    throw semacore.reject(inout state, r,
                         "inout index receiver must be binding-backed",
                         "E_CALL_ARGUMENT");
             }
             check_inout_place_type(inout state, r, type_id);
         }
-        return Expr(id: node(inout state, r, type_id,
+        return semacore.Expr(id: semacore.node(inout state, r, type_id,
                        hir.NodeData.IndexPlace(value: hir.IndexPlace()),
                        [base.id, index.id]),
-            value: b_empty_value(type_id));
+            value: semacore.b_empty_value(type_id));
     }
-    if b_kind_is(n.kind, model.AstKind.Slice) {
+    if semacore.b_kind_is(n.kind, model.AstKind.Slice) {
         if inout_mode {
-            throw unavailable(inout state, r, "slice inout is not supported");
+            throw semacore.unavailable(inout state, r, "slice inout is not supported");
         }
-        let base = expression(inout state, b_child_m(b_module, r, 0),
+        let base = expression(inout state, semacore.b_child_m(b_module, r, 0),
             option.Option[usize].None);
-        if !effects.b_type_kind_is(lookup_type(inout state, base.value.type_id).kind,
+        if !effects.b_type_kind_is(semacore.lookup_type(inout state, base.value.type_id).kind,
                            model.TypeKind.ForeignOpaque) {
-            throw unavailable(inout state, r,
+            throw semacore.unavailable(inout state, r,
                 "slice assignment requires a declared external slice");
         }
         let slice_id = foreign_slice(inout state, base.value.type_id);
@@ -521,21 +170,21 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
         switch slice_id {
             case option.Option.Some(value): binding = value;
             case option.Option.None:
-                throw unavailable(inout state, r,
+                throw semacore.unavailable(inout state, r,
                     "external slicing is not declared");
         }
         let declaration = b_foreign_slice_declaration(inout state, binding);
         if !declaration.writable {
-            throw unavailable(inout state, r, "external slicing is read-only");
+            throw semacore.unavailable(inout state, r, "external slicing is read-only");
         }
-        var colon = b_ast_m(b_module, b_child_m(b_module, r, 0)).token_end + 1;
+        var colon = semacore.b_ast_m(b_module, semacore.b_child_m(b_module, r, 0)).token_end + 1;
         if vec.len(n.children) > 1 &&
-           b_kind_is(b_ast_m(b_module, b_child_m(b_module, r, 1)).kind,
+           semacore.b_kind_is(semacore.b_ast_m(b_module, semacore.b_child_m(b_module, r, 1)).kind,
                      model.AstKind.BracketItem) {
-            colon = b_ast_m(b_module, b_child_m(b_module, r, 1)).token_end;
+            colon = semacore.b_ast_m(b_module, semacore.b_child_m(b_module, r, 1)).token_end;
         }
-        if b_token_index(inout state, r, colon) != ":" {
-            throw reject(inout state, r, "invalid slice delimiter",
+        if semacore.b_token_index(inout state, r, colon) != ":" {
+            throw semacore.reject(inout state, r, "invalid slice delimiter",
                 "E_TYPE_MISMATCH");
         }
         let values = vec.empty[usize]();
@@ -545,8 +194,8 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
                 hir.ForeignAccessKind.SlicePlace),
             start: option.Option[usize].None, end: option.Option[usize].None);
         for var index usize = 1; index < vec.len(n.children); index += 1 {
-            let endpoint = b_child_m(b_module, r, index);
-            let start = b_ast_m(b_module, endpoint).token_begin < colon;
+            let endpoint = semacore.b_child_m(b_module, r, index);
+            let start = semacore.b_ast_m(b_module, endpoint).token_begin < colon;
             var declared = option.Option[string].None;
             if start { declared = declaration.start_type; }
             else { declared = declaration.end_type; }
@@ -554,11 +203,11 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
             switch declared {
                 case option.Option.Some(value): type_name = value;
                 case option.Option.None:
-                    throw reject(inout state, r,
+                    throw semacore.reject(inout state, r,
                         "external slice endpoint is not declared",
                         "E_TYPE_MISMATCH");
             }
-            let type_id = declared_foreign_type(inout state, type_name);
+            let type_id = sematypes.declared_foreign_type(inout state, type_name);
             let e = expression(inout state, endpoint,
                 option.Option[usize].Some(type_id));
             b_match(inout state, endpoint, e.value.type_id,
@@ -567,83 +216,83 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
             if start { access.start = option.Option[usize].Some(e.id); }
             else { access.end = option.Option[usize].Some(e.id); }
         }
-        let record = b_foreign_binding(inout state, binding);
-        return Expr(id: node(inout state, r, record.type_id,
+        let record = semacore.b_foreign_binding(inout state, binding);
+        return semacore.Expr(id: semacore.node(inout state, r, record.type_id,
                        hir.NodeData.ForeignRead(value: access), values),
-            value: b_empty_value(record.type_id));
+            value: semacore.b_empty_value(record.type_id));
     }
-    if b_kind_is(n.kind, model.AstKind.Member) {
-        switch peek_type(inout state, b_child_m(b_module, r, 0)) {
+    if semacore.b_kind_is(n.kind, model.AstKind.Member) {
+        switch peek_type(inout state, semacore.b_child_m(b_module, r, 0)) {
             case option.Option.Some(type_id): {
-                if effects.b_type_kind_is(lookup_type(inout state, type_id).kind,
+                if effects.b_type_kind_is(semacore.lookup_type(inout state, type_id).kind,
                                   model.TypeKind.ForeignOpaque) {
                     if inout_mode {
-                        throw unavailable(inout state, r,
+                        throw semacore.unavailable(inout state, r,
                             "external property inout is not supported");
                     }
-                    let base = expression(inout state, b_child_m(b_module, r, 0),
+                    let base = expression(inout state, semacore.b_child_m(b_module, r, 0),
                         option.Option[usize].None);
-                    let name = b_last_token_m(b_module, r);
+                    let name = semacore.b_last_token_m(b_module, r);
                     let property = foreign_property(inout state, base.value.type_id,
                         name);
                     var binding usize = 0;
                     switch property {
                         case option.Option.Some(value): binding = value;
                         case option.Option.None:
-                            throw unavailable(inout state, r,
+                            throw semacore.unavailable(inout state, r,
                                 "external property is not declared");
                     }
                     let declaration = b_foreign_property_declaration(inout state,
                         binding);
                     if vec.len(declaration.setter) == 0 {
-                        throw unavailable(inout state, r,
+                        throw semacore.unavailable(inout state, r,
                             "external property is read-only");
                     }
-                    let record = b_foreign_binding(inout state, binding);
+                    let record = semacore.b_foreign_binding(inout state, binding);
                     let access = hir.ForeignRead(binding: binding,
                         access: option.Option[hir.ForeignAccessKind].Some(
                             hir.ForeignAccessKind.PropertyPlace),
                         start: option.Option[usize].None,
                         end: option.Option[usize].None);
-                    return Expr(id: node(inout state, r, record.type_id,
+                    return semacore.Expr(id: semacore.node(inout state, r, record.type_id,
                                    hir.NodeData.ForeignRead(value: access),
                                    [base.id]),
-                        value: b_empty_value(record.type_id));
+                        value: semacore.b_empty_value(record.type_id));
                 }
             }
             case option.Option.None: {}
         }
-        let base = place(inout state, b_child_m(b_module, r, 0), false);
+        let base = place(inout state, semacore.b_child_m(b_module, r, 0), false);
         let field = find_field(inout state, r, base.value.type_id);
-        let type_id = field_type(inout state, base.value.type_id, field);
+        let type_id = sematypes.field_type(inout state, base.value.type_id, field);
         if inout_mode {
             switch place_root(inout state, base.id) {
                 case option.Option.Some(root): {}
                 case option.Option.None:
-                    throw reject(inout state, r,
+                    throw semacore.reject(inout state, r,
                         "inout field receiver must be binding-backed",
                         "E_CALL_ARGUMENT");
             }
             check_inout_place_type(inout state, r, type_id);
         }
-        return Expr(id: node(inout state, r, type_id,
+        return semacore.Expr(id: semacore.node(inout state, r, type_id,
                        hir.NodeData.FieldPlace(value: hir.FieldPlace(
                            field: field.symbol)),
                        [base.id]),
-            value: b_empty_value(type_id));
+            value: semacore.b_empty_value(type_id));
     }
-    if !b_kind_is(n.kind, model.AstKind.Name) {
-        throw unavailable(inout state, r,
+    if !semacore.b_kind_is(n.kind, model.AstKind.Name) {
+        throw semacore.unavailable(inout state, r,
             "only a whole writable scalar binding can be used as a place");
     }
     var symbol_id = option.Option[usize].None;
-    switch occurrence(inout state, r) {
+    switch semacore.occurrence(inout state, r) {
         case option.Option.Some(value): symbol_id = option.Option[usize].Some(value);
         case option.Option.None: {}
     }
     switch symbol_id {
         case option.Option.Some(value):
-            switch b_capture_origin_find(inout state, value) {
+            switch semacore.b_capture_origin_find(inout state, value) {
                 case option.Option.Some(mapped):
                     symbol_id = option.Option[usize].Some(mapped);
                 case option.Option.None: {}
@@ -658,69 +307,69 @@ func place(state inout Checker, r model.NodeRef, inout_mode bool) Expr throws Er
     }
     if !have_id {
         if inout_mode {
-            throw reject(inout state, r, "place is not a local binding",
+            throw semacore.reject(inout state, r, "place is not a local binding",
                 "E_CALL_ARGUMENT");
         }
-        throw reject(inout state, r, "place is not a local binding",
+        throw semacore.reject(inout state, r, "place is not a local binding",
             "E_TYPE_MISMATCH");
     }
-    var local = Local(type_id: 0, writable: false,
+    var local = semacore.Local(type_id: 0, writable: false,
         ordinary_parameter: false, read_only_capture: false);
     var have_local = false;
-    switch b_locals_find(inout state, id) {
+    switch semacore.b_locals_find(inout state, id) {
         case option.Option.Some(value): { local = value; have_local = true; }
         case option.Option.None: {}
     }
     if !have_local {
         if inout_mode {
-            throw reject(inout state, r, "place is not a local binding",
+            throw semacore.reject(inout state, r, "place is not a local binding",
                 "E_CALL_ARGUMENT");
         }
-        throw reject(inout state, r, "place is not a local binding",
+        throw semacore.reject(inout state, r, "place is not a local binding",
             "E_TYPE_MISMATCH");
     }
     if local.read_only_capture {
         if inout_mode {
-            throw reject(inout state, r, "a captured binding is read-only",
+            throw semacore.reject(inout state, r, "a captured binding is read-only",
                 "E_CALL_ARGUMENT");
         }
-        throw reject(inout state, r, "a captured binding is read-only",
+        throw semacore.reject(inout state, r, "a captured binding is read-only",
             "E_TYPE_MISMATCH");
     }
     if local.ordinary_parameter {
         if inout_mode {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "an ordinary parameter is not a var or an exclusive inout binding",
                 "E_CALL_ARGUMENT");
         }
-        throw reject(inout state, r,
+        throw semacore.reject(inout state, r,
             "ordinary parameters are read-only; declare a var local to change the value",
             "E_TYPE_MISMATCH");
     }
     if !local.writable {
         if inout_mode {
-            throw reject(inout state, r, "let/const bindings are not writable",
+            throw semacore.reject(inout state, r, "let/const bindings are not writable",
                 "E_CALL_ARGUMENT");
         }
-        throw reject(inout state, r, "let/const bindings are not writable",
+        throw semacore.reject(inout state, r, "let/const bindings are not writable",
             "E_TYPE_MISMATCH");
     }
     if inout_mode { check_inout_place_type(inout state, r, local.type_id); }
-    return Expr(id: node(inout state, r, local.type_id,
+    return semacore.Expr(id: semacore.node(inout state, r, local.type_id,
                    hir.NodeData.Place(value: hir.Place(symbol: id)), []),
-        value: b_empty_value(local.type_id));
+        value: semacore.b_empty_value(local.type_id));
 }
 
-func b_foreign_property_declaration(state inout Checker, binding usize)
-    model.BindingProperty throws Error {
+func b_foreign_property_declaration(state inout semacore.Checker, binding usize)
+    model.BindingProperty throws semacore.Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     let project = state.m.resolved.project;
     if binding >= vec.len(project.foreign_bindings) {
-        throw internal_error("invalid foreign property declaration");
+        throw semacore.internal_error("invalid foreign property declaration");
     }
     switch project.foreign_bindings[binding].detail {
         case model.ForeignDetail.Property(value): return value;
-        default: throw internal_error("foreign property binding has wrong kind");
+        default: throw semacore.internal_error("foreign property binding has wrong kind");
     }
 }

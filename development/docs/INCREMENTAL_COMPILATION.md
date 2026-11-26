@@ -1,15 +1,15 @@
 # 源码逻辑包增量编译
 
-## Wz 编译器的源码 Make 入口
+## Wz 编译器的 `--source-make` 入口
 
 ```sh
-MAKEFLAGS=-j4 woozyc build --project lang.toml --source-make \
+woozyc build --project lang.toml --source-make --jobs 4 \
   --out-dir build --opt 2
 ```
 
-此入口适用于 Linux x86_64 和 macOS arm64 的 Native/64，需要 GNU Make 和 LLVM 22.1.8。一个逻辑包可以包含多个 `.wz` 文件。主进程只加载一次源码和项目声明。Make 为每个包安排独立的任务，编译进程从主进程已准备的源码和符号开始。声明检查通过后，未命中或未启用对象缓存的包共享已检查的声明，分别检查本包函数体和用到的外包泛型模板，再校验 IR 并生成该包的 `.o`；启用缓存并命中时，直接取出该包的对象，跳过函数体解析、检查和 LLVM 处理。全部包就绪后合并对象并链接。
+此入口适用于 Linux x86_64 和 macOS arm64 的 Native/64，需要 LLVM 22.1.8。用 `--jobs N` 指定最多同时编译的包数，`N` 为十进制正整数，默认为 1。该入口不读取 `WOOZY_MAKE` 或 `MAKEFLAGS`。一个逻辑包可以包含多个 `.wz` 文件。主进程只加载一次源码和项目声明，并直接启动各包的编译任务。声明检查通过后，未命中或未启用对象缓存的包共享已检查的声明，分别检查本包函数体和用到的外包泛型模板，再校验 IR 并生成该包的 `.o`；启用缓存并命中时，直接取出该包的对象，跳过函数体解析、检查和 LLVM 处理。全部包就绪后合并对象并链接。
 
-需要增量编译时，加上 `--cache-dir .woozy-cache`。三包用例首次构建重编 3 包，重复构建重编 0 包。改私有函数体只重编本包。改公开签名或影响跨包传值的类型布局，会重编本包和调用方。构建失败时保留上次成功的程序。可在输出目录查看 `Makefile`、`make.log` 和 `make-report.json`。
+需要增量编译时，加上 `--cache-dir .woozy-cache`。三包用例首次构建重编 3 包，重复构建重编 0 包。改私有函数体只重编本包。改公开签名或影响跨包传值的类型布局，会重编本包和调用方。构建失败时保留上次成功的程序。可在输出目录查看调度日志 `make.log`、构建报告 `make-report.json`、缓存统计 `cache-statistics.json` 和每个包的 `module-*.log`。
 
 已验证标量跨包调用、struct 和 enum 跨包传值，以及自举编译器实际用到的泛型和 `std/` 导入。用这个入口编译完整工程时，第二、三代各生成 57 个包对象，链接得到的 Woozy 编译器逐字节相同。入口和运行条件见 [自举说明](SELFHOST_BOOTSTRAP.md)。
 
@@ -25,7 +25,7 @@ WOOZY_LLVM_BIN=/path/to/llvm-22.1.8/bin \
   --objects-only --target arm64-apple-macosx11.0.0 --opt 2
 ```
 
-GNU Make 按源码包分别检查并编译，LLVM `opt` 校验每个包，`llvm-ar` 把 Mach-O arm64 对象归档到 `program.a`。`--cache-dir` 可用于生成对象或链接程序。包含 async 的项目使用普通 `build` 或 `--package-objects`。C 绑定项目使用普通 `build`。
+编译器按源码包分别检查并编译，LLVM `opt` 校验每个包，`llvm-ar` 把 Mach-O arm64 对象归档到 `program.a`。`--cache-dir` 可用于生成对象或链接程序。包含 async 的项目使用普通 `build` 或 `--package-objects`。C 绑定项目使用普通 `build`。
 
 对象归档、完整程序、带调试信息的程序各用独立的 `--out-dir`。构建只更新本次输出的文件。
 

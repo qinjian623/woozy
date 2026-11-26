@@ -1,5 +1,7 @@
 // Generic/direct/typed call argument ordering and scalar conversions.
 package sema;
+import "app/wzcc/sema/core" as semacore;
+import "app/wzcc/sema/typecheck" as sematypes;
 
 import "app/wzcc/semaeffects" as effects;
 
@@ -10,13 +12,13 @@ import "app/wzcc/number" as number;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func typed_call(state inout Checker, r model.NodeRef, target usize,
+func typed_call(state inout semacore.Checker, r model.NodeRef, target usize,
                 signature_override option.Option[usize],
                 input_substitutions Vec[model.Substitution],
-                receiver option.Option[Expr], expected option.Option[usize],
+                receiver option.Option[semacore.Expr], expected option.Option[usize],
                 constraint option.Option[hir.TraitRef],
                 constraint_type option.Option[usize],
-                receiver_mode model.ParamMode) Expr throws Error {
+                receiver_mode model.ParamMode) semacore.Expr throws semacore.Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
     var original usize = 0;
@@ -24,33 +26,33 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
         case option.Option.Some(value): original = value;
         case option.Option.None: original = b_signature_or_internal(inout state, target);
     }
-    let original_type = lookup_type(inout state, original);
-    var substitutions = b_copy_substitutions(input_substitutions);
+    let original_type = semacore.lookup_type(inout state, original);
+    var substitutions = semacore.b_copy_substitutions(input_substitutions);
     var has_receiver = false;
     switch receiver { case option.Option.Some(value): has_receiver = true; case option.Option.None: {} }
     if has_receiver {
         if vec.len(original_type.parameters) == 0 {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "value call requires a Self parameter", "E_CALL_ARGUMENT");
         }
         let declared_mode = original_type.parameters[0].mode;
-        if !b_mode_is(declared_mode, receiver_mode) {
-            if b_mode_is(receiver_mode, model.ParamMode.Ordinary) {
-                throw unavailable(inout state, r,
+        if !semacore.b_mode_is(declared_mode, receiver_mode) {
+            if semacore.b_mode_is(receiver_mode, model.ParamMode.Ordinary) {
+                throw semacore.unavailable(inout state, r,
                     "move/inout Self requires an explicit receiver marker");
             }
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "receiver mode differs from the Self parameter",
                 "E_CALL_ARGUMENT");
         }
         var implementation = option.Option[usize].None;
-        implementation = impl_of(inout state, target);
+        implementation = sematypes.impl_of(inout state, target);
         var trait_self = false;
         switch constraint {
             case option.Option.Some(trait_ref): {
                 var receiver_type_id usize = 0;
                 switch receiver { case option.Option.Some(value): receiver_type_id = value.value.type_id; case option.Option.None: {} }
-                switch constraint_method_move_source(inout state, target,
+                switch sematypes.constraint_method_move_source(inout state, target,
                         trait_ref, receiver_type_id) {
                     case option.Option.Some(value): trait_self = true;
                     case option.Option.None: {}
@@ -62,7 +64,7 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
                         let implementation_decl = state.m.impls[index];
                         switch implementation_decl.trait_ref {
                             case option.Option.Some(trait_ref): {
-                                switch trait_impl_move_source(inout state,
+                                switch sematypes.trait_impl_move_source(inout state,
                                         target, true) {
                                     case option.Option.Some(value): trait_self = true;
                                     case option.Option.None: {}
@@ -86,47 +88,47 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             case option.Option.None: {}
         }
         if constrained_or_trait && !trait_self {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "value call requires the real trait Self first parameter",
                 "E_CALL_ARGUMENT");
         }
-        if !b_mode_is(receiver_mode, model.ParamMode.Ordinary) && !trait_self &&
-           !inherent_self_source(inout state, target) {
-            throw reject(inout state, r,
+        if !semacore.b_mode_is(receiver_mode, model.ParamMode.Ordinary) && !trait_self &&
+           !sematypes.inherent_self_source(inout state, target) {
+            throw semacore.reject(inout state, r,
                 "receiver marker requires a real first-position Self",
                 "E_CALL_ARGUMENT");
         }
     }
     switch expected {
         case option.Option.Some(wanted):
-            infer(inout state, r, original_type.result, wanted, substitutions);
+            sematypes.infer(inout state, r, original_type.result, wanted, substitutions);
         case option.Option.None: {}
     }
     var parameters = vec.empty[hir.Parameter]();
-    switch b_parameters_find(inout state, target) {
+    switch semacore.b_parameters_find(inout state, target) {
         case option.Option.Some(value): parameters = value;
-        case option.Option.None: throw internal_error("missing sema parameters");
+        case option.Option.None: throw semacore.internal_error("missing sema parameters");
     }
     var offset usize = 0;
     if has_receiver { offset = 1; }
-    let value_count = vec.len(b_ast_m(b_module, r).children) - 1;
+    let value_count = vec.len(semacore.b_ast_m(b_module, r).children) - 1;
     if value_count + offset != vec.len(parameters) {
-        throw reject(inout state, r, "wrong number of arguments",
+        throw semacore.reject(inout state, r, "wrong number of arguments",
             "E_CALL_ARGUMENT");
     }
     let args = vec.empty[hir.CallArg]();
     let children = vec.empty[usize]();
     let seen = vec.make[bool](vec.len(parameters), false);
-    let values = vec.make[option.Option[Expr]](value_count,
-        option.Option[Expr].None);
+    let values = vec.make[option.Option[semacore.Expr]](value_count,
+        option.Option[semacore.Expr].None);
     let indices = vec.make[usize](value_count, 0);
     let labels = vec.make[option.Option[string]](value_count,
         option.Option[string].None);
     let modes = vec.make[model.ParamMode](value_count, model.ParamMode.Ordinary);
     if has_receiver {
-        var receiver_value = b_empty_expr();
+        var receiver_value = semacore.b_empty_expr();
         switch receiver { case option.Option.Some(value): receiver_value = value; case option.Option.None: {} }
-        infer(inout state, r, original_type.parameters[0].type_id,
+        sematypes.infer(inout state, r, original_type.parameters[0].type_id,
             receiver_value.value.type_id, substitutions);
         vec.push(args, hir.CallArg(source_index: 0, parameter_index: 0,
             label: option.Option[string].None, mode: receiver_mode,
@@ -135,10 +137,10 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
         seen[0] = true;
     }
     for var index usize = 0; index < value_count; index += 1 {
-        let argument_ref = b_child_m(b_module, r, index + 1);
+        let argument_ref = semacore.b_child_m(b_module, r, index + 1);
         var parameter_index = index + offset;
-        if b_token_m(b_module, argument_ref, 1) == ":" {
-            let label_value = b_token_m(b_module, argument_ref, 0);
+        if semacore.b_token_m(b_module, argument_ref, 1) == ":" {
+            let label_value = semacore.b_token_m(b_module, argument_ref, 0);
             labels[index] = option.Option[string].Some(label_value);
             parameter_index = 0;
             for parameter_index < vec.len(parameters) &&
@@ -147,7 +149,7 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             }
         }
         if parameter_index >= vec.len(parameters) || seen[parameter_index] {
-            throw reject(inout state, argument_ref,
+            throw semacore.reject(inout state, argument_ref,
                 "unknown or duplicate argument", "E_CALL_ARGUMENT");
         }
         seen[parameter_index] = true;
@@ -157,29 +159,29 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
     switch receiver { case option.Option.None: {}
         case option.Option.Some(value): free_template = false; }
     if !has_receiver && option_is_none_trait(constraint) {
-        free_template = free_generic_template(inout state, target);
+        free_template = sematypes.free_generic_template(inout state, target);
     }
     let free_move = free_template;
     let free_inout = free_template;
     var inherent = false;
     if option_is_none_trait(constraint) {
-        inherent = inherent_method_route(inout state, target, has_receiver,
+        inherent = sematypes.inherent_method_route(inout state, target, has_receiver,
             original);
     }
     var inherent_static = false;
     if option_is_none_trait(constraint) && !has_receiver {
-        inherent_static = inherent_method_source(inout state, target);
+        inherent_static = sematypes.inherent_method_source(inout state, target);
     }
     var trait_impl_inout = false;
     if option_is_none_trait(constraint) {
-        switch trait_impl_inout_source(inout state, target, has_receiver) {
+        switch sematypes.trait_impl_inout_source(inout state, target, has_receiver) {
             case option.Option.Some(value): trait_impl_inout = true;
             case option.Option.None: {}
         }
     }
     var trait_impl_move = false;
     if option_is_none_trait(constraint) {
-        switch trait_impl_move_source(inout state, target, has_receiver) {
+        switch sematypes.trait_impl_move_source(inout state, target, has_receiver) {
             case option.Option.Some(value): trait_impl_move = true;
             case option.Option.None: {}
         }
@@ -199,7 +201,7 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             }
             switch constraint_receiver {
                 case option.Option.Some(value): {
-                    let value_type = lookup_type(inout state, value);
+                    let value_type = semacore.lookup_type(inout state, value);
                     if effects.b_type_kind_is(value_type.kind, model.TypeKind.TypeParameter) {
                         vec.push(substitutions, model.Substitution(
                             symbol: value_type.declaration, type_id: value));
@@ -217,23 +219,23 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             switch constraint_receiver {
                 case option.Option.Some(type_id): {
                     if has_receiver {
-                        switch constraint_method_source(inout state, target,
+                        switch sematypes.constraint_method_source(inout state, target,
                                 trait_ref, type_id) {
                             case option.Option.Some(value): trait_constraint_inout = true;
                             case option.Option.None: {}
                         }
-                        switch constraint_method_move_source(inout state, target,
+                        switch sematypes.constraint_method_move_source(inout state, target,
                                 trait_ref, type_id) {
                             case option.Option.Some(value): trait_constraint_move = true;
                             case option.Option.None: {}
                         }
                     } else {
-                        switch constraint_static_method_source(inout state, target,
+                        switch sematypes.constraint_static_method_source(inout state, target,
                                 trait_ref, type_id) {
                             case option.Option.Some(value): trait_constraint_inout = true;
                             case option.Option.None: {}
                         }
-                        switch constraint_static_method_move_source(inout state,
+                        switch sematypes.constraint_static_method_move_source(inout state,
                                 target, trait_ref, type_id) {
                             case option.Option.Some(value): trait_constraint_move = true;
                             case option.Option.None: {}
@@ -257,73 +259,73 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
                 case option.Option.None: {}
             }
             if already { continue; }
-            let argument_ref = b_child_m(b_module, r, index + 1);
-            var er = b_child_m(b_module, argument_ref, 0);
+            let argument_ref = semacore.b_child_m(b_module, r, index + 1);
+            var er = semacore.b_child_m(b_module, argument_ref, 0);
             if pass == 0 && contextual(inout state, er) { continue; }
             let parameter = original_type.parameters[indices[index]];
-            let parameter_type_id = substitute_type(inout state,
+            let parameter_type_id = semacore.substitute_type(inout state,
                 parameter.type_id, substitutions);
             let parameter_mode = parameter.mode;
-            let argument = argument_mode(inout state, argument_ref);
+            let argument = semacore.argument_mode(inout state, argument_ref);
             er = argument.value;
             var mode = argument.requested;
-            if b_mode_is(parameter_mode, model.ParamMode.Move) && allow_move {
-                if b_mode_is(mode, model.ParamMode.Ordinary) {
-                    let tmp = b_strip_parens(inout state, er);
-                    let kind = b_ast_m(b_module, tmp).kind;
-                    if b_kind_is(kind, model.AstKind.Name) ||
-                       b_kind_is(kind, model.AstKind.Member) ||
-                       b_kind_is(kind, model.AstKind.NeutralBracket) {
-                        throw reject(inout state, argument_ref,
+            if semacore.b_mode_is(parameter_mode, model.ParamMode.Move) && allow_move {
+                if semacore.b_mode_is(mode, model.ParamMode.Ordinary) {
+                    let tmp = semacore.b_strip_parens(inout state, er);
+                    let kind = semacore.b_ast_m(b_module, tmp).kind;
+                    if semacore.b_kind_is(kind, model.AstKind.Name) ||
+                       semacore.b_kind_is(kind, model.AstKind.Member) ||
+                       semacore.b_kind_is(kind, model.AstKind.NeutralBracket) {
+                        throw semacore.reject(inout state, argument_ref,
                             "existing binding requires explicit move",
                             "E_CALL_ARGUMENT");
                     }
                     mode = model.ParamMode.Move;
                 }
-            } else if !b_mode_is(parameter_mode, model.ParamMode.Inout) ||
+            } else if !semacore.b_mode_is(parameter_mode, model.ParamMode.Inout) ||
                       !allow_inout {
-                if !b_mode_is(parameter_mode, model.ParamMode.Ordinary) {
-                    throw unavailable(inout state, argument_ref,
+                if !semacore.b_mode_is(parameter_mode, model.ParamMode.Ordinary) {
+                    throw semacore.unavailable(inout state, argument_ref,
                         "generic/method inout and move calls are not implemented");
                 }
             }
-            if b_mode_is(parameter_mode, model.ParamMode.Ordinary) &&
+            if semacore.b_mode_is(parameter_mode, model.ParamMode.Ordinary) &&
                argument.has_marker {
-                throw reject(inout state, argument.marked,
+                throw semacore.reject(inout state, argument.marked,
                     "generic/method argument mode differs from ordinary parameter",
                     "E_CALL_ARGUMENT");
             }
-            if !b_mode_is(mode, parameter_mode) {
-                throw reject(inout state, argument_ref,
+            if !semacore.b_mode_is(mode, parameter_mode) {
+                throw semacore.reject(inout state, argument_ref,
                     "argument mode differs from parameter mode",
                     "E_CALL_ARGUMENT");
             }
-            if argument.has_marker && b_mode_is(argument.requested,
+            if argument.has_marker && semacore.b_mode_is(argument.requested,
                                                model.ParamMode.Move) {
                 er = argument.marked;
             }
             modes[index] = mode;
-            var e = b_empty_expr();
-            if b_mode_is(mode, model.ParamMode.Inout) {
+            var e = semacore.b_empty_expr();
+            if semacore.b_mode_is(mode, model.ParamMode.Inout) {
                 e = place(inout state, er, true);
             } else {
-                if contains_parameter(inout state, parameter_type_id) {
+                if sematypes.contains_parameter(inout state, parameter_type_id) {
                     e = expression(inout state, er, option.Option[usize].None);
                 } else {
                     e = expression(inout state, er,
                         option.Option[usize].Some(parameter_type_id));
                 }
             }
-            infer(inout state, argument_ref, parameter.type_id,
+            sematypes.infer(inout state, argument_ref, parameter.type_id,
                 e.value.type_id, substitutions);
-            values[index] = option.Option[Expr].Some(e);
+            values[index] = option.Option[semacore.Expr].Some(e);
         }
     }
     switch constraint {
         case option.Option.Some(trait_ref): {
             var trait_index usize = 0;
             var have_trait = false;
-            switch trait_decl(inout state, trait_ref.declaration) {
+            switch sematypes.trait_decl(inout state, trait_ref.declaration) {
                 case option.Option.Some(value): { trait_index = value; have_trait = true; }
                 case option.Option.None: {}
             }
@@ -344,22 +346,22 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
         case option.Option.None: {}
     }
     let type_args = vec.empty[usize]();
-    let generic = b_generic_params(inout state, target);
+    let generic = semacore.b_generic_params(inout state, target);
     if option_is_some_trait(constraint) {
-        let ignored = finish_arguments(inout state, r, generic,
+        let ignored = sematypes.finish_arguments(inout state, r, generic,
             substitutions);
     } else {
-        let finished = finish_arguments(inout state, r, generic,
+        let finished = sematypes.finish_arguments(inout state, r, generic,
             substitutions);
         for value in finished { vec.push(type_args, value); }
     }
-    let concrete_signature = substitute_type(inout state, original, substitutions);
-    check_inout_graph(inout state, r, concrete_signature, true,
+    let concrete_signature = semacore.substitute_type(inout state, original, substitutions);
+    sematypes.check_inout_graph(inout state, r, concrete_signature, true,
         option.Option[usize].None, false);
-    let signature_type = lookup_type(inout state, concrete_signature);
+    let signature_type = semacore.lookup_type(inout state, concrete_signature);
     for var index usize = 0; index < value_count; index += 1 {
-        var e = b_empty_expr();
-        switch values[index] { case option.Option.Some(value): e = value; case option.Option.None: throw internal_error("missing checked call argument"); }
+        var e = semacore.b_empty_expr();
+        switch values[index] { case option.Option.Some(value): e = value; case option.Option.None: throw semacore.internal_error("missing checked call argument"); }
         b_match(inout state, r, e.value.type_id,
             option.Option[usize].Some(signature_type.parameters[indices[index]].type_id));
         vec.push(args, hir.CallArg(source_index: u32(index + offset),
@@ -373,14 +375,14 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
             var receiver_type_id usize = 0;
             switch constraint_receiver {
                 case option.Option.Some(value): receiver_type_id = value;
-                case option.Option.None: throw internal_error("constraint receiver missing");
+                case option.Option.None: throw semacore.internal_error("constraint receiver missing");
             }
             let data = hir.ConstraintCall(trait_ref: trait_ref, method: target,
                 receiver: receiver_type_id, signature: concrete_signature,
                 args: args);
-            return Expr(id: node(inout state, r, signature_type.result,
+            return semacore.Expr(id: semacore.node(inout state, r, signature_type.result,
                            hir.NodeData.ConstraintCall(value: data), children),
-                value: b_empty_value(signature_type.result));
+                value: semacore.b_empty_value(signature_type.result));
         }
         case option.Option.None: {
             let data = hir.Call(kind: hir.CalleeKind.Direct,
@@ -390,9 +392,9 @@ func typed_call(state inout Checker, r model.NodeRef, target usize,
                 type_args: type_args, binding: option.Option[usize].None,
                 c_callable: option.Option[u32].None, omitted: [],
                 system: option.Option[u32].None);
-            return Expr(id: node(inout state, r, signature_type.result,
+            return semacore.Expr(id: semacore.node(inout state, r, signature_type.result,
                            hir.NodeData.Call(value: data), children),
-                value: b_empty_value(signature_type.result));
+                value: semacore.b_empty_value(signature_type.result));
         }
     }
 }
@@ -416,13 +418,13 @@ func b_substitution_bind(values Vec[model.Substitution], symbol usize,
     vec.push(values, model.Substitution(symbol: symbol, type_id: type_id));
 }
 
-func scalar_call(state inout Checker, r model.NodeRef,
-                 checked_callee option.Option[Expr]) Expr throws Error {
+func scalar_call(state inout semacore.Checker, r model.NodeRef,
+                 checked_callee option.Option[semacore.Expr]) semacore.Expr throws semacore.Error {
     let b_module=state.m;
     let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
-    let callee_ref = b_child_m(b_module, r, 0);
+    let callee_ref = semacore.b_child_m(b_module, r, 0);
     var callee_symbol = option.Option[usize].None;
-    switch occurrence(inout state, callee_ref) {
+    switch semacore.occurrence(inout state, callee_ref) {
         case option.Option.Some(value): callee_symbol = option.Option[usize].Some(value);
         case option.Option.None: {}
     }
@@ -431,66 +433,66 @@ func scalar_call(state inout Checker, r model.NodeRef,
     switch callee_symbol {
         case option.Option.Some(value): {
             symbol_id = value;
-            is_builtin = b_symbol_kind_is(symbol(inout state, value).kind,
+            is_builtin = semacore.b_symbol_kind_is(semacore.symbol(inout state, value).kind,
                 model.SymbolKind.BuiltinType);
         }
         case option.Option.None: {}
     }
     if is_builtin {
-        let target = parse_type(inout state, callee_ref,
+        let target = sematypes.parse_type(inout state, callee_ref,
             option.Option[usize].None, false);
-        let target_type = lookup_type(inout state, target);
-        if !integer(inout state, target) &&
+        let target_type = semacore.lookup_type(inout state, target);
+        if !semacore.integer(inout state, target) &&
            !effects.b_type_kind_is(target_type.kind, model.TypeKind.Float) {
-            throw unavailable(inout state, r,
+            throw semacore.unavailable(inout state, r,
                 "only explicit integer/float numeric conversions are implemented");
         }
-        if vec.len(b_ast_m(b_module, r).children) != 2 {
-            throw reject(inout state, r, "conversion requires one argument",
+        if vec.len(semacore.b_ast_m(b_module, r).children) != 2 {
+            throw semacore.reject(inout state, r, "conversion requires one argument",
                 "E_CALL_ARGUMENT");
         }
-        let argument = b_child_m(b_module, r, 1);
-        let argument_node = b_ast_m(b_module, argument);
+        let argument = semacore.b_child_m(b_module, r, 1);
+        let argument_node = semacore.b_ast_m(b_module, argument);
         if argument_node.token_begin + 1 < argument_node.token_end &&
-           b_token_m(b_module, argument, 1) == ":" {
-            throw reject(inout state, argument,
+           semacore.b_token_m(b_module, argument, 1) == ":" {
+            throw semacore.reject(inout state, argument,
                 "conversion does not accept labels", "E_CALL_ARGUMENT");
         }
-        let expression_ref = b_child_m(b_module, argument, 0);
+        let expression_ref = semacore.b_child_m(b_module, argument, 0);
         var expected = option.Option[usize].None;
         var literal = option.Option[bigint.BigInt].None;
         switch literal_integer(inout state, expression_ref) {
             case option.Option.Some(value): literal = option.Option[bigint.BigInt].Some(value);
             case option.Option.None: {}
         }
-        if integer(inout state, target) &&
+        if semacore.integer(inout state, target) &&
            option_is_some_bigint(literal) {
             expected = option.Option[usize].Some(target);
         }
         let x = expression(inout state, expression_ref, expected);
-        let source_integer = integer(inout state, x.value.type_id);
+        let source_integer = semacore.integer(inout state, x.value.type_id);
         let source_float = effects.b_type_kind_is(
-            lookup_type(inout state, x.value.type_id).kind, model.TypeKind.Float);
+            semacore.lookup_type(inout state, x.value.type_id).kind, model.TypeKind.Float);
         if !source_integer && !source_float {
-            throw reject(inout state, argument,
+            throw semacore.reject(inout state, argument,
                 "conversion operand must be an integer or float",
                 "E_TYPE_MISMATCH");
         }
-        let source_width = width(inout state, x.value.type_id);
-        let target_width = width(inout state, target);
+        let source_width = semacore.width(inout state, x.value.type_id);
+        let target_width = semacore.width(inout state, target);
         let float_pair = source_float &&
             effects.b_type_kind_is(target_type.kind, model.TypeKind.Float);
         if float_pair && source_width != 32 && source_width != 64 {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "floating conversion source has an invalid width",
                 "E_TYPE_MISMATCH");
         }
         if float_pair && target_width != 32 && target_width != 64 {
-            throw reject(inout state, r,
+            throw semacore.reject(inout state, r,
                 "floating conversion destination has an invalid width",
                 "E_TYPE_MISMATCH");
         }
-        var value = b_empty_value(target);
+        var value = semacore.b_empty_value(target);
         if float_pair {
             switch x.value.floating {
                 case option.Option.Some(bits):
@@ -498,7 +500,7 @@ func scalar_call(state inout Checker, r model.NodeRef,
                         value.floating = option.Option[u64].Some(
                             number.convert_ieee(bits, source_width, target_width));
                     } catch error number.Error {
-                        throw Error.Support(support_from_number_error(error));
+                        throw semacore.Error.Support(semacore.support_from_number_error(error));
                     }
                 case option.Option.None: {}
             }
@@ -510,14 +512,14 @@ func scalar_call(state inout Checker, r model.NodeRef,
                     catch error number.Error {
                         switch error {
                             case number.Error.NonFiniteInteger:
-                                throw reject(inout state, argument,
+                                throw semacore.reject(inout state, argument,
                                     "conversion of a NaN or infinity constant is a source error",
                                     "E_TYPE_MISMATCH");
                             default:
-                                throw Error.Support(support_from_number_error(error));
+                                throw semacore.Error.Support(semacore.support_from_number_error(error));
                         }
                     }
-                    range(inout state, argument, truncated, target);
+                    semacore.range(inout state, argument, truncated, target);
                     value.integer = option.Option[bigint.BigInt].Some(truncated);
                 case option.Option.None: {}
             }
@@ -528,19 +530,19 @@ func scalar_call(state inout Checker, r model.NodeRef,
                         value.floating = option.Option[u64].Some(
                             number.integer_to_ieee(integer_value, target_width));
                     } catch error number.Error {
-                        throw Error.Support(support_from_number_error(error));
+                        throw semacore.Error.Support(semacore.support_from_number_error(error));
                     }
                 case option.Option.None: {}
             }
         } else {
             switch x.value.integer {
                 case option.Option.Some(integer_value):
-                    range(inout state, argument, integer_value, target);
+                    semacore.range(inout state, argument, integer_value, target);
                     value.integer = option.Option[bigint.BigInt].Some(integer_value);
                 case option.Option.None: {}
             }
         }
-        return Expr(id: node(inout state, r, target,
+        return semacore.Expr(id: semacore.node(inout state, r, target,
                        hir.NodeData.IntegerConvert(
                            value: hir.IntegerConvert()), [x.id]),
             value: value);
@@ -556,9 +558,9 @@ func scalar_call(state inout Checker, r model.NodeRef,
     if is_builtin { direct = false; }
     switch callee_symbol {
         case option.Option.Some(value): {
-            if b_symbol_kind_is(symbol(inout state, value).kind,
+            if semacore.b_symbol_kind_is(semacore.symbol(inout state, value).kind,
                                 model.SymbolKind.Function) {
-                switch b_signature_find(inout state, value) {
+                switch semacore.b_signature_find(inout state, value) {
                     case option.Option.Some(signature): {
                         direct = true;
                         call.kind = hir.CalleeKind.Direct;
@@ -572,26 +574,26 @@ func scalar_call(state inout Checker, r model.NodeRef,
         case option.Option.None: {}
     }
     if !direct {
-        var callee = b_empty_expr();
+        var callee = semacore.b_empty_expr();
         switch checked_callee {
             case option.Option.Some(value): callee = value;
             case option.Option.None:
                 callee = expression(inout state, callee_ref,
                     option.Option[usize].None);
         }
-        let callee_type = lookup_type(inout state, callee.value.type_id);
+        let callee_type = semacore.lookup_type(inout state, callee.value.type_id);
         if effects.b_type_kind_is(callee_type.kind, model.TypeKind.ForeignOpaque) {
             let candidates = foreign_members(inout state, callee.value.type_id,
                 "", "callable");
             if vec.len(candidates) == 0 {
-                throw reject(inout state, callee_ref,
+                throw semacore.reject(inout state, callee_ref,
                     "external object is not callable", "E_CALL_ARGUMENT");
             }
             return foreign_call(inout state, r, callee_ref, candidates,
-                option.Option[Expr].Some(callee));
+                option.Option[semacore.Expr].Some(callee));
         }
         if !effects.b_type_kind_is(callee_type.kind, model.TypeKind.Function) {
-            throw reject(inout state, callee_ref,
+            throw semacore.reject(inout state, callee_ref,
                 "callee is not a function", "E_CALL_ARGUMENT");
         }
         call.kind = hir.CalleeKind.FunctionValue;
@@ -599,18 +601,18 @@ func scalar_call(state inout Checker, r model.NodeRef,
         call.signature = callee.value.type_id;
         vec.push(children, callee.id);
     }
-    let signature_type = lookup_type(inout state, call.signature);
+    let signature_type = semacore.lookup_type(inout state, call.signature);
     let seen = vec.make[bool](vec.len(signature_type.parameters), false);
-    if vec.len(b_ast_m(b_module, r).children) - 1 != vec.len(seen) {
-        throw reject(inout state, r, "wrong number of call arguments",
+    if vec.len(semacore.b_ast_m(b_module, r).children) - 1 != vec.len(seen) {
+        throw semacore.reject(inout state, r, "wrong number of call arguments",
             "E_CALL_ARGUMENT");
     }
-    for var index usize = 1; index < vec.len(b_ast_m(b_module, r).children); index += 1 {
-        let argument_ref = b_child_m(b_module, r, index);
-        var er = b_child_m(b_module, argument_ref, 0);
+    for var index usize = 1; index < vec.len(semacore.b_ast_m(b_module, r).children); index += 1 {
+        let argument_ref = semacore.b_child_m(b_module, r, index);
+        var er = semacore.b_child_m(b_module, argument_ref, 0);
         var parameter_index = index - 1;
         var label = option.Option[string].None;
-        if b_token_m(b_module, argument_ref, 1) == ":" {
+        if semacore.b_token_m(b_module, argument_ref, 1) == ":" {
             var direct_symbol_id usize = 0;
             var have_direct = false;
             switch call.direct_symbol {
@@ -618,16 +620,16 @@ func scalar_call(state inout Checker, r model.NodeRef,
                 case option.Option.None: {}
             }
             if !have_direct {
-                throw reject(inout state, argument_ref,
+                throw semacore.reject(inout state, argument_ref,
                     "function values do not preserve parameter labels",
                     "E_CALL_ARGUMENT");
             }
-            let label_value = b_token_m(b_module, argument_ref, 0);
+            let label_value = semacore.b_token_m(b_module, argument_ref, 0);
             label = option.Option[string].Some(label_value);
             var parameters = vec.empty[hir.Parameter]();
-            switch b_parameters_find(inout state, direct_symbol_id) {
+            switch semacore.b_parameters_find(inout state, direct_symbol_id) {
                 case option.Option.Some(value): parameters = value;
-                case option.Option.None: throw internal_error("missing parameters");
+                case option.Option.None: throw semacore.internal_error("missing parameters");
             }
             parameter_index = 0;
             for parameter_index < vec.len(parameters) &&
@@ -635,44 +637,44 @@ func scalar_call(state inout Checker, r model.NodeRef,
                 parameter_index += 1;
             }
             if parameter_index == vec.len(parameters) {
-                throw reject(inout state, argument_ref,
+                throw semacore.reject(inout state, argument_ref,
                     "unknown argument label", "E_CALL_ARGUMENT");
             }
         }
         if parameter_index >= vec.len(seen) || seen[parameter_index] {
-            throw reject(inout state, argument_ref,
+            throw semacore.reject(inout state, argument_ref,
                 "parameter provided more than once", "E_CALL_ARGUMENT");
         }
         seen[parameter_index] = true;
-        er = b_strip_parens(inout state, er);
-        let argument = argument_mode(inout state, argument_ref);
+        er = semacore.b_strip_parens(inout state, er);
+        let argument = semacore.argument_mode(inout state, argument_ref);
         er = argument.value;
         var mode = argument.requested;
-        if b_mode_is(signature_type.parameters[parameter_index].mode,
+        if semacore.b_mode_is(signature_type.parameters[parameter_index].mode,
                      model.ParamMode.Move) &&
-           b_mode_is(mode, model.ParamMode.Ordinary) {
-            let tmp = b_strip_parens(inout state, er);
-            let kind = b_ast_m(b_module, tmp).kind;
-            if b_kind_is(kind, model.AstKind.Name) ||
-               b_kind_is(kind, model.AstKind.Member) ||
-               b_kind_is(kind, model.AstKind.NeutralBracket) {
-                throw reject(inout state, argument_ref,
+           semacore.b_mode_is(mode, model.ParamMode.Ordinary) {
+            let tmp = semacore.b_strip_parens(inout state, er);
+            let kind = semacore.b_ast_m(b_module, tmp).kind;
+            if semacore.b_kind_is(kind, model.AstKind.Name) ||
+               semacore.b_kind_is(kind, model.AstKind.Member) ||
+               semacore.b_kind_is(kind, model.AstKind.NeutralBracket) {
+                throw semacore.reject(inout state, argument_ref,
                     "existing binding requires explicit move",
                     "E_CALL_ARGUMENT");
             }
             mode = model.ParamMode.Move;
         }
-        if !b_mode_is(mode, signature_type.parameters[parameter_index].mode) {
-            throw reject(inout state, argument_ref,
+        if !semacore.b_mode_is(mode, signature_type.parameters[parameter_index].mode) {
+            throw semacore.reject(inout state, argument_ref,
                 "argument mode differs from parameter mode",
                 "E_CALL_ARGUMENT");
         }
-        if argument.has_marker && b_mode_is(argument.requested,
+        if argument.has_marker && semacore.b_mode_is(argument.requested,
                                            model.ParamMode.Move) {
             er = argument.marked;
         }
-        var e = b_empty_expr();
-        if b_mode_is(mode, model.ParamMode.Inout) {
+        var e = semacore.b_empty_expr();
+        if semacore.b_mode_is(mode, model.ParamMode.Inout) {
             e = place(inout state, er, true);
         } else {
             e = expression(inout state, er,
@@ -690,9 +692,9 @@ func scalar_call(state inout Checker, r model.NodeRef,
     var indirect = false;
     switch call.kind { case hir.CalleeKind.FunctionValue: indirect = true; default: {} }
     check_call_borrows(inout state, r, call.args, children, indirect);
-    return Expr(id: node(inout state, r, signature_type.result,
+    return semacore.Expr(id: semacore.node(inout state, r, signature_type.result,
                    hir.NodeData.Call(value: call), children),
-        value: b_empty_value(signature_type.result));
+        value: semacore.b_empty_value(signature_type.result));
 }
 
 func option_is_some_bigint(value option.Option[bigint.BigInt]) bool {

@@ -483,8 +483,7 @@ def _add_file(snapshot, key, path, strict=True):
     snapshot["paths"][key] = str(target)
 
 
-def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=None,
-                   env=None):
+def _frozen_inputs(output, stage0, toolchain, strict=True, env=None):
     snapshot = {"files": {}, "paths": {}}
     source = stage0.get("path_source", "legacy_macros")
     route = None
@@ -571,8 +570,6 @@ def _frozen_inputs(output, stage0, toolchain, strict=True, source_make_tools=Non
             if name in route["package_tools"]:
                 snapshot["paths"][f"stage0_route/package_tools/{name}"] = str(
                     route["package_tools"][name])
-    for name, path in (source_make_tools or {}).items():
-        _add_file(snapshot, f"source_make_tools/{name}", path, strict)
     snapshot["paths"]["selected_toolchain"] = str(toolchain.resolve())
     return snapshot
 
@@ -645,28 +642,12 @@ def run(args):
             allowed_tools.add(str(executable))
         environment = dict(os.environ)
         environment.pop("WOOZY_LLVM_BIN", None)
-        source_make_tools = {}
-        if getattr(args, "source_make", False) and args.stages > 1:
-            source_make_tools = {name: Path(path) for name, path in {
-                "make": "/usr/bin/make", "shell": "/bin/sh",
-                "mkdir": "/usr/bin/mkdir"}.items()}
-            for name, path in source_make_tools.items():
-                _required_file(path, f"source-make {name}")
-            # Do not inherit outer Make options, jobserver settings, extra
-            # makefiles, or command-line variable overrides.
-            for name in ("GNUMAKEFLAGS", "MAKEFILES", "MAKEOVERRIDES", "MFLAGS",
-                         "MAKELEVEL", "MAKE_RESTARTS"):
+        source_make = getattr(args, "source_make", False)
+        if source_make and args.stages > 1:
+            for name in ("MAKEFLAGS", "GNUMAKEFLAGS", "MAKEFILES", "MAKEOVERRIDES",
+                         "MFLAGS", "MAKELEVEL", "MAKE_RESTARTS", "WOOZY_MAKE"):
                 environment.pop(name, None)
-            environment["MAKEFLAGS"] = f"-j{getattr(args, 'jobs', 1)}"
-            version = subprocess.run([str(source_make_tools["make"]), "--version"],
-                                     env=environment, capture_output=True, text=True, check=False)
-            if version.returncode or not version.stdout.startswith("GNU Make "):
-                raise RuntimeError("source-make requires GNU Make")
-            environment["WOOZY_MAKE"] = str(source_make_tools["make"])
             environment["PATH"] = "/usr/bin:/bin"
-            allowed_tools.update(str(path.resolve()) for path in source_make_tools.values())
-            report["source_make_tools"] = {name: str(path)
-                                           for name, path in source_make_tools.items()}
         libraries = [str(toolchain / "lib"), str(args.libxml_dir.resolve())]
         if environment.get("LD_LIBRARY_PATH"):
             libraries.append(environment["LD_LIBRARY_PATH"])
@@ -674,8 +655,7 @@ def run(args):
 
         stage_label = "stage0"
         stage0 = inspect_stage0(stage0_path, toolchain,
-                                package_objects=getattr(args, "source_make", False),
-                                env=environment)
+                                package_objects=source_make, env=environment)
         stage0["seed"]["entry_path"] = str(stage0_entry)
         frozen_stage0 = resources / "stage0"
         frozen_stage0.mkdir()
@@ -688,7 +668,6 @@ def run(args):
         _compare_stage0_inputs(stage0, resources)
         report["stage0"] = stage0
         expected_inputs = _frozen_inputs(output, stage0, toolchain, strict=True,
-                                         source_make_tools=source_make_tools,
                                          env=environment)
         _compare_stage0_inputs(stage0, resources)
         report["frozen_inputs"] = expected_inputs
@@ -699,7 +678,6 @@ def run(args):
         for generation in range(1, args.stages + 1):
             stage_label = f"stage{generation}"
             before = _frozen_inputs(output, stage0, toolchain, strict=False,
-                                    source_make_tools=source_make_tools,
                                     env=environment)
             if before != expected_inputs:
                 raise RuntimeError(
@@ -716,8 +694,11 @@ def run(args):
                        str(output / "source/lang.toml"), "--backend", "native",
                        "--opt", args.opt, "--out-dir", str(stage / "build"),
                        "--format", "json"]
-            if getattr(args, "source_make", False):
-                command.insert(4, "--package-objects" if generation == 1 else "--source-make")
+            if source_make:
+                if generation == 1:
+                    command.append("--package-objects")
+                else:
+                    command.extend(("--source-make", "--jobs", str(args.jobs)))
             trace = stage / "exec.log"
             traced = command
             if generation > 1:
@@ -748,8 +729,7 @@ def run(args):
 
                 failures = []
                 after = _frozen_inputs(output, stage0, toolchain, strict=False,
-                                    source_make_tools=source_make_tools,
-                                    env=environment)
+                                       env=environment)
                 if after != expected_inputs:
                     record["input_changes"] = _input_changes(
                         expected_inputs, after)
@@ -823,9 +803,9 @@ def main():
     parser.add_argument("--stages", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--opt", choices=("0", "2"), default="2")
     parser.add_argument("--jobs", type=int, default=1,
-                        help="parallel source Make workers (default: 1)")
+                        help="parallel source-package jobs for stages 2 and 3 (default: 1)")
     parser.add_argument("--source-make", action="store_true",
-                        help="use package objects for stage 1 and source Make for stages 2 and 3")
+                        help="use package objects for stage 1 and build from source packages for stages 2 and 3")
     parser.add_argument("--toolchain", type=Path, default=DEFAULT_LLVM)
     parser.add_argument("--runtime-dir", type=Path,
                         default=ROOT / "build/woozy-stdlib-native/native")

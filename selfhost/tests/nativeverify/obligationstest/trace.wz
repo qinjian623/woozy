@@ -1,16 +1,17 @@
 // Test-only package-internal obligations trace.
 //
-// Copied into the staged nativeverify package by obligationstest/run.py.  It
+// Copied into the staged nativeverify/obligations package by obligationstest/run.py.  It
 // builds the same hand-written HIR control tree as the C++ oracle (which calls
 // the real lang::ir::detail::RequiredExits from src/ir/obligations.hpp) and
 // prints the required exit/call obligations.  This exercises the complete
 // exit/defer/call/await/loop/switch/try obligation algorithm without needing
 // the still-missing hirverify package.  No verified HIR is constructed and no
 // verification success is claimed.
-package nativeverify;
+package obligations;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
+import "app/wzcc/nativeverify/support" as vfsupport;
 import "app/wzcc/types" as types;
 import "std/option" as option;
 import "std/strconv" as strconv;
@@ -369,7 +370,7 @@ func context_text(entries Vec[ContextEntry]) string {
             text += ",";
         }
         text += num(entries[index].origin) + ":" +
-            num(usize(exit_kind_id(entries[index].kind))) + ":" +
+            num(usize(vfsupport.exit_kind_id(entries[index].kind))) + ":" +
             optional_text(entries[index].error_type) + ":" +
             num(entries[index].defer_node);
     }
@@ -399,7 +400,7 @@ pub func obligation_trace() string {
         for entry in obligations.exits {
             text += "exit ctx=" + context_text(entry.key.context) +
                 " origin=" + num(entry.key.origin) +
-                " kind=" + num(usize(exit_kind_id(entry.key.kind))) +
+                " kind=" + num(usize(vfsupport.exit_kind_id(entry.key.kind))) +
                 " error=" + optional_text(entry.key.error_type) +
                 " count=" + num(entry.count) + "\n";
         }
@@ -409,11 +410,11 @@ pub func obligation_trace() string {
                 " origin=" + num(entry.key.origin) +
                 " count=" + num(entry.count) + "\n";
         }
-    } catch error VerifyError {
+    } catch error vfsupport.VerifyError {
         var message = "";
         switch error {
-            case VerifyError.Bad(text_value, span): message = text_value;
-            case VerifyError.Support(value): message = support_text(value);
+            case vfsupport.VerifyError.Bad(text_value, span): message = text_value;
+            case vfsupport.VerifyError.Support(value): message = support_text(value);
         }
         text += "error " + message + "\n";
     }

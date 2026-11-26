@@ -57,16 +57,16 @@ ctest --preset frontend-debug
 
 ### 自举版
 
-`selfhost/src/` 是同一编译器的 Woozy 源码。第一代用上面的 C++ 版构建，第二、三代只使用上一代 Woozy 编译器，最后要求 stage2 和 stage3 的二进制逐字节相同。用 Make 按源码包构建：
+`selfhost/src/` 是同一编译器的 Woozy 源码。第一代用上面的 C++ 版构建，第二、三代只使用上一代 Woozy 编译器，最后要求 stage2 和 stage3 的二进制逐字节相同。用 Python 脚本按源码包构建。
 
 ```sh
-make -C selfhost bootstrap \
-  OUT="$PWD/build/selfhost-bootstrap" \
-  STAGE0="$PWD/build/woozyc-cpp/woozyc" \
-  RUNTIME_DIR="$PWD/build/woozyc-cpp/native" \
-  JOBS=6
+python3 -B selfhost/bootstrap.py --source-make \
+  --out-dir "$PWD/build/selfhost-bootstrap" \
+  --stage0 "$PWD/build/woozyc-cpp/woozyc" \
+  --runtime-dir "$PWD/build/woozyc-cpp/native" \
+  --opt 0 --jobs 6
 ```
 
-`STAGE0` 和 `RUNTIME_DIR` 默认指向 `build/woozy-stdlib-native/`，换构建目录时两个都要改。`OUT` 必须为空。默认构建三代、`OPT=0`；`STAGES=2` 只到第二代，`OPT=2` 改用 O2。第二、三代需要可执行的 `strace`，默认从 `PATH` 查找，也可用 `STRACE=` 指定，本机在 `../toolchains/strace-7.2/usr/bin/strace`。脚本会冻结源码、标准库、运行库和工具输入并逐代核对哈希，结果写在 `OUT/result.json`；那里的 `status=ok` 只表示分代构建完成，不代表语料对照通过。
+`--stage0` 和 `--runtime-dir` 默认指向 `build/woozy-stdlib-native/`，换构建目录时两个都要改。输出目录必须为空。默认构建三代，`--stages 2` 只到第二代。示例使用 O0，省略 `--opt` 时使用 O2。第一代需要 Ninja，第二、三代需要可执行的 `strace`。默认从 `PATH` 查找，也可通过 `--strace` 指定，本机在 `../toolchains/strace-7.2/usr/bin/strace`。脚本会冻结源码、标准库、运行库和工具输入并逐代核对哈希。输出目录的 `result.json` 记录分代构建结果，语料对照需另行运行。
 
 自举使用的 `--source-make` 和 `--package-objects` 入口见 [增量编译](docs/INCREMENTAL_COMPILATION.md)。自举模块的移植范围和当前状态见 [自举实现与检查](docs/SELF_HOSTING.md)。

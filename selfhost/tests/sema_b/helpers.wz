@@ -4,6 +4,8 @@
 // This is not a production facade and never claims verified HIR.
 package sema;
 
+import "app/wzcc/sema/core" as semacore;
+import "app/wzcc/sema/declarations" as semadecl;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "std/option" as option;
@@ -20,16 +22,16 @@ pub struct BTestResult {
     pub plain_foreign_read bool;
 }
 
-func b_test_failure(error Error) BTestResult {
+func b_test_failure(error semacore.Error) BTestResult {
     switch error {
-        case Error.Rejected(diagnostic, failure):
+        case semacore.Error.Rejected(diagnostic, failure):
             return BTestResult(ok: false, code: diagnostic.code,
                 message: diagnostic.message, property_read: false,
                 begin_byte: diagnostic.primary.begin_byte,
                 end_byte: diagnostic.primary.end_byte, phase: diagnostic.phase, plain_foreign_read: false);
-        case Error.Support(support):
+        case semacore.Error.Support(support):
             return BTestResult(ok: false, code: "E_INTERNAL_ERROR",
-                message: b_support_message(support), property_read: false,
+                message: semacore.b_support_message(support), property_read: false,
                 begin_byte: 0, end_byte: 0, phase: "type", plain_foreign_read: false);
     }
 }
@@ -56,22 +58,22 @@ pub func b_test_run(input model.ResolveResult) BTestResult {
     }
     var checker = b_empty_checker_value();
     try { checker = make_checker(input.value, b_runtime_config(input.value)); }
-    catch error Error { return b_test_failure(error); }
+    catch error semacore.Error { return b_test_failure(error); }
     try {
-        declarations(inout checker);
+        semadecl.declarations(inout checker);
         for module in checker.m.resolved.project.modules {
             for var file_index usize = 0; file_index < vec.len(module.files);
                 file_index += 1 {
                 let file_ref = model.NodeRef(module: module.id,
                     file: file_index, node: 0);
-                let file = parsed_file(inout checker, file_ref);
-                let root_ref = at(file_ref, file.root);
-                let root = ast(inout checker, root_ref);
+                let file = semacore.parsed_file(inout checker, file_ref);
+                let root_ref = semacore.at(file_ref, file.root);
+                let root = semacore.ast(inout checker, root_ref);
                 for id in root.children {
-                    let location = at(file_ref, id);
-                    switch ast(inout checker, location).kind {
+                    let location = semacore.at(file_ref, id);
+                    switch semacore.ast(inout checker, location).kind {
                         case model.AstKind.Binding: {
-                            let binding = definition(inout checker, location);
+                            let binding = semacore.definition(inout checker, location);
                             let ignored = constant(inout checker, binding);
                         }
                         default: {}
@@ -92,7 +94,7 @@ pub func b_test_run(input model.ResolveResult) BTestResult {
         for id in run_body_symbols(checker.bodies) {
             check_body(inout checker, id);
         }
-    } catch error Error { return b_test_failure(error); }
+    } catch error semacore.Error { return b_test_failure(error); }
     var property_read = false;
     var plain_foreign_read = false;
     for node in checker.m.nodes {
@@ -117,10 +119,10 @@ pub func b_test_run(input model.ResolveResult) BTestResult {
         phase: "", plain_foreign_read: plain_foreign_read);
 }
 
-func b_empty_checker_value() Checker {
+func b_empty_checker_value() semacore.Checker {
     let resolved = model.ResolvedProject(project: model.empty_project(),
         symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
-    return Checker(m: hir_empty_module_for_test(resolved),
+    return semacore.Checker(m: hir_empty_module_for_test(resolved),
         selected_body_module: option.Option[usize].None, selected_templates: [],
         occurrences: [], definitions: [], signatures: [],
         trait_signature_context: [], parameters: [], locals: [], constants: [],

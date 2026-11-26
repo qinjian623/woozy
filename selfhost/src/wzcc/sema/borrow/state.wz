@@ -1,0 +1,58 @@
+// Borrow-path records and the sorted nominal declaration index they use.
+// This package is a leaf: it reads HIR/model data and never imports sema.
+package borrow;
+
+import "app/wzcc/semaeffects" as effects;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct PlacePath { is_index bool; known bool; value u64; }
+struct ContainerPath { indexes Vec[PlacePath]; fields Vec[u64]; }
+struct PlaceAccess { root usize; path Vec[PlacePath]; }
+pub struct NominalIdEntry { symbol usize; index usize; }
+
+func internal_error(message string) effects.Error {
+    return effects.Error.Support(model.SupportError.Invalid(message));
+}
+
+func reject(node model.NodeRef, message string, code string) effects.Error {
+    return effects.Error.Rejected(node: node, message: message, code: code);
+}
+
+func mode_is(actual model.ParamMode, expected model.ParamMode) bool {
+    switch actual {
+        case model.ParamMode.Ordinary:
+            switch expected { case model.ParamMode.Ordinary: return true; default: return false; }
+        case model.ParamMode.Inout:
+            switch expected { case model.ParamMode.Inout: return true; default: return false; }
+        case model.ParamMode.Move:
+            switch expected { case model.ParamMode.Move: return true; default: return false; }
+    }
+}
+
+func nominal_id_pos(entries Vec[NominalIdEntry],symbol usize) usize {
+    var low usize=0;var high=vec.len(entries);
+    for low<high {
+        let mid=low+(high-low)/2;
+        if entries[mid].symbol<symbol {low=mid+1;} else {high=mid;}
+    }
+    return low;
+}
+
+pub func nominal_id_get(entries Vec[NominalIdEntry],symbol usize) option.Option[usize] {
+    let pos=nominal_id_pos(entries,symbol);
+    if pos<vec.len(entries) && entries[pos].symbol==symbol {
+        return option.Option[usize].Some(entries[pos].index);
+    }
+    return option.Option[usize].None;
+}
+
+pub func nominal_id_set(entries Vec[NominalIdEntry],symbol usize,index usize) {
+    let pos=nominal_id_pos(entries,symbol);
+    let n=vec.len(entries);
+    if pos<n && entries[pos].symbol==symbol {entries[pos].index=index;return;}
+    vec.push(entries,NominalIdEntry(symbol:0,index:0));
+    var cursor=n;for cursor>pos {entries[cursor]=entries[cursor-1];cursor-=1;}
+    entries[pos]=NominalIdEntry(symbol:symbol,index:index);
+}

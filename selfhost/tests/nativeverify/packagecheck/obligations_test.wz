@@ -1,0 +1,51 @@
+// Staged only by packagecheck/run.py.
+package obligations;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/nativeverify/support" as vfsupport;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+pub func test_obligations(failures inout usize) throws os.Error {
+    var actual = obligations();
+    let empty = vec.empty[ContextEntry]();
+    let first = vec.empty[ContextEntry]();
+    vec.push(first, ContextEntry(origin: 1, kind: hir.ExitKind.Return,
+        error_type: option.Option[usize].None, defer_node: 2));
+    let second = vec.empty[ContextEntry]();
+    vec.push(second, ContextEntry(origin: 2, kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(4), defer_node: 3));
+    // Insert out of order; the map must still compare by tuple key.
+    obligation_add_exit(inout actual, second, 9, hir.ExitKind.Error,
+        option.Option[usize].Some(4));
+    obligation_add_exit(inout actual, first, 5, hir.ExitKind.Return,
+        option.Option[usize].None);
+    obligation_add_exit(inout actual, first, 5, hir.ExitKind.Return,
+        option.Option[usize].None);
+    obligation_add_call(inout actual, empty, 7);
+    obligation_add_call(inout actual, first, 7);
+    let wanted_exits = vec.empty[ExitObligation]();
+    vec.push(wanted_exits, ExitObligation(key: ExitKey(context: first,
+        origin: 5, kind: hir.ExitKind.Return,
+        error_type: option.Option[usize].None), count: 2));
+    vec.push(wanted_exits, ExitObligation(key: ExitKey(context: second,
+        origin: 9, kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(4)), count: 1));
+    vfsupport.selftest_check("exit obligation order/count",
+        obligations_equal_exits(actual.exits, wanted_exits), inout failures);
+    vfsupport.selftest_check("exit obligation order strict",
+        exit_obligation_compare(actual.exits[0], actual.exits[1]) < 0,
+        inout failures);
+    let wanted_calls = vec.empty[CallObligation]();
+    vec.push(wanted_calls, CallObligation(key: CallKey(context: empty,
+        origin: 7), count: 1));
+    vec.push(wanted_calls, CallObligation(key: CallKey(context: first,
+        origin: 7), count: 1));
+    vfsupport.selftest_check("call obligation order/count",
+        obligations_equal_calls(actual.calls, wanted_calls), inout failures);
+    vfsupport.selftest_check("context order", context_compare(first, second) < 0 &&
+        context_compare(empty, first) < 0, inout failures);
+    vfsupport.selftest_check("context entry order", context_entry_compare(first[0], second[0]) < 0,
+        inout failures);
+}

@@ -1,0 +1,19 @@
+// Staged with the system operation package for the C fixture only.
+package systemops;
+
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+
+pub func test_c_function_value_of(code emitcore.Value, environment emitcore.Value,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return c_function_value_of(code, environment, inout state);
+}
+pub func test_c_weak_value(control emitcore.Value, code emitcore.Value,
+    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return c_weak_value(control, code, inout state);
+}
+pub func test_weak_system_call(instruction nativeir.Instruction, args Vec[emitcore.Value],
+    state inout emitcore.Emitter) option.Option[emitcore.Value] throws emitcore.Error {
+    return weak_system_call(instruction, args, inout state);
+}

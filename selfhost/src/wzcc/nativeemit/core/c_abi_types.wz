@@ -1,0 +1,139 @@
+package core;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeadapter" as nativeadapter;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func e_c_record_type(project model.Project, id u32,
+                     state inout Emitter) string throws Error {
+    for item in state.e.c_records {
+        if item.c_type == id { return item.type_name; }
+    }
+    let declaration = e_c_type(project, id);
+    if !e_c_decl_kind_is(declaration.kind, model.CDeclKind.Record) {
+        throw invalid("C record cache referenced a non-record type");
+    }
+    let name = "c.record." + number(usize(id));
+    let reference = type_reference(name);
+    vec.push(state.e.c_records, CRecordLayout(c_type: id, type_name: reference));
+    var fields Vec[string] = [];
+    for field in declaration.fields {
+        let spelling = c_ref_type(field.type_ref, inout state);
+        vec.push(fields, spelling);
+    }
+    var body = "{}";
+    if vec.len(fields) != 0 { body = "{ " + e_join_types(fields) + " }"; }
+    let defined = define_type(name, body, inout state);
+    return defined;
+}
+
+pub func c_ref_type(reference model.CTypeRef, state inout Emitter) string throws Error {
+    switch reference.kind {
+        case model.CTypeKind.Scalar: {
+            if reference.scalar == "Unit" || reference.scalar == "bool" ||
+               reference.scalar == "i8" || reference.scalar == "u8" {
+                return "i8";
+            }
+            if reference.scalar == "i16" || reference.scalar == "u16" { return "i16"; }
+            if reference.scalar == "i32" || reference.scalar == "u32" { return "i32"; }
+            if reference.scalar == "i64" || reference.scalar == "u64" ||
+               reference.scalar == "isize" || reference.scalar == "usize" {
+                return "i64";
+            }
+            if reference.scalar == "f32" { return "float"; }
+            if reference.scalar == "f64" { return "double"; }
+            throw e_unsupported("unknown C scalar storage type");
+        }
+        case model.CTypeKind.Pointer:
+            return "ptr";
+        case model.CTypeKind.Buffer:
+            return e_buffer_layout();
+        case model.CTypeKind.Named: {
+            let project = state.input.hir.resolved.project;
+            let declaration = e_c_type(project, reference.named);
+            switch declaration.kind {
+                case model.CDeclKind.Record:
+                    return e_c_record_type(project, declaration.id, inout state);
+                case model.CDeclKind.Resource: return "ptr";
+                case model.CDeclKind.Callback: return "ptr";
+                case model.CDeclKind.Opaque: return "ptr";
+            }
+        }
+    }
+}
+
+pub func c_lower_type(type_id usize, state inout Emitter) string throws Error {
+    let config = state.input.hir.config;
+    let value = type_of(state, type_id);
+    if e_type_kind_is(value.kind, model.TypeKind.CForeignRecord) {
+        let reference = model.CTypeRef(kind: model.CTypeKind.Named,
+            scalar: "", writable: false, args: [], named: value.c_type);
+        return c_ref_type(reference, inout state);
+    }
+    if e_type_kind_is(value.kind, model.TypeKind.Unit) || e_type_kind_is(value.kind, model.TypeKind.Bool) {
+        return "i8";
+    }
+    if e_type_kind_is(value.kind, model.TypeKind.SignedInt) ||
+       e_type_kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       e_type_kind_is(value.kind, model.TypeKind.Isize) ||
+       e_type_kind_is(value.kind, model.TypeKind.Usize) {
+        let bits = e_type_bits(value.kind, value.bits, config.word_bits);
+        return e_llvm_int_type(bits);
+    }
+    if e_type_kind_is(value.kind, model.TypeKind.Float) {
+        if value.bits == 32 { return "float"; }
+        return "double";
+    }
+    if e_type_kind_is(value.kind, model.TypeKind.CForeignPointer) ||
+       e_type_kind_is(value.kind, model.TypeKind.CForeignResource) ||
+       e_type_kind_is(value.kind, model.TypeKind.CForeignCallback) ||
+       e_type_kind_is(value.kind, model.TypeKind.CForeignOpaque) {
+        return "ptr";
+    }
+    if e_type_kind_is(value.kind, model.TypeKind.CForeignBuffer) {
+        return e_buffer_layout();
+    }
+    throw e_unsupported("non-C type in C storage position");
+}
+pub func e_unsupported(message string) Error {
+    return Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+        message);
+}
+pub func e_c_type(project model.Project, id u32) model.CTypeDecl throws Error {
+    try { return nativeadapter.e_c_type(project, id); }
+    catch error nativeadapter.Error { throw adapter_error(error); }
+}
+pub func e_type_kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+pub func e_c_type_kind_is(kind model.CTypeKind, expected model.CTypeKind) bool {
+    return nativeadapter.e_c_type_kind_is(kind, expected);
+}
+pub func e_c_decl_kind_is(kind model.CDeclKind, expected model.CDeclKind) bool {
+    return nativeadapter.e_c_decl_kind_is(kind, expected);
+}
+func e_type_bits(kind model.TypeKind, bits u32, word_bits u32) u32 {
+    if e_type_kind_is(kind, model.TypeKind.Isize) || e_type_kind_is(kind, model.TypeKind.Usize) {
+        return word_bits;
+    }
+    return bits;
+}
+func e_llvm_int_type(bits u32) string throws Error {
+    switch bits {
+        case 1: return "i1";
+        case 8: return "i8";
+        case 16: return "i16";
+        case 32: return "i32";
+        case 64: return "i64";
+        default: throw invalid("unsupported integer width in LLVM text emission");
+    }
+}
+func e_buffer_layout() string { return "{ ptr, i64 }"; }
+pub func e_join_types(types Vec[string]) string {
+    return text.join(types, ", ");
+}
+pub func adapter_error(error nativeadapter.Error) Error {
+    switch error { case nativeadapter.Error.Failure(code, kind, message):
+        return Error.Failure(code, kind, message); }
+}

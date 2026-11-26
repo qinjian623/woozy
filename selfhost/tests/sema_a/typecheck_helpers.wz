@@ -1,0 +1,13 @@
+package typecheck;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/sema/core" as semacore;
+
+pub func test_declared_self(state inout semacore.Checker, target usize) bool throws semacore.Error {
+    return declared_self(inout state, target);
+}
+
+pub func test_try_infer(state inout semacore.Checker, ref model.NodeRef, pattern usize,
+                       actual usize, substitutions Vec[model.Substitution]) bool throws semacore.Error {
+    return try_infer(inout state, ref, pattern, actual, substitutions);
+}

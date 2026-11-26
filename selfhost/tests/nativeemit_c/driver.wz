@@ -11,6 +11,9 @@
 // are built and executed by the existing C++ native backend today, and by the
 // merged Wz pipeline once B/D/E are complete.
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/systemops" as emitsystem;
+import "app/wzcc/nativeemit/values" as emitvalues;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
@@ -27,8 +30,8 @@ struct CTypedInput {
     vec_type usize;
 }
 
-func c_driver_bad(message string) Error {
-    return Error.Failure("E_TEST_ASSERTION", model.FailureKind.Internal, message);
+func c_driver_bad(message string) emitcore.Error {
+    return emitcore.Error.Failure("E_TEST_ASSERTION", model.FailureKind.Internal, message);
 }
 
 func c_driver_empty(op nativeir.Op, type_id usize) nativeir.Instruction {
@@ -38,7 +41,7 @@ func c_driver_empty(op nativeir.Op, type_id usize) nativeir.Instruction {
     return instruction;
 }
 
-func c_driver_input() CTypedInput throws Error {
+func c_driver_input() CTypedInput throws emitcore.Error {
     let resolved = model.ResolvedProject(project: model.empty_project(),
         symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
     var module = hir.empty_module(resolved, 0,
@@ -94,18 +97,18 @@ func c_driver_join(chunks Vec[string]) string {
 
 // A handled no-result instruction with real slot storage, so the assembled text
 // stays valid LLVM: Take must clear the declared active flag and return Unit.
-func c_driver_take(state inout Emitter, input CTypedInput) bool throws Error {
-    let function_index = new_function("nativeemit.c.driver",
-        Signature(result: "void", parameters: []), "internal", "", inout state);
-    let entry = new_block(function_index, "entry", inout state);
-    position(entry, inout state);
-    let active = entry_result("ptr", "alloca i1", inout state);
-    let address = entry_result("ptr", "alloca i8", inout state);
-    append("store i1 true, ptr " + active.reference, inout state);
-    vec.push(state.frame.slots, SlotStorage(address: address,
-        active: option.Option[Value].Some(active),
-        iteration_length: option.Option[Value].None,
-        iteration_index: option.Option[Value].None));
+func c_driver_take(state inout emitcore.Emitter, input CTypedInput) bool throws emitcore.Error {
+    let function_index = emitcore.new_function("nativeemit.c.driver",
+        emitcore.Signature(result: "void", parameters: []), "internal", "", inout state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let active = emitcore.entry_result("ptr", "alloca i1", inout state);
+    let address = emitcore.entry_result("ptr", "alloca i8", inout state);
+    emitcore.append("store i1 true, ptr " + active.reference, inout state);
+    vec.push(state.frame.slots, emitcore.SlotStorage(address: address,
+        active: option.Option[emitcore.Value].Some(active),
+        iteration_length: option.Option[emitcore.Value].None,
+        iteration_index: option.Option[emitcore.Value].None));
     var take = c_driver_empty(nativeir.Op.Take, input.unit);
     take.slot = 0;
     var produced = false;
@@ -115,7 +118,7 @@ func c_driver_take(state inout Emitter, input CTypedInput) bool throws Error {
         }
         case option.Option.None: {}
     }
-    terminate("ret void", inout state);
+    emitcore.terminate("ret void", inout state);
     state.frame.slots = [];
     return produced;
 }
@@ -123,7 +126,7 @@ func c_driver_take(state inout Emitter, input CTypedInput) bool throws Error {
 // Ops owned by another group must return None; a non-Weak system operation must
 // not be claimed by weak_system_call; and an internal inconsistency must be an
 // Error instead of a fabricated result.
-func c_driver_dispatch(state inout Emitter, input CTypedInput) bool throws Error {
+func c_driver_dispatch(state inout emitcore.Emitter, input CTypedInput) bool throws emitcore.Error {
     var foreign = c_driver_empty(nativeir.Op.Store, input.unit);
     switch emit_value_instruction(foreign, [], inout state) {
         case option.Option.Some(value): return false;
@@ -141,7 +144,7 @@ func c_driver_dispatch(state inout Emitter, input CTypedInput) bool throws Error
     }
     var system = c_driver_empty(nativeir.Op.SystemCall, input.unit);
     system.system = option.Option[u32].Some(13);
-    switch weak_system_call(system, [], inout state) {
+    switch emitsystem.test_weak_system_call(system, [], inout state) {
         case option.Option.Some(value): return false;
         case option.Option.None: {}
     }
@@ -150,9 +153,9 @@ func c_driver_dispatch(state inout Emitter, input CTypedInput) bool throws Error
     var rejected = false;
     try {
         let ignored = emit_value_instruction(take, [], inout state);
-    } catch error Error {
+    } catch error emitcore.Error {
         switch error {
-            case Error.Failure(code, kind, message): {
+            case emitcore.Error.Failure(code, kind, message): {
                 switch kind {
                     case model.FailureKind.Internal: {
                         rejected = code == "E_IR_INVALID";
@@ -165,28 +168,28 @@ func c_driver_dispatch(state inout Emitter, input CTypedInput) bool throws Error
     return rejected;
 }
 
-func c_driver_checks_with(optimization u32) string throws Error {
+func c_driver_checks_with(optimization u32) string throws emitcore.Error {
     let input = c_driver_input();
     var options = default_options();
     options.optimization = optimization;
-    var state = new_emitter(input.module, options);
+    var state = emitcore.new_emitter(input.module, core_settings(options));
     // The Root assembler declares the fixed runtime layouts first; do the same
     // so the text assembled here is a complete module.
-    declare_runtime_types(inout state);
-    if !owning(input.vec_type, inout state) {
+    emitcore.declare_runtime_types(inout state);
+    if !emitvalues.owning(input.vec_type, inout state) {
         throw c_driver_bad("Vec must be owning");
     }
-    if owning(input.unit, inout state) {
+    if emitvalues.owning(input.unit, inout state) {
         throw c_driver_bad("Unit must not be owning");
     }
-    if owning(input.i32_type, inout state) {
+    if emitvalues.owning(input.i32_type, inout state) {
         throw c_driver_bad("i32 must not be owning");
     }
     // The copy helper is registered before its body, so a second lookup must
     // return the same symbol and must not append another cache entry.
-    let copy_op = value_op(input.vec_type, true, inout state);
-    let copy_again = value_op(input.vec_type, true, inout state);
-    let drop_op = value_op(input.vec_type, false, inout state);
+    let copy_op = emitvalues.value_op(input.vec_type, true, inout state);
+    let copy_again = emitvalues.value_op(input.vec_type, true, inout state);
+    let drop_op = emitvalues.value_op(input.vec_type, false, inout state);
     if copy_op.reference != copy_again.reference {
         throw c_driver_bad("value_op is not cached");
     }
@@ -207,18 +210,18 @@ func c_driver_checks_with(optimization u32) string throws Error {
     // Environment records are keyed by the ordered field list; the cache key
     // must be a copy, so widening the caller array must create a new record.
     var fields Vec[usize] = [input.vec_type];
-    let layout = env_record_type(fields, inout state);
-    let layout_again = env_record_type(fields, inout state);
+    let layout = emitvalues.env_record_type(fields, inout state);
+    let layout_again = emitvalues.env_record_type(fields, inout state);
     if layout != layout_again {
         throw c_driver_bad("environment type is not cached");
     }
     vec.push(fields, input.i32_type);
-    let widened = env_record_type(fields, inout state);
+    let widened = emitvalues.env_record_type(fields, inout state);
     if widened == layout {
         throw c_driver_bad("environment key was not copied");
     }
-    let env_copy = env_record_op(fields, true, inout state);
-    let env_drop = env_record_op(fields, false, inout state);
+    let env_copy = emitvalues.test_env_record_op(fields, true, inout state);
+    let env_drop = emitvalues.test_env_record_op(fields, false, inout state);
     if vec.len(state.c.environment_ops) != 2 {
         throw c_driver_bad("environment_ops cache size");
     }
@@ -227,13 +230,13 @@ func c_driver_checks_with(optimization u32) string throws Error {
     }
     // Function-value bookkeeping is what E uses to reject captured or bound
     // callables in an ordinary C callback slot.
-    switch function_value_info(state, 4) {
+    switch emitvalues.test_function_value_info(state, 4) {
         case option.Option.Some(value): throw c_driver_bad("stale function value entry");
         case option.Option.None: {}
     }
     vec.push(state.frame.function_values,
-        FunctionValueInfo(value_id: 4, symbol: 11, dynamic: true));
-    switch function_value_info(state, 4) {
+        emitcore.FunctionValueInfo(value_id: 4, symbol: 11, dynamic: true));
+    switch emitvalues.test_function_value_info(state, 4) {
         case option.Option.Some(value): {
             if value.symbol != 11 || !value.dynamic {
                 throw c_driver_bad("function value entry");
@@ -247,7 +250,7 @@ func c_driver_checks_with(optimization u32) string throws Error {
     if !c_driver_dispatch(inout state, input) {
         throw c_driver_bad("instruction dispatch");
     }
-    let module_text = c_driver_join(sections(state));
+    let module_text = c_driver_join(emitcore.sections(state));
     if !c_driver_contains(module_text,
         "define internal void @\"lang.vec.retain\"(ptr %p0)") {
         throw c_driver_bad("missing retain helper");
@@ -270,14 +273,14 @@ func c_driver_checks_with(optimization u32) string throws Error {
     return module_text;
 }
 
-func c_driver_checks() string throws Error {
+func c_driver_checks() string throws emitcore.Error {
     return c_driver_checks_with(0);
 }
 
-pub func c_driver_module_text() string throws Error {
+pub func c_driver_module_text() string throws emitcore.Error {
     return c_driver_checks();
 }
 
-pub func c_driver_module_text_opt(optimization u32) string throws Error {
+pub func c_driver_module_text_opt(optimization u32) string throws emitcore.Error {
     return c_driver_checks_with(optimization);
 }

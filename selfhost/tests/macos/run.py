@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 import platform
 import plistlib
@@ -22,6 +21,8 @@ def command(argv, *, cwd=None, expected=0):
 
 
 def build(compiler, manifest, output, *options):
+    if "--source-make" in options:
+        options += ("--jobs", "2")
     result = json.loads(command([compiler, "build", "--project", manifest,
                                  "--out-dir", output, "--format", "json", *options]))
     assert result["status"] == "ok", result
@@ -104,6 +105,10 @@ def test(compiler, work):
         program = build(compiler, manifest, out, *options)
         command([program], expected=expected)
         cold = json.loads((out / "cache-statistics.json").read_text())
+        if mode == "--source-make":
+            assert not (out / "Makefile").exists()
+            report = json.loads((out / "make-report.json").read_text())
+            assert (report["schema_version"], report["phase"]) == (1, "source-make"), report
         command([build(compiler, manifest, out, *options)], expected=expected)
         warm = json.loads((out / "cache-statistics.json").read_text())
         assert cold["opt_jobs"] == 3 and cold["llc_jobs"] == 3, cold
@@ -145,7 +150,6 @@ def main():
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error("these checks require macOS arm64")
-    os.environ.setdefault("MAKEFLAGS", "-j3")
     with tempfile.TemporaryDirectory(prefix="woozy-macos-tests-") as work:
         test(args.woozyc.resolve(), Path(work))
 

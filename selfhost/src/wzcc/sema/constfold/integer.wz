@@ -1,0 +1,177 @@
+// Exact integer folding for the checker. Pure over BigInt/operator inputs;
+// the sema adapter supplies type width, wrapping and diagnostics.
+package constfold;
+
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+
+pub enum Error {
+    Arithmetic;
+    Magnitude;
+    BitwiseOperator;
+}
+
+pub enum IntegerFold {
+    Empty;
+    Integer(value bigint.BigInt);
+    Boolean(value bool);
+}
+
+func one() bigint.BigInt {
+    return bigint.from_u64(1);
+}
+
+func pow2(bits u32) bigint.BigInt {
+    return bigint.shift_left(one(), u64(bits));
+}
+
+func positive_remainder(value bigint.BigInt,
+                        modulus bigint.BigInt) bigint.BigInt throws Error {
+    try {
+        let parts = bigint.divrem(value, modulus);
+        if parts.remainder.sign < 0 {
+            return bigint.add(parts.remainder, modulus);
+        }
+        return parts.remainder;
+    } catch error bigint.Error {
+        throw Error.Arithmetic;
+    }
+}
+
+func width_mask(width u32) u64 {
+    if width >= 64 { return 0xFFFFFFFFFFFFFFFF; }
+    return (u64(1) << u64(width)) - 1;
+}
+
+func low_bits(value bigint.BigInt, width u32) u64 throws Error {
+    let modulus = pow2(width);
+    let residue = positive_remainder(value, modulus);
+    try {
+        return bigint.to_u64(residue) & width_mask(width);
+    } catch error bigint.Error {
+        throw Error.Magnitude;
+    }
+}
+
+func bitwise_fold(op hir.BinaryOp, left bigint.BigInt,
+                  right bigint.BigInt, width u32) bigint.BigInt throws Error {
+    let a = low_bits(left, width);
+    let b = low_bits(right, width);
+    var result u64 = 0;
+    switch op {
+        case hir.BinaryOp.BitAnd: result = a & b;
+        case hir.BinaryOp.BitOr: result = a | b;
+        case hir.BinaryOp.BitXor: result = a ^ b;
+        default: throw Error.BitwiseOperator;
+    }
+    return bigint.from_u64(result);
+}
+
+pub func bitwise_not(value bigint.BigInt, width u32) bigint.BigInt throws Error {
+    let low = low_bits(value, width);
+    return bigint.from_u64(width_mask(width) ^ low);
+}
+
+func arithmetic_shift_right(value bigint.BigInt, amount u32) bigint.BigInt throws Error {
+    if value.sign >= 0 {
+        return bigint.shift_right(value, u64(amount));
+    }
+    let magnitude = bigint.absolute(value);
+    let divisor = pow2(amount);
+    try {
+        let parts = bigint.divrem(magnitude, divisor);
+        var quotient = parts.quotient;
+        if parts.remainder.sign != 0 {
+            quotient = bigint.add(quotient, one());
+        }
+        return bigint.negate(quotient);
+    } catch error bigint.Error {
+        throw Error.Arithmetic;
+    }
+}
+
+// A negative shift amount is rejected before the checker looks up the operand
+// width, matching the original folding branch order.
+pub func integer_width_needed(op hir.BinaryOp, right bigint.BigInt) bool {
+    switch op {
+        case hir.BinaryOp.ShiftLeft: return right.sign >= 0;
+        case hir.BinaryOp.ShiftRight: return right.sign >= 0;
+        case hir.BinaryOp.BitAnd: return true;
+        case hir.BinaryOp.BitOr: return true;
+        case hir.BinaryOp.BitXor: return true;
+        default: return false;
+    }
+}
+
+pub func fold_integer(op hir.BinaryOp, x bigint.BigInt, y bigint.BigInt,
+                      width u32) IntegerFold throws Error {
+    switch op {
+        case hir.BinaryOp.Add: {
+            return IntegerFold.Integer(bigint.add(x, y));
+        }
+        case hir.BinaryOp.Subtract: {
+            return IntegerFold.Integer(bigint.subtract(x, y));
+        }
+        case hir.BinaryOp.Multiply: {
+            return IntegerFold.Integer(bigint.multiply(x, y));
+        }
+        case hir.BinaryOp.Divide: {
+            if y.sign == 0 { return IntegerFold.Empty; }
+            try { return IntegerFold.Integer(bigint.divrem(x, y).quotient); }
+            catch error bigint.Error { return IntegerFold.Empty; }
+        }
+        case hir.BinaryOp.Remainder: {
+            if y.sign == 0 { return IntegerFold.Empty; }
+            try { return IntegerFold.Integer(bigint.divrem(x, y).remainder); }
+            catch error bigint.Error { return IntegerFold.Empty; }
+        }
+        case hir.BinaryOp.ShiftLeft: {
+            if y.sign < 0 ||
+               bigint.compare(y, bigint.from_u64(u64(width))) >= 0 {
+                return IntegerFold.Empty;
+            }
+            try {
+                return IntegerFold.Integer(
+                    bigint.shift_left(x, bigint.to_u64(y)));
+            } catch error bigint.Error { return IntegerFold.Empty; }
+        }
+        case hir.BinaryOp.ShiftRight: {
+            if y.sign < 0 ||
+               bigint.compare(y, bigint.from_u64(u64(width))) >= 0 {
+                return IntegerFold.Empty;
+            }
+            try {
+                return IntegerFold.Integer(
+                    arithmetic_shift_right(x, u32(bigint.to_u64(y))));
+            } catch error bigint.Error { return IntegerFold.Empty; }
+        }
+        case hir.BinaryOp.BitAnd: {
+            return IntegerFold.Integer(bitwise_fold(op, x, y, width));
+        }
+        case hir.BinaryOp.BitOr: {
+            return IntegerFold.Integer(bitwise_fold(op, x, y, width));
+        }
+        case hir.BinaryOp.BitXor: {
+            return IntegerFold.Integer(bitwise_fold(op, x, y, width));
+        }
+        default: {
+            var comparison = false;
+            switch op {
+                case hir.BinaryOp.Equal:
+                    comparison = bigint.compare(x, y) == 0;
+                case hir.BinaryOp.NotEqual:
+                    comparison = bigint.compare(x, y) != 0;
+                case hir.BinaryOp.Less:
+                    comparison = bigint.compare(x, y) < 0;
+                case hir.BinaryOp.LessEqual:
+                    comparison = bigint.compare(x, y) <= 0;
+                case hir.BinaryOp.Greater:
+                    comparison = bigint.compare(x, y) > 0;
+                case hir.BinaryOp.GreaterEqual:
+                    comparison = bigint.compare(x, y) >= 0;
+                default: {}
+            }
+            return IntegerFold.Boolean(comparison);
+        }
+    }
+}

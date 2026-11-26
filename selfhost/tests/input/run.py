@@ -40,6 +40,10 @@ FIXTURES = {
     "file.bin": b"not a directory\n",
     "unreadable.bin": b"secret\n",
     "dir with space/\u00fcn\u00efcode \u6c49.bin": b"spaced",
+    "multi-chunk.bin": (
+        bytes([0xEF, 0xBB, 0xBF])
+        + b"0123456789abcdef\xc3\xa9\r\n" * 3500
+    ),
 }
 
 # Permission-restricted fixtures are restored even when a check fails.

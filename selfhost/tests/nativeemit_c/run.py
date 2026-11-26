@@ -48,7 +48,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 from wzcc_closure import complete_import_closure  # noqa: E402
 
-C_FILES = ("c_values.wz", "c_weak.wz", "c_instructions.wz")
+C_FILES = ("values/c_values.wz", "systemops/c_weak.wz", "c_instructions.wz")
 APP_PACKAGES = ("model", "types", "hir", "nativeir", "valueops", "nativelayout")
 C_STAGES = ("syntax", "oracle", "wz", "branches")
 BRANCHES = ("fn", "weak", "dyn", "thread", "ops")
@@ -136,7 +136,7 @@ parser.add_argument("--only", default=None,
                     help="comma-separated stages: syntax,oracle,wz,branches")
 parser.add_argument("--b-source", default=None,
                     help="accepted B worktree or its selfhost/src/wzcc/nativeemit; "
-                         "b_*.wz are copied from here instead of --source-root")
+                         "B implementation files are copied from here instead of --source-root")
 parser.add_argument("--runtime", default=None,
                     help="published native runtime archive (default: next to "
                          "--woozyc in native/liblang_native_runtime.a)")
@@ -209,13 +209,13 @@ def stage_syntax():
     results = {}
     for name in C_FILES:
         path = NATIVEEMIT / name
-        out = command("syntax-" + name[:-3],
+        out = command("syntax-" + path.stem,
                       [STAGE0, "check", "--syntax-only", "--format", "json", path])
         text = out.stdout.decode()
         if '"status":"ok"' not in text.replace(" ", ""):
             raise RuntimeError(f"syntax-{name}: {text[:2000]}")
         results[name] = {"sha256": sha(path), "status": "passed"}
-    for name in ("main.wz", "driver.wz", "branch_driver.wz"):
+    for name in ("main.wz", "driver.wz", "branch_driver.wz", "values_probe.wz", "systemops_probe.wz"):
         path = HERE / name
         out = command("syntax-" + name[:-3],
                       [STAGE0, "check", "--syntax-only", "--format", "json", path])
@@ -275,7 +275,7 @@ def scratch_project():
 
     The manifest lists each copied file with its source and SHA-256.  A missing
     real dependency is blocked; there is no stand-in fallback.  When --b-source
-    is given, b_*.wz come from that accepted worktree and all other packages
+    is given, B implementation files come from that worktree and other packages
     come from --source-root.
     """
     project = WORK / "wz"
@@ -306,34 +306,40 @@ def scratch_project():
     else:
         emitter_dir = target / "nativeemit"
         emitter_dir.mkdir(exist_ok=True)
-        for source in sorted(NATIVEEMIT.glob("*.wz")):
-            if B_SOURCE is not None and source.name.startswith("b_"):
+        b_support = Path("core/function_support.wz")
+        for source in sorted(NATIVEEMIT.rglob("*.wz")):
+            relative = source.relative_to(NATIVEEMIT)
+            if B_SOURCE is not None and (source.name.startswith("b_") or relative == b_support):
+                if not (B_SOURCE / relative).is_file():
+                    missing.append(f"b_source/{relative}")
                 continue
-            destination = emitter_dir / source.name
+            destination = emitter_dir / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(source.read_bytes())
             copied.append({"package": "nativeemit", "source": str(source),
                            "target": str(destination), "sha256": sha(source)})
         if B_SOURCE is not None:
-            if not B_SOURCE.is_dir():
-                missing.append("b_source")
+            b_files = sorted(B_SOURCE.rglob("b_*.wz"))
+            if not b_files or not (B_SOURCE / b_support).is_file():
+                missing.append(f"b_source/{b_support}")
             else:
-                found = 0
-                for source in sorted(B_SOURCE.glob("b_*.wz")):
-                    destination = emitter_dir / source.name
+                b_files.append(B_SOURCE / b_support)
+                for source in b_files:
+                    relative = source.relative_to(B_SOURCE)
+                    destination = emitter_dir / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(source.read_bytes())
-                    copied.append({"package": "b_source",
-                                   "source": str(source),
-                                   "target": str(destination),
-                                   "sha256": sha(source)})
-                    found += 1
-                if found == 0:
-                    missing.append("b_source")
+                    copied.append({"package": "b_source", "source": str(source),
+                                   "target": str(destination), "sha256": sha(source)})
         # The C entry points stay package-private, so the drivers join the
         # package.  Record them with the dependency manifest as well.
         for name, target_name in (("driver.wz", "c_driver_test.wz"),
-                                  ("branch_driver.wz", "c_branch_test.wz")):
+                                  ("branch_driver.wz", "c_branch_test.wz"),
+                                  ("values_probe.wz", "values/c_fixture_test.wz"),
+                                  ("systemops_probe.wz", "systemops/c_fixture_test.wz")):
             source = HERE / name
             destination = emitter_dir / target_name
+            destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(source.read_bytes())
             copied.append({"package": "test", "source": str(source),
                            "target": str(destination), "sha256": sha(source)})
@@ -580,6 +586,7 @@ def main():
     inputs = []
     for path in [*(NATIVEEMIT / name for name in C_FILES), HERE / "main.wz",
                  HERE / "driver.wz", HERE / "branch_driver.wz",
+                 HERE / "values_probe.wz", HERE / "systemops_probe.wz",
                  *(HERE / "corpus").glob("*/src/main.wz")]:
         inputs.append({"source": str(path), "sha256": sha(path)})
     (WORK / "inputs.json").write_text(json.dumps(inputs, indent=2))

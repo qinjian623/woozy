@@ -1,12 +1,10 @@
-// Source-level per-package Make build.
+// Source-level per-package build with direct process scheduling.
 //
-// The public entry writes a fixed Makefile and a private length-prefixed state
-// record.  Make target names contain only fixed-width package ids; real paths
-// live in the state record and are passed as argv, never interpolated into a
-// shell command or a Make rule. A worker starts from the prepared project and,
-// on an object miss, resolves and checks its own module body, then lowers its
-// definitions, and turns the result into its own object.  Imported functions
-// are checked external declarations.
+// The driver keeps the prepared project and package state in memory, forks at
+// most --jobs workers, and combines/link the resulting objects itself. Workers
+// start from the prepared project and, on an object miss, resolve and check
+// their own module body, then lower its definitions, and turn the result into
+// its own object. Imported functions are checked external declarations.
 package cli;
 
 import "app/wzcc/frontcache" as frontcache;
@@ -32,7 +30,6 @@ import "std/strconv" as strconv;
 import "std/text" as text;
 import "std/vec" as vec;
 
-const MAKE_STATE string = ".wz-source-make/state";
 const OBJECT_DIR string = "obj";
 
 struct MakePackage {
@@ -76,45 +73,6 @@ struct WorkerStatus {
 
 func invalid_state() os.Error { return os.Error.System(22, 0); }
 
-func put_number(out Vec[u8], value u64) {
-    for byte in text.bytes(strconv.format_u64(value) + ":") { vec.push(out, byte); }
-}
-
-func put_string(out Vec[u8], value string) {
-    put_number(out, u64(vec.len(text.bytes(value))));
-    for byte in text.bytes(value) { vec.push(out, byte); }
-}
-
-func take_number(bytes Vec[u8], cursor inout usize) u64 throws os.Error {
-    var result u64 = 0; var digits usize = 0;
-    for cursor < vec.len(bytes) {
-        let byte = bytes[cursor]; cursor += 1;
-        if byte == 58 {
-            if digits == 0 { throw invalid_state(); }
-            return result;
-        }
-        if byte < 48 || byte > 57 || digits >= 20 { throw invalid_state(); }
-        let digit = u64(byte - 48);
-        if result > (18446744073709551615 - digit) / 10 { throw invalid_state(); }
-        result = result * 10 + digit; digits += 1;
-    }
-    throw invalid_state();
-}
-
-func take_string(bytes Vec[u8], cursor inout usize) string throws os.Error {
-    let length = take_number(bytes, inout cursor);
-    if length > u64(vec.len(bytes) - cursor) { throw invalid_state(); }
-    let start = cursor; cursor += usize(length);
-    try { return text.from_bytes(bytes[start:cursor]); }
-    catch problem text.Error { throw invalid_state(); }
-}
-
-func take_bool(bytes Vec[u8], cursor inout usize) bool throws os.Error {
-    let value = take_number(bytes, inout cursor);
-    if value > 1 { throw invalid_state(); }
-    return value == 1;
-}
-
 func fixed_id(value usize) string {
     let digits = "0123456789abcdef"; var result = "";
     for var index usize = 0; index < 16; index += 1 {
@@ -125,100 +83,8 @@ func fixed_id(value usize) string {
     return result;
 }
 
-func encode_state(state MakeState) Vec[u8] {
-    let out = vec.empty[u8]();
-    put_string(out, "wz-source-make-state/2");
-    put_string(out, state.manifest); put_string(out, state.cache_dir);
-    put_string(out, state.fingerprint); put_string(out, state.opt);
-    if state.debug_info { put_number(out, 1); } else { put_number(out, 0); }
-    put_string(out, state.target);
-    if state.hosted { put_number(out, 1); } else { put_number(out, 0); }
-    put_number(out, u64(vec.len(state.packages)));
-    for package_value in state.packages {
-        put_number(out, u64(package_value.id)); put_string(out, package_value.fixed);
-        put_string(out, package_value.logical_path); put_string(out, package_value.identity);
-    }
-    put_number(out, u64(vec.len(state.c_libraries)));
-    for library in state.c_libraries { put_string(out, library); }
-    put_number(out, u64(vec.len(state.c_library_dirs)));
-    for directory in state.c_library_dirs { put_string(out, directory); }
-    return out;
-}
-
-func decode_state(bytes Vec[u8]) MakeState throws os.Error {
-    var cursor usize = 0;
-    if take_string(bytes, inout cursor) != "wz-source-make-state/2" { throw invalid_state(); }
-    var state = MakeState(manifest: take_string(bytes, inout cursor),
-        cache_dir: take_string(bytes, inout cursor),
-        fingerprint: take_string(bytes, inout cursor),
-        opt: take_string(bytes, inout cursor),
-        debug_info: take_bool(bytes, inout cursor),
-        target: take_string(bytes, inout cursor),
-        hosted: take_bool(bytes, inout cursor), packages: [],
-        c_libraries: [], c_library_dirs: []);
-    let package_count = take_number(bytes, inout cursor);
-    if package_count > 100000 { throw invalid_state(); }
-    for var index usize = 0; index < usize(package_count); index += 1 {
-        let id = take_number(bytes, inout cursor);
-        var package_value = MakePackage(id: usize(id),
-            fixed: take_string(bytes, inout cursor),
-            logical_path: take_string(bytes, inout cursor),
-            identity: take_string(bytes, inout cursor));
-        vec.push(state.packages, package_value);
-    }
-    let library_count = take_number(bytes, inout cursor);
-    if library_count > 1000000 { throw invalid_state(); }
-    for var index usize = 0; index < usize(library_count); index += 1 {
-        vec.push(state.c_libraries, take_string(bytes, inout cursor));
-    }
-    let directory_count = take_number(bytes, inout cursor);
-    if directory_count > 1000000 { throw invalid_state(); }
-    for var index usize = 0; index < usize(directory_count); index += 1 {
-        vec.push(state.c_library_dirs, take_string(bytes, inout cursor));
-    }
-    if cursor != vec.len(bytes) { throw invalid_state(); }
-    return state;
-}
-
-func read_state(name string) MakeState throws os.Error {
-    return decode_state(fs.read_file(name));
-}
-
-func package_by_fixed(state MakeState, fixed string) option.Option[MakePackage] {
-    for package_value in state.packages {
-        if package_value.fixed == fixed { return option.Option[MakePackage].Some(package_value); }
-    }
-    return option.Option[MakePackage].None;
-}
-
-func package_index(state MakeState, id usize) option.Option[usize] {
-    for var index usize = 0; index < vec.len(state.packages); index += 1 {
-        if state.packages[index].id == id { return option.Option[usize].Some(index); }
-    }
-    return option.Option[usize].None;
-}
-
 func object_name(package_value MakePackage) string {
     return OBJECT_DIR + "/pkg-" + package_value.fixed + ".o";
-}
-
-func makefile_text(state MakeState, objects_only bool) string {
-    let archive = state.target == nativeemit.DARWIN_ARM64_TRIPLE;
-    var combined = "program.o";
-    var final_name = "program";
-    if archive { combined = "program.a"; }
-    if objects_only { final_name = combined; }
-    var result = ".POSIX:\n.DEFAULT_GOAL := all\n\nall: " + final_name + "\n\nobj:\n\tmkdir -p " + OBJECT_DIR + "\n\n";
-    for package_value in state.packages {
-        result += object_name(package_value) + ": | obj\n";
-        result += "\t\"$$WOOZYC\" __source_make_worker --state " + MAKE_STATE +
-            " --package " + package_value.fixed + "\n\n";
-    }
-    result += combined + ":";
-    for package_value in state.packages { result += " " + object_name(package_value); }
-    result += "\n\t\"$$WOOZYC\" __source_make_combine --state " + MAKE_STATE + "\n\n";
-    if !objects_only { result += "program: " + combined + "\n\t\"$$WOOZYC\" __source_make_link --state " + MAKE_STATE + "\n"; }
-    return result;
 }
 
 func json_string(value string) string {
@@ -262,6 +128,12 @@ func write_status(package_value MakePackage, status WorkerStatus) throws os.Erro
 }
 
 func append_log(log inout string, value string) { log += value + "\n"; }
+
+func append_step_log(log inout string, label string, name string) {
+    append_log(inout log, label + " log:");
+    try { append_log(inout log, fs.read_text(name)); }
+    catch problem os.Error { append_log(inout log, label + " log unavailable"); }
+}
 
 func bool_text(value bool) string {
     if value { return "true"; }
@@ -468,6 +340,7 @@ pub func source_make_build(input Options, original model.Project,
     }
     defer { toolio.cleanup(stage); }
     fs.create_dir_all(stage.path + "/" + ".wz-source-make", 0o777);
+    fs.create_dir_all(stage.path + "/" + OBJECT_DIR, 0o777);
     var preflight = "source-make preflight\nproject: " + input.project + "\ntarget: " + target + "\nopt: " + optimization + "\n";
     let root = resources.directory();
     var tools = ["opt", "llc", "clang", "ld.lld"];
@@ -500,32 +373,61 @@ pub func source_make_build(input Options, original model.Project,
         fingerprint: cache.fingerprint, opt: optimization, debug_info: input.debug_info, target: target,
         hosted: original.hosted, packages: packages,
         c_libraries: original.c_libraries, c_library_dirs: original.c_library_dirs);
-    fs.write_file(stage.path + "/" + MAKE_STATE, encode_state(state), 0o600);
-    write_log(stage.path + "/Makefile", makefile_text(state, input.objects_only));
-    let executable = os.executable_path();
-    process.setenv("WOOZYC", executable, true);
-    let make = resources.make();
-    var execution = toolio.ProcessResult(exit_code: 127, signalled: false, output: vec.empty[u8]());
-    try {
-        let broker = start_make_broker(stage.path, input, original, state, prepared, manager);
-        defer { finish_make_broker(broker); }
-        execution = toolio.run([make, "-C", stage.path, "-f", "Makefile"],
-            stage.path + "/make-capture");
+    let previous_directory = os.getcwd();
+    try { os.chdir(stage.path); }
+    catch problem os.Error {
+        return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain",
+            source_os_text(problem), model.FailureKind.Environment);
     }
-    catch problem toolio.Error {
-        switch problem { case toolio.Error.System(error): throw error; case toolio.Error.Rollback(backup, error): throw error; }
-    }
-    let make_output = "make executable: " + make + "\nmake workdir: " + stage.path +
-        "\nmake exit: " + strconv.format_i64(i64(execution.exit_code)) + "\n" + output_text(execution.output);
-    write_log(stage.path + "/make.log", make_output);
-    if execution.exit_code != 0 || execution.signalled {
+    defer { try { os.chdir(previous_directory); } catch problem os.Error {} }
+    let run = run_source_make(input, state, original, prepared, manager);
+    var make_output = run.log;
+    if !run.ok {
+        write_log(stage.path + "/make.log", make_output);
         let diagnostics = read_worker_diagnostics(stage.path, packages, make_output, inout manager);
         publish_failure_logs(inout stage);
         return finish(input, manager.snapshots, model.PhaseState.Failed,
             model.FailureKind.Source, false, diagnostics);
     }
+    var combine_status i32 = 0;
+    try { combine_status = source_make_combine(state); }
+    catch problem os.Error {
+        append_log(inout make_output, "combine error: " + source_os_text(problem));
+        write_log(stage.path + "/make.log", make_output);
+        publish_failure_logs(inout stage);
+        return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain",
+            source_os_text(problem), model.FailureKind.Environment);
+    }
+    append_step_log(inout make_output, "combine", stage.path + "/combine.log");
+    if combine_status != 0 {
+        write_log(stage.path + "/make.log", make_output);
+        let diagnostics = read_worker_diagnostics(stage.path, packages, make_output, inout manager);
+        publish_failure_logs(inout stage);
+        return finish(input, manager.snapshots, model.PhaseState.Failed,
+            model.FailureKind.Source, false, diagnostics);
+    }
+    if !input.objects_only {
+        var link_status i32 = 0;
+        try { link_status = source_make_link(state); }
+        catch problem os.Error {
+            append_log(inout make_output, "link error: " + source_os_text(problem));
+            write_log(stage.path + "/make.log", make_output);
+            publish_failure_logs(inout stage);
+            return fail(input, manager.snapshots, "E_INPUT_IO", "toolchain",
+                source_os_text(problem), model.FailureKind.Environment);
+        }
+        append_step_log(inout make_output, "link", stage.path + "/link.log");
+        if link_status != 0 {
+            write_log(stage.path + "/make.log", make_output);
+            let diagnostics = read_worker_diagnostics(stage.path, packages, make_output, inout manager);
+            publish_failure_logs(inout stage);
+            return finish(input, manager.snapshots, model.PhaseState.Failed,
+                model.FailureKind.Source, false, diagnostics);
+        }
+    }
+    write_log(stage.path + "/make.log", make_output);
     write_reports(stage.path, packages, state, make_output, cache, input.objects_only);
-    var names = ["Makefile", "make.log", "preflight.log", "combine.log",
+    var names = ["make.log", "preflight.log", "combine.log",
         "make-report.json", "cache-statistics.json"];
     if target == nativeemit.DARWIN_ARM64_TRIPLE { vec.push(names, "program.a"); }
     else { vec.push(names, "program.o"); }
@@ -550,7 +452,7 @@ pub func source_make_build(input Options, original model.Project,
 }
 
 func publish_failure_logs(stage inout toolio.Stage) {
-    var candidates = ["Makefile", "make.log", "preflight.log", "combine.log", "link.log", "make-report.json"];
+    var candidates = ["make.log", "preflight.log", "combine.log", "link.log", "make-report.json"];
     var entries = vec.empty[fs.DirEntry]();
     try { entries = fs.read_dir(stage.path); } catch problem os.Error {}
     for entry in entries {
@@ -858,7 +760,6 @@ func source_make_compile(options Options, manager source.Manager, state MakeStat
                                     "source make does not support C adapters", model.FailureKind.Unsupported);
                             }
                             let object = object_name(package_value);
-                            fs.create_dir_all(OBJECT_DIR, 0o777);
                             let llvm = OBJECT_DIR + "/pkg-" + package_value.fixed + ".ll";
                             let verified_llvm = OBJECT_DIR + "/pkg-" + package_value.fixed + ".verified.ll";
                             write_sections(llvm, output.llvm_sections);
@@ -961,47 +862,37 @@ func link_arguments(state MakeState, compile_program_object bool) Vec[string] th
     return result;
 }
 
-pub func source_make_combine(options Options) i32 throws os.Error {
+func source_make_combine(state MakeState) i32 throws os.Error {
     var log = "source-make combine\nworkdir: " + os.getcwd() + "\n";
-    io.println("source-make combine start");
-    let state = read_state(MAKE_STATE);
-    let execution = run_logged(link_arguments(state, true), "combine-capture", inout log, true);
+    let execution = run_logged(link_arguments(state, true), "combine-capture", inout log, false);
     append_log(inout log, "combine end");
     write_log("combine.log", log);
-    io.println("source-make combine end");
     if execution.exit_code != 0 || execution.signalled {
         write_diagnostic("link", [model.diagnostic("E_LINK_FAILED", "link",
             "object combine failed", model.Span(snapshot: 0, begin_byte: 0, end_byte: 0))],
             []);
-        return fail(options, [], "E_LINK_FAILED", "link",
-            "object combine failed with status " + strconv.format_i64(i64(execution.exit_code)),
-            model.FailureKind.Source);
     }
-    return 0;
+    return execution.exit_code;
 }
 
-pub func source_make_link(options Options) i32 throws os.Error {
+func source_make_link(state MakeState) i32 throws os.Error {
     var log = "source-make link\nworkdir: " + os.getcwd() + "\n";
-    io.println("source-make link start");
-    let state = read_state(MAKE_STATE);
     if state.target != "x86_64-unknown-linux-gnu" && state.target != nativeemit.DARWIN_ARM64_TRIPLE {
-        return fail(options, [], "E_TARGET_UNSUPPORTED", "link",
-            "unsupported native executable target: " + state.target, model.FailureKind.Unsupported);
+        write_diagnostic("link", [model.diagnostic("E_TARGET_UNSUPPORTED", "link",
+            "unsupported native executable target: " + state.target,
+            model.Span(snapshot: 0, begin_byte: 0, end_byte: 0))], []);
+        return 1;
     }
-    var execution = run_logged(link_arguments(state, false), "link-capture", inout log, true);
+    var execution = run_logged(link_arguments(state, false), "link-capture", inout log, false);
     if execution.exit_code == 0 && !execution.signalled && state.target == nativeemit.DARWIN_ARM64_TRIPLE && state.debug_info {
         let tools = resources.llvm_bin(resources.directory());
-        execution = run_logged(resources.darwin_debug_command(tools, "program"), "debug-capture", inout log, true);
+        execution = run_logged(resources.darwin_debug_command(tools, "program"), "debug-capture", inout log, false);
     }
     append_log(inout log, "link end");
     write_log("link.log", log);
-    io.println("source-make link end");
     if execution.exit_code != 0 || execution.signalled {
         write_diagnostic("link", [model.diagnostic("E_LINK_FAILED", "link",
             "final link failed", model.Span(snapshot: 0, begin_byte: 0, end_byte: 0))], []);
-        return fail(options, [], "E_LINK_FAILED", "link",
-            "final link failed with status " + strconv.format_i64(i64(execution.exit_code)),
-            model.FailureKind.Source);
     }
-    return 0;
+    return execution.exit_code;
 }

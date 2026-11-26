@@ -147,53 +147,42 @@ try:
                     'nativeadapter']:
         copy_package(package)
 
-    # Production Root text/state/debug plus every B file comes from the B owner.
+    # B supplies its implementation files and the frozen shared
+    # state/text/debug files. Keep each package's relative path in the fixture.
     nativeemit = PROJECT / 'src/wzcc/nativeemit'
-    nativeemit.mkdir(exist_ok=True)
     b_dir = B_SOURCE_ROOT / 'nativeemit'
-    b_files = [b_dir / 'state.wz', b_dir / 'text.wz'] + sorted(b_dir.glob('b_*.wz'))
-    # SH37 made state/text and b_function/b_ops reference nativeemit/debug.wz.
-    # It is a same-package dependency, so no package import edge exposes it;
-    # stage it when the selected B tree has it and fail early when a debug-using
-    # B tree lacks it.  Older debug-free trees keep their original selection.
-    debug = b_dir / 'debug.wz'
-    if debug.is_file():
-        b_files.append(debug)
-    debug_types = b_dir / 'debug_types.wz'
-    if debug_types.is_file():
-        b_files.append(debug_types)
-    require_files('nativeemit/B', b_files)
-    if not debug.is_file() and any('debug_' in path.read_text() for path in b_files):
-        raise RuntimeError(f'missing required production dependency package '
-                           f'nativeemit/B: {debug}')
-    for source in b_files:
-        shutil.copyfile(source, nativeemit / source.name)
-        record_input(source)
-
-    # Real sibling C/D/E files.  They are read-only inputs; B never copies a
-    # scaffold for them.
-    sibling = sorted(list((SOURCE_ROOT / 'nativeemit').glob('c_*.wz')) +
-                     list((SOURCE_ROOT / 'nativeemit').glob('d_*.wz')) +
-                     list((SOURCE_ROOT / 'nativeemit').glob('e_*.wz')))
-    for prefix, label in [('c_*.wz', 'C'), ('d_*.wz', 'D'), ('e_*.wz', 'E')]:
-        if not list((SOURCE_ROOT / 'nativeemit').glob(prefix)):
-            raise RuntimeError(f'missing required production dependency package '
-                               f'nativeemit/{label}: {SOURCE_ROOT / "nativeemit" / prefix}')
-    for source in sibling:
-        shutil.copyfile(source, nativeemit / source.name)
-        record_input(source)
-
-    # Root-owned frozen state/text/debug must be identical in both trees when
-    # the sibling tree contains a copy; a mismatch is a merge error, not a
-    # reason to silently pick one.
-    for name in ['state.wz', 'text.wz', 'debug.wz', 'debug_types.wz']:
-        owned = b_dir / name
-        other = SOURCE_ROOT / 'nativeemit' / name
-        if not owned.is_file():
-            continue
-        if other.is_file() and sha(other) != sha(owned):
+    sibling_dir = SOURCE_ROOT / 'nativeemit'
+    b_support = Path('core/function_support.wz')
+    owned = [source.relative_to(b_dir) for source in sorted(b_dir.rglob('b_*.wz'))]
+    owned.append(b_support)
+    shared = (Path('core/state.wz'), Path('core/text.wz'), Path('core/debug_support.wz'),
+              Path('debug/debug.wz'), Path('debug/debug_types.wz'))
+    require_files('nativeemit/B', [b_dir / name for name in
+        ('b_function.wz', 'b_ops.wz', 'core/b_type.wz', b_support, *shared)])
+    for name in shared:
+        other = sibling_dir / name
+        if other.is_file() and sha(other) != sha(b_dir / name):
             raise RuntimeError(f'Root-owned nativeemit/{name} differs between '
-                               f'B root {owned} and sibling root {other}')
+                               f'B root {b_dir / name} and sibling root {other}')
+    sibling = sorted(sibling_dir.rglob('*.wz'))
+    for prefix, label in [('c_*.wz', 'C'), ('d_*.wz', 'D'), ('e_*.wz', 'E')]:
+        if not list(sibling_dir.rglob(prefix)):
+            raise RuntimeError(f'missing required production dependency package '
+                               f'nativeemit/{label}: {sibling_dir / prefix}')
+    for source in sibling:
+        name = source.relative_to(sibling_dir)
+        if (source.name.startswith('b_') or name in shared or
+                name in (b_support, Path('emit.wz'))):
+            continue
+        destination = nativeemit / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        record_input(source)
+    for name in (*owned, *shared):
+        destination = nativeemit / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(b_dir / name, destination)
+        record_input(b_dir / name)
 
     copy_package('nativelayout')
     copy_package('valueops')

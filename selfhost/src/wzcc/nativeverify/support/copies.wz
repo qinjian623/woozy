@@ -1,0 +1,181 @@
+// Deep copies used by the Native CFG verifier.
+//
+// Every Vec field of Instruction, Terminator, BasicBlock, Function, Slot,
+// Handler and Diagnostic is copied explicitly, so neither the caller's builder
+// data nor the published VerifiedModule can be changed through a shared Vec
+// handle.  Strings are immutable Woozy values and need no copy.
+package support;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func copy_exit_site(value nativeir.ExitSite) nativeir.ExitSite {
+    return nativeir.ExitSite(origin: value.origin, kind: value.kind,
+        error_type: value.error_type);
+}
+
+func copy_instruction(value nativeir.Instruction) nativeir.Instruction {
+    let inputs = vec.empty[usize]();
+    vec.reserve(inputs, vec.len(value.inputs));
+    for item in value.inputs {
+        vec.push(inputs, item);
+    }
+    let methods = vec.empty[usize]();
+    vec.reserve(methods, vec.len(value.methods));
+    for item in value.methods {
+        vec.push(methods, item);
+    }
+    var site = option.Option[nativeir.ExitSite].None;
+    switch value.exit {
+        case option.Option.Some(item):
+            site = option.Option[nativeir.ExitSite].Some(copy_exit_site(item));
+        case option.Option.None: {}
+    }
+    return nativeir.Instruction(op: value.op, result: value.result,
+        type_id: value.type_id, inputs: inputs, slot: value.slot,
+        function: value.function, signature: value.signature,
+        system: value.system, c_callable: value.c_callable, methods: methods,
+        c_type: value.c_type, c_field: value.c_field, field: value.field,
+        variant: value.variant, bits: value.bits, utf8: value.utf8,
+        exit: site, cleanup: value.cleanup, origin: value.origin,
+        owner: value.owner, unary: value.unary, binary: value.binary,
+        source: value.source);
+}
+
+func copy_terminator(value nativeir.Terminator) nativeir.Terminator {
+    let inputs = vec.empty[usize]();
+    vec.reserve(inputs, vec.len(value.inputs));
+    for item in value.inputs {
+        vec.push(inputs, item);
+    }
+    let targets = vec.empty[usize]();
+    vec.reserve(targets, vec.len(value.targets));
+    for item in value.targets {
+        vec.push(targets, item);
+    }
+    var site = option.Option[nativeir.ExitSite].None;
+    switch value.exit {
+        case option.Option.Some(item):
+            site = option.Option[nativeir.ExitSite].Some(copy_exit_site(item));
+        case option.Option.None: {}
+    }
+    return nativeir.Terminator(kind: value.kind, inputs: inputs,
+        targets: targets, source: value.source, signature: value.signature,
+        exit: site, origin: value.origin);
+}
+
+func copy_block(value nativeir.BasicBlock) nativeir.BasicBlock {
+    let instructions = vec.empty[nativeir.Instruction]();
+    vec.reserve(instructions, vec.len(value.instructions));
+    for item in value.instructions {
+        vec.push(instructions, copy_instruction(item));
+    }
+    let parameters = vec.empty[nativeir.BlockParameter]();
+    vec.reserve(parameters, vec.len(value.parameters));
+    for item in value.parameters {
+        vec.push(parameters, item);
+    }
+    return nativeir.BasicBlock(instructions: instructions,
+        terminator: copy_terminator(value.terminator), parameters: parameters);
+}
+
+func copy_slot(value nativeir.Slot) nativeir.Slot {
+    return nativeir.Slot(type_id: value.type_id, parameter: value.parameter,
+        is_inout: value.is_inout, owner: value.owner,
+        owning_parameter: value.owning_parameter, binding: value.binding);
+}
+
+func copy_handler(value nativeir.Handler) nativeir.Handler {
+    return nativeir.Handler(target: value.target, block: value.block,
+        slot: value.slot, protected_entry: value.protected_entry);
+}
+
+func copy_function(value nativeir.Function) nativeir.Function {
+    let slots = vec.empty[nativeir.Slot]();
+    vec.reserve(slots, vec.len(value.slots));
+    for item in value.slots {
+        vec.push(slots, copy_slot(item));
+    }
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    vec.reserve(blocks, vec.len(value.blocks));
+    for item in value.blocks {
+        vec.push(blocks, copy_block(item));
+    }
+    let handlers = vec.empty[nativeir.Handler]();
+    vec.reserve(handlers, vec.len(value.handlers));
+    for item in value.handlers {
+        vec.push(handlers, copy_handler(item));
+    }
+    return nativeir.Function(symbol: value.symbol,
+        signature: value.signature, is_async: value.is_async, slots: slots,
+        blocks: blocks, source: value.source, handlers: handlers);
+}
+
+pub func copy_functions(values Vec[nativeir.Function]) Vec[nativeir.Function] {
+    let result = vec.empty[nativeir.Function]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, copy_function(value));
+    }
+    return result;
+}
+
+func copy_diagnostic(value model.Diagnostic) model.Diagnostic {
+    let related = vec.empty[model.Related]();
+    vec.reserve(related, vec.len(value.related));
+    for item in value.related {
+        vec.push(related, item);
+    }
+    let fixits = vec.empty[model.Fixit]();
+    vec.reserve(fixits, vec.len(value.fixits));
+    for item in value.fixits {
+        vec.push(fixits, item);
+    }
+    let notes = vec.empty[string]();
+    vec.reserve(notes, vec.len(value.notes));
+    for item in value.notes {
+        vec.push(notes, item);
+    }
+    return model.Diagnostic(code: value.code, phase: value.phase,
+        severity: value.severity, message: value.message,
+        has_primary: value.has_primary, primary: value.primary,
+        related: related, fixits: fixits, notes: notes,
+        has_expected_type: value.has_expected_type,
+        expected_type: value.expected_type,
+        has_actual_type: value.has_actual_type,
+        actual_type: value.actual_type);
+}
+
+pub func copy_diagnostics(values Vec[model.Diagnostic]) Vec[model.Diagnostic] {
+    let result = vec.empty[model.Diagnostic]();
+    vec.reserve(result, vec.len(values));
+    for value in values {
+        vec.push(result, copy_diagnostic(value));
+    }
+    return result;
+}
+
+pub func append_error(diagnostics inout Vec[model.Diagnostic],
+                  error VerifyError) {
+    switch error {
+        case VerifyError.Bad(message, span): {
+            vec.push(diagnostics,
+                model.diagnostic("E_IR_INVALID", "lowering", message, span));
+        }
+        case VerifyError.Support(value): {
+            var message = "";
+            switch value {
+                case model.SupportError.Invalid(text): message = text;
+                case model.SupportError.Limit(text): message = text;
+            }
+            vec.push(diagnostics, model.Diagnostic(code: "E_IR_INVALID",
+                phase: "lowering", severity: "error", message: message,
+                has_primary: false, primary: empty_span(), related: [],
+                fixits: [], notes: [], has_expected_type: false,
+                expected_type: "", has_actual_type: false,
+                actual_type: ""));
+        }
+    }
+}

@@ -1,1 +1,1 @@
-package app; import "app/wzcc/sema" as sema; import "std/os" as os; func main()i32 throws os.Error{return sema.run_common_tests();}
+package app; import "app/wzcc/sema/core" as semacore; import "std/os" as os; func main()i32 throws os.Error{return semacore.run_common_tests();}

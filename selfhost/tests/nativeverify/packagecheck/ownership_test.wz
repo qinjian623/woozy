@@ -1,0 +1,41 @@
+// Staged only by packagecheck/run.py.
+package ownership;
+
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/support" as vfsupport;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func parameter_value(value usize) nativeir.BlockParameter {
+    return nativeir.BlockParameter(value: value, type_id: value + 1,
+        call: value + 2, error: false);
+}
+
+pub func test_ownership_maps(failures inout usize) throws os.Error {
+    var parameters = parameter_map();
+    parameter_insert(inout parameters, 5, parameter_value(5));
+    parameter_insert(inout parameters, 1, parameter_value(1));
+    parameter_insert(inout parameters, 3, parameter_value(3));
+    vfsupport.selftest_check("parameter order", vec.len(parameters.entries) == 3 &&
+        parameters.entries[0].value == 1 &&
+        parameters.entries[1].value == 3 &&
+        parameters.entries[2].value == 5, inout failures);
+    let found = parameter_find(parameters, 3);
+    var parameter = nativeir.BlockParameter(value: 0, type_id: 0, call: 0,
+        error: false);
+    var present = false;
+    switch found {
+        case option.Option.Some(item): parameter = item; present = true;
+        case option.Option.None: {}
+    }
+    vfsupport.selftest_check("parameter find", present && parameter.type_id == 4,
+        inout failures);
+    var roots = element_root_map();
+    element_root_insert(inout roots, 4, 40);
+    element_root_insert(inout roots, 2, 20);
+    element_root_insert(inout roots, 3, 30);
+    vfsupport.selftest_check("element root order", vec.len(roots.entries) == 3 &&
+        roots.entries[0].value == 2 && roots.entries[1].value == 3 &&
+        roots.entries[2].value == 4, inout failures);
+}

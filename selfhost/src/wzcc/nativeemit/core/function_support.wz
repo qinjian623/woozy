@@ -1,0 +1,30 @@
+package core;
+
+import "app/wzcc/interface" as interface;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+pub func owns_function(state Emitter, symbol usize) bool {
+    if state.emit_worker_instances { return option.is_some(b_hir_index(state, symbol)); }
+    switch state.package_selection {
+        case option.Option.Some(package_id): {
+            switch state.identities { case option.Option.Some(keys): return interface.indexed_owner(keys, symbol) == package_id; case option.Option.None: return false; }
+        }
+        case option.Option.None: return true;
+    }
+}
+pub func source_name(state Emitter, symbol usize) string throws Error {
+    if !option.is_some(state.package_selection) { return "lang.fn." + number(symbol); }
+    try {
+        switch state.identities {
+            case option.Option.Some(keys): return interface.indexed_function_name(keys, symbol);
+            case option.Option.None: throw invalid("missing package identity index");
+        }
+    }
+    catch problem model.SupportError {
+        switch problem {
+            case model.SupportError.Invalid(message): throw invalid(message);
+            case model.SupportError.Limit(message): throw invalid(message);
+        }
+    }
+}

@@ -5,6 +5,7 @@
 // code and are used only to compare inputs and results.
 package sema;
 
+import "app/wzcc/sema/core" as semacore;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/lexer" as lexer;
 import "app/wzcc/model" as model;
@@ -51,27 +52,27 @@ func node_index_check(t inout NodeIndexTest, ok bool, label string) {
     }
 }
 
-func node_index_key(module usize, file usize, node usize) NodeKey {
-    return NodeKey(module: module, file: file, node: node);
+func node_index_key(module usize, file usize, node usize) semacore.NodeKey {
+    return semacore.NodeKey(module: module, file: file, node: node);
 }
 
-func node_index_sorted(entries Vec[NodeSymbolEntry]) bool {
+func node_index_sorted(entries Vec[semacore.NodeSymbolEntry]) bool {
     for var index usize = 1; index < vec.len(entries); index += 1 {
-        if node_key_less(entries[index].key, entries[index - 1].key) {
+        if semacore.node_key_less(entries[index].key, entries[index - 1].key) {
             return false;
         }
-        if same_node_key(entries[index].key, entries[index - 1].key) {
+        if semacore.same_node_key(entries[index].key, entries[index - 1].key) {
             return false;
         }
     }
     return true;
 }
 
-func node_index_same_entries(left Vec[NodeSymbolEntry],
-                             right Vec[NodeSymbolEntry]) bool {
+func node_index_same_entries(left Vec[semacore.NodeSymbolEntry],
+                             right Vec[semacore.NodeSymbolEntry]) bool {
     if vec.len(left) != vec.len(right) { return false; }
     for var index usize = 0; index < vec.len(left); index += 1 {
-        if !same_node_key(left[index].key, right[index].key) { return false; }
+        if !semacore.same_node_key(left[index].key, right[index].key) { return false; }
         if left[index].symbol != right[index].symbol { return false; }
     }
     return true;
@@ -110,24 +111,24 @@ func node_index_option_equal(left option.Option[usize],
 }
 
 // Actual shared lookup, with the same absent-neighbour check as the callers.
-func node_index_lookup_id(entries Vec[NodeSymbolEntry],
-                          key NodeKey) option.Option[usize] {
-    let position = node_symbol_position(entries, key);
+func node_index_lookup_id(entries Vec[semacore.NodeSymbolEntry],
+                          key semacore.NodeKey) option.Option[usize] {
+    let position = semacore.node_symbol_position(entries, key);
     if position < vec.len(entries) &&
-       same_node_key(entries[position].key, key) {
+       semacore.same_node_key(entries[position].key, key) {
         return option.Option[usize].Some(entries[position].symbol);
     }
     return option.Option[usize].None;
 }
 
 // Test oracle copied verbatim from the old linear insertion rule.
-func node_index_oracle_less(left NodeKey, right NodeKey) bool {
+func node_index_oracle_less(left semacore.NodeKey, right semacore.NodeKey) bool {
     if left.module != right.module { return left.module < right.module; }
     if left.file != right.file { return left.file < right.file; }
     return left.node < right.node;
 }
 
-func node_index_oracle_put(entries Vec[NodeSymbolEntry], key NodeKey,
+func node_index_oracle_put(entries Vec[semacore.NodeSymbolEntry], key semacore.NodeKey,
                            id usize, replace bool,
                            comparisons inout usize) {
     var position usize = 0;
@@ -140,11 +141,11 @@ func node_index_oracle_put(entries Vec[NodeSymbolEntry], key NodeKey,
         }
     }
     if position < vec.len(entries) &&
-       same_node_key(entries[position].key, key) {
+       semacore.same_node_key(entries[position].key, key) {
         if replace { entries[position].symbol = id; }
         return;
     }
-    let entry = NodeSymbolEntry(key: key, symbol: id);
+    let entry = semacore.NodeSymbolEntry(key: key, symbol: id);
     vec.push(entries, entry);
     var index = vec.len(entries) - 1;
     for index > position {
@@ -154,18 +155,18 @@ func node_index_oracle_put(entries Vec[NodeSymbolEntry], key NodeKey,
     entries[position] = entry;
 }
 
-func node_index_oracle_get(entries Vec[NodeSymbolEntry], key NodeKey,
+func node_index_oracle_get(entries Vec[semacore.NodeSymbolEntry], key semacore.NodeKey,
                            comparisons inout usize) option.Option[usize] {
     for entry in entries {
         comparisons += 1;
-        if same_node_key(entry.key, key) {
+        if semacore.same_node_key(entry.key, key) {
             return option.Option[usize].Some(entry.symbol);
         }
     }
     return option.Option[usize].None;
 }
 
-func node_index_checksum(entries Vec[NodeSymbolEntry]) u64 {
+func node_index_checksum(entries Vec[semacore.NodeSymbolEntry]) u64 {
     var sum u64 = 0;
     for entry in entries {
         sum += u64(entry.key.module) * 1000003 +
@@ -204,14 +205,14 @@ func node_index_order(count usize, mode u32) Vec[usize] {
 }
 
 func node_index_direct_tests(t inout NodeIndexTest) {
-    let empty = vec.empty[NodeSymbolEntry]();
+    let empty = vec.empty[semacore.NodeSymbolEntry]();
     let nowhere = node_index_key(3, 4, 5);
-    node_index_check(inout t, node_symbol_position(empty, nowhere) == 0,
+    node_index_check(inout t, semacore.node_symbol_position(empty, nowhere) == 0,
         "empty lower_bound");
     node_index_check(inout t, !node_index_option_some(
         node_index_lookup_id(empty, nowhere)), "empty lookup");
 
-    let single = vec.empty[NodeSymbolEntry]();
+    let single = vec.empty[semacore.NodeSymbolEntry]();
     run_put_node_symbol(single, nowhere, 17, false);
     node_index_check(inout t, vec.len(single) == 1 && single[0].symbol == 17,
         "single insertion");
@@ -224,8 +225,8 @@ func node_index_direct_tests(t inout NodeIndexTest) {
 
     for var mode u32 = 0; mode < 3; mode += 1 {
         let order = node_index_order(24, mode);
-        let actual = vec.empty[NodeSymbolEntry]();
-        let oracle = vec.empty[NodeSymbolEntry]();
+        let actual = vec.empty[semacore.NodeSymbolEntry]();
+        let oracle = vec.empty[semacore.NodeSymbolEntry]();
         var oracle_comparisons usize = 0;
         for var step usize = 0; step < vec.len(order); step += 1 {
             let node = order[step];
@@ -257,7 +258,7 @@ func node_index_direct_tests(t inout NodeIndexTest) {
             actual, node_index_key(1, 0, 0))), "order missing module");
     }
 
-    let defs = vec.empty[NodeSymbolEntry]();
+    let defs = vec.empty[semacore.NodeSymbolEntry]();
     let duplicate = node_index_key(3, 4, 5);
     run_put_node_symbol(defs, node_index_key(3, 4, 4), 40, false);
     run_put_node_symbol(defs, duplicate, 10, false);
@@ -267,14 +268,14 @@ func node_index_direct_tests(t inout NodeIndexTest) {
     node_index_check(inout t, defs[1].symbol == 10, "first definition retained");
     node_index_check(inout t, node_index_sorted(defs), "first definition sorted");
 
-    let occurrences = vec.empty[NodeSymbolEntry]();
+    let occurrences = vec.empty[semacore.NodeSymbolEntry]();
     run_put_node_symbol(occurrences, duplicate, 20, true);
     run_put_node_symbol(occurrences, duplicate, 21, true);
     node_index_check(inout t, vec.len(occurrences) == 1, "last occurrence count");
     node_index_check(inout t, occurrences[0].symbol == 21,
         "last occurrence retained");
 
-    let cross = vec.empty[NodeSymbolEntry]();
+    let cross = vec.empty[semacore.NodeSymbolEntry]();
     run_put_node_symbol(cross, node_index_key(1, 1, 7), 4, false);
     run_put_node_symbol(cross, node_index_key(0, 1, 7), 2, false);
     run_put_node_symbol(cross, node_index_key(1, 0, 7), 3, false);
@@ -297,7 +298,7 @@ func node_index_direct_tests(t inout NodeIndexTest) {
     node_index_check(inout t, !node_index_option_some(node_index_lookup_id(
         cross, node_index_key(2, 0, 7))), "cross missing module");
 
-    let edge = vec.empty[NodeSymbolEntry]();
+    let edge = vec.empty[semacore.NodeSymbolEntry]();
     let max_key = node_index_key(18446744073709551615,
         18446744073709551615, 18446744073709551615);
     run_put_node_symbol(edge, node_index_key(0, 0, 0), 1, false);
@@ -349,31 +350,31 @@ func node_index_project() model.Project {
     return project;
 }
 
-func node_index_symbol_id(state inout Checker, name string) usize throws Error {
+func node_index_symbol_id(state inout semacore.Checker, name string) usize throws semacore.Error {
     for value in state.m.resolved.symbols {
         if value.name == name { return value.id; }
     }
-    throw internal_error("test symbol missing: " + name);
+    throw semacore.internal_error("test symbol missing: " + name);
 }
 
-func node_index_symbol_ref(state inout Checker, name string)
-    model.NodeRef throws Error {
+func node_index_symbol_ref(state inout semacore.Checker, name string)
+    model.NodeRef throws semacore.Error {
     let id = node_index_symbol_id(inout state, name);
-    let value = symbol(inout state, id);
+    let value = semacore.symbol(inout state, id);
     switch value.definition {
         case option.Option.Some(location): return location;
         case option.Option.None:
-            throw internal_error("test definition missing: " + name);
+            throw semacore.internal_error("test definition missing: " + name);
     }
 }
 
-func node_index_missing_definition(state inout Checker, r model.NodeRef) bool {
+func node_index_missing_definition(state inout semacore.Checker, r model.NodeRef) bool {
     try {
-        let ignored = definition(inout state, r);
+        let ignored = semacore.definition(inout state, r);
         return false;
-    } catch error Error {
+    } catch error semacore.Error {
         switch error {
-            case Error.Support(support): {
+            case semacore.Error.Support(support): {
                 switch support {
                     case model.SupportError.Invalid(message):
                         return message == "missing sema definition";
@@ -381,16 +382,16 @@ func node_index_missing_definition(state inout Checker, r model.NodeRef) bool {
                         return false;
                 }
             }
-            case Error.Rejected(diagnostic, failure): return false;
+            case semacore.Error.Rejected(diagnostic, failure): return false;
         }
     }
     return false;
 }
 
-func node_index_monotonic() os.Timespec throws Error {
+func node_index_monotonic() os.Timespec throws semacore.Error {
     try { return time.monotonic(); }
     catch error os.Error {
-        throw internal_error("monotonic clock unavailable");
+        throw semacore.internal_error("monotonic clock unavailable");
     }
     return os.Timespec(seconds: 0, nanoseconds: 0);
 }
@@ -400,10 +401,10 @@ func node_index_elapsed(start os.Timespec, finish os.Timespec) i64 {
         (finish.nanoseconds - start.nanoseconds);
 }
 
-func node_index_bench(state inout Checker, scale usize)
-    NodeIndexBench throws Error {
-    let product = vec.empty[NodeSymbolEntry]();
-    let oracle = vec.empty[NodeSymbolEntry]();
+func node_index_bench(state inout semacore.Checker, scale usize)
+    NodeIndexBench throws semacore.Error {
+    let product = vec.empty[semacore.NodeSymbolEntry]();
+    let oracle = vec.empty[semacore.NodeSymbolEntry]();
     var oracle_insert_comparisons usize = 0;
 
     var start = node_index_monotonic();
@@ -430,7 +431,7 @@ func node_index_bench(state inout Checker, scale usize)
     start = node_index_monotonic();
     for var index usize = 0; index < scale; index += 1 {
         let location = model.NodeRef(module: 0, file: 0, node: index);
-        let definition_id = definition(inout probe, location);
+        let definition_id = semacore.definition(inout probe, location);
         product_lookup_sum += u64(definition_id);
         switch b_occurrence_raw(inout probe, location) {
             case option.Option.Some(id):
@@ -479,7 +480,7 @@ func node_index_bench(state inout Checker, scale usize)
 }
 
 func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
-    Vec[NodeIndexBench] throws Error {
+    Vec[NodeIndexBench] throws semacore.Error {
     let benches = vec.empty[NodeIndexBench]();
     let resolved = resolve.resolve_project(node_index_project());
     var complete = false;
@@ -508,7 +509,7 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
     for entry in base.definitions {
         let location = model.NodeRef(module: entry.key.module,
             file: entry.key.file, node: entry.key.node);
-        node_index_check(inout t, definition(inout base, location) == entry.symbol,
+        node_index_check(inout t, semacore.definition(inout base, location) == entry.symbol,
             "definition table entry lookup");
     }
     for entry in base.occurrences {
@@ -531,13 +532,13 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
     let g_ref = node_index_symbol_ref(inout base, "g");
     let h_ref = node_index_symbol_ref(inout base, "h");
     let x_ref = node_index_symbol_ref(inout base, "x");
-    node_index_check(inout t, definition(inout base, f_ref) == f,
+    node_index_check(inout t, semacore.definition(inout base, f_ref) == f,
         "real definition f");
-    node_index_check(inout t, definition(inout base, g_ref) == g,
+    node_index_check(inout t, semacore.definition(inout base, g_ref) == g,
         "real definition g");
-    node_index_check(inout t, definition(inout base, h_ref) == h,
+    node_index_check(inout t, semacore.definition(inout base, h_ref) == h,
         "real definition h");
-    node_index_check(inout t, definition(inout base, x_ref) == x,
+    node_index_check(inout t, semacore.definition(inout base, x_ref) == x,
         "real definition x binding");
 
     var found_parenthesized = false;
@@ -547,16 +548,16 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
             file_index += 1 {
             let file_ref = model.NodeRef(module: module_value.id,
                 file: file_index, node: 0);
-            let file = parsed_file(inout base, file_ref);
+            let file = semacore.parsed_file(inout base, file_ref);
             for var node_index usize = 0; node_index < vec.len(file.nodes);
                 node_index += 1 {
                 let location = model.NodeRef(module: module_value.id,
                     file: file_index, node: node_index);
-                let node_value = ast(inout base, location);
+                let node_value = semacore.ast(inout base, location);
                 switch node_value.kind {
                     case model.AstKind.Parenthesized: {
                         found_parenthesized = true;
-                        switch occurrence(inout base, location) {
+                        switch semacore.occurrence(inout base, location) {
                             case option.Option.Some(id):
                                 node_index_check(inout t, id == x,
                                     "parenthesized occurrence x");
@@ -574,9 +575,9 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
                         }
                     }
                     case model.AstKind.Name: {
-                        if token(inout base, location, 0) == "x" {
+                        if semacore.token(inout base, location, 0) == "x" {
                             found_name_x = true;
-                            switch occurrence(inout base, location) {
+                            switch semacore.occurrence(inout base, location) {
                                 case option.Option.Some(id):
                                     node_index_check(inout t, id == x,
                                         "name occurrence x");
@@ -606,15 +607,15 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
     node_index_check(inout t, node_index_missing_definition(inout base, root_ref),
         "missing definition keeps original error");
     node_index_check(inout t, !node_index_option_some(
-        occurrence(inout base, root_ref)), "missing occurrence root");
+        semacore.occurrence(inout base, root_ref)), "missing occurrence root");
     node_index_check(inout t, !node_index_option_some(
         b_occurrence_raw(inout base, root_ref)), "missing raw occurrence root");
 
-    let f_key = node_key(f_ref);
-    let custom_defs = vec.empty[NodeSymbolEntry]();
+    let f_key = semacore.node_key(f_ref);
+    let custom_defs = vec.empty[semacore.NodeSymbolEntry]();
     run_put_node_symbol(custom_defs, f_key, 700, false);
     run_put_node_symbol(custom_defs, f_key, 701, false);
-    let custom_occurrences = vec.empty[NodeSymbolEntry]();
+    let custom_occurrences = vec.empty[semacore.NodeSymbolEntry]();
     run_put_node_symbol(custom_occurrences, f_key, 800, true);
     run_put_node_symbol(custom_occurrences, f_key, 801, true);
     node_index_check(inout t, vec.len(custom_defs) == 1 &&
@@ -625,9 +626,9 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
     var probe = base;
     probe.definitions = custom_defs;
     probe.occurrences = custom_occurrences;
-    node_index_check(inout t, definition(inout probe, f_ref) == 700,
+    node_index_check(inout t, semacore.definition(inout probe, f_ref) == 700,
         "definition caller keeps first");
-    switch occurrence(inout probe, f_ref) {
+    switch semacore.occurrence(inout probe, f_ref) {
         case option.Option.Some(id):
             node_index_check(inout t, id == 801, "occurrence caller keeps last");
         case option.Option.None:
@@ -640,18 +641,18 @@ func node_index_real_checks(t inout NodeIndexTest, small usize, large usize)
             node_index_check(inout t, false, "raw caller missing");
     }
 
-    probe.definitions = vec.empty[NodeSymbolEntry]();
-    probe.occurrences = vec.empty[NodeSymbolEntry]();
+    probe.definitions = vec.empty[semacore.NodeSymbolEntry]();
+    probe.occurrences = vec.empty[semacore.NodeSymbolEntry]();
     node_index_check(inout t, node_index_missing_definition(inout probe, f_ref),
         "empty custom definition error");
     node_index_check(inout t, !node_index_option_some(
-        occurrence(inout probe, f_ref)), "empty custom occurrence");
+        semacore.occurrence(inout probe, f_ref)), "empty custom occurrence");
     node_index_check(inout t, !node_index_option_some(
         b_occurrence_raw(inout probe, f_ref)), "empty custom raw occurrence");
 
     let base_defs_len = vec.len(base.definitions);
     let base_occurrences_len = vec.len(base.occurrences);
-    var copy = clone_checker(base);
+    var copy = semacore.clone_checker(base);
     node_index_check(inout t, node_index_same_entries(copy.definitions,
         base.definitions), "clone definitions equal");
     node_index_check(inout t, node_index_same_entries(copy.occurrences,
@@ -728,7 +729,7 @@ pub func run_node_index_tests(small usize, large usize) i32 throws os.Error {
     var benches = vec.empty[NodeIndexBench]();
     try {
         benches = node_index_real_checks(inout test, small, large);
-    } catch error Error {
+    } catch error semacore.Error {
         node_index_check(inout test, false, "real checks threw an Error");
     }
     for bench in benches {

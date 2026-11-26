@@ -17,6 +17,8 @@ package nativeverify;
 import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/state" as nvstate;
+import "app/wzcc/nativeverify/support" as nvsupport;
 import "std/option" as option;
 import "std/vec" as vec;
 
@@ -43,7 +45,7 @@ func copy_externals(values Vec[hirverify.ExternalFunction]) Vec[hirverify.Extern
 // Deep-copy the CFG, verify the raw HIR independently, then run the full CFG
 // and ownership verifier over the resulting verified HIR copy.
 pub func verify(input nativeir.Module) VerifyResult {
-    let functions = copy_functions(input.functions);
+    let functions = nvsupport.copy_functions(input.functions);
     let checked = hirverify.verify(input.hir, hirverify.VerifyMode.Backend);
     return verify_checked_hir(checked, functions);
 }
@@ -52,7 +54,7 @@ pub func verify(input nativeir.Module) VerifyResult {
 // if necessary without re-cloning or re-verifying Backend-verified HIR.
 pub func verify_lowered(input hirverify.VerifiedHirModule,
                         input_functions Vec[nativeir.Function]) VerifyResult {
-    let functions = copy_functions(input_functions);
+    let functions = nvsupport.copy_functions(input_functions);
     let checked = hirverify.ensure_backend(input);
     return verify_checked_hir(checked, functions);
 }
@@ -60,7 +62,7 @@ pub func verify_lowered(input hirverify.VerifiedHirModule,
 func verify_checked_hir(checked hirverify.VerifyResult,
                         functions Vec[nativeir.Function]) VerifyResult {
     var result = VerifyResult(state: checked.state, failure: checked.failure,
-        diagnostics: copy_diagnostics(checked.diagnostics),
+        diagnostics: nvsupport.copy_diagnostics(checked.diagnostics),
         value: option.Option[VerifiedModule].None);
     switch checked.value {
         case option.Option.Some(verified): {
@@ -70,8 +72,8 @@ func verify_checked_hir(checked hirverify.VerifyResult,
             try {
                 let verified_hir = hirverify.snapshot(verified);
                 let config = hirverify.config(verified);
-                var state = ModuleState(h: verified_hir, config: config,
-                    functions: functions, symbols: vec.empty[FunctionEntry](),
+                var state = nvstate.ModuleState(h: verified_hir, config: config,
+                    functions: functions, symbols: vec.empty[nvstate.FunctionEntry](),
                     externals: hirverify.externals(verified));
                 run_module(inout state);
                 result.state = model.PhaseState.Complete;
@@ -79,18 +81,18 @@ func verify_checked_hir(checked hirverify.VerifyResult,
                 result.diagnostics = vec.empty[model.Diagnostic]();
                 result.value = option.Option[VerifiedModule].Some(
                     VerifiedModule(hir: verified,
-                        functions: copy_functions(state.functions),
+                        functions: nvsupport.copy_functions(state.functions),
                         externals: copy_externals(state.externals)));
-            } catch error VerifyError {
+            } catch error nvsupport.VerifyError {
                 result.state = model.PhaseState.Failed;
                 result.failure = model.FailureKind.Internal;
                 result.diagnostics = vec.empty[model.Diagnostic]();
-                append_error(inout result.diagnostics, error);
+                nvsupport.append_error(inout result.diagnostics, error);
             } catch error model.SupportError {
                 result.state = model.PhaseState.Failed;
                 result.failure = model.FailureKind.Internal;
                 result.diagnostics = vec.empty[model.Diagnostic]();
-                append_error(inout result.diagnostics, support(error));
+                nvsupport.append_error(inout result.diagnostics, nvsupport.support(error));
             }
         }
         case option.Option.None: {}
@@ -103,7 +105,7 @@ func verify_checked_hir(checked hirverify.VerifyResult,
 pub func snapshot(input VerifiedModule) nativeir.Module
     throws model.SupportError {
     return nativeir.Module(hir: hirverify.snapshot(input.hir),
-        functions: copy_functions(input.functions));
+        functions: nvsupport.copy_functions(input.functions));
 }
 
 pub func function_count(input VerifiedModule) usize {

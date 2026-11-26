@@ -1,3 +1,18 @@
+package nativeemit;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/debug" as emitdebug;
+import "app/wzcc/nativeemit/systemops" as emitops;
+import "app/wzcc/nativeemit/values" as emitvalues;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
 // B: ordinary instruction and terminator emission.
 //
 // Direct port of the scalar instruction/terminator switch of
@@ -10,20 +25,12 @@
 // assertions below only re-check the structural lookups (blocks, slots,
 // incoming addresses, HIR origins) so a broken record fails as E_IR_INVALID
 // instead of producing text.
-package nativeemit;
 
-import "app/wzcc/hir" as hir;
-import "app/wzcc/model" as model;
-import "app/wzcc/nativeir" as nativeir;
-import "std/option" as option;
-import "std/strconv" as strconv;
-import "std/text" as text;
-import "std/vec" as vec;
 
-func b_current(state Emitter) nativeir.Function throws Error {
+func b_current(state emitcore.Emitter) nativeir.Function throws emitcore.Error {
     switch state.frame.native_index {
-        case option.Option.Some(index): return b_native_function(state, index);
-        case option.Option.None: throw invalid("no source function selected");
+        case option.Option.Some(index): return emitcore.b_native_function(state, index);
+        case option.Option.None: throw emitcore.invalid("no source function selected");
     }
 }
 
@@ -47,203 +54,203 @@ func b_wide_literal(negative bool, magnitude u64) string {
     return strconv.format_u64(magnitude);
 }
 
-func b_slot(state Emitter, index usize) SlotStorage throws Error {
+func b_slot(state emitcore.Emitter, index usize) emitcore.SlotStorage throws emitcore.Error {
     if index >= vec.len(state.frame.slots) {
-        throw invalid("slot index out of range");
+        throw emitcore.invalid("slot index out of range");
     }
     return state.frame.slots[index];
 }
 
-func b_store_line(value Value, address Value) string {
-    return "store " + typed(value) + ", ptr " + address.reference;
+func b_store_line(value emitcore.Value, address emitcore.Value) string {
+    return "store " + emitcore.typed(value) + ", ptr " + address.reference;
 }
 
-func b_label(block BlockRef) string {
+func b_label(block emitcore.BlockRef) string {
     return "label " + block.reference;
 }
 
 // ---- binary ----------------------------------------------------------------
 
-func b_float_binary(i nativeir.Instruction, a Value, b Value,
-                    state inout Emitter) Value throws Error {
-    let operand = typed(a) + ", " + b.reference;
+func b_float_binary(i nativeir.Instruction, a emitcore.Value, b emitcore.Value,
+                    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let operand = emitcore.typed(a) + ", " + b.reference;
     switch i.binary {
         case hir.BinaryOp.Add: {
-            return result(a.type_name, "fadd " + operand, inout state);
+            return emitcore.result(a.type_name, "fadd " + operand, inout state);
         }
         case hir.BinaryOp.Subtract: {
-            return result(a.type_name, "fsub " + operand, inout state);
+            return emitcore.result(a.type_name, "fsub " + operand, inout state);
         }
         case hir.BinaryOp.Multiply: {
-            return result(a.type_name, "fmul " + operand, inout state);
+            return emitcore.result(a.type_name, "fmul " + operand, inout state);
         }
         case hir.BinaryOp.Divide: {
-            return result(a.type_name, "fdiv " + operand, inout state);
+            return emitcore.result(a.type_name, "fdiv " + operand, inout state);
         }
         case hir.BinaryOp.Equal: {
-            return result("i1", "fcmp oeq " + operand, inout state);
+            return emitcore.result("i1", "fcmp oeq " + operand, inout state);
         }
         // Source != is unordered, exactly as the C++ FCmpUNE predicate.
         case hir.BinaryOp.NotEqual: {
-            return result("i1", "fcmp une " + operand, inout state);
+            return emitcore.result("i1", "fcmp une " + operand, inout state);
         }
         case hir.BinaryOp.Less: {
-            return result("i1", "fcmp olt " + operand, inout state);
+            return emitcore.result("i1", "fcmp olt " + operand, inout state);
         }
         case hir.BinaryOp.LessEqual: {
-            return result("i1", "fcmp ole " + operand, inout state);
+            return emitcore.result("i1", "fcmp ole " + operand, inout state);
         }
         case hir.BinaryOp.Greater: {
-            return result("i1", "fcmp ogt " + operand, inout state);
+            return emitcore.result("i1", "fcmp ogt " + operand, inout state);
         }
         case hir.BinaryOp.GreaterEqual: {
-            return result("i1", "fcmp oge " + operand, inout state);
+            return emitcore.result("i1", "fcmp oge " + operand, inout state);
         }
-        default: throw invalid("invalid verified floating operation");
+        default: throw emitcore.invalid("invalid verified floating operation");
     }
 }
 
-func b_divide(i nativeir.Instruction, a Value, b Value, remainder bool,
-              sign bool, state inout Emitter) Value throws Error {
-    let is_zero = result("i1", "icmp eq " + typed(b) + ", 0", inout state);
-    guard(is_zero, 1, i.source, inout state);
+func b_divide(i nativeir.Instruction, a emitcore.Value, b emitcore.Value, remainder bool,
+              sign bool, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let is_zero = emitcore.result("i1", "icmp eq " + emitcore.typed(b) + ", 0", inout state);
+    emitcore.guard(is_zero, 1, i.source, inout state);
     var name = "udiv ";
     if remainder {
         name = "urem ";
     }
     if !sign {
-        return result(a.type_name, name + typed(a) + ", " + b.reference,
+        return emitcore.result(a.type_name, name + emitcore.typed(a) + ", " + b.reference,
             inout state);
     }
-    let width = b_integer_width(state, value_type(state, i.inputs[0]));
+    let width = emitcore.b_integer_width(state, emitcore.value_type(state, i.inputs[0]));
     let minimum = b_signed_minimum(width);
-    let minimum_text = b_integer_literal(minimum, width);
-    let at_minimum = result("i1", "icmp eq " + typed(a) + ", " + minimum_text,
+    let minimum_text = emitcore.b_integer_literal(minimum, width);
+    let at_minimum = emitcore.result("i1", "icmp eq " + emitcore.typed(a) + ", " + minimum_text,
         inout state);
-    let at_minus_one = result("i1", "icmp eq " + typed(b) + ", -1", inout state);
-    let special = result("i1", "and i1 " + at_minimum.reference + ", " +
+    let at_minus_one = emitcore.result("i1", "icmp eq " + emitcore.typed(b) + ", -1", inout state);
+    let special = emitcore.result("i1", "and i1 " + at_minimum.reference + ", " +
         at_minus_one.reference, inout state);
-    let function_index = current_function(state);
-    let overflow = new_block(function_index, "division.wrap", inout state);
-    let normal = new_block(function_index, "division.normal", inout state);
-    let join = new_block(function_index, "division.result", inout state);
-    terminate("br " + typed(special) + ", " + b_label(overflow) + ", " +
+    let function_index = emitcore.current_function(state);
+    let overflow = emitcore.new_block(function_index, "division.wrap", inout state);
+    let normal = emitcore.new_block(function_index, "division.normal", inout state);
+    let join = emitcore.new_block(function_index, "division.result", inout state);
+    emitcore.terminate("br " + emitcore.typed(special) + ", " + b_label(overflow) + ", " +
         b_label(normal), inout state);
-    position(overflow, inout state);
-    terminate("br " + b_label(join), inout state);
-    position(normal, inout state);
+    emitcore.position(overflow, inout state);
+    emitcore.terminate("br " + b_label(join), inout state);
+    emitcore.position(normal, inout state);
     var normal_name = "sdiv ";
     if remainder {
         normal_name = "srem ";
     }
-    let computed = result(a.type_name, normal_name + typed(a) + ", " +
+    let computed = emitcore.result(a.type_name, normal_name + emitcore.typed(a) + ", " +
         b.reference, inout state);
-    terminate("br " + b_label(join), inout state);
-    position(join, inout state);
+    emitcore.terminate("br " + b_label(join), inout state);
+    emitcore.position(join, inout state);
     var wrapped = "0";
     if !remainder {
         wrapped = minimum_text;
     }
-    return result(a.type_name, "phi " + a.type_name + " [ " + wrapped + ", " +
+    return emitcore.result(a.type_name, "phi " + a.type_name + " [ " + wrapped + ", " +
         overflow.reference + " ], [ " + computed.reference + ", " +
         normal.reference + " ]", inout state);
 }
 
-func b_shift(i nativeir.Instruction, a Value, b Value, left bool, sign bool,
-             state inout Emitter) Value throws Error {
-    let width = b_integer_width(state, value_type(state, i.inputs[0]));
-    let rhs_type = type_of(state, value_type(state, i.inputs[1]));
-    let rhs_signed = b_signed(rhs_type);
+func b_shift(i nativeir.Instruction, a emitcore.Value, b emitcore.Value, left bool, sign bool,
+             state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let width = emitcore.b_integer_width(state, emitcore.value_type(state, i.inputs[0]));
+    let rhs_type = emitcore.type_of(state, emitcore.value_type(state, i.inputs[1]));
+    let rhs_signed = emitcore.b_signed(rhs_type);
     var cast = "zext ";
     if rhs_signed {
         cast = "sext ";
     }
-    let amount = result("i65", cast + typed(b) + " to i65", inout state);
-    let too_large = result("i1", "icmp uge i65 " + amount.reference + ", " +
-        number(usize(width)), inout state);
+    let amount = emitcore.result("i65", cast + emitcore.typed(b) + " to i65", inout state);
+    let too_large = emitcore.result("i1", "icmp uge i65 " + amount.reference + ", " +
+        emitcore.number(usize(width)), inout state);
     var bad = too_large;
     if rhs_signed {
-        let negative = result("i1", "icmp slt i65 " + amount.reference + ", 0",
+        let negative = emitcore.result("i1", "icmp slt i65 " + amount.reference + ", 0",
             inout state);
-        bad = result("i1", "or i1 " + too_large.reference + ", " +
+        bad = emitcore.result("i1", "or i1 " + too_large.reference + ", " +
             negative.reference, inout state);
     }
-    guard(bad, 2, i.source, inout state);
-    let checked = result(a.type_name, "trunc i65 " + amount.reference + " to " +
+    emitcore.guard(bad, 2, i.source, inout state);
+    let checked = emitcore.result(a.type_name, "trunc i65 " + amount.reference + " to " +
         a.type_name, inout state);
     if left {
-        return result(a.type_name, "shl " + typed(a) + ", " + checked.reference,
+        return emitcore.result(a.type_name, "shl " + emitcore.typed(a) + ", " + checked.reference,
             inout state);
     }
     var name = "lshr ";
     if sign {
         name = "ashr ";
     }
-    return result(a.type_name, name + typed(a) + ", " + checked.reference,
+    return emitcore.result(a.type_name, name + emitcore.typed(a) + ", " + checked.reference,
         inout state);
 }
 
-func b_binary(i nativeir.Instruction, a Value, b Value,
-              state inout Emitter) Value throws Error {
-    let left = type_of(state, value_type(state, i.inputs[0]));
-    if b_kind_is(left.kind, model.TypeKind.String) {
-        return text_binary(i, a, b, inout state);
+func b_binary(i nativeir.Instruction, a emitcore.Value, b emitcore.Value,
+              state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let left = emitcore.type_of(state, emitcore.value_type(state, i.inputs[0]));
+    if emitcore.b_kind_is(left.kind, model.TypeKind.String) {
+        return emitvalues.text_binary(i, a, b, inout state);
     }
     // Float operations round in their own LLVM type: no widening, fast-math
     // flag, contraction or integer zero guard.
-    if b_kind_is(left.kind, model.TypeKind.Float) {
+    if emitcore.b_kind_is(left.kind, model.TypeKind.Float) {
         return b_float_binary(i, a, b, inout state);
     }
-    let sign = b_signed(left);
-    let operand = typed(a) + ", " + b.reference;
+    let sign = emitcore.b_signed(left);
+    let operand = emitcore.typed(a) + ", " + b.reference;
     switch i.binary {
         case hir.BinaryOp.Add: {
-            return result(a.type_name, "add " + operand, inout state);
+            return emitcore.result(a.type_name, "add " + operand, inout state);
         }
         case hir.BinaryOp.Subtract: {
-            return result(a.type_name, "sub " + operand, inout state);
+            return emitcore.result(a.type_name, "sub " + operand, inout state);
         }
         case hir.BinaryOp.Multiply: {
-            return result(a.type_name, "mul " + operand, inout state);
+            return emitcore.result(a.type_name, "mul " + operand, inout state);
         }
         case hir.BinaryOp.BitAnd: {
-            return result(a.type_name, "and " + operand, inout state);
+            return emitcore.result(a.type_name, "and " + operand, inout state);
         }
         case hir.BinaryOp.BitOr: {
-            return result(a.type_name, "or " + operand, inout state);
+            return emitcore.result(a.type_name, "or " + operand, inout state);
         }
         case hir.BinaryOp.BitXor: {
-            return result(a.type_name, "xor " + operand, inout state);
+            return emitcore.result(a.type_name, "xor " + operand, inout state);
         }
         case hir.BinaryOp.Equal: {
-            return result("i1", "icmp eq " + operand, inout state);
+            return emitcore.result("i1", "icmp eq " + operand, inout state);
         }
         case hir.BinaryOp.NotEqual: {
-            return result("i1", "icmp ne " + operand, inout state);
+            return emitcore.result("i1", "icmp ne " + operand, inout state);
         }
         case hir.BinaryOp.Less: {
             if sign {
-                return result("i1", "icmp slt " + operand, inout state);
+                return emitcore.result("i1", "icmp slt " + operand, inout state);
             }
-            return result("i1", "icmp ult " + operand, inout state);
+            return emitcore.result("i1", "icmp ult " + operand, inout state);
         }
         case hir.BinaryOp.LessEqual: {
             if sign {
-                return result("i1", "icmp sle " + operand, inout state);
+                return emitcore.result("i1", "icmp sle " + operand, inout state);
             }
-            return result("i1", "icmp ule " + operand, inout state);
+            return emitcore.result("i1", "icmp ule " + operand, inout state);
         }
         case hir.BinaryOp.Greater: {
             if sign {
-                return result("i1", "icmp sgt " + operand, inout state);
+                return emitcore.result("i1", "icmp sgt " + operand, inout state);
             }
-            return result("i1", "icmp ugt " + operand, inout state);
+            return emitcore.result("i1", "icmp ugt " + operand, inout state);
         }
         case hir.BinaryOp.GreaterEqual: {
             if sign {
-                return result("i1", "icmp sge " + operand, inout state);
+                return emitcore.result("i1", "icmp sge " + operand, inout state);
             }
-            return result("i1", "icmp uge " + operand, inout state);
+            return emitcore.result("i1", "icmp uge " + operand, inout state);
         }
         case hir.BinaryOp.Divide: {
             return b_divide(i, a, b, false, sign, inout state);
@@ -258,7 +265,7 @@ func b_binary(i nativeir.Instruction, a Value, b Value,
             return b_shift(i, a, b, false, sign, inout state);
         }
     }
-    throw invalid("unknown binary operation");
+    throw emitcore.invalid("unknown binary operation");
 }
 
 // ---- convert ----------------------------------------------------------------
@@ -267,175 +274,175 @@ func b_binary(i nativeir.Instruction, a Value, b Value,
 // equal widths are the identity, narrower destinations truncate, and wider
 // destinations sign- or zero-extend according to the source.  Spell each case
 // directly because `trunc` to the same or a wider type is not valid LLVM IR.
-func b_int_cast(value Value, from_width u32, to_width u32, signed bool,
-                target string, state inout Emitter) Value throws Error {
+func b_int_cast(value emitcore.Value, from_width u32, to_width u32, signed bool,
+                target string, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     if from_width == to_width {
-        return Value(type_name: target, reference: value.reference);
+        return emitcore.Value(type_name: target, reference: value.reference);
     }
     if to_width < from_width {
-        return result(target, "trunc " + typed(value) + " to " + target,
+        return emitcore.result(target, "trunc " + emitcore.typed(value) + " to " + target,
             inout state);
     }
     var operation = "zext ";
     if signed {
         operation = "sext ";
     }
-    return result(target, operation + typed(value) + " to " + target,
+    return emitcore.result(target, operation + emitcore.typed(value) + " to " + target,
         inout state);
 }
 
-func b_convert(i nativeir.Instruction, value Value,
-               state inout Emitter) Value throws Error {
-    let from = type_of(state, value_type(state, i.inputs[0]));
-    let to = type_of(state, i.type_id);
-    let from_float = b_kind_is(from.kind, model.TypeKind.Float);
-    let to_float = b_kind_is(to.kind, model.TypeKind.Float);
+func b_convert(i nativeir.Instruction, value emitcore.Value,
+               state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let from = emitcore.type_of(state, emitcore.value_type(state, i.inputs[0]));
+    let to = emitcore.type_of(state, i.type_id);
+    let from_float = emitcore.b_kind_is(from.kind, model.TypeKind.Float);
+    let to_float = emitcore.b_kind_is(to.kind, model.TypeKind.Float);
     if from_float && to_float {
         // Identity keeps the LLVM value unchanged; 32->64 is exact fpext and
         // 64->32 is one IEEE round-to-nearest-even fptrunc.
         if from.bits == to.bits {
             return value;
         }
-        let target = lower_type(i.type_id, inout state);
+        let target = emitcore.lower_type(i.type_id, inout state);
         if from.bits == 32 {
-            return result(target, "fpext " + typed(value) + " to " + target,
+            return emitcore.result(target, "fpext " + emitcore.typed(value) + " to " + target,
                 inout state);
         }
-        return result(target, "fptrunc " + typed(value) + " to " + target,
+        return emitcore.result(target, "fptrunc " + emitcore.typed(value) + " to " + target,
             inout state);
     }
     if from_float {
         return b_float_to_integer(i, value, from, to, inout state);
     }
     if to_float {
-        let target = lower_type(i.type_id, inout state);
+        let target = emitcore.lower_type(i.type_id, inout state);
         var name = "uitofp ";
-        if b_signed(from) {
+        if emitcore.b_signed(from) {
             name = "sitofp ";
         }
-        return result(target, name + typed(value) + " to " + target,
+        return emitcore.result(target, name + emitcore.typed(value) + " to " + target,
             inout state);
     }
     // i65 can represent every source integer and every destination bound.
-    let signed_from = b_signed(from);
+    let signed_from = emitcore.b_signed(from);
     var cast = "zext ";
     if signed_from {
         cast = "sext ";
     }
-    let wide = result("i65", cast + typed(value) + " to i65", inout state);
-    let width = b_integer_width(state, i.type_id);
-    let signed_to = b_signed(to);
+    let wide = emitcore.result("i65", cast + emitcore.typed(value) + " to i65", inout state);
+    let width = emitcore.b_integer_width(state, i.type_id);
+    let signed_to = emitcore.b_signed(to);
     var low = "0";
     var high = strconv.format_u64(b_all_ones(width));
     if signed_to {
         low = b_wide_literal(true, b_signed_minimum(width));
         high = strconv.format_u64(b_signed_minimum(width) - 1);
     }
-    let below = result("i1", "icmp slt i65 " + wide.reference + ", " + low,
+    let below = emitcore.result("i1", "icmp slt i65 " + wide.reference + ", " + low,
         inout state);
-    let above = result("i1", "icmp sgt i65 " + wide.reference + ", " + high,
+    let above = emitcore.result("i1", "icmp sgt i65 " + wide.reference + ", " + high,
         inout state);
-    let bad = result("i1", "or i1 " + below.reference + ", " + above.reference,
+    let bad = emitcore.result("i1", "or i1 " + below.reference + ", " + above.reference,
         inout state);
-    guard(bad, 3, i.source, inout state);
-    let target = lower_type(i.type_id, inout state);
-    let from_width = b_integer_width(state, value_type(state, i.inputs[0]));
+    emitcore.guard(bad, 3, i.source, inout state);
+    let target = emitcore.lower_type(i.type_id, inout state);
+    let from_width = emitcore.b_integer_width(state, emitcore.value_type(state, i.inputs[0]));
     return b_int_cast(value, from_width, width, signed_from, target, inout state);
 }
 
-func b_float_to_integer(i nativeir.Instruction, value Value, from model.Type,
-                        to model.Type, state inout Emitter) Value throws Error {
+func b_float_to_integer(i nativeir.Instruction, value emitcore.Value, from model.Type,
+                        to model.Type, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     // Truncate into an i64 first only under bounds every f32/f64 can represent
     // exactly; NaN is unordered, so both ULE/UGE comparisons fire.
-    let width = b_integer_width(state, i.type_id);
-    let signed_to = b_signed(to);
-    var bad = Value(type_name: "i1", reference: "false");
+    let width = emitcore.b_integer_width(state, i.type_id);
+    let signed_to = emitcore.b_signed(to);
+    var bad = emitcore.Value(type_name: "i1", reference: "false");
     if signed_to {
-        let minus_two63 = b_float_pow2(63, true, from.bits);
-        let limit = b_float_pow2(63, false, from.bits);
-        let low = result("i1", "fcmp ult " + typed(value) + ", " +
+        let minus_two63 = emitcore.b_float_pow2(63, true, from.bits);
+        let limit = emitcore.b_float_pow2(63, false, from.bits);
+        let low = emitcore.result("i1", "fcmp ult " + emitcore.typed(value) + ", " +
             minus_two63.reference, inout state);
-        let high = result("i1", "fcmp uge " + typed(value) + ", " +
+        let high = emitcore.result("i1", "fcmp uge " + emitcore.typed(value) + ", " +
             limit.reference, inout state);
-        bad = result("i1", "or i1 " + low.reference + ", " + high.reference,
+        bad = emitcore.result("i1", "or i1 " + low.reference + ", " + high.reference,
             inout state);
     } else {
         // -1.0 itself truncates to -1, which cannot be unsigned; values in
         // (-1,0) truncate to 0 and stay valid. 2^64 is exactly representable.
-        let minus_one = b_float_pow2(0, true, from.bits);
-        let limit = b_float_pow2(64, false, from.bits);
-        let low = result("i1", "fcmp ule " + typed(value) + ", " +
+        let minus_one = emitcore.b_float_pow2(0, true, from.bits);
+        let limit = emitcore.b_float_pow2(64, false, from.bits);
+        let low = emitcore.result("i1", "fcmp ule " + emitcore.typed(value) + ", " +
             minus_one.reference, inout state);
-        let high = result("i1", "fcmp uge " + typed(value) + ", " +
+        let high = emitcore.result("i1", "fcmp uge " + emitcore.typed(value) + ", " +
             limit.reference, inout state);
-        bad = result("i1", "or i1 " + low.reference + ", " + high.reference,
+        bad = emitcore.result("i1", "or i1 " + low.reference + ", " + high.reference,
             inout state);
     }
-    guard(bad, 3, i.source, inout state);
+    emitcore.guard(bad, 3, i.source, inout state);
     var name = "fptoui ";
     if signed_to {
         name = "fptosi ";
     }
-    let wide = result("i64", name + typed(value) + " to i64", inout state);
+    let wide = emitcore.result("i64", name + emitcore.typed(value) + " to i64", inout state);
     if width < 64 {
-        var narrow = Value(type_name: "i1", reference: "false");
+        var narrow = emitcore.Value(type_name: "i1", reference: "false");
         if signed_to {
-            let low = Value(type_name: "i64",
-                reference: b_integer_literal(
+            let low = emitcore.Value(type_name: "i64",
+                reference: emitcore.b_integer_literal(
                     u64(0) - b_signed_minimum(width), 64));
-            let high = Value(type_name: "i64",
+            let high = emitcore.Value(type_name: "i64",
                 reference: strconv.format_u64(b_signed_minimum(width) - 1));
-            let below = result("i1", "icmp slt i64 " + wide.reference + ", " +
+            let below = emitcore.result("i1", "icmp slt i64 " + wide.reference + ", " +
                 low.reference, inout state);
-            let above = result("i1", "icmp sgt i64 " + wide.reference + ", " +
+            let above = emitcore.result("i1", "icmp sgt i64 " + wide.reference + ", " +
                 high.reference, inout state);
-            narrow = result("i1", "or i1 " + below.reference + ", " +
+            narrow = emitcore.result("i1", "or i1 " + below.reference + ", " +
                 above.reference, inout state);
         } else {
-            let high = Value(type_name: "i64",
+            let high = emitcore.Value(type_name: "i64",
                 reference: strconv.format_u64(b_all_ones(width)));
-            narrow = result("i1", "icmp ugt i64 " + wide.reference + ", " +
+            narrow = emitcore.result("i1", "icmp ugt i64 " + wide.reference + ", " +
                 high.reference, inout state);
         }
-        guard(narrow, 3, i.source, inout state);
+        emitcore.guard(narrow, 3, i.source, inout state);
     }
-    let target = lower_type(i.type_id, inout state);
+    let target = emitcore.lower_type(i.type_id, inout state);
     return b_int_cast(wide, 64, width, signed_to, target, inout state);
 }
 
 // ---- ordinary instruction helpers ------------------------------------------
 
-func b_call_origin(state Emitter, origin option.Option[usize],
-                   source model.Span) hir.Call throws Error {
+func b_call_origin(state emitcore.Emitter, origin option.Option[usize],
+                   source model.Span) hir.Call throws emitcore.Error {
     switch origin {
         case option.Option.Some(id): {
             if id >= vec.len(state.input.hir.nodes) {
-                throw invalid("call instruction has no HIR origin");
+                throw emitcore.invalid("call instruction has no HIR origin");
             }
             let node = state.input.hir.nodes[id];
             switch node.data {
                 case hir.NodeData.Call(call): return call;
-                default: throw invalid("call instruction origin is not a HIR call");
+                default: throw emitcore.invalid("call instruction origin is not a HIR call");
             }
         }
         case option.Option.None: {
-            throw invalid("call instruction has no HIR origin");
+            throw emitcore.invalid("call instruction has no HIR origin");
         }
     }
 }
 
 // LLVM has no `not` instruction; xor with all ones preserves the exact
 // two's-complement bit complement for every width including i1.
-func b_not(value Value, width u32, state inout Emitter) Value throws Error {
-    return result(value.type_name, "xor " + typed(value) + ", " +
-        b_integer_literal(b_all_ones(width), width), inout state);
+func b_not(value emitcore.Value, width u32, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(value.type_name, "xor " + emitcore.typed(value) + ", " +
+        emitcore.b_integer_literal(b_all_ones(width), width), inout state);
 }
 
 // A lexically negative float literal is an fneg applied to a float constant.
 // Only that pure operation gets a constant spelling (the sign bit flipped), so
 // C's batch Vec constant table sees exactly the C++ ConstantFP.
 func b_register_negated(i nativeir.Instruction, width u32,
-                        state inout Emitter) {
+                        state inout emitcore.Emitter) {
     var result_id usize = 0;
     var has_result = false;
     switch i.result {
@@ -448,18 +455,18 @@ func b_register_negated(i nativeir.Instruction, width u32,
     if !has_result {
         return;
     }
-    let original = constant_value(state, i.inputs[0]);
+    let original = emitcore.constant_value(state, i.inputs[0]);
     switch original {
         case option.Option.Some(item): {
-            switch b_float_bits_of(item.reference) {
+            switch emitcore.b_float_bits_of(item.reference) {
                 case option.Option.Some(bits): {
                     var sign_bit u64 = 9223372036854775808;
                     if width == 32 {
                         sign_bit = 2147483648;
                     }
-                    let flipped = b_float_value(bits ^ sign_bit, width);
+                    let flipped = emitcore.b_float_value(bits ^ sign_bit, width);
                     vec.push(state.frame.constants,
-                        b_constant_binding(result_id, flipped));
+                        emitcore.b_constant_binding(result_id, flipped));
                 }
                 case option.Option.None: {}
             }
@@ -468,24 +475,24 @@ func b_register_negated(i nativeir.Instruction, width u32,
     }
 }
 
-func b_unary(i nativeir.Instruction, value Value,
-             state inout Emitter) Value throws Error {
+func b_unary(i nativeir.Instruction, value emitcore.Value,
+             state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     switch i.unary {
         case hir.UnaryOp.Negate: {
-            let kind = type_of(state, i.type_id);
-            if b_kind_is(kind.kind, model.TypeKind.Float) {
+            let kind = emitcore.type_of(state, i.type_id);
+            if emitcore.b_kind_is(kind.kind, model.TypeKind.Float) {
                 // fneg flips the sign bit, including +/-0.
-                let negated = result(value.type_name, "fneg " + typed(value),
+                let negated = emitcore.result(value.type_name, "fneg " + emitcore.typed(value),
                     inout state);
                 b_register_negated(i, kind.bits, inout state);
                 return negated;
             }
-            return result(value.type_name, "sub " + value.type_name + " 0, " +
+            return emitcore.result(value.type_name, "sub " + value.type_name + " 0, " +
                 value.reference, inout state);
         }
         case hir.UnaryOp.LogicalNot: return b_not(value, 1, inout state);
         case hir.UnaryOp.BitNot: {
-            let width = b_integer_width(state, i.type_id);
+            let width = emitcore.b_integer_width(state, i.type_id);
             return b_not(value, width, inout state);
         }
     }
@@ -498,54 +505,54 @@ func b_gc_stack_slot(current nativeir.Function, slot usize) bool {
     return !current.is_async && !current.slots[slot].is_inout;
 }
 
-func b_gc_stack_address(i nativeir.Instruction, state Emitter) bool throws Error {
+func b_gc_stack_address(i nativeir.Instruction, state emitcore.Emitter) bool throws emitcore.Error {
     switch i.op {
         case nativeir.Op.Address: return b_gc_stack_slot(b_current(state), i.slot);
         case nativeir.Op.FieldAddress:
-            return b_value_binding(state, i.inputs[0]).stack_address;
+            return emitcore.b_value_binding(state, i.inputs[0]).stack_address;
         default: return false;
     }
 }
 
-func b_gc_store(value Value, address Value, type_id usize, stack_address bool,
-                state inout Emitter) throws Error {
+func b_gc_store(value emitcore.Value, address emitcore.Value, type_id usize, stack_address bool,
+                state inout emitcore.Emitter) throws emitcore.Error {
     // Stack owner bits are not traced edges. Retains, drops and the ordinary
     // function and loop polls remain at their original sites.
-    if !stack_address && has_strong_edge(type_id, inout state) {
-        let critical = gc_enter_critical(inout state);
-        append(b_store_line(value, address), inout state);
-        gc_leave_critical(critical, inout state);
+    if !stack_address && emitvalues.has_strong_edge(type_id, inout state) {
+        let critical = emitvalues.gc_enter_critical(inout state);
+        emitcore.append(b_store_line(value, address), inout state);
+        emitvalues.gc_leave_critical(critical, inout state);
     } else {
-        append(b_store_line(value, address), inout state);
+        emitcore.append(b_store_line(value, address), inout state);
     }
 }
 
-func b_replace_indirect(i nativeir.Instruction, args Vec[Value],
-                        state inout Emitter) throws Error {
-    let target = b_value_binding(state, i.inputs[0]);
+func b_replace_indirect(i nativeir.Instruction, args Vec[emitcore.Value],
+                        state inout emitcore.Emitter) throws emitcore.Error {
+    let target = emitcore.b_value_binding(state, i.inputs[0]);
     let old_type = target.type_id;
     let destination = args[0];
-    if owning(old_type, inout state) {
+    if emitvalues.owning(old_type, inout state) {
         // Move the old owner aside, publish the complete new value in one
         // graph-stable interval, then drop the old owner outside it.  A
         // reentrant destructor never observes a half-replaced field.
-        let type_name = lower_type(old_type, inout state);
-        let old = storage(type_name, inout state);
-        let loaded = result(type_name, "load " + type_name + ", ptr " +
+        let type_name = emitcore.lower_type(old_type, inout state);
+        let old = emitcore.storage(type_name, inout state);
+        let loaded = emitcore.result(type_name, "load " + type_name + ", ptr " +
             destination.reference, inout state);
-        append(b_store_line(loaded, old), inout state);
+        emitcore.append(b_store_line(loaded, old), inout state);
         b_gc_store(args[1], destination, old_type, target.stack_address,
             inout state);
-        let drop = value_op(old_type, false, inout state);
-        let drop_sig = Signature(result: "void", parameters: ["ptr"]);
-        call(drop_sig, drop, [old], inout state);
+        let drop = emitvalues.value_op(old_type, false, inout state);
+        let drop_sig = emitcore.Signature(result: "void", parameters: ["ptr"]);
+        emitcore.call(drop_sig, drop, [old], inout state);
     } else {
-        append(b_store_line(args[1], destination), inout state);
+        emitcore.append(b_store_line(args[1], destination), inout state);
     }
 }
 
-func b_store_slot(i nativeir.Instruction, args Vec[Value],
-                  state inout Emitter) throws Error {
+func b_store_slot(i nativeir.Instruction, args Vec[emitcore.Value],
+                  state inout emitcore.Emitter) throws emitcore.Error {
     let slot = b_slot(state, i.slot);
     let current = b_current(state);
     let slot_type = current.slots[i.slot].type_id;
@@ -553,70 +560,70 @@ func b_store_slot(i nativeir.Instruction, args Vec[Value],
         b_gc_stack_slot(current, i.slot), inout state);
     switch slot.active {
         case option.Option.Some(flag): {
-            append("store i1 true, ptr " + flag.reference, inout state);
+            emitcore.append("store i1 true, ptr " + flag.reference, inout state);
         }
         case option.Option.None: {}
     }
 }
 
-func b_store_indirect(i nativeir.Instruction, args Vec[Value],
-                      state inout Emitter) throws Error {
-    let target = b_value_binding(state, i.inputs[0]);
+func b_store_indirect(i nativeir.Instruction, args Vec[emitcore.Value],
+                      state inout emitcore.Emitter) throws emitcore.Error {
+    let target = emitcore.b_value_binding(state, i.inputs[0]);
     b_gc_store(args[1], args[0], target.type_id, target.stack_address,
         inout state);
 }
 
-func b_struct_init(i nativeir.Instruction, args Vec[Value],
-                   state inout Emitter) Value throws Error {
-    let type_name = lower_type(i.type_id, inout state);
-    var aggregate = Value(type_name: type_name, reference: "zeroinitializer");
+func b_struct_init(i nativeir.Instruction, args Vec[emitcore.Value],
+                   state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let type_name = emitcore.lower_type(i.type_id, inout state);
+    var aggregate = emitcore.Value(type_name: type_name, reference: "zeroinitializer");
     for var index usize = 0; index < vec.len(args); index += 1 {
         let expression = "insertvalue " + type_name + " " +
-            aggregate.reference + ", " + typed(args[index]) + ", " +
-            number(index);
-        aggregate = result(type_name, expression, inout state);
+            aggregate.reference + ", " + emitcore.typed(args[index]) + ", " +
+            emitcore.number(index);
+        aggregate = emitcore.result(type_name, expression, inout state);
     }
     return aggregate;
 }
 
-func b_enum_init(i nativeir.Instruction, args Vec[Value],
-                 state inout Emitter) Value throws Error {
-    let type_name = lower_type(i.type_id, inout state);
-    let index = variant_index(state, i.type_id, i.variant);
-    var aggregate = Value(type_name: type_name, reference: "zeroinitializer");
-    aggregate = result(type_name, "insertvalue " + type_name + " " +
-        aggregate.reference + ", i32 " + number(index) + ", 0", inout state);
+func b_enum_init(i nativeir.Instruction, args Vec[emitcore.Value],
+                 state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let type_name = emitcore.lower_type(i.type_id, inout state);
+    let index = emitcore.variant_index(state, i.type_id, i.variant);
+    var aggregate = emitcore.Value(type_name: type_name, reference: "zeroinitializer");
+    aggregate = emitcore.result(type_name, "insertvalue " + type_name + " " +
+        aggregate.reference + ", i32 " + emitcore.number(index) + ", 0", inout state);
     for var field usize = 0; field < vec.len(args); field += 1 {
         let expression = "insertvalue " + type_name + " " +
-            aggregate.reference + ", " + typed(args[field]) + ", " +
-            number(index + 1) + ", " + number(field);
-        aggregate = result(type_name, expression, inout state);
+            aggregate.reference + ", " + emitcore.typed(args[field]) + ", " +
+            emitcore.number(index + 1) + ", " + emitcore.number(field);
+        aggregate = emitcore.result(type_name, expression, inout state);
     }
     return aggregate;
 }
 
 func b_string_literal(i nativeir.Instruction,
-                      state inout Emitter) Value throws Error {
+                      state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     let bytes = text.bytes(i.utf8);
-    let storage_value = b_bytes_global(i.utf8, inout state);
+    let storage_value = emitcore.b_bytes_global(i.utf8, inout state);
     var runes usize = 0;
     for byte in bytes {
         if (byte & 192) != 128 {
             runes += 1;
         }
     }
-    let type_name = lower_type(i.type_id, inout state);
-    let length = number(vec.len(bytes));
-    let rune_count = number(runes);
-    return Value(type_name: type_name, reference: "{ ptr " +
+    let type_name = emitcore.lower_type(i.type_id, inout state);
+    let length = emitcore.number(vec.len(bytes));
+    let rune_count = emitcore.number(runes);
+    return emitcore.Value(type_name: type_name, reference: "{ ptr " +
         storage_value.reference + ", i64 " + length + ", i64 " + rune_count +
         ", ptr null }");
 }
 
-func b_call_instruction(i nativeir.Instruction, args Vec[Value],
-                        state inout Emitter) Value throws Error {
+func b_call_instruction(i nativeir.Instruction, args Vec[emitcore.Value],
+                        state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
     let origin = b_call_origin(state, i.origin, i.source);
-    var actual = vec.empty[Value]();
+    var actual = vec.empty[emitcore.Value]();
     for var index usize = 1; index < vec.len(args); index += 1 {
         vec.push(actual, args[index]);
     }
@@ -624,35 +631,35 @@ func b_call_instruction(i nativeir.Instruction, args Vec[Value],
         case hir.CalleeKind.Direct: {
             switch origin.direct_symbol {
                 case option.Option.Some(symbol): {
-                    if b_capturing(state, symbol) {
-                        throw invalid("direct call targets a capturing lambda entry");
+                    if emitcore.b_capturing(state, symbol) {
+                        throw emitcore.invalid("direct call targets a capturing lambda entry");
                     }
-                    let target = call_target(state, symbol);
-                    let sig = signature(i.signature, false, false,
+                    let target = emitcore.call_target(state, symbol);
+                    let sig = emitcore.signature(i.signature, false, false,
                         inout state);
-                    return call(sig, target, actual, inout state);
+                    return emitcore.call(sig, target, actual, inout state);
                 }
                 case option.Option.None: {
-                    throw invalid("ordinary call origin is neither direct nor function_value");
+                    throw emitcore.invalid("ordinary call origin is neither direct nor function_value");
                 }
             }
         }
         case hir.CalleeKind.FunctionValue: {
             let callee = args[0];
-            let code = result("ptr", "extractvalue " + FN_TYPE + " " +
+            let code = emitcore.result("ptr", "extractvalue " + FN_TYPE + " " +
                 callee.reference + ", 0", inout state);
-            let env = result("ptr", "extractvalue " + FN_TYPE + " " +
+            let env = emitcore.result("ptr", "extractvalue " + FN_TYPE + " " +
                 callee.reference + ", 1", inout state);
-            var method = vec.empty[Value]();
+            var method = vec.empty[emitcore.Value]();
             vec.push(method, env);
             for item in actual {
                 vec.push(method, item);
             }
-            let sig = signature(i.signature, true, false, inout state);
-            return call(sig, code, method, inout state);
+            let sig = emitcore.signature(i.signature, true, false, inout state);
+            return emitcore.call(sig, code, method, inout state);
         }
         default: {
-            throw invalid("ordinary call origin is neither direct nor function_value");
+            throw emitcore.invalid("ordinary call origin is neither direct nor function_value");
         }
     }
 }
@@ -693,20 +700,20 @@ func b_group(op nativeir.Op) u32 {
     }
 }
 
-func emit_instruction(i nativeir.Instruction, state inout Emitter) throws Error {
-    if state.options.debug_info { debug_origin_location(i.source, i.origin, inout state); }
-    var args = vec.empty[Value]();
+func emit_instruction(i nativeir.Instruction, state inout emitcore.Emitter) throws emitcore.Error {
+    if state.options.debug_info { emitdebug.debug_origin_location(i.source, i.origin, inout state); }
+    var args = vec.empty[emitcore.Value]();
     for input in i.inputs {
-        vec.push(args, value(state, input));
+        vec.push(args, emitcore.value(state, input));
     }
     let group = b_group(i.op);
-    var produced = option.Option[Value].None;
+    var produced = option.Option[emitcore.Value].None;
     if group == 1 {
         produced = emit_value_instruction(i, args, inout state);
     } else if group == 2 {
-        produced = emit_c_instruction(i, args, inout state);
+        produced = emitvalues.emit_c_instruction(i, args, inout state);
     } else if group == 3 {
-        produced = option.Option[Value].Some(system_call(i, args, inout state));
+        produced = option.Option[emitcore.Value].Some(emitops.system_call(i, args, inout state));
     } else {
         produced = b_emit_ordinary(i, args, inout state);
     }
@@ -715,11 +722,11 @@ func emit_instruction(i nativeir.Instruction, state inout Emitter) throws Error 
             switch produced {
                 case option.Option.Some(item): {
                     let stack_address = b_gc_stack_address(i, state);
-                    vec.push(state.frame.values, ValueBinding(value_id: result_id,
+                    vec.push(state.frame.values, emitcore.ValueBinding(value_id: result_id,
                         type_id: i.type_id, value: item, stack_address: stack_address));
                 }
                 case option.Option.None: {
-                    throw invalid("instruction result was not produced");
+                    throw emitcore.invalid("instruction result was not produced");
                 }
             }
         }
@@ -727,14 +734,14 @@ func emit_instruction(i nativeir.Instruction, state inout Emitter) throws Error 
     }
 }
 
-func b_emit_ordinary(i nativeir.Instruction, args Vec[Value],
-                     state inout Emitter) option.Option[Value] throws Error {
+func b_emit_ordinary(i nativeir.Instruction, args Vec[emitcore.Value],
+                     state inout emitcore.Emitter) option.Option[emitcore.Value] throws emitcore.Error {
     switch i.op {
         case nativeir.Op.Constant: {
-            let kind = type_of(state, i.type_id);
-            var produced = Value(type_name: "", reference: "");
-            if b_kind_is(kind.kind, model.TypeKind.Float) {
-                produced = b_float_value(i.bits, kind.bits);
+            let kind = emitcore.type_of(state, i.type_id);
+            var produced = emitcore.Value(type_name: "", reference: "");
+            if emitcore.b_kind_is(kind.kind, model.TypeKind.Float) {
+                produced = emitcore.b_float_value(i.bits, kind.bits);
             } else {
                 // Unit stores as i8 and Bool as i1 in lower_type.  Their
                 // constants are still ConstantInt spellings, but they have no
@@ -745,174 +752,174 @@ func b_emit_ordinary(i nativeir.Instruction, args Vec[Value],
                 switch kind.kind {
                     case model.TypeKind.Bool: width = 1;
                     case model.TypeKind.Unit: width = 8;
-                    default: width = b_integer_width(state, i.type_id);
+                    default: width = emitcore.b_integer_width(state, i.type_id);
                 }
-                let type_name = lower_type(i.type_id, inout state);
-                produced = Value(type_name: type_name,
-                    reference: b_integer_literal(i.bits, width));
+                let type_name = emitcore.lower_type(i.type_id, inout state);
+                produced = emitcore.Value(type_name: type_name,
+                    reference: emitcore.b_integer_literal(i.bits, width));
             }
             switch i.result {
                 case option.Option.Some(result_id): {
                     // Only the original ConstantInt/ConstantFP spelling feeds
                     // the batch Vec constant table; no other folding is added.
                     vec.push(state.frame.constants,
-                        b_constant_binding(result_id, produced));
+                        emitcore.b_constant_binding(result_id, produced));
                 }
                 case option.Option.None: {}
             }
-            return option.Option[Value].Some(produced);
+            return option.Option[emitcore.Value].Some(produced);
         }
         case nativeir.Op.Load: {
             let slot = b_slot(state, i.slot);
-            let type_name = lower_type(i.type_id, inout state);
-            if state.options.debug_info { debug_read(i, inout state); }
-            return option.Option[Value].Some(result(type_name, "load " +
+            let type_name = emitcore.lower_type(i.type_id, inout state);
+            if state.options.debug_info { emitdebug.debug_read(i, inout state); }
+            return option.Option[emitcore.Value].Some(emitcore.result(type_name, "load " +
                 type_name + ", ptr " + slot.address.reference, inout state));
         }
         case nativeir.Op.Address: {
             let slot = b_slot(state, i.slot);
-            return option.Option[Value].Some(slot.address);
+            return option.Option[emitcore.Value].Some(slot.address);
         }
         case nativeir.Op.Store: {
             b_store_slot(i, args, inout state);
-            if state.options.debug_info { debug_store(i.slot, inout state); }
-            return option.Option[Value].None;
+            if state.options.debug_info { emitdebug.debug_store(i.slot, inout state); }
+            return option.Option[emitcore.Value].None;
         }
         case nativeir.Op.Unary: {
-            return option.Option[Value].Some(b_unary(i, args[0], inout state));
+            return option.Option[emitcore.Value].Some(b_unary(i, args[0], inout state));
         }
         case nativeir.Op.Binary: {
-            return option.Option[Value].Some(b_binary(i, args[0], args[1],
+            return option.Option[emitcore.Value].Some(b_binary(i, args[0], args[1],
                 inout state));
         }
         case nativeir.Op.Convert: {
-            return option.Option[Value].Some(b_convert(i, args[0], inout state));
+            return option.Option[emitcore.Value].Some(b_convert(i, args[0], inout state));
         }
         case nativeir.Op.Call: {
-            return option.Option[Value].Some(b_call_instruction(i, args,
+            return option.Option[emitcore.Value].Some(b_call_instruction(i, args,
                 inout state));
         }
         case nativeir.Op.StructInit: {
-            return option.Option[Value].Some(b_struct_init(i, args, inout state));
+            return option.Option[emitcore.Value].Some(b_struct_init(i, args, inout state));
         }
         case nativeir.Op.EnumInit: {
-            return option.Option[Value].Some(b_enum_init(i, args, inout state));
+            return option.Option[emitcore.Value].Some(b_enum_init(i, args, inout state));
         }
         case nativeir.Op.FieldRead: {
-            let receiver = value_type(state, i.inputs[0]);
-            let index = field_index(receiver, i.field, option.Option[usize].None,
+            let receiver = emitcore.value_type(state, i.inputs[0]);
+            let index = emitcore.field_index(receiver, i.field, option.Option[usize].None,
                 inout state);
-            let receiver_name = lower_type(receiver, inout state);
-            let type_name = lower_type(i.type_id, inout state);
-            return option.Option[Value].Some(result(type_name,
+            let receiver_name = emitcore.lower_type(receiver, inout state);
+            let type_name = emitcore.lower_type(i.type_id, inout state);
+            return option.Option[emitcore.Value].Some(emitcore.result(type_name,
                 "extractvalue " + receiver_name + " " + args[0].reference + ", " +
-                number(index), inout state));
+                emitcore.number(index), inout state));
         }
         case nativeir.Op.FieldAddress: {
-            let receiver = value_type(state, i.inputs[0]);
-            let index = field_index(receiver, i.field, option.Option[usize].None,
+            let receiver = emitcore.value_type(state, i.inputs[0]);
+            let index = emitcore.field_index(receiver, i.field, option.Option[usize].None,
                 inout state);
-            let receiver_name = lower_type(receiver, inout state);
-            return option.Option[Value].Some(result("ptr",
+            let receiver_name = emitcore.lower_type(receiver, inout state);
+            return option.Option[emitcore.Value].Some(emitcore.result("ptr",
                 "getelementptr inbounds " + receiver_name + ", ptr " +
-                args[0].reference + ", i32 0, i32 " + number(index),
+                args[0].reference + ", i32 0, i32 " + emitcore.number(index),
                 inout state));
         }
         case nativeir.Op.LoadIndirect: {
-            let type_name = lower_type(i.type_id, inout state);
-            return option.Option[Value].Some(result(type_name, "load " +
+            let type_name = emitcore.lower_type(i.type_id, inout state);
+            return option.Option[emitcore.Value].Some(emitcore.result(type_name, "load " +
                 type_name + ", ptr " + args[0].reference, inout state));
         }
         case nativeir.Op.StoreIndirect: {
             b_store_indirect(i, args, inout state);
-            return option.Option[Value].None;
+            return option.Option[emitcore.Value].None;
         }
         case nativeir.Op.ReplaceIndirect: {
             b_replace_indirect(i, args, inout state);
-            return option.Option[Value].None;
+            return option.Option[emitcore.Value].None;
         }
         case nativeir.Op.EnumTest: {
-            let receiver = value_type(state, i.inputs[0]);
-            let receiver_name = lower_type(receiver, inout state);
-            let index = variant_index(state, receiver, i.variant);
-            let tag = result("i32", "extractvalue " + receiver_name + " " +
+            let receiver = emitcore.value_type(state, i.inputs[0]);
+            let receiver_name = emitcore.lower_type(receiver, inout state);
+            let index = emitcore.variant_index(state, receiver, i.variant);
+            let tag = emitcore.result("i32", "extractvalue " + receiver_name + " " +
                 args[0].reference + ", 0", inout state);
-            return option.Option[Value].Some(result("i1", "icmp eq i32 " +
-                tag.reference + ", " + number(index), inout state));
+            return option.Option[emitcore.Value].Some(emitcore.result("i1", "icmp eq i32 " +
+                tag.reference + ", " + emitcore.number(index), inout state));
         }
         case nativeir.Op.EnumPayload: {
-            let receiver = value_type(state, i.inputs[0]);
-            let receiver_name = lower_type(receiver, inout state);
-            let variant = variant_index(state, receiver, i.variant);
-            let index = field_index(receiver, i.field,
+            let receiver = emitcore.value_type(state, i.inputs[0]);
+            let receiver_name = emitcore.lower_type(receiver, inout state);
+            let variant = emitcore.variant_index(state, receiver, i.variant);
+            let index = emitcore.field_index(receiver, i.field,
                 option.Option[usize].Some(i.variant), inout state);
-            let type_name = lower_type(i.type_id, inout state);
-            return option.Option[Value].Some(result(type_name,
+            let type_name = emitcore.lower_type(i.type_id, inout state);
+            return option.Option[emitcore.Value].Some(emitcore.result(type_name,
                 "extractvalue " + receiver_name + " " + args[0].reference + ", " +
-                number(variant + 1) + ", " + number(index), inout state));
+                emitcore.number(variant + 1) + ", " + emitcore.number(index), inout state));
         }
         case nativeir.Op.StringLiteral: {
-            return option.Option[Value].Some(b_string_literal(i, inout state));
+            return option.Option[emitcore.Value].Some(b_string_literal(i, inout state));
         }
         // Verified compile-time obligations with no runtime bookkeeping.
-        case nativeir.Op.ExitBegin: return option.Option[Value].None;
-        case nativeir.Op.CleanupBegin: return option.Option[Value].None;
-        case nativeir.Op.CleanupEnd: return option.Option[Value].None;
-        case nativeir.Op.SaveOutput: return option.Option[Value].None;
-        case nativeir.Op.OwnershipBegin: return option.Option[Value].None;
-        case nativeir.Op.OwnershipEnd: return option.Option[Value].None;
-        case nativeir.Op.BeginBorrow: return option.Option[Value].None;
-        case nativeir.Op.EndBorrow: return option.Option[Value].None;
+        case nativeir.Op.ExitBegin: return option.Option[emitcore.Value].None;
+        case nativeir.Op.CleanupBegin: return option.Option[emitcore.Value].None;
+        case nativeir.Op.CleanupEnd: return option.Option[emitcore.Value].None;
+        case nativeir.Op.SaveOutput: return option.Option[emitcore.Value].None;
+        case nativeir.Op.OwnershipBegin: return option.Option[emitcore.Value].None;
+        case nativeir.Op.OwnershipEnd: return option.Option[emitcore.Value].None;
+        case nativeir.Op.BeginBorrow: return option.Option[emitcore.Value].None;
+        case nativeir.Op.EndBorrow: return option.Option[emitcore.Value].None;
         default: {
-            throw invalid("unhandled ordinary instruction op " +
-                number(usize(nativeir.op_id(i.op))));
+            throw emitcore.invalid("unhandled ordinary instruction op " +
+                emitcore.number(usize(nativeir.op_id(i.op))));
         }
     }
 }
 
 // ---- terminators ------------------------------------------------------------
 
-func b_try_output(state Emitter, block usize) TryOutput throws Error {
+func b_try_output(state emitcore.Emitter, block usize) emitcore.TryOutput throws emitcore.Error {
     for entry in state.frame.try_outputs {
         if entry.block == block {
             return entry;
         }
     }
-    throw invalid("missing try output storage");
+    throw emitcore.invalid("missing try output storage");
 }
 
-func b_target(terminator nativeir.Terminator, index usize) usize throws Error {
+func b_target(terminator nativeir.Terminator, index usize) usize throws emitcore.Error {
     if index >= vec.len(terminator.targets) {
-        throw invalid("terminator is missing a successor");
+        throw emitcore.invalid("terminator is missing a successor");
     }
     return terminator.targets[index];
 }
 
-func b_block_ref(block usize, state Emitter) BlockRef throws Error {
+func b_block_ref(block usize, state emitcore.Emitter) emitcore.BlockRef throws emitcore.Error {
     if block >= vec.len(state.frame.blocks) {
-        throw invalid("successor block index out of range");
+        throw emitcore.invalid("successor block index out of range");
     }
     return state.frame.blocks[block];
 }
 
 func b_try_call(terminator nativeir.Terminator, block_id usize,
-                state inout Emitter) throws Error {
+                state inout emitcore.Emitter) throws emitcore.Error {
     let storage = b_try_output(state, block_id);
-    var actual = vec.empty[Value]();
+    var actual = vec.empty[emitcore.Value]();
     for var index usize = 1; index < vec.len(terminator.inputs); index += 1 {
-        vec.push(actual, value(state, terminator.inputs[index]));
+        vec.push(actual, emitcore.value(state, terminator.inputs[index]));
     }
     switch storage.value {
         case option.Option.Some(item): {
             if storage.start_value {
-                start_lifetime(item, inout state);
+                emitcore.start_lifetime(item, inout state);
             }
             vec.push(actual, item);
         }
         case option.Option.None: {}
     }
     if storage.start_error {
-        start_lifetime(storage.error, inout state);
+        emitcore.start_lifetime(storage.error, inout state);
     }
     vec.push(actual, storage.error);
     let origin = b_call_origin(state, terminator.origin, terminator.source);
@@ -920,66 +927,66 @@ func b_try_call(terminator nativeir.Terminator, block_id usize,
     let error_target = b_target(terminator, 1);
     let success_block = b_block_ref(success_target, state);
     let error_block = b_block_ref(error_target, state);
-    var success = Value(type_name: "i1", reference: "false");
+    var success = emitcore.Value(type_name: "i1", reference: "false");
     switch origin.kind {
         case hir.CalleeKind.Direct: {
             switch origin.direct_symbol {
                 case option.Option.Some(symbol): {
-                    if b_capturing(state, symbol) {
-                        throw invalid("direct throwing call targets a capturing lambda entry");
+                    if emitcore.b_capturing(state, symbol) {
+                        throw emitcore.invalid("direct throwing call targets a capturing lambda entry");
                     }
-                    let target = source_function(state, symbol).code;
-                    let sig = signature(terminator.signature, false, false,
+                    let target = emitcore.source_function(state, symbol).code;
+                    let sig = emitcore.signature(terminator.signature, false, false,
                         inout state);
-                    success = call(sig, target, actual, inout state);
+                    success = emitcore.call(sig, target, actual, inout state);
                 }
                 case option.Option.None: {
-                    throw invalid("throwing call origin is neither direct nor function_value");
+                    throw emitcore.invalid("throwing call origin is neither direct nor function_value");
                 }
             }
         }
         case hir.CalleeKind.FunctionValue: {
-            let callee = value(state, terminator.inputs[0]);
-            let code = result("ptr", "extractvalue " + FN_TYPE + " " +
+            let callee = emitcore.value(state, terminator.inputs[0]);
+            let code = emitcore.result("ptr", "extractvalue " + FN_TYPE + " " +
                 callee.reference + ", 0", inout state);
-            let env = result("ptr", "extractvalue " + FN_TYPE + " " +
+            let env = emitcore.result("ptr", "extractvalue " + FN_TYPE + " " +
                 callee.reference + ", 1", inout state);
-            var method = vec.empty[Value]();
+            var method = vec.empty[emitcore.Value]();
             vec.push(method, env);
             for item in actual {
                 vec.push(method, item);
             }
-            let sig = signature(terminator.signature, true, false,
+            let sig = emitcore.signature(terminator.signature, true, false,
                 inout state);
-            success = call(sig, code, method, inout state);
+            success = emitcore.call(sig, code, method, inout state);
         }
         default: {
-            throw invalid("throwing call origin is neither direct nor function_value");
+            throw emitcore.invalid("throwing call origin is neither direct nor function_value");
         }
     }
-    terminate("br " + typed(success) + ", " + b_label(success_block) + ", " +
+    emitcore.terminate("br " + emitcore.typed(success) + ", " + b_label(success_block) + ", " +
         b_label(error_block), inout state);
 }
 
 func emit_terminator(terminator nativeir.Terminator, block_id usize,
-                     state inout Emitter) throws Error {
-    if state.options.debug_info { debug_origin_location(terminator.source, terminator.origin, inout state); }
+                     state inout emitcore.Emitter) throws emitcore.Error {
+    if state.options.debug_info { emitdebug.debug_origin_location(terminator.source, terminator.origin, inout state); }
     // Async-only terminators (await/cancel return and async return/throw) are
     // generated by D; anything it does not own falls through to B.
-    if emit_async_terminator(terminator, block_id, inout state) {
+    if emitvalues.emit_async_terminator(terminator, block_id, inout state) {
         return;
     }
     switch terminator.kind {
         case nativeir.Exit.Branch: {
             let target = b_target(terminator, 0);
             let block = b_block_ref(target, state);
-            terminate("br " + b_label(block), inout state);
+            emitcore.terminate("br " + b_label(block), inout state);
         }
         case nativeir.Exit.Conditional: {
-            let condition = value(state, terminator.inputs[0]);
+            let condition = emitcore.value(state, terminator.inputs[0]);
             let yes = b_block_ref(b_target(terminator, 0), state);
             let no = b_block_ref(b_target(terminator, 1), state);
-            terminate("br " + typed(condition) + ", " + b_label(yes) + ", " +
+            emitcore.terminate("br " + emitcore.typed(condition) + ", " + b_label(yes) + ", " +
                 b_label(no), inout state);
         }
         case nativeir.Exit.TryCall: {
@@ -987,43 +994,43 @@ func emit_terminator(terminator nativeir.Terminator, block_id usize,
         }
         case nativeir.Exit.Return: {
             let function = b_current(state);
-            let sig = type_of(state, function.signature);
-            let source = b_source_by_native(state,
+            let sig = emitcore.type_of(state, function.signature);
+            let source = emitcore.b_source_by_native(state,
                 b_frame_index(state));
-            let returned = value(state, terminator.inputs[0]);
+            let returned = emitcore.value(state, terminator.inputs[0]);
             let throws_type = sig.throws_type;
             switch throws_type {
                 case option.Option.Some(item): {
-                    let payload = type_of(state, sig.result);
-                    if !b_kind_is(payload.kind, model.TypeKind.Unit) {
+                    let payload = emitcore.type_of(state, sig.result);
+                    if !emitcore.b_kind_is(payload.kind, model.TypeKind.Unit) {
                         let offset = b_parameter_offset(state, function.symbol);
                         let index = vec.len(sig.parameters) + offset;
-                        let out = parameter(state, source.text_index, index);
-                        append(b_store_line(returned, out), inout state);
+                        let out = emitcore.parameter(state, source.text_index, index);
+                        emitcore.append(b_store_line(returned, out), inout state);
                     }
-                    terminate("ret i1 true", inout state);
+                    emitcore.terminate("ret i1 true", inout state);
                 }
                 case option.Option.None: {
-                    terminate("ret " + typed(returned), inout state);
+                    emitcore.terminate("ret " + emitcore.typed(returned), inout state);
                 }
             }
         }
         case nativeir.Exit.ErrorReturn: {
             let function = b_current(state);
-            let source = b_source_by_native(state, b_frame_index(state));
-            let thrown = value(state, terminator.inputs[0]);
+            let source = emitcore.b_source_by_native(state, b_frame_index(state));
+            let thrown = emitcore.value(state, terminator.inputs[0]);
             let emitted = state.functions[source.text_index];
             let count = vec.len(emitted.signature.parameters);
             if count == 0 {
-                throw invalid("throwing function has no output parameters");
+                throw emitcore.invalid("throwing function has no output parameters");
             }
-            let out = parameter(state, source.text_index, count - 1);
-            append(b_store_line(thrown, out), inout state);
-            terminate("ret i1 false", inout state);
+            let out = emitcore.parameter(state, source.text_index, count - 1);
+            emitcore.append(b_store_line(thrown, out), inout state);
+            emitcore.terminate("ret i1 false", inout state);
         }
         case nativeir.Exit.Unreachable: {
-            terminate("unreachable", inout state);
+            emitcore.terminate("unreachable", inout state);
         }
-        default: throw invalid("unverified terminator reached emitter");
+        default: throw emitcore.invalid("unverified terminator reached emitter");
     }
 }

@@ -101,7 +101,7 @@ jobs:
           docker build --tag woozy-release-smoke - <<'DOCKERFILE'
           FROM ubuntu:24.04
           RUN apt-get update && apt-get install --no-install-recommends -y \
-              python3.12 gdb make ninja-build binutils g++ && rm -rf /var/lib/apt/lists/*
+              python3.12 gdb ninja-build binutils g++ && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
           docker run --rm --network none \
             -v "$GITHUB_WORKSPACE:/source:ro" -v "$RUNNER_TEMP/release:/release:ro" \
@@ -152,9 +152,9 @@ jobs:
           objects="$RUNNER_TEMP/macos-objects"
           ln -s "$GITHUB_WORKSPACE/stdlib" "$compiler/stdlib"
           ulimit -S -s 16384
-          MAKEFLAGS=-j2 WOOZY_LLVM_BIN="$RUNNER_TEMP/llvm/bin" \
+          WOOZY_LLVM_BIN="$RUNNER_TEMP/llvm/bin" \
             "$compiler/program" build --project selfhost/lang.toml --out-dir "$objects" \
-              --source-make --objects-only --target arm64-apple-macosx11.0.0 --opt 0 --format json
+              --source-make --jobs 2 --objects-only --target arm64-apple-macosx11.0.0 --opt 0 --format json
           cd "$objects"
           sha256sum program.a make-report.json > SHA256SUMS
 
@@ -184,8 +184,8 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           xcrun --sdk macosx --show-sdk-path
-          brew install make ninja python@3.12
-          printf '%s\n' "$(brew --prefix make)/libexec/gnubin" "$(brew --prefix python@3.12)/bin" >> "$GITHUB_PATH"
+          brew install ninja python@3.12
+          printf '%s\n' "$(brew --prefix python@3.12)/bin" >> "$GITHUB_PATH"
 
       - name: Verify and extract locked LLVM for macOS
         run: |

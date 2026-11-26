@@ -1,0 +1,781 @@
+// Ordered containers and sets for the Native CFG verifier.
+//
+// The C++ verifier uses std::map/std::set of ids.  Their iteration order is the
+// ascending (or tuple-lexicographic) key order, and that order decides which
+// malformed record is reported first.  Every map/set here therefore keeps its
+// entries in the same order instead of using hash-like or insertion order.
+// Vec values are shared handles in Woozy, so container copies are explicit.
+package containers;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/vec" as vec;
+import "app/wzcc/nativeverify/support" as nvsupport;
+
+// std::set<size_t> stand-in.
+pub struct BoolSet {
+    pub bits Vec[bool];
+}
+
+pub func bool_set(size usize) BoolSet {
+    return BoolSet(bits: vec.make[bool](size, false));
+}
+
+pub func bool_set_copy(value BoolSet) BoolSet {
+    let bits = vec.make[bool](vec.len(value.bits), false);
+    for var index usize = 0; index < vec.len(value.bits); index += 1 {
+        bits[index] = value.bits[index];
+    }
+    return BoolSet(bits: bits);
+}
+
+pub func bool_set_has(value BoolSet, index usize) bool {
+    if index >= vec.len(value.bits) {
+        return false;
+    }
+    return value.bits[index];
+}
+
+pub func bool_set_add(value inout BoolSet, index usize) bool {
+    if index >= vec.len(value.bits) || value.bits[index] {
+        return false;
+    }
+    value.bits[index] = true;
+    return true;
+}
+
+pub func bool_set_remove(value inout BoolSet, index usize) bool {
+    if index >= vec.len(value.bits) || !value.bits[index] {
+        return false;
+    }
+    value.bits[index] = false;
+    return true;
+}
+
+pub func bool_set_intersect(left BoolSet, right BoolSet) BoolSet {
+    let result = bool_set_copy(left);
+    for var index usize = 0; index < vec.len(result.bits); index += 1 {
+        if !bool_set_has(right, index) {
+            result.bits[index] = false;
+        }
+    }
+    return result;
+}
+
+pub func bool_set_equal(left BoolSet, right BoolSet) bool {
+    if vec.len(left.bits) != vec.len(right.bits) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.bits); index += 1 {
+        if left.bits[index] != right.bits[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// std::set<HirNodeId> in ascending id order.
+pub struct NodeSet {
+    pub values Vec[usize];
+}
+
+pub func node_set() NodeSet {
+    return NodeSet(values: vec.empty[usize]());
+}
+
+func node_set_compare(left usize, right usize) i32 {
+    return nvsupport.usize_compare(left, right);
+}
+
+pub func node_set_has(state NodeSet, value usize) bool {
+    return nvsupport.sorted_index(state.values, value, node_set_compare) <
+           vec.len(state.values);
+}
+
+pub func node_set_insert(state inout NodeSet, value usize) bool {
+    return nvsupport.sorted_insert(inout state.values, value, node_set_compare);
+}
+
+pub func node_set_remove(state inout NodeSet, value usize) bool {
+    let at = nvsupport.sorted_index(state.values, value, node_set_compare);
+    if at >= vec.len(state.values) {
+        return false;
+    }
+    for var index usize = at; index + 1 < vec.len(state.values);
+        index += 1 {
+        state.values[index] = state.values[index + 1];
+    }
+    let popped = vec.pop(state.values);
+    switch popped {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func node_set_copy(state NodeSet) NodeSet {
+    let result = vec.empty[usize]();
+    vec.reserve(result, vec.len(state.values));
+    for value in state.values {
+        vec.push(result, value);
+    }
+    return NodeSet(values: result);
+}
+
+// std::set<std::pair<HirNodeId, uint32_t>> for catch targets.
+pub struct CatchKey {
+    pub try_node usize;
+    pub index u32;
+}
+
+pub struct CatchSet {
+    pub values Vec[CatchKey];
+}
+
+func catch_key_compare(left CatchKey, right CatchKey) i32 {
+    let node_order = nvsupport.usize_compare(left.try_node, right.try_node);
+    if node_order != 0 {
+        return node_order;
+    }
+    return nvsupport.usize_compare(usize(left.index), usize(right.index));
+}
+
+pub func catch_set() CatchSet {
+    return CatchSet(values: vec.empty[CatchKey]());
+}
+
+pub func catch_set_insert(state inout CatchSet, key CatchKey) bool {
+    return nvsupport.sorted_insert(inout state.values, key, catch_key_compare);
+}
+
+pub func catch_set_remove(state inout CatchSet, key CatchKey) bool {
+    let at = nvsupport.sorted_index(state.values, key, catch_key_compare);
+    if at >= vec.len(state.values) {
+        return false;
+    }
+    for var index usize = at; index + 1 < vec.len(state.values);
+        index += 1 {
+        state.values[index] = state.values[index + 1];
+    }
+    let popped = vec.pop(state.values);
+    switch popped {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+// std::set<std::tuple<ValueId, SymbolId, bool>> used for enum variant facts.
+pub struct Fact {
+    pub value usize;
+    pub variant usize;
+    pub matches bool;
+}
+
+pub struct FactSet {
+    pub values Vec[Fact];
+}
+
+func fact_compare(left Fact, right Fact) i32 {
+    let value_order = nvsupport.usize_compare(left.value, right.value);
+    if value_order != 0 {
+        return value_order;
+    }
+    let variant_order = nvsupport.usize_compare(left.variant, right.variant);
+    if variant_order != 0 {
+        return variant_order;
+    }
+    if !left.matches && right.matches { return -1; }
+    if left.matches && !right.matches { return 1; }
+    return 0;
+}
+
+pub func fact_set() FactSet {
+    return FactSet(values: vec.empty[Fact]());
+}
+
+pub func fact_insert(state inout FactSet, value usize, variant usize,
+                 matches bool) bool {
+    return nvsupport.sorted_insert(inout state.values,
+        Fact(value: value, variant: variant, matches: matches), fact_compare);
+}
+
+pub func fact_has(state FactSet, value usize, variant usize, matches bool) bool {
+    let probe = Fact(value: value, variant: variant, matches: matches);
+    return nvsupport.sorted_index(state.values, probe, fact_compare) <
+           vec.len(state.values);
+}
+
+pub func fact_set_copy(state FactSet) FactSet {
+    let result = vec.empty[Fact]();
+    vec.reserve(result, vec.len(state.values));
+    for value in state.values {
+        vec.push(result, value);
+    }
+    return FactSet(values: result);
+}
+
+pub func fact_set_equal(left FactSet, right FactSet) bool {
+    if vec.len(left.values) != vec.len(right.values) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.values); index += 1 {
+        if fact_compare(left.values[index], right.values[index]) != 0 {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub func fact_set_intersect(left FactSet, right FactSet) FactSet {
+    let result = vec.empty[Fact]();
+    for value in left.values {
+        if fact_has(right, value.value, value.variant, value.matches) {
+            vec.push(result, value);
+        }
+    }
+    return FactSet(values: result);
+}
+
+// std::map<ValueId, Def>.  ValueIds sort as plain integers.
+pub struct Definition {
+    pub block usize;
+    pub position usize;
+    pub type_id usize;
+    pub address bool;
+    pub source model.Span;
+}
+
+pub struct ValueDefinition {
+    pub value usize;
+    pub definition Definition;
+}
+
+pub struct DefinitionMap {
+    pub entries Vec[ValueDefinition];
+}
+
+func value_definition_compare(left ValueDefinition, right ValueDefinition) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func definition_map() DefinitionMap {
+    return DefinitionMap(entries: vec.empty[ValueDefinition]());
+}
+
+pub func definition_find(state DefinitionMap, value usize) option.Option[Definition] {
+    let probe = ValueDefinition(value: value,
+        definition: Definition(block: 0, position: 0, type_id: 0, address: false,
+            source: nvsupport.empty_span()));
+    let at = nvsupport.sorted_index(state.entries, probe, value_definition_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[Definition].Some(state.entries[at].definition);
+    }
+    return option.Option[Definition].None;
+}
+
+pub func definition_require(state DefinitionMap, value usize) Definition
+    throws nvsupport.VerifyError {
+    let found = definition_find(state, value);
+    switch found {
+        case option.Option.Some(definition): return definition;
+        case option.Option.None:
+            throw nvsupport.support(model.SupportError.Invalid("missing value definition"));
+    }
+}
+
+pub func definition_insert(state inout DefinitionMap, value usize,
+                       definition Definition) bool {
+    return nvsupport.sorted_insert(inout state.entries,
+        ValueDefinition(value: value, definition: definition),
+        value_definition_compare);
+}
+
+pub func definition_set_source(state inout DefinitionMap, value usize,
+                           source model.Span) {
+    let at = nvsupport.sorted_index(state.entries,
+        ValueDefinition(value: value,
+            definition: Definition(block: 0, position: 0, type_id: 0,
+                address: false, source: nvsupport.empty_span())),
+        value_definition_compare);
+    if at < vec.len(state.entries) {
+        state.entries[at].definition.source = source;
+    }
+}
+
+// std::map<ValueId, const Instruction *>.
+pub struct InstructionEntry {
+    pub value usize;
+    pub instruction nativeir.Instruction;
+}
+
+pub struct InstructionMap {
+    pub entries Vec[InstructionEntry];
+}
+
+func instruction_entry_compare(left InstructionEntry,
+                               right InstructionEntry) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func instruction_map() InstructionMap {
+    return InstructionMap(entries: vec.empty[InstructionEntry]());
+}
+
+pub func instruction_find(state InstructionMap, value usize)
+    option.Option[nativeir.Instruction] {
+    let probe = InstructionEntry(value: value,
+        instruction: nativeir.empty_instruction());
+    let at = nvsupport.sorted_index(state.entries, probe, instruction_entry_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[nativeir.Instruction].Some(
+            state.entries[at].instruction);
+    }
+    return option.Option[nativeir.Instruction].None;
+}
+
+pub func instruction_require(state InstructionMap, value usize)
+    nativeir.Instruction throws nvsupport.VerifyError {
+    let found = instruction_find(state, value);
+    switch found {
+        case option.Option.Some(instruction): return instruction;
+        case option.Option.None:
+            throw nvsupport.support(model.SupportError.Invalid(
+                "missing value instruction"));
+    }
+}
+
+pub func instruction_insert(state inout InstructionMap, value usize,
+                        instruction nativeir.Instruction) bool {
+    let entry = InstructionEntry(value: value, instruction: instruction);
+    return nvsupport.sorted_insert(inout state.entries, entry, instruction_entry_compare);
+}
+
+// std::map<ValueId, std::pair<ValueId, size_t>> for Vec element addresses.
+pub struct AddressRoot {
+    pub value usize;
+    pub root usize;
+    pub depth usize;
+}
+
+pub struct AddressRootMap {
+    pub entries Vec[AddressRoot];
+}
+
+func address_root_compare(left AddressRoot, right AddressRoot) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func address_root_map() AddressRootMap {
+    return AddressRootMap(entries: vec.empty[AddressRoot]());
+}
+
+pub func address_root_find(state AddressRootMap, value usize)
+    option.Option[AddressRoot] {
+    let probe = AddressRoot(value: value, root: 0, depth: 0);
+    let at = nvsupport.sorted_index(state.entries, probe, address_root_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[AddressRoot].Some(state.entries[at]);
+    }
+    return option.Option[AddressRoot].None;
+}
+
+pub func address_root_insert(state inout AddressRootMap, value usize, root usize,
+                         depth usize) bool {
+    return nvsupport.sorted_insert(inout state.entries,
+        AddressRoot(value: value, root: root, depth: depth),
+        address_root_compare);
+}
+
+// std::map<ValueId, size_t> counters (address writes).
+pub struct ValueCount {
+    pub value usize;
+    pub count usize;
+}
+
+pub struct ValueCountMap {
+    pub entries Vec[ValueCount];
+}
+
+func value_count_compare(left ValueCount, right ValueCount) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func value_count_map() ValueCountMap {
+    return ValueCountMap(entries: vec.empty[ValueCount]());
+}
+
+pub func value_count_add(state inout ValueCountMap, value usize) {
+    let at = nvsupport.sorted_index(state.entries, ValueCount(value: value, count: 0),
+        value_count_compare);
+    if at < vec.len(state.entries) {
+        state.entries[at].count += 1;
+        return;
+    }
+    nvsupport.sorted_insert(inout state.entries, ValueCount(value: value, count: 1),
+        value_count_compare);
+}
+
+pub func value_count_get(state ValueCountMap, value usize) usize {
+    let at = nvsupport.sorted_index(state.entries, ValueCount(value: value, count: 0),
+        value_count_compare);
+    if at < vec.len(state.entries) {
+        return state.entries[at].count;
+    }
+    return 0;
+}
+
+// std::map<ValueId, std::set<LocalSlotId>> for owning receivers.
+pub struct ValueOwners {
+    pub value usize;
+    pub slots BoolSet;
+}
+
+pub struct ValueOwnerMap {
+    pub entries Vec[ValueOwners];
+    pub slot_count usize;
+}
+
+func value_owners_compare(left ValueOwners, right ValueOwners) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func value_owner_map(slot_count usize) ValueOwnerMap {
+    return ValueOwnerMap(entries: vec.empty[ValueOwners](),
+        slot_count: slot_count);
+}
+
+pub func value_owner_find(state ValueOwnerMap, value usize)
+    option.Option[BoolSet] {
+    let probe = ValueOwners(value: value, slots: bool_set(state.slot_count));
+    let at = nvsupport.sorted_index(state.entries, probe, value_owners_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[BoolSet].Some(state.entries[at].slots);
+    }
+    return option.Option[BoolSet].None;
+}
+
+pub func value_owner_add(state inout ValueOwnerMap, value usize, slot usize) {
+    let at = nvsupport.sorted_index(state.entries,
+        ValueOwners(value: value, slots: bool_set(state.slot_count)),
+        value_owners_compare);
+    if at < vec.len(state.entries) {
+        bool_set_add(inout state.entries[at].slots, slot);
+        return;
+    }
+    var slots = bool_set(state.slot_count);
+    bool_set_add(inout slots, slot);
+    nvsupport.sorted_insert(inout state.entries, ValueOwners(value: value, slots: slots),
+        value_owners_compare);
+}
+
+// std::map<LocalSlotId, ValueId> for owning temporaries.
+pub struct SlotTemporary {
+    pub slot usize;
+    pub value usize;
+}
+
+pub struct SlotTemporaryMap {
+    pub entries Vec[SlotTemporary];
+}
+
+func slot_temporary_compare(left SlotTemporary, right SlotTemporary) i32 {
+    return nvsupport.usize_compare(left.slot, right.slot);
+}
+
+pub func slot_temporary_map() SlotTemporaryMap {
+    return SlotTemporaryMap(entries: vec.empty[SlotTemporary]());
+}
+
+pub func slot_temporary_insert(state inout SlotTemporaryMap, slot usize,
+                           value usize) bool {
+    return nvsupport.sorted_insert(inout state.entries,
+        SlotTemporary(slot: slot, value: value), slot_temporary_compare);
+}
+
+pub func slot_temporary_require(state SlotTemporaryMap, slot usize) usize
+    throws nvsupport.VerifyError {
+    let at = nvsupport.sorted_index(state.entries, SlotTemporary(slot: slot, value: 0),
+        slot_temporary_compare);
+    if at < vec.len(state.entries) {
+        return state.entries[at].value;
+    }
+    throw nvsupport.support(model.SupportError.Invalid("missing owning temporary"));
+}
+
+// std::map<HirNodeId, size_t> for the HIR evaluation order of system calls.
+pub struct NodeOrder {
+    pub node usize;
+    pub order usize;
+}
+
+pub struct NodeOrderMap {
+    pub entries Vec[NodeOrder];
+}
+
+func node_order_compare(left NodeOrder, right NodeOrder) i32 {
+    return nvsupport.usize_compare(left.node, right.node);
+}
+
+pub func node_order_map() NodeOrderMap {
+    return NodeOrderMap(entries: vec.empty[NodeOrder]());
+}
+
+pub func node_order_insert(state inout NodeOrderMap, node usize, order usize) bool {
+    return nvsupport.sorted_insert(inout state.entries, NodeOrder(node: node, order: order),
+        node_order_compare);
+}
+
+pub func node_order_find(state NodeOrderMap, node usize) option.Option[usize] {
+    let at = nvsupport.sorted_index(state.entries, NodeOrder(node: node, order: 0),
+        node_order_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[usize].Some(state.entries[at].order);
+    }
+    return option.Option[usize].None;
+}
+
+// std::multimap<std::tuple<snapshot, begin, end, type>, HirNodeId>.  The C++
+// equal_range preserves insertion order, which is ascending node index here.
+pub struct ConstantRoot {
+    pub snapshot u64;
+    pub begin_byte u64;
+    pub end_byte u64;
+    pub type_id usize;
+    pub node usize;
+}
+
+pub struct ConstantRootList {
+    pub entries Vec[ConstantRoot];
+}
+
+pub func constant_root_list() ConstantRootList {
+    return ConstantRootList(entries: vec.empty[ConstantRoot]());
+}
+
+pub func constant_root_insert(state inout ConstantRootList, snapshot u64,
+                          begin_byte u64, end_byte u64, type_id usize,
+                          node usize) {
+    vec.push(state.entries, ConstantRoot(snapshot: snapshot,
+        begin_byte: begin_byte, end_byte: end_byte, type_id: type_id,
+        node: node));
+}
+
+// std::map<std::tuple<TryNode, index, BlockId>, const Handler *>.
+pub struct HandlerKey {
+    pub try_node usize;
+    pub index u32;
+    pub block usize;
+}
+
+pub struct HandlerEntry {
+    pub key HandlerKey;
+    pub handler nativeir.Handler;
+}
+
+pub struct HandlerMap {
+    pub entries Vec[HandlerEntry];
+}
+
+func handler_key_compare(left HandlerKey, right HandlerKey) i32 {
+    let node_order = nvsupport.usize_compare(left.try_node, right.try_node);
+    if node_order != 0 {
+        return node_order;
+    }
+    let index_order = nvsupport.usize_compare(usize(left.index), usize(right.index));
+    if index_order != 0 {
+        return index_order;
+    }
+    return nvsupport.usize_compare(left.block, right.block);
+}
+
+func handler_entry_compare(left HandlerEntry, right HandlerEntry) i32 {
+    return handler_key_compare(left.key, right.key);
+}
+
+pub func handler_map() HandlerMap {
+    return HandlerMap(entries: vec.empty[HandlerEntry]());
+}
+
+pub func handler_insert(state inout HandlerMap, try_node usize, index u32,
+                    block usize, handler nativeir.Handler) bool {
+    return nvsupport.sorted_insert(inout state.entries,
+        HandlerEntry(key: HandlerKey(try_node: try_node, index: index,
+            block: block), handler: handler),
+        handler_entry_compare);
+}
+
+pub func handler_find(state HandlerMap, try_node usize, index u32, block usize)
+    option.Option[nativeir.Handler] {
+    let probe = HandlerEntry(key: HandlerKey(try_node: try_node, index: index,
+        block: block), handler: default_handler());
+    let at = nvsupport.sorted_index(state.entries, probe, handler_entry_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[nativeir.Handler].Some(
+            state.entries[at].handler);
+    }
+    return option.Option[nativeir.Handler].None;
+}
+
+pub func default_handler() nativeir.Handler {
+    return nativeir.Handler(target: hir.CatchTarget(try_node: 0, index: 0),
+        block: 0, slot: 0, protected_entry: 0);
+}
+
+// std::set<std::tuple<TryNode, uint32_t, BlockId>> for concrete Try instances.
+pub struct InstanceKey {
+    pub try_node usize;
+    pub index u32;
+    pub block usize;
+}
+
+func instance_key_compare(left InstanceKey, right InstanceKey) i32 {
+    return handler_key_compare(HandlerKey(try_node: left.try_node,
+            index: left.index, block: left.block),
+        HandlerKey(try_node: right.try_node, index: right.index,
+            block: right.block));
+}
+
+pub struct InstanceSet {
+    pub values Vec[InstanceKey];
+}
+
+pub func instance_set() InstanceSet {
+    return InstanceSet(values: vec.empty[InstanceKey]());
+}
+
+pub func instance_set_insert(state inout InstanceSet, try_node usize, index u32,
+                         block usize) bool {
+    return nvsupport.sorted_insert(inout state.values,
+        InstanceKey(try_node: try_node, index: index, block: block),
+        instance_key_compare);
+}
+
+// std::map<ValueId, unsigned> for owned-value flags (bit 1 transferred,
+// bit 2 available).  Entries stay sorted by ValueId so equality is the C++
+// std::map equality of the same contents.
+pub struct ValueFlag {
+    pub value usize;
+    pub state u32;
+}
+
+pub struct ValueFlagMap {
+    pub entries Vec[ValueFlag];
+}
+
+func value_flag_compare(left ValueFlag, right ValueFlag) i32 {
+    return nvsupport.usize_compare(left.value, right.value);
+}
+
+pub func value_flag_map() ValueFlagMap {
+    return ValueFlagMap(entries: vec.empty[ValueFlag]());
+}
+
+func value_flag_find(state ValueFlagMap, value usize) option.Option[u32] {
+    let at = nvsupport.sorted_index(state.entries, ValueFlag(value: value, state: 0),
+        value_flag_compare);
+    if at < vec.len(state.entries) {
+        return option.Option[u32].Some(state.entries[at].state);
+    }
+    return option.Option[u32].None;
+}
+
+pub func value_flag_require(state ValueFlagMap, value usize) u32
+    throws nvsupport.VerifyError {
+    let found = value_flag_find(state, value);
+    switch found {
+        case option.Option.Some(flags): return flags;
+        case option.Option.None:
+            throw nvsupport.support(model.SupportError.Invalid(
+                "missing owned value state"));
+    }
+}
+
+pub func value_flag_set(state inout ValueFlagMap, value usize, flags u32) {
+    let at = nvsupport.sorted_index(state.entries, ValueFlag(value: value, state: 0),
+        value_flag_compare);
+    if at < vec.len(state.entries) {
+        state.entries[at].state = flags;
+        return;
+    }
+    nvsupport.sorted_insert(inout state.entries, ValueFlag(value: value, state: flags),
+        value_flag_compare);
+}
+
+pub func value_flag_insert(state inout ValueFlagMap, value usize, flags u32) bool {
+    return nvsupport.sorted_insert(inout state.entries,
+        ValueFlag(value: value, state: flags), value_flag_compare);
+}
+
+pub func value_flag_copy(state ValueFlagMap) ValueFlagMap {
+    let entries = vec.empty[ValueFlag]();
+    vec.reserve(entries, vec.len(state.entries));
+    for value in state.entries {
+        vec.push(entries, value);
+    }
+    return ValueFlagMap(entries: entries);
+}
+
+pub func value_flag_equal(left ValueFlagMap, right ValueFlagMap) bool {
+    if vec.len(left.entries) != vec.len(right.entries) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.entries); index += 1 {
+        if value_flag_compare(left.entries[index], right.entries[index]) != 0 ||
+           left.entries[index].state != right.entries[index].state {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub func bool_set_is_single(value BoolSet, index usize) bool {
+    var found = false;
+    for var position usize = 0; position < vec.len(value.bits); position += 1 {
+        if !value.bits[position] {
+            continue;
+        }
+        if found || position != index {
+            return false;
+        }
+        found = true;
+    }
+    return found;
+}
+
+pub func bool_set_count(value BoolSet) usize {
+    var count usize = 0;
+    for item in value.bits {
+        if item {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+pub func bool_set_first(value BoolSet) usize throws nvsupport.VerifyError {
+    for var position usize = 0; position < vec.len(value.bits); position += 1 {
+        if value.bits[position] {
+            return position;
+        }
+    }
+    throw nvsupport.support(model.SupportError.Invalid("empty block predecessor set"));
+}
+
+pub func bool_set_vec(count usize, value BoolSet) Vec[BoolSet] {
+    let result = vec.empty[BoolSet]();
+    vec.reserve(result, count);
+    for var index usize = 0; index < count; index += 1 {
+        vec.push(result, bool_set_copy(value));
+    }
+    return result;
+}
+
+pub func fact_set_vec(count usize, value FactSet) Vec[FactSet] {
+    let result = vec.empty[FactSet]();
+    vec.reserve(result, count);
+    for var index usize = 0; index < count; index += 1 {
+        vec.push(result, fact_set_copy(value));
+    }
+    return result;
+}

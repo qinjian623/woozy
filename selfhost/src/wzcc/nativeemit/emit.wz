@@ -1,12 +1,16 @@
 package nativeemit;
 
-import "app/wzcc/hirverify" as hirverify;
 import "app/wzcc/interface" as interface;
 import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/debug" as emitdebug;
+import "app/wzcc/nativeemit/values" as emitvalues;
 import "app/wzcc/nativeir" as nativeir;
 import "app/wzcc/nativeverify" as nativeverify;
 import "std/option" as option;
 import "std/vec" as vec;
+
+
 
 func emit_failure(code string, kind model.FailureKind, message string) EmitResult {
     var diagnostic = model.diagnostic(code, "codegen", message,
@@ -16,37 +20,44 @@ func emit_failure(code string, kind model.FailureKind, message string) EmitResul
         diagnostics: [diagnostic], value: option.Option[Output].None);
 }
 
-func emit_assembly(input nativeir.Module, entry usize, options Options)
-    Output throws Error {
-    return emit_package_assembly(input, entry, options, option.Option[usize].None,
-        option.Option[interface.Keys].None, [], [], false);
+// The public facade keeps its own records; core gets one private settings copy.
+func core_settings(options Options) emitcore.Settings {
+    return emitcore.Settings(triple: options.triple, cpu: options.cpu,
+        features: options.features, optimization: options.optimization,
+        debug_info: options.debug_info);
 }
-func emit_package_assembly(input nativeir.Module, entry usize, options Options,
+
+func emit_assembly(input nativeir.Module, entry usize, options Options)
+    Output throws emitcore.Error {
+    return emit_package_assembly(input, entry, core_settings(options),
+        option.Option[usize].None, option.Option[interface.Keys].None, [], [], false);
+}
+func emit_package_assembly(input nativeir.Module, entry usize, settings emitcore.Settings,
     package_id option.Option[usize], keys option.Option[interface.Keys],
-    order Vec[usize], externals Vec[ExternalSource], worker_instances bool) Output throws Error {
-    var state = new_emitter(input, options);
+    order Vec[usize], externals Vec[emitcore.ExternalSource], worker_instances bool) Output throws emitcore.Error {
+    var state = emitcore.new_emitter(input, settings);
     state.package_selection = package_id; state.identities = keys;
     state.emit_worker_instances = worker_instances;
-    if options.debug_info { debug_init(inout state); }
+    if settings.debug_info { emitdebug.debug_init(inout state); }
     if option.is_some(package_id) { state.source_order = order; }
-    declare_runtime_types(inout state);
-    scan_c_resource_flags(inout state);
+    emitcore.declare_runtime_types(inout state);
+    emitvalues.scan_c_resource_flags(inout state);
     declare_source_functions(inout state);
     declare_external_functions(externals, inout state);
     state.gc_entry_symbol = option.Option[usize].Some(entry);
     var has_async = false;
     for index in state.source_order {
-        if owns_function(state, input.functions[index].symbol) {
+        if emitcore.owns_function(state, input.functions[index].symbol) {
             if input.functions[index].is_async { has_async = true; }
             emit_function(index, inout state);
         }
     }
-    if owns_function(state, entry) { emit_main(entry, inout state); }
-    finalize_c_adapter(inout state);
-    let output = sections(state);
+    if emitcore.owns_function(state, entry) { emit_main(entry, inout state); }
+    emitvalues.finalize_c_adapter(inout state);
+    let output = emitcore.sections(state);
     return Output(llvm_sections: output, c_adapter_source: state.e.adapter_source,
-        triple: options.triple, data_layout: state.data_layout, has_async: has_async,
-        debug_info: options.debug_info);
+        triple: settings.triple, data_layout: state.data_layout, has_async: has_async,
+        debug_info: settings.debug_info);
 }
 
 pub func emit(input nativeverify.VerifiedModule, entry usize,
@@ -57,6 +68,7 @@ pub func emit_package(input nativeverify.VerifiedModule, entry usize, options Op
     return emit_selected(input, entry, options, option.Option[usize].Some(package_id), true);
 }
 func emit_selected(input nativeverify.VerifiedModule, entry usize, options Options, package_id option.Option[usize], worker_instances bool) EmitResult {
+    let settings = core_settings(options);
     try {
         let module = nativeverify.snapshot(input);
         let capabilities = nativeverify.check_hir_capabilities(input);
@@ -75,7 +87,7 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
                 "native scalars require native/64 HIR");
         }
         var c_target = "x86_64-linux-gnu";
-        if options.triple == DARWIN_ARM64_TRIPLE { c_target = "arm64-apple-darwin"; }
+        if settings.triple == DARWIN_ARM64_TRIPLE { c_target = "arm64-apple-darwin"; }
         for binding in module.hir.resolved.project.c_bindings {
             if binding.target != c_target {
                 return emit_failure("E_TARGET_UNSUPPORTED", model.FailureKind.Unsupported,
@@ -84,9 +96,9 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
         }
         switch package_id {
             case option.Option.Some(selected): {
-                if selected >= vec.len(module.hir.resolved.project.modules) { throw invalid("package selection is not a project module"); }
+                if selected >= vec.len(module.hir.resolved.project.modules) { throw emitcore.invalid("package selection is not a project module"); }
                 if vec.len(module.hir.resolved.project.c_bindings) != 0 {
-                    throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+                    throw emitcore.Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
                         "package objects do not yet support C binding adapters");
                 }
             }
@@ -96,19 +108,19 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
         if option.is_some(package_id) { keys = option.Option[interface.Keys].Some(interface.index(module.hir)); }
         var order = vec.empty[usize]();
         switch keys { case option.Option.Some(index): order = package_function_order(module, index); case option.Option.None: {} }
-        var externals = vec.empty[ExternalSource]();
+        var externals = vec.empty[emitcore.ExternalSource]();
         if option.is_some(package_id) {
             for external in nativeverify.externals(input) {
-                vec.push(externals, ExternalSource(symbol: external.symbol,
+                vec.push(externals, emitcore.ExternalSource(symbol: external.symbol,
                     signature: external.signature));
             }
         }
-        let output = emit_package_assembly(module, entry, options, package_id, keys, order, externals, worker_instances);
+        let output = emit_package_assembly(module, entry, settings, package_id, keys, order, externals, worker_instances);
         return EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source,
             diagnostics: [], value: option.Option[Output].Some(output));
-    } catch error Error {
+    } catch error emitcore.Error {
         switch error {
-            case Error.Failure(code, kind, message): return emit_failure(code, kind, message);
+            case emitcore.Error.Failure(code, kind, message): return emit_failure(code, kind, message);
         }
     } catch error model.SupportError {
         switch error {
@@ -123,6 +135,7 @@ func emit_selected(input nativeverify.VerifiedModule, entry usize, options Optio
 // One snapshot and identity index for every selected package. The verified input
 // remains the only public entry; no mutable HIR is accepted by this API.
 pub func emit_packages(input nativeverify.VerifiedModule, entry usize, options Options, packages Vec[usize]) Vec[EmitResult] {
+    let settings = core_settings(options);
     let result = vec.empty[EmitResult]();
     try {
         let module = nativeverify.snapshot(input); let capabilities = nativeverify.check_hir_capabilities(input);
@@ -132,16 +145,16 @@ pub func emit_packages(input nativeverify.VerifiedModule, entry usize, options O
         if module.hir.config.word_bits != 64 || vec.len(module.hir.resolved.project.c_bindings) != 0 {
             vec.push(result, emit_failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported, "package objects require native/64 without C adapters")); return result;
         }
-        switch module.hir.config.backend { case model.Backend.Native: {} case model.Backend.Python: throw invalid("package objects require Native HIR"); }
+        switch module.hir.config.backend { case model.Backend.Native: {} case model.Backend.Python: throw emitcore.invalid("package objects require Native HIR"); }
         let keys = interface.index(module.hir);
         let order = package_function_order(module, keys);
         for selected in packages {
-            if selected >= vec.len(module.hir.resolved.project.modules) { throw invalid("package selection is not a project module"); }
-            let output = emit_package_assembly(module, entry, options, option.Option[usize].Some(selected), option.Option[interface.Keys].Some(keys), order,
-                vec.empty[ExternalSource](), false);
+            if selected >= vec.len(module.hir.resolved.project.modules) { throw emitcore.invalid("package selection is not a project module"); }
+            let output = emit_package_assembly(module, entry, settings, option.Option[usize].Some(selected), option.Option[interface.Keys].Some(keys), order,
+                vec.empty[emitcore.ExternalSource](), false);
             vec.push(result, EmitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source, diagnostics: [], value: option.Option[Output].Some(output)));
         }
-    } catch problem Error { switch problem { case Error.Failure(code, kind, message): vec.push(result, emit_failure(code, kind, message)); } }
+    } catch problem emitcore.Error { switch problem { case emitcore.Error.Failure(code, kind, message): vec.push(result, emit_failure(code, kind, message)); } }
     catch problem model.SupportError { switch problem {
         case model.SupportError.Invalid(message): vec.push(result, emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message));
         case model.SupportError.Limit(message): vec.push(result, emit_failure("E_INTERNAL_ERROR", model.FailureKind.Internal, message));

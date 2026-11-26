@@ -51,7 +51,6 @@ def verify(release, version, commit):
                 {"LD_LIBRARY_PATH", "LD_PRELOAD", "SDKROOT", "MAKEFLAGS", "GNUMAKEFLAGS",
                  "MFLAGS", "MAKEFILES", "MAKEOVERRIDES", "MAKELEVEL", "MAKE_RESTARTS"}):
             del os.environ[name]
-    os.environ["MAKEFLAGS"] = "-j2"
 
     with tempfile.TemporaryDirectory(prefix="woozy-macos-release-") as temporary:
         work = Path(temporary)

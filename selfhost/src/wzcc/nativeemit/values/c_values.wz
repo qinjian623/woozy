@@ -1,0 +1,1455 @@
+package values;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/valueops" as valueops;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// C: source value operations, function environments, thunks, bound
+// receivers, trait vtables, thread bridges and the value-shaped instructions.
+//
+// Direct port of src/backend/native/value_ops.inc, concurrency.inc and the
+// emit.cpp sections for environments, thunks, bound adapters, function values,
+// Vec/iterator instructions, dyn boxing/dispatch and trait tables.  The C++
+// backend builds llvm::Values directly; this file emits the same instruction
+// sequence as LLVM text through the shared state/text helpers.
+//
+// Ownership of state is fixed by SELFHOST_NATIVEEMIT.md: this file writes only
+// the C caches (c.value_ops/thunks/environment_types/environment_ops/
+// bound_adapters/trait_vtables/trait_drop/trait_clone/thread_bridges/
+// vec_retain_fast/vec_release_fast) and frame.function_values.  Aggregate
+// layout stays in the nativelayout worker behind B's thin wrappers, and
+// FrameGcOps/runtime registration stays in D.
+//
+// Every local helper is prefixed c_; only the function names published by the
+// contract are unprefixed and owned here.
+
+
+// One incoming edge of a reserved PHI line.  A PHI must stay in the block
+// prefix, so the line is reserved before the branch that defines its operand
+// and filled once every predecessor is known.
+pub struct CPhiIncoming {
+    pub value emitcore.Value;
+    pub block emitcore.BlockRef;
+}
+
+pub struct CPendingPhi {
+    slot emitcore.PrefixRef;
+    pub value emitcore.Value;
+    type_name string;
+}
+
+// ---- small literal/error helpers -------------------------------------------
+
+pub func c_unsupported(message string) emitcore.Error {
+    return emitcore.Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+        message);
+}
+
+func c_param_mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+pub func c_int(type_name string, value usize) emitcore.Value {
+    return emitcore.Value(type_name: type_name, reference: emitcore.number(value));
+}
+
+pub func c_null() emitcore.Value {
+    return emitcore.Value(type_name: "ptr", reference: "null");
+}
+
+func c_true() emitcore.Value {
+    return emitcore.Value(type_name: "i1", reference: "true");
+}
+
+pub func c_false() emitcore.Value {
+    return emitcore.Value(type_name: "i1", reference: "false");
+}
+
+// Language Unit is an ordinary i8 value, not an LLVM void.
+func c_unit() emitcore.Value {
+    return emitcore.Value(type_name: "i8", reference: "0");
+}
+
+pub func c_none_result() option.Option[emitcore.Value] {
+    return option.Option[emitcore.Value].Some(c_unit());
+}
+
+func c_parameters(args Vec[emitcore.Value]) Vec[string] {
+    var out = vec.empty[string]();
+    for arg in args {
+        vec.push(out, arg.type_name);
+    }
+    return out;
+}
+
+func c_same_ids(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Cache keys store their own copy; a caller may keep mutating its array.
+func c_copy_ids(values Vec[usize]) Vec[usize] {
+    var out = vec.empty[usize]();
+    for value in values {
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func c_option_value(value option.Option[emitcore.Value]) emitcore.Value throws emitcore.Error {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: throw emitcore.invalid("missing LLVM value");
+    }
+}
+
+pub func c_argument(args Vec[emitcore.Value], index usize) emitcore.Value throws emitcore.Error {
+    if index >= vec.len(args) {
+        throw emitcore.invalid("instruction is missing an operand");
+    }
+    return args[index];
+}
+
+// ---- LLVM text helpers ------------------------------------------------------
+
+pub func c_load(type_name string, address emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(type_name, "load " + type_name + ", ptr " + address.reference,
+        inout state);
+}
+
+pub func c_load_tagged(type_name string, address emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let suffix = emitcore.vec_memory(false, inout state);
+    return emitcore.result(type_name, "load " + type_name + ", ptr " + address.reference + suffix,
+        inout state);
+}
+
+pub func c_store(value emitcore.Value, address emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.append("store " + emitcore.typed(value) + ", ptr " + address.reference, inout state);
+}
+
+pub func c_store_tagged(value emitcore.Value, address emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    let suffix = emitcore.vec_memory(false, inout state);
+    emitcore.append("store " + emitcore.typed(value) + ", ptr " + address.reference + suffix, inout state);
+}
+
+pub func c_gep(type_name string, address emitcore.Value, field usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result("ptr", "getelementptr inbounds " + type_name + ", ptr " +
+        address.reference + ", i32 0, i32 " + emitcore.number(field), inout state);
+}
+
+func c_gep2(type_name string, address emitcore.Value, outer usize, inner usize,
+            state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result("ptr", "getelementptr inbounds " + type_name + ", ptr " +
+        address.reference + ", i32 0, i32 " + emitcore.number(outer) + ", i32 " +
+        emitcore.number(inner), inout state);
+}
+
+pub func c_extract(type_name string, aggregate emitcore.Value, index usize,
+               state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(type_name, "extractvalue " + emitcore.typed(aggregate) + ", " +
+        emitcore.number(index), inout state);
+}
+
+pub func c_insert(type_name string, aggregate emitcore.Value, value emitcore.Value, index usize,
+              state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(type_name, "insertvalue " + emitcore.typed(aggregate) + ", " +
+        emitcore.typed(value) + ", " + emitcore.number(index), inout state);
+}
+
+pub func c_icmp(predicate string, type_name string, left string, right string,
+            state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result("i1", "icmp " + predicate + " " + type_name + " " + left +
+        ", " + right, inout state);
+}
+
+pub func c_binop(operation string, type_name string, left string, right string,
+             state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(type_name, operation + " " + type_name + " " + left + ", " +
+        right, inout state);
+}
+
+pub func c_branch(target emitcore.BlockRef, state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.terminate("br label " + target.reference, inout state);
+}
+
+pub func c_cond_branch(condition emitcore.Value, yes emitcore.BlockRef, no emitcore.BlockRef,
+                   state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.terminate("br i1 " + condition.reference + ", label " + yes.reference +
+        ", label " + no.reference, inout state);
+}
+
+func c_ret(value emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.terminate("ret " + emitcore.typed(value), inout state);
+}
+
+func c_ret_void(state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.terminate("ret void", inout state);
+}
+
+pub func c_call(callee emitcore.Value, args Vec[emitcore.Value], result_type string,
+            state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let signature = emitcore.Signature(result: result_type, parameters: c_parameters(args));
+    return emitcore.call(signature, callee, args, inout state);
+}
+
+// The C++ IRBuilder declares llvm.memcpy on first use; do the same so a module
+// that only needs one of the callers still verifies.
+pub func c_memcpy(destination emitcore.Value, source emitcore.Value, length emitcore.Value,
+              state inout emitcore.Emitter) throws emitcore.Error {
+    let signature = emitcore.Signature(result: "void",
+        parameters: ["ptr", "ptr", "i64", "i1"]);
+    let declaration = emitcore.declare_function("llvm.memcpy.p0.p0.i64", signature,
+        inout state);
+    let suffix = emitcore.vec_memory(false, inout state);
+    emitcore.append("call void " + declaration.reference + "(ptr " + destination.reference +
+        ", ptr " + source.reference + ", " + emitcore.typed(length) + ", i1 false)" +
+        suffix, inout state);
+}
+
+pub func c_phi_begin(type_name string, state inout emitcore.Emitter) CPendingPhi throws emitcore.Error {
+    let slot = emitcore.reserve_prefix(inout state);
+    let value = emitcore.fresh_value(type_name, inout state);
+    return CPendingPhi(slot: slot, value: value, type_name: type_name);
+}
+
+pub func c_phi_set(phi CPendingPhi, incoming Vec[CPhiIncoming],
+               state inout emitcore.Emitter) throws emitcore.Error {
+    if vec.len(incoming) == 0 {
+        throw emitcore.invalid("LLVM PHI has no incoming edges");
+    }
+    var line = phi.value.reference + " = phi " + phi.type_name;
+    for var index usize = 0; index < vec.len(incoming); index += 1 {
+        if index != 0 {
+            line += ",";
+        }
+        line += " [ " + incoming[index].value.reference + ", " +
+            incoming[index].block.reference + " ]";
+    }
+    emitcore.set_prefix(phi.slot, line, inout state);
+}
+
+// ---- symbol naming ----------------------------------------------------------
+
+func c_name_taken(name string, state emitcore.Emitter) bool {
+    for item in state.type_definitions {
+        if item.name == name {
+            return true;
+        }
+    }
+    for item in state.globals {
+        if item.name == name {
+            return true;
+        }
+    }
+    for item in state.declarations {
+        if item.name == name {
+            return true;
+        }
+    }
+    for item in state.functions {
+        if item.name == name {
+            return true;
+        }
+    }
+    return false;
+}
+
+// LLVM would auto-rename a repeated internal helper; keep the same shape.
+pub func c_unique_name(base string, state emitcore.Emitter) string {
+    var name = base;
+    var suffix usize = 0;
+    for c_name_taken(name, state) {
+        name = base + "." + emitcore.number(suffix);
+        suffix += 1;
+    }
+    return name;
+}
+
+// ---- value classification ---------------------------------------------------
+
+func c_ordinary_copyable(type_id usize, state emitcore.Emitter) bool throws emitcore.Error {
+    var copyable = false;
+    try {
+        copyable = valueops.ordinary_copyable(state.input.hir, type_id);
+    } catch error model.SupportError {
+        throw emitcore.invalid("value classification failed");
+    }
+    return copyable;
+}
+
+pub func c_weak_target(type_id usize, state emitcore.Emitter) bool {
+    return valueops.weak_target(state.input.hir, type_id);
+}
+
+// A Function or Weak always owns a runtime reference even while the shared HIR
+// classifier still treats Function as trivial.  Aggregates containing either
+// must be copied and dropped field-wise.
+func c_contains_function(type_id usize, active Vec[usize], depth usize,
+                         state inout emitcore.Emitter) bool throws emitcore.Error {
+    if depth > 64 {
+        return false;
+    }
+    let value = emitcore.type_of(state, type_id);
+    switch value.kind {
+        case model.TypeKind.Function: return true;
+        case model.TypeKind.Weak: return true;
+        case model.TypeKind.NominalStruct: {}
+        case model.TypeKind.NominalEnum: {}
+        default: return false;
+    }
+    for present in active {
+        if present == type_id {
+            return false;
+        }
+    }
+    var nested = c_copy_ids(active);
+    vec.push(nested, type_id);
+    var found = false;
+    switch value.kind {
+        case model.TypeKind.NominalStruct: {
+            let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None,
+                inout state);
+            for field in fields {
+                if c_contains_function(field.type_id, nested, depth + 1,
+                                       inout state) {
+                    found = true;
+                }
+            }
+        }
+        case model.TypeKind.NominalEnum: {
+            let declaration = emitcore.aggregate_declaration(state, type_id);
+            for variant in declaration.variants {
+                let fields = emitcore.aggregate_fields(type_id,
+                    option.Option[usize].Some(variant.symbol), inout state);
+                for field in fields {
+                    if c_contains_function(field.type_id, nested, depth + 1,
+                                           inout state) {
+                        found = true;
+                    }
+                }
+            }
+        }
+        default: {}
+    }
+    return found;
+}
+
+pub func owning(type_id usize, state inout emitcore.Emitter) bool throws emitcore.Error {
+    var needs_drop = false;
+    try {
+        needs_drop = valueops.classify_value(state.input.hir, type_id).needs_drop;
+    } catch error model.SupportError {
+        throw emitcore.invalid("value classification failed");
+    }
+    if needs_drop {
+        return true;
+    }
+    var active = vec.empty[usize]();
+    return c_contains_function(type_id, active, 0, inout state);
+}
+
+// ---- vec reference counting -------------------------------------------------
+
+func c_vec_rc_cached(retain bool, state emitcore.Emitter) option.Option[emitcore.Value] {
+    if retain {
+        return state.c.vec_retain_fast;
+    }
+    return state.c.vec_release_fast;
+}
+
+func c_vec_rc_remember(retain bool, value emitcore.Value, state inout emitcore.Emitter) {
+    if retain {
+        state.c.vec_retain_fast = option.Option[emitcore.Value].Some(value);
+    } else {
+        state.c.vec_release_fast = option.Option[emitcore.Value].Some(value);
+    }
+}
+
+// The test-only Vec observer is a weak declaration in C++.  The text API has
+// no way to spell extern_weak on a function, so the same address probe is
+// emitted as an extern_weak object reference: a linked observer (including a
+// reentrant one) resolves non-null and keeps the runtime path and its exact
+// event order, while an absent observer resolves to null and the common
+// refcount updates stay inline.  Overflow cases still return to the runtime.
+func c_vec_observer_declaration(state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.define_global("lang_vec_observe_v1", "extern_weak global i8", inout state);
+}
+
+func c_vec_rc(retain bool, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    switch c_vec_rc_cached(retain, state) {
+        case option.Option.Some(cached): return cached;
+        case option.Option.None: {}
+    }
+    var name = "lang.vec.release";
+    if retain {
+        name = "lang.vec.retain";
+    }
+    let signature = emitcore.Signature(result: "void", parameters: ["ptr"]);
+    let function_index = emitcore.new_function(name, signature, "internal", "", inout state);
+    let value = emitcore.function_reference(state, function_index);
+    c_vec_rc_remember(retain, value, inout state);
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    let fast = emitcore.new_block(function_index, "fast", inout state);
+    let runtime_block = emitcore.new_block(function_index, "runtime", inout state);
+    let check = emitcore.new_block(function_index, "check", inout state);
+    let update = emitcore.new_block(function_index, "update", inout state);
+    let done = emitcore.new_block(function_index, "done", inout state);
+
+    emitcore.position(entry, inout state);
+    let observer = c_vec_observer_declaration(inout state);
+    let observed = c_icmp("ne", "ptr", observer.reference, "null", inout state);
+    c_cond_branch(observed, runtime_block, fast, inout state);
+
+    emitcore.position(fast, inout state);
+    let argument = emitcore.parameter(state, function_index, 0);
+    let address = c_gep(emitcore.VEC_TYPE, argument, 0, inout state);
+    let suffix = emitcore.vec_memory(true, inout state);
+    let initial = emitcore.result("i64", "load atomic i64, ptr " + address.reference +
+        " monotonic, align 8" + suffix, inout state);
+    c_branch(check, inout state);
+
+    emitcore.position(check, inout state);
+    let phi = c_phi_begin("i64", inout state);
+    var defer_expression = "";
+    if retain {
+        defer_expression = c_icmp("eq", "i64", phi.value.reference,
+            "18446744073709551615", inout state).reference;
+    } else {
+        defer_expression = c_icmp("ult", "i64", phi.value.reference, "2",
+            inout state).reference;
+    }
+    c_cond_branch(emitcore.Value(type_name: "i1", reference: defer_expression),
+        runtime_block, update, inout state);
+
+    emitcore.position(update, inout state);
+    var next_expression = "";
+    if retain {
+        next_expression = "add";
+    } else {
+        next_expression = "sub";
+    }
+    let next = c_binop(next_expression, "i64", phi.value.reference, "1", inout state);
+    var ordering = "monotonic";
+    if !retain {
+        ordering = "release";
+    }
+    let exchange_suffix = emitcore.vec_memory(true, inout state);
+    let exchange = emitcore.result("{ i64, i1 }", "cmpxchg ptr " + address.reference +
+        ", i64 " + phi.value.reference + ", i64 " + next.reference + " " +
+        ordering + " monotonic, align 8" + exchange_suffix, inout state);
+    let previous = c_extract("i64", exchange, 0, inout state);
+    let succeeded = c_extract("i1", exchange, 1, inout state);
+    c_cond_branch(succeeded, done, check, inout state);
+    let update_end = emitcore.here(state);
+
+    emitcore.position(runtime_block, inout state);
+    var runtime_name = "lang_vec_release_v1";
+    if retain {
+        runtime_name = "lang_vec_retain_v1";
+    }
+    let ignored = emitcore.runtime(runtime_name, "void", [argument], inout state);
+    c_branch(done, inout state);
+
+    emitcore.position(done, inout state);
+    let fast_end = fast;
+    var incoming = vec.empty[CPhiIncoming]();
+    vec.push(incoming, CPhiIncoming(value: initial, block: fast_end));
+    vec.push(incoming, CPhiIncoming(value: previous, block: update_end));
+    c_phi_set(phi, incoming, inout state);
+    c_ret_void(inout state);
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+// ---- value operations -------------------------------------------------------
+
+func c_resource_registration(c_type u32, state emitcore.Emitter) option.Option[model.CRegistrationDecl] throws emitcore.Error {
+    let project = state.input.hir.resolved.project;
+    if c_type == 0 || usize(c_type) > vec.len(project.c_types) {
+        throw emitcore.invalid("C resource type index out of range");
+    }
+    return project.c_types[usize(c_type) - 1].registration;
+}
+
+func c_resource_retain_symbol(c_type u32, state emitcore.Emitter) string throws emitcore.Error {
+    let project = state.input.hir.resolved.project;
+    if c_type == 0 || usize(c_type) > vec.len(project.c_types) {
+        throw emitcore.invalid("C resource type index out of range");
+    }
+    return project.c_types[usize(c_type) - 1].retain_symbol;
+}
+
+func c_value_op_body(type_id usize, copy bool, function_index usize,
+                     state inout emitcore.Emitter) throws emitcore.Error {
+    let argument = emitcore.parameter(state, function_index, 0);
+    let value_type = emitcore.type_of(state, type_id);
+    switch value_type.kind {
+        case model.TypeKind.Vec: {
+            let value = c_load("ptr", argument, inout state);
+            let operation = c_vec_rc(copy, inout state);
+            let ignored = c_call(operation, [value], "void", inout state);
+        }
+        case model.TypeKind.Function: {
+            let value = c_load(emitcore.FN_TYPE, argument, inout state);
+            let environment = c_extract("ptr", value, 1, inout state);
+            let present = emitcore.new_block(function_index, "fn.env", inout state);
+            let done = emitcore.new_block(function_index, "fn.done", inout state);
+            let alive = c_icmp("ne", "ptr", environment.reference, "null", inout state);
+            c_cond_branch(alive, present, done, inout state);
+            emitcore.position(present, inout state);
+            var operation_name = "lang_vec_release_v1";
+            if copy {
+                operation_name = "lang_vec_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [environment], inout state);
+            c_branch(done, inout state);
+            emitcore.position(done, inout state);
+        }
+        case model.TypeKind.Weak: {
+            let value = c_load(emitcore.WEAK_TYPE, argument, inout state);
+            let control = c_extract("ptr", value, 0, inout state);
+            let present = emitcore.new_block(function_index, "weak.control", inout state);
+            let done = emitcore.new_block(function_index, "weak.done", inout state);
+            let alive = c_icmp("ne", "ptr", control.reference, "null", inout state);
+            c_cond_branch(alive, present, done, inout state);
+            emitcore.position(present, inout state);
+            var operation_name = "lang_weak_release_v1";
+            if copy {
+                operation_name = "lang_weak_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [control], inout state);
+            c_branch(done, inout state);
+            emitcore.position(done, inout state);
+        }
+        case model.TypeKind.Slice: {
+            var operation_name = "lang_slice_drop_v1";
+            if copy {
+                operation_name = "lang_slice_copy_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [argument], inout state);
+        }
+        case model.TypeKind.String: {
+            let layout = emitcore.lower_type(type_id, inout state);
+            let value = c_load(layout, argument, inout state);
+            let owner = c_extract("ptr", value, 3, inout state);
+            let present = emitcore.new_block(function_index, "text.owner", inout state);
+            let done = emitcore.new_block(function_index, "text.done", inout state);
+            let alive = c_icmp("ne", "ptr", owner.reference, "null", inout state);
+            c_cond_branch(alive, present, done, inout state);
+            emitcore.position(present, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [owner], inout state);
+            c_branch(done, inout state);
+            emitcore.position(done, inout state);
+        }
+        case model.TypeKind.ThreadHandle: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.MutexHandle: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.CondvarHandle: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.AtomicI64Handle: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.IpcHandle: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_handle_release_v1";
+            if copy {
+                operation_name = "lang_handle_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.Task: {
+            let value = c_load("ptr", argument, inout state);
+            var operation_name = "lang_async_task_release_v1";
+            if copy {
+                operation_name = "lang_async_task_retain_v1";
+            }
+            let ignored = emitcore.runtime(operation_name, "void", [value], inout state);
+        }
+        case model.TypeKind.CForeignResource: {
+            if copy {
+                switch c_resource_registration(value_type.c_type, state) {
+                    case option.Option.Some(declaration): {
+                        throw c_unsupported("managed registration resource is move-only");
+                    }
+                    case option.Option.None: {}
+                }
+                if c_resource_retain_symbol(value_type.c_type, state) == "" {
+                    throw c_unsupported("C resource has no retain_symbol and cannot be copied");
+                }
+            }
+            let value = c_load("ptr", argument, inout state);
+            let operation = resource_operation(value_type.c_type, copy, inout state);
+            let ignored = c_call(operation, [value], "void", inout state);
+        }
+        case model.TypeKind.TraitObject: {
+            let value = c_load(emitcore.DYN_TYPE, argument, inout state);
+            let data = c_extract("ptr", value, 0, inout state);
+            let table = c_extract("ptr", value, 1, inout state);
+            var slot_index = "0";
+            if copy {
+                slot_index = "1";
+            }
+            let slot = emitcore.result("ptr", "getelementptr ptr, ptr " + table.reference +
+                ", i32 " + slot_index, inout state);
+            let callback = c_load("ptr", slot, inout state);
+            if copy {
+                let clone = c_call(callback, [data], "ptr", inout state);
+                let next = c_insert(emitcore.DYN_TYPE, value, clone, 0, inout state);
+                c_store(next, argument, inout state);
+            } else {
+                let ignored = c_call(callback, [data], "void", inout state);
+            }
+        }
+        case model.TypeKind.NominalStruct: {
+            let layout = emitcore.lower_type(type_id, inout state);
+            let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None,
+                inout state);
+            let field_ids = c_field_ids(fields);
+            c_record_ops(field_ids, copy, layout, argument, inout state);
+        }
+        case model.TypeKind.NominalEnum: {
+            let layout = emitcore.lower_type(type_id, inout state);
+            let tag_address = c_gep(layout, argument, 0, inout state);
+            let tag = c_load("i32", tag_address, inout state);
+            let declaration = emitcore.aggregate_declaration(state, type_id);
+            let done = emitcore.new_block(function_index, "done", inout state);
+            var bodies = vec.empty[emitcore.BlockRef]();
+            for variant in declaration.variants {
+                vec.push(bodies, emitcore.new_block(function_index, "payload", inout state));
+            }
+            var cases = "";
+            for var index usize = 0; index < vec.len(bodies); index += 1 {
+                cases += " i32 " + emitcore.number(index) + ", label " +
+                    bodies[index].reference;
+            }
+            emitcore.terminate("switch i32 " + tag.reference + ", label " + done.reference +
+                " [" + cases + " ]", inout state);
+            for var index usize = 0; index < vec.len(bodies); index += 1 {
+                emitcore.position(bodies[index], inout state);
+                let fields = emitcore.aggregate_fields(type_id,
+                    option.Option[usize].Some(declaration.variants[index].symbol),
+                    inout state);
+                let count = vec.len(fields);
+                for var position_index usize = 0; position_index < count;
+                    position_index += 1 {
+                    var field_index = position_index;
+                    if !copy {
+                        field_index = count - 1 - position_index;
+                    }
+                    let field_type = fields[field_index].type_id;
+                    if owning(field_type, inout state) {
+                        let address = c_gep2(layout, argument, index + 1,
+                            field_index, inout state);
+                        let operation = value_op(field_type, copy, inout state);
+                        let ignored = c_call(operation, [address], "void", inout state);
+                    }
+                }
+                c_branch(done, inout state);
+            }
+            emitcore.position(done, inout state);
+        }
+        default: {}
+    }
+}
+
+pub func value_op(type_id usize, copy bool, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.value_ops); index += 1 {
+        let entry = state.c.value_ops[index];
+        if entry.type_id == type_id && entry.copy == copy {
+            return entry.function;
+        }
+    }
+    var name = "lang.drop." + emitcore.number(type_id);
+    if copy {
+        name = "lang.copy." + emitcore.number(type_id);
+    }
+    let signature = emitcore.Signature(result: "void", parameters: ["ptr"]);
+    let function_index = emitcore.new_function(name, signature, "internal", "", inout state);
+    let value = emitcore.function_reference(state, function_index);
+    // Register the reference before the body so recursive copy/drop of a
+    // nominal type terminates on the cached function.
+    vec.push(state.c.value_ops, emitcore.ValueOperation(type_id: type_id, copy: copy,
+        function: value));
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    c_value_op_body(type_id, copy, function_index, inout state);
+    c_ret_void(inout state);
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+pub func copy_value(type_id usize, value emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    if owning(type_id, inout state) {
+        let layout = emitcore.lower_type(type_id, inout state);
+        let address = emitcore.storage(layout, inout state);
+        c_store(value, address, inout state);
+        let operation = value_op(type_id, true, inout state);
+        let ignored = c_call(operation, [address], "void", inout state);
+    }
+    return value;
+}
+
+pub func c_slot_storage(slot usize, state emitcore.Emitter) emitcore.SlotStorage throws emitcore.Error {
+    if slot >= vec.len(state.frame.slots) {
+        throw emitcore.invalid("native slot index out of range");
+    }
+    return state.frame.slots[slot];
+}
+
+func c_slot_active(slot usize, state emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let storage_entry = c_slot_storage(slot, state);
+    switch storage_entry.active {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw emitcore.invalid("slot has no active flag");
+    }
+}
+
+pub func destroy_slot(slot usize, type_id usize, state inout emitcore.Emitter) throws emitcore.Error {
+    let current = emitcore.here(state);
+    let function_index = current.function_index;
+    let live = emitcore.new_block(function_index, "destroy.live", inout state);
+    let done = emitcore.new_block(function_index, "destroy.done", inout state);
+    let storage_entry = c_slot_storage(slot, state);
+    let active = c_slot_active(slot, state);
+    let loaded = c_load("i1", active, inout state);
+    c_cond_branch(loaded, live, done, inout state);
+    emitcore.position(live, inout state);
+    c_store(c_false(), active, inout state);
+    let operation = value_op(type_id, false, inout state);
+    let ignored = c_call(operation, [storage_entry.address], "void", inout state);
+    c_branch(done, inout state);
+    emitcore.position(done, inout state);
+}
+
+// ---- function environments --------------------------------------------------
+
+func c_record_text(fields Vec[usize], state inout emitcore.Emitter) string throws emitcore.Error {
+    if vec.len(fields) == 0 {
+        return "{}";
+    }
+    var parts = vec.empty[string]();
+    for field in fields {
+        vec.push(parts, emitcore.lower_type(field, inout state));
+    }
+    return "{ " + text.join(parts, ", ") + " }";
+}
+
+// A nonempty Fn environment is exactly one row of an anonymous record held in
+// a LangVec.  The record has no public TypeId, so its recursive copy/drop
+// helpers are synthesized from the field TypeIds in declaration order.
+pub func env_record_type(fields Vec[usize], state inout emitcore.Emitter) string throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.environment_types);
+        index += 1 {
+        let entry = state.c.environment_types[index];
+        if c_same_ids(entry.fields, fields) {
+            return entry.type_name;
+        }
+    }
+    let name = c_unique_name("lang.env", state);
+    let layout = c_record_text(fields, inout state);
+    let type_name = emitcore.define_type(name, layout, inout state);
+    vec.push(state.c.environment_types, emitcore.EnvironmentType(fields: c_copy_ids(fields),
+        type_name: type_name));
+    return type_name;
+}
+
+func c_field_ids(fields Vec[hir.FieldDecl]) Vec[usize] {
+    var out = vec.empty[usize]();
+    for field in fields {
+        vec.push(out, field.type_id);
+    }
+    return out;
+}
+
+func c_record_ops(fields Vec[usize], copy bool, layout string, address emitcore.Value,
+                  state inout emitcore.Emitter) throws emitcore.Error {
+    let count = vec.len(fields);
+    for var index usize = 0; index < count; index += 1 {
+        var field_index = index;
+        if !copy {
+            field_index = count - 1 - index;
+        }
+        let field_type = fields[field_index];
+        if owning(field_type, inout state) {
+            let field_address = c_gep(layout, address, field_index, inout state);
+            let operation = value_op(field_type, copy, inout state);
+            let ignored = c_call(operation, [field_address], "void", inout state);
+        }
+    }
+}
+
+func c_has_move_only_field(fields Vec[usize], state emitcore.Emitter) bool throws emitcore.Error {
+    for field in fields {
+        if !c_ordinary_copyable(field, state) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func env_record_op(fields Vec[usize], copy bool, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.environment_ops); index += 1 {
+        let entry = state.c.environment_ops[index];
+        if entry.copy == copy && c_same_ids(entry.fields, fields) {
+            return entry.function;
+        }
+    }
+    let layout = env_record_type(fields, inout state);
+    var name = "lang.env.drop." + emitcore.number(vec.len(state.c.environment_ops));
+    if copy {
+        name = "lang.env.copy." + emitcore.number(vec.len(state.c.environment_ops));
+    }
+    let signature = emitcore.Signature(result: "void", parameters: ["ptr"]);
+    let function_index = emitcore.new_function(name, signature, "internal", "", inout state);
+    let value = emitcore.function_reference(state, function_index);
+    vec.push(state.c.environment_ops, emitcore.EnvironmentOperation(fields: c_copy_ids(fields),
+        copy: copy, function: value));
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let argument = emitcore.parameter(state, function_index, 0);
+    // Fn copies share the env; deep-copying a move-only row is invalid and is
+    // reported by the same runtime panic as the C++ backend.
+    if copy && c_has_move_only_field(fields, state) {
+        let ignored = emitcore.runtime("lang_native_panic_v1", "void",
+            [c_int("i32", 10), c_int("i64", 0), c_int("i64", 0), c_int("i64", 0)],
+            inout state);
+        emitcore.terminate("unreachable", inout state);
+    } else {
+        c_record_ops(fields, copy, layout, argument, inout state);
+        c_ret_void(inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+// Install already-owned child values as one Vec row.  The children were copied
+// or moved by NativeIR; storing their bytes transfers ownership once.
+func make_environment(fields Vec[usize], children Vec[emitcore.Value],
+                      state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    if vec.len(fields) != vec.len(children) {
+        throw emitcore.invalid("function environment child count differs from schema");
+    }
+    let layout = env_record_type(fields, inout state);
+    let row = emitcore.storage(layout, inout state);
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        let address = c_gep(layout, row, index, inout state);
+        c_store(children[index], address, inout state);
+    }
+    let bytes = emitcore.allocation_size(layout);
+    let empty = c_icmp("eq", "i64", bytes.reference, "0", inout state);
+    let stride_value = emitcore.result("i64", "select i1 " + empty.reference + ", i64 1, i64 " +
+        bytes.reference, inout state);
+    let copy_op = env_record_op(fields, true, inout state);
+    let drop_op = env_record_op(fields, false, inout state);
+    let environment = emitcore.runtime("lang_vec_new_v1", "ptr",
+        [c_int("i64", 1), stride_value, copy_op, drop_op], inout state);
+    let data = emitcore.vec_field(environment, 5, "ptr", inout state);
+    c_memcpy(data, row, bytes, inout state);
+    let length = c_gep(emitcore.VEC_TYPE, environment, 2, inout state);
+    let suffix = emitcore.vec_memory(true, inout state);
+    emitcore.append("store i64 1, ptr " + length.reference + suffix, inout state);
+    let registered = gc_register_fields(environment, fields, inout state);
+    return environment;
+}
+
+// ---- thunks, bound receivers and function values ----------------------------
+
+func c_require_hir_function(symbol usize, state emitcore.Emitter) hir.HirFunction throws emitcore.Error {
+    switch emitcore.find_hir_function(state, symbol) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw emitcore.invalid("function value has no HIR function instance");
+        }
+    }
+}
+
+// Cache one env-ignoring thunk per noncapturing function.  Stored and indirect
+// code always has the env-first ABI, including throws outputs.
+func function_thunk(symbol usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.thunks); index += 1 {
+        if state.c.thunks[index].symbol == symbol {
+            return state.c.thunks[index].function;
+        }
+    }
+    let source = emitcore.source_function(state, symbol);
+    // Direct-call callees also materialize a function instruction; for an
+    // async declaration the value-shaped entry is its Task-producing start
+    // function, not the coroutine (which takes a trailing future).
+    let target = emitcore.call_target(state, symbol);
+    let env_signature = emitcore.signature(source.signature, true, false, inout state);
+    let name = "lang.thunk." + emitcore.number(symbol);
+    let function_index = emitcore.new_function(name, env_signature, "internal", "",
+        inout state);
+    let value = emitcore.function_reference(state, function_index);
+    vec.push(state.c.thunks, emitcore.SymbolFunction(symbol: symbol, function: value));
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    var actual = vec.empty[emitcore.Value]();
+    for var index usize = 1; index < vec.len(env_signature.parameters); index += 1 {
+        vec.push(actual, emitcore.parameter(state, function_index, index));
+    }
+    let returned = c_call(target, actual, env_signature.result, inout state);
+    if env_signature.result == "void" {
+        c_ret_void(inout state);
+    } else {
+        c_ret(returned, inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+func c_bound_receiver(schema hir.FunctionValue) hir.BoundReceiver throws emitcore.Error {
+    switch schema.bound {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw emitcore.invalid("bound adapter without receiver schema");
+        }
+    }
+}
+
+func bound_adapter(schema hir.FunctionValue, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let bound = c_bound_receiver(schema);
+    if c_param_mode_id(bound.mode) == 1 {
+        throw emitcore.invalid("inout Self cannot be stored in a bound function value");
+    }
+    let source = emitcore.source_function(state, schema.symbol);
+    let method = emitcore.type_of(state, source.signature);
+    if vec.len(method.parameters) == 0 {
+        throw emitcore.invalid("bound receiver differs from the method Self parameter");
+    }
+    if method.parameters[0].type_id != bound.type_id ||
+       c_param_mode_id(method.parameters[0].mode) != c_param_mode_id(bound.mode) {
+        throw emitcore.invalid("bound receiver differs from the method Self parameter");
+    }
+    // Both ordinary and move Self require an ordinary-copyable receiver.  The
+    // per-call copy for move Self must not consume the environment field, so
+    // the copy helper is materialized before the adapter is cached.
+    if owning(bound.type_id, inout state) {
+        let forced = value_op(bound.type_id, true, inout state);
+    }
+    for var index usize = 0; index < vec.len(state.c.bound_adapters); index += 1 {
+        let entry = state.c.bound_adapters[index];
+        if entry.symbol == schema.symbol && entry.receiver_type == bound.type_id &&
+           c_param_mode_id(entry.mode) == c_param_mode_id(bound.mode) {
+            return entry.function;
+        }
+    }
+    let adapter_signature = emitcore.signature(source.signature, true, true, inout state);
+    let name = "lang.bound." + emitcore.number(schema.symbol) + "." + emitcore.number(bound.type_id);
+    let function_index = emitcore.new_function(name, adapter_signature, "internal", "",
+        inout state);
+    let value = emitcore.function_reference(state, function_index);
+    vec.push(state.c.bound_adapters, emitcore.BoundAdapter(symbol: schema.symbol,
+        receiver_type: bound.type_id, mode: bound.mode, function: value));
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let environment = emitcore.parameter(state, function_index, 0);
+    let row = emitcore.runtime("lang_vec_at_v1", "ptr",
+        [environment, c_int("i64", 0)], inout state);
+    let layout = env_record_type([bound.type_id], inout state);
+    let address = c_gep(layout, row, 0, inout state);
+    let receiver_type = emitcore.lower_type(bound.type_id, inout state);
+    var receiver = c_load(receiver_type, address, inout state);
+    if c_param_mode_id(bound.mode) == 2 && owning(bound.type_id, inout state) {
+        let copy_slot = emitcore.storage(receiver_type, inout state);
+        c_store(receiver, copy_slot, inout state);
+        let copy_op = value_op(bound.type_id, true, inout state);
+        let ignored = c_call(copy_op, [copy_slot], "void", inout state);
+        receiver = c_load(receiver_type, copy_slot, inout state);
+    }
+    var actual = vec.empty[emitcore.Value]();
+    vec.push(actual, receiver);
+    for var index usize = 1; index < vec.len(adapter_signature.parameters);
+        index += 1 {
+        vec.push(actual, emitcore.parameter(state, function_index, index));
+    }
+    let returned = c_call(source.code, actual, adapter_signature.result, inout state);
+    if adapter_signature.result == "void" {
+        c_ret_void(inout state);
+    } else {
+        c_ret(returned, inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+func c_function_value_schema(instruction nativeir.Instruction,
+                             state emitcore.Emitter) option.Option[hir.FunctionValue] {
+    switch instruction.origin {
+        case option.Option.None: return option.Option[hir.FunctionValue].None;
+        case option.Option.Some(origin): {
+            if origin >= vec.len(state.input.hir.nodes) {
+                return option.Option[hir.FunctionValue].None;
+            }
+            switch state.input.hir.nodes[origin].data {
+                case hir.NodeData.FunctionValue(value): {
+                    return option.Option[hir.FunctionValue].Some(value);
+                }
+                case hir.NodeData.ConstantLiteral(literal): {
+                    switch literal.value.data {
+                        case hir.ConstantData.FunctionValue(value): {
+                            return option.Option[hir.FunctionValue].Some(value);
+                        }
+                        default: return option.Option[hir.FunctionValue].None;
+                    }
+                }
+                default: return option.Option[hir.FunctionValue].None;
+            }
+        }
+    }
+}
+
+func c_constant_origin(instruction nativeir.Instruction, state emitcore.Emitter) bool {
+    switch instruction.origin {
+        case option.Option.None: return false;
+        case option.Option.Some(origin): {
+            if origin >= vec.len(state.input.hir.nodes) {
+                return false;
+            }
+            switch state.input.hir.nodes[origin].data {
+                case hir.NodeData.ConstantLiteral(literal): return true;
+                default: return false;
+            }
+        }
+    }
+}
+
+func function_value_info(state emitcore.Emitter,
+                         value_id usize) option.Option[emitcore.FunctionValueInfo] {
+    for var index usize = 0; index < vec.len(state.frame.function_values);
+        index += 1 {
+        if state.frame.function_values[index].value_id == value_id {
+            return option.Option[emitcore.FunctionValueInfo].Some(
+                state.frame.function_values[index]);
+        }
+    }
+    return option.Option[emitcore.FunctionValueInfo].None;
+}
+
+pub func function_value(instruction nativeir.Instruction, args Vec[emitcore.Value],
+                    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let schema = c_function_value_schema(instruction, state);
+    let constant_origin = c_constant_origin(instruction, state);
+    var symbol = instruction.function;
+    switch schema {
+        case option.Option.Some(value): { symbol = value.symbol; }
+        case option.Option.None: {}
+    }
+    if symbol != instruction.function {
+        throw emitcore.invalid("function value symbol differs from its HIR schema");
+    }
+    var dynamic = false;
+    switch schema {
+        case option.Option.None: {}
+        case option.Option.Some(value): {
+            switch value.bound {
+                case option.Option.Some(bound): {
+                    if vec.len(value.captures) != 0 {
+                        throw emitcore.invalid("function value has both captures and a bound receiver");
+                    }
+                    dynamic = true;
+                }
+                case option.Option.None: {
+                    if vec.len(value.captures) != 0 {
+                        dynamic = true;
+                    }
+                }
+            }
+        }
+    }
+    if dynamic && constant_origin {
+        throw emitcore.invalid("constant FunctionValue cannot capture or bind a receiver");
+    }
+    if dynamic && vec.len(args) == 0 {
+        throw emitcore.invalid("capturing or bound function value has no environment inputs");
+    }
+    var value = emitcore.Value(type_name: emitcore.FN_TYPE, reference: "zeroinitializer");
+    if dynamic {
+        let schema_value = c_option_schema(schema);
+        var fields = vec.empty[usize]();
+        var is_bound = false;
+        switch schema_value.bound {
+            case option.Option.Some(bound): {
+                is_bound = true;
+                if vec.len(args) != 1 {
+                    throw emitcore.invalid("bound function value has the wrong receiver child count");
+                }
+                if emitcore.value_type(state, instruction.inputs[0]) != bound.type_id {
+                    throw emitcore.invalid("bound receiver child type differs from its schema");
+                }
+                vec.push(fields, bound.type_id);
+            }
+            case option.Option.None: {
+                if vec.len(args) != vec.len(schema_value.captures) {
+                    throw emitcore.invalid("capture child count differs from the function schema");
+                }
+                let entry = c_require_hir_function(symbol, state);
+                if vec.len(entry.captures) != vec.len(schema_value.captures) {
+                    throw emitcore.invalid("capture schema differs from the lambda entry");
+                }
+                for var index usize = 0; index < vec.len(schema_value.captures);
+                    index += 1 {
+                    let capture = schema_value.captures[index];
+                    let entry_capture = entry.captures[index];
+                    if emitcore.value_type(state, instruction.inputs[index]) != capture.type_id {
+                        throw emitcore.invalid("capture child type differs from the function schema");
+                    }
+                    if entry_capture.origin != capture.origin ||
+                       entry_capture.type_id != capture.type_id {
+                        throw emitcore.invalid("capture origin/type differs from the lambda entry");
+                    }
+                    vec.push(fields, capture.type_id);
+                }
+            }
+        }
+        if is_bound {
+            switch emitcore.find_hir_function(state, symbol) {
+                case option.Option.Some(entry): {
+                    if vec.len(entry.captures) != 0 {
+                        throw emitcore.invalid("bound method entry unexpectedly captures locals");
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+        var code = c_null();
+        if is_bound {
+            code = bound_adapter(schema_value, inout state);
+        } else {
+            code = emitcore.source_function(state, symbol).code;
+        }
+        let environment = make_environment(fields, args, inout state);
+        let with_code = c_insert(emitcore.FN_TYPE, value, code, 0, inout state);
+        value = c_insert(emitcore.FN_TYPE, with_code, environment, 1, inout state);
+    } else {
+        if vec.len(args) != 0 {
+            throw emitcore.invalid("noncapturing function value has children");
+        }
+        switch emitcore.find_hir_function(state, symbol) {
+            case option.Option.Some(entry): {
+                if vec.len(entry.captures) != 0 {
+                    throw emitcore.invalid("capturing function value is missing its HIR capture schema");
+                }
+            }
+            case option.Option.None: {}
+        }
+        let thunk = function_thunk(symbol, inout state);
+        value = emitcore.Value(type_name: emitcore.FN_TYPE, reference: "{ ptr " + thunk.reference +
+            ", ptr null }");
+    }
+    switch instruction.result {
+        case option.Option.Some(value_id): {
+            vec.push(state.frame.function_values, emitcore.FunctionValueInfo(value_id: value_id,
+                symbol: symbol, dynamic: dynamic));
+        }
+        case option.Option.None: {}
+    }
+    return value;
+}
+
+func c_option_schema(value option.Option[hir.FunctionValue]) hir.FunctionValue throws emitcore.Error {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: {
+            throw emitcore.invalid("function value has no HIR schema");
+        }
+    }
+}
+
+// ---- trait objects ----------------------------------------------------------
+
+func trait_box_op(concrete usize, clone bool, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    if clone {
+        for var index usize = 0; index < vec.len(state.c.trait_clone); index += 1 {
+            if state.c.trait_clone[index].type_id == concrete {
+                return state.c.trait_clone[index].function;
+            }
+        }
+    } else {
+        for var index usize = 0; index < vec.len(state.c.trait_drop); index += 1 {
+            if state.c.trait_drop[index].type_id == concrete {
+                return state.c.trait_drop[index].function;
+            }
+        }
+    }
+    var name = "lang.trait.drop." + emitcore.number(concrete);
+    var result_type = "void";
+    if clone {
+        name = "lang.trait.clone." + emitcore.number(concrete);
+        result_type = "ptr";
+    }
+    let signature = emitcore.Signature(result: result_type, parameters: ["ptr"]);
+    let function_index = emitcore.new_function(name, signature, "internal", "", inout state);
+    let value = emitcore.function_reference(state, function_index);
+    if clone {
+        vec.push(state.c.trait_clone, emitcore.TypeFunction(type_id: concrete, function: value));
+    } else {
+        vec.push(state.c.trait_drop, emitcore.TypeFunction(type_id: concrete, function: value));
+    }
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let data = emitcore.parameter(state, function_index, 0);
+    var runtime_name = "lang_trait_box_release_v1";
+    if clone {
+        runtime_name = "lang_trait_box_clone_v1";
+    }
+    let returned = emitcore.runtime(runtime_name, result_type, [data], inout state);
+    if clone {
+        c_ret(returned, inout state);
+    } else {
+        c_ret_void(inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+func trait_method_thunk(dyn_type usize, concrete usize, target usize,
+                        state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let target_hir = c_require_hir_function(target, state);
+    let target_type = emitcore.type_of(state, target_hir.signature);
+    var parameters = vec.empty[string]();
+    vec.push(parameters, "ptr");
+    for var index usize = 1; index < vec.len(target_type.parameters); index += 1 {
+        vec.push(parameters, emitcore.lower_type(target_type.parameters[index].type_id,
+            inout state));
+    }
+    let result_type = emitcore.lower_type(target_type.result, inout state);
+    let signature_value = emitcore.Signature(result: result_type, parameters: parameters);
+    let name = "lang.trait.method." + emitcore.number(dyn_type) + "." + emitcore.number(concrete) +
+        "." + emitcore.number(target);
+    let function_index = emitcore.new_function(name, signature_value, "internal", "",
+        inout state);
+    let value = emitcore.function_reference(state, function_index);
+    let saved = emitcore.save_cursor(state);
+    let entry = emitcore.new_block(function_index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let data = emitcore.parameter(state, function_index, 0);
+    let concrete_type = emitcore.lower_type(concrete, inout state);
+    let loaded = c_load(concrete_type, data, inout state);
+    var receiver = loaded;
+    var receiver_copy = c_null();
+    var has_copy = false;
+    if owning(concrete, inout state) {
+        has_copy = true;
+        receiver_copy = emitcore.storage(concrete_type, inout state);
+        c_store(loaded, receiver_copy, inout state);
+        let copy_op = value_op(concrete, true, inout state);
+        let ignored = c_call(copy_op, [receiver_copy], "void", inout state);
+        receiver = c_load(concrete_type, receiver_copy, inout state);
+    }
+    var actual = vec.empty[emitcore.Value]();
+    vec.push(actual, receiver);
+    for var index usize = 1; index < vec.len(signature_value.parameters); index += 1 {
+        vec.push(actual, emitcore.parameter(state, function_index, index));
+    }
+    let target_source = emitcore.source_function(state, target);
+    let returned = c_call(target_source.code, actual, result_type, inout state);
+    if has_copy {
+        let drop_op = value_op(concrete, false, inout state);
+        let ignored = c_call(drop_op, [receiver_copy], "void", inout state);
+    }
+    if result_type == "void" {
+        c_ret_void(inout state);
+    } else {
+        c_ret(returned, inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+    return value;
+}
+
+pub func trait_vtable(dyn_type usize, concrete usize, methods Vec[usize],
+                  state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.trait_vtables); index += 1 {
+        let entry = state.c.trait_vtables[index];
+        if entry.dyn_type == dyn_type && entry.concrete_type == concrete {
+            return entry.global;
+        }
+    }
+    let dynamic = emitcore.type_of(state, dyn_type);
+    var declaration_found = false;
+    var declaration_methods usize = 0;
+    for var index usize = 0; index < vec.len(state.input.hir.traits); index += 1 {
+        let candidate = state.input.hir.traits[index];
+        if candidate.symbol == dynamic.declaration {
+            declaration_found = true;
+            declaration_methods = vec.len(candidate.methods);
+            break;
+        }
+    }
+    if !declaration_found || declaration_methods != vec.len(methods) {
+        throw emitcore.invalid("trait object vtable has no matching trait declaration");
+    }
+    var field_parts = vec.empty[string]();
+    for var index usize = 0; index < 2 + vec.len(methods); index += 1 {
+        vec.push(field_parts, "ptr");
+    }
+    let layout_name = "lang.trait.vtable." + emitcore.number(dyn_type) + "." +
+        emitcore.number(concrete);
+    let layout = emitcore.define_type(layout_name, "{ " + text.join(field_parts, ", ") + " }",
+        inout state);
+    var entries = vec.empty[string]();
+    let drop_op = trait_box_op(concrete, false, inout state);
+    let clone_op = trait_box_op(concrete, true, inout state);
+    vec.push(entries, "ptr " + drop_op.reference);
+    vec.push(entries, "ptr " + clone_op.reference);
+    for method in methods {
+        let thunk = trait_method_thunk(dyn_type, concrete, method, inout state);
+        vec.push(entries, "ptr " + thunk.reference);
+    }
+    let data_name = "lang.trait.vtable.data." + emitcore.number(dyn_type) + "." +
+        emitcore.number(concrete);
+    let body = "private unnamed_addr constant " + layout + " { " +
+        text.join(entries, ", ") + " }";
+    let global = emitcore.define_global(data_name, body, inout state);
+    vec.push(state.c.trait_vtables, emitcore.TraitVtable(dyn_type: dyn_type,
+        concrete_type: concrete, global: global));
+    return global;
+}
+
+// ---- threads ----------------------------------------------------------------
+
+func thread_bridge(entry_type usize, state inout emitcore.Emitter) emitcore.ThreadBridge throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.c.thread_bridges); index += 1 {
+        if state.c.thread_bridges[index].entry_type == entry_type {
+            return state.c.thread_bridges[index];
+        }
+    }
+    let entry_signature = emitcore.type_of(state, entry_type);
+    if vec.len(entry_signature.parameters) == 0 {
+        throw emitcore.invalid("thread entry has no argument type");
+    }
+    let argument = entry_signature.parameters[0].type_id;
+    let argument_type = emitcore.lower_type(argument, inout state);
+    let context_name = "lang.thread.context." + emitcore.number(entry_type);
+    let context_type = emitcore.define_type(context_name,
+        "{ " + emitcore.FN_TYPE + ", " + argument_type + " }", inout state);
+    let entry_name = c_unique_name("lang.thread.entry", state);
+    let entry_index = emitcore.new_function(entry_name,
+        emitcore.Signature(result: "i64", parameters: ["ptr"]), "internal", "", inout state);
+    let entry = emitcore.function_reference(state, entry_index);
+    let copy_name = c_unique_name("lang.thread.copy", state);
+    let copy_index = emitcore.new_function(copy_name,
+        emitcore.Signature(result: "void", parameters: ["ptr"]), "internal", "", inout state);
+    let copy = emitcore.function_reference(state, copy_index);
+    let drop_name = c_unique_name("lang.thread.drop", state);
+    let drop_index = emitcore.new_function(drop_name,
+        emitcore.Signature(result: "void", parameters: ["ptr"]), "internal", "", inout state);
+    let drop = emitcore.function_reference(state, drop_index);
+    vec.push(state.c.thread_bridges, emitcore.ThreadBridge(entry_type: entry_type,
+        context_type: context_type, entry: entry, copy: copy, drop: drop));
+    let saved = emitcore.save_cursor(state);
+
+    let entry_block = emitcore.new_block(entry_index, "entry", inout state);
+    emitcore.position(entry_block, inout state);
+    let data = emitcore.parameter(state, entry_index, 0);
+    let saved_address = c_gep(context_type, data, 0, inout state);
+    let saved_function = c_load(emitcore.FN_TYPE, saved_address, inout state);
+    let code = c_extract("ptr", saved_function, 0, inout state);
+    let environment = c_extract("ptr", saved_function, 1, inout state);
+    let argument_address = c_gep(context_type, data, 1, inout state);
+    let argument_value = c_load(argument_type, argument_address, inout state);
+    let entry_call = emitcore.signature(entry_type, true, false, inout state);
+    let returned = emitcore.call(entry_call, code, [environment, argument_value], inout state);
+    c_ret(returned, inout state);
+
+    // Copy in declaration order, drop in reverse order.  The Fn environment is
+    // always handled; A uses its own value operation even when trivial.
+    let copy_block = emitcore.new_block(copy_index, "entry", inout state);
+    emitcore.position(copy_block, inout state);
+    let copy_address = emitcore.parameter(state, copy_index, 0);
+    let copy_function_field = c_gep(context_type, copy_address, 0, inout state);
+    let function_copy = value_op(entry_type, true, inout state);
+    let copied = c_call(function_copy, [copy_function_field], "void", inout state);
+    let copy_argument_field = c_gep(context_type, copy_address, 1, inout state);
+    let argument_copy = value_op(argument, true, inout state);
+    let copied_argument = c_call(argument_copy, [copy_argument_field], "void",
+        inout state);
+    c_ret_void(inout state);
+
+    let drop_block = emitcore.new_block(drop_index, "entry", inout state);
+    emitcore.position(drop_block, inout state);
+    let drop_address = emitcore.parameter(state, drop_index, 0);
+    let drop_argument_field = c_gep(context_type, drop_address, 1, inout state);
+    let argument_drop = value_op(argument, false, inout state);
+    let dropped_argument = c_call(argument_drop, [drop_argument_field], "void",
+        inout state);
+    let drop_function_field = c_gep(context_type, drop_address, 0, inout state);
+    let function_drop = value_op(entry_type, false, inout state);
+    let dropped = c_call(function_drop, [drop_function_field], "void", inout state);
+    c_ret_void(inout state);
+
+    emitcore.restore_cursor(saved, inout state);
+    return emitcore.ThreadBridge(entry_type: entry_type, context_type: context_type,
+        entry: entry, copy: copy, drop: drop);
+}
+
+pub func thread_spawn(instruction nativeir.Instruction, args Vec[emitcore.Value],
+                  state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    let spawn_signature = emitcore.type_of(state, instruction.signature);
+    if vec.len(spawn_signature.parameters) == 0 {
+        throw emitcore.invalid("thread spawn has no entry function");
+    }
+    if vec.len(args) != 2 {
+        throw emitcore.invalid("thread spawn requires a function and an argument");
+    }
+    let entry_type = spawn_signature.parameters[0].type_id;
+    let bridge = thread_bridge(entry_type, inout state);
+    let data = emitcore.storage(bridge.context_type, inout state);
+    let function_field = c_gep(bridge.context_type, data, 0, inout state);
+    c_store(args[0], function_field, inout state);
+    let argument_field = c_gep(bridge.context_type, data, 1, inout state);
+    c_store(args[1], argument_field, inout state);
+    let size = emitcore.allocation_size(bridge.context_type);
+    return emitcore.runtime("lang_thread_spawn_v1", "ptr",
+        [bridge.entry, data, size, bridge.copy, bridge.drop], inout state);
+}

@@ -159,23 +159,14 @@ def _stage_one(root: pathlib.Path, relative: str, work: pathlib.Path) -> dict:
         project = module.stage_project(work)
         method = "layouttest.stage_project"
     elif runner.endswith("nativeverify/obligationstest/run.py"):
-        project = work / "project"
-        (project / "src/wzcc").mkdir(parents=True)
         sources = {}
         for package in module.PACKAGES:
             path = module.find_package(package, [])
             if path is None:
                 raise RuntimeError(f"obligation parent package missing: {package}")
             sources[package] = path
-            shutil.copytree(path, project / "src/wzcc" / package)
-            if package == "nativeverify":
-                shutil.copy2(module.HERE / "trace.wz",
-                             project / "src/wzcc/nativeverify/trace.wz")
-                if "hirverify" not in sources:
-                    (project / "src/wzcc/nativeverify/nativeverify.wz").unlink()
-        shutil.copy2(module.HERE / "main.wz", project / "src/main.wz")
-        shutil.copy2(module.HERE / "lang.toml", project / "lang.toml")
-        method = "inline package copy from obligationstest/run.py main()"
+        project = module.stage_project(work, sources)
+        method = "obligationstest.stage_project"
     elif runner.endswith("phase-timing/run.py"):
         source_root = module.DEFAULT_SOURCE_ROOT
         component = work / "component"

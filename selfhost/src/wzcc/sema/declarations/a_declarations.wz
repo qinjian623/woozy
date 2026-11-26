@@ -1,0 +1,584 @@
+// CPP check.cpp:541-6684 declaration registration and public wrappers.
+package declarations;
+import "app/wzcc/sema/core" as semacore;
+import "app/wzcc/sema/typecheck" as sematypes;
+import "app/wzcc/foreign" as foreignlib;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func a_sorted_insert(entries Vec[usize],value usize) {
+    let ignored=semacore.a_insert(entries,value);
+}
+func a_backend_native(backend model.Backend) bool {
+    switch backend {case model.Backend.Native:return true;case model.Backend.Python:return false;}
+}
+func self_parameter(state inout semacore.Checker,r model.NodeRef) usize throws semacore.Error {
+    for parameter in state.m.resolved.self_parameters {
+        if semacore.same_node_key(semacore.node_key(parameter.source),semacore.node_key(r)) {return parameter.symbol;}
+    }
+    throw semacore.internal_error("missing resolver Self owner");
+}
+func a_signature_id(state inout semacore.Checker,symbol_id usize) usize throws semacore.Error {
+    var found=semacore.a_symbol_type_get(state.signatures,symbol_id);
+    switch found {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw semacore.internal_error("missing sema signature");
+    }
+}
+func a_register_nested(state inout semacore.Checker,r model.NodeRef,inherited Vec[hir.GenericParam]) throws semacore.Error {
+    for id in semacore.ast(inout state,r).children {
+        let current=semacore.at(r,id);
+        if sematypes.a_kind_ast(semacore.ast(inout state,current).kind,model.AstKind.FunctionLiteral) {
+            register_function(inout state,current,inherited,false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        } else {
+            a_register_nested(inout state,current,inherited);
+        }
+    }
+}
+func register_function(state inout semacore.Checker,r model.NodeRef,inherited Vec[hir.GenericParam],
+    prototype bool,trait_self option.Option[usize],environment Vec[hir.GenericParam],
+    member bool) throws semacore.Error {
+    let id=semacore.definition(inout state,r);
+    let saved_environment=semacore.a_copy_ids(state.signature_parameters);
+    for parameter in environment {semacore.a_insert(state.signature_parameters,parameter.symbol);}
+    var own=sematypes.generics(inout state,r);
+    let merged=semacore.a_copy_generic_params(inherited);
+    for parameter in own {vec.push(merged,parameter);}
+    semacore.a_generic_params_set(state.generic_params,id,merged);
+    var have_trait_self=false;var trait_self_value usize=0;
+    switch trait_self {
+        case option.Option.Some(value):have_trait_self=true;trait_self_value=value;
+        case option.Option.None: {}
+    }
+    if have_trait_self {
+        let self_found=semacore.a_symbol_type_get(state.self_types,trait_self_value);
+        var valid=false;
+        switch self_found {
+            case option.Option.Some(value):valid=sematypes.trait_self_type(inout state,value,trait_self_value);
+            case option.Option.None: {}
+        }
+        if !valid {throw semacore.internal_error("invalid trait Self registration");}
+    }
+    var trait_self_callback=false;
+    if have_trait_self {
+        for child_id in semacore.ast(inout state,r).children {
+            var parameter_ref=semacore.at(r,child_id);
+            if !sematypes.a_kind_ast(semacore.ast(inout state,parameter_ref).kind,model.AstKind.Parameter) {continue;}
+            if semacore.a_mode(semacore.mode(inout state,parameter_ref),model.ParamMode.Ordinary) {
+                let first_type_ref=semacore.child(inout state,parameter_ref,0);
+                let first_type=sematypes.parse_type(inout state,first_type_ref,trait_self,false);
+                trait_self_callback=sematypes.trait_self_type(inout state,first_type,trait_self_value);
+            }
+            break;
+        }
+    }
+    vec.clear(state.signature_parameters);
+    for parameter in merged {semacore.a_insert(state.signature_parameters,parameter.symbol);}
+    for parameter in environment {semacore.a_insert(state.signature_parameters,parameter.symbol);}
+    let declared_signature=sematypes.signature(inout state,r,trait_self,false,trait_self_callback);
+    semacore.a_symbol_type_set(state.signatures,id,declared_signature);
+    if semacore.has_async_marker(inout state,r) {
+        if have_trait_self || prototype || member {
+            throw semacore.unavailable(inout state,r,
+                "async methods are not supported; use a free async function instead");
+        }
+        semacore.a_insert(state.async_functions,id);
+        var declared=semacore.lookup_type(inout state,declared_signature);
+        for parameter in declared.parameters {
+            if semacore.a_mode(parameter.mode,model.ParamMode.Inout) {
+                throw semacore.unavailable(inout state,r,"async functions cannot retain an inout parameter");
+            }
+        }
+        var task=model.empty_type(model.TypeKind.Task);
+        vec.push(task.type_args,declared.result);
+        var task_error=state.unit;
+        switch declared.throws_type {
+            case option.Option.Some(error_type):task_error=error_type;
+            case option.Option.None: {}
+        }
+        vec.push(task.type_args,task_error);
+        let task_id=semacore.intern_type(inout state,task);
+        var callable=declared;
+        callable.parameters=vec.empty[model.ParameterType]();
+        for parameter in declared.parameters {
+            vec.push(callable.parameters,model.ParameterType(mode:parameter.mode,
+                type_id:parameter.type_id));
+        }
+        callable.result=task_id;
+        callable.throws_type=option.Option[usize].None;
+        semacore.a_symbol_type_set(state.signatures,id,semacore.intern_type(inout state,callable));
+    }
+    let current_signature=a_signature_id(inout state,id);
+    var direct=sematypes.check_inout_graph(inout state,r,current_signature,true,trait_self,trait_self_callback);
+    if have_trait_self {
+        semacore.a_trait_signature_set(state.trait_signature_context,id,trait_self_value,trait_self_callback);
+    }
+    state.signature_parameters=saved_environment;
+    for child_id in semacore.ast(inout state,r).children {
+        let parameter_ref=semacore.at(r,child_id);
+        if !sematypes.a_kind_ast(semacore.ast(inout state,parameter_ref).kind,model.AstKind.Parameter) {continue;}
+        let parameter=semacore.definition(inout state,parameter_ref);
+        var label=semacore.symbol(inout state,parameter).name;
+        if label=="_" {label="";}
+        semacore.a_parameters_push(state.parameters,id,hir.Parameter(symbol:parameter,label:label));
+    }
+    semacore.a_parameters_ensure(state.parameters,id);
+    if prototype {return;}
+    semacore.a_body_set(state.bodies,id,r);
+    var inspect_body = false;
+    switch state.selected_body_module {
+        case option.Option.None: inspect_body = true;
+        case option.Option.Some(selected): {
+            if r.module == selected || sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.FunctionLiteral) {
+                inspect_body = true;
+            }
+            for template in state.selected_templates {
+                if semacore.same_node_key(semacore.node_key(template),semacore.node_key(r)) { inspect_body = true; }
+            }
+        }
+    }
+    if inspect_body {
+        for child_id in semacore.ast(inout state,r).children {
+            let block_ref=semacore.at(r,child_id);
+            if sematypes.a_kind_ast(semacore.ast(inout state,block_ref).kind,model.AstKind.Block) {
+                a_register_nested(inout state,block_ref,merged);
+            }
+        }
+    }
+}
+func overlap(state inout semacore.Checker,left usize,right usize) bool throws semacore.Error {
+    try {return types.patterns_overlap(left,right,state.m.types);}
+    catch error types.Error {throw semacore.Error.Support(semacore.support_from_type_error(error));}
+}
+func impls_overlap(state inout semacore.Checker,left hir.ImplDecl,right hir.ImplDecl) bool throws semacore.Error {
+    var left_application=hir.TraitRef(declaration:0,args:[]);
+    var right_application=hir.TraitRef(declaration:0,args:[]);
+    switch left.trait_ref {
+        case option.Option.None:return overlap(inout state,left.self_type,right.self_type);
+        case option.Option.Some(value):left_application=value;
+    }
+    switch right.trait_ref {
+        case option.Option.None:return overlap(inout state,left.self_type,right.self_type);
+        case option.Option.Some(value):right_application=value;
+    }
+    if vec.len(left_application.args)!=vec.len(right_application.args) {return false;}
+    var first=model.empty_type(model.TypeKind.Function);first.result=state.unit;
+    vec.push(first.parameters,model.ParameterType(mode:model.ParamMode.Ordinary,
+        type_id:left.self_type));
+    for arg in left_application.args {
+        vec.push(first.parameters,model.ParameterType(mode:model.ParamMode.Ordinary,type_id:arg));
+    }
+    var second=model.empty_type(model.TypeKind.Function);second.result=state.unit;
+    second.parameters=semacore.a_copy_parameter_types(first.parameters);
+    second.parameters[0].type_id=right.self_type;
+    for var index usize=0;index<vec.len(right_application.args);index+=1 {
+        second.parameters[index+1].type_id=right_application.args[index];
+    }
+    let first_id=semacore.intern_type(inout state,first);
+    let second_id=semacore.intern_type(inout state,second);
+    return overlap(inout state,first_id,second_id);
+}
+pub func duplicate_symbol(state inout semacore.Checker,origin usize) usize throws semacore.Error {
+    var value=semacore.symbol(inout state,origin);
+    value.id=vec.len(state.m.resolved.symbols);
+    vec.push(state.m.resolved.symbols,value);
+    return value.id;
+}
+func a_has_read_error(project model.Project) bool {
+    for declaration in project.foreign_bindings {
+        switch declaration.detail {
+            case model.ForeignDetail.Type(value): {
+                if value.kind=="runtime_error" && declaration.identity=="lang.py.Error" {
+                    return true;
+                }
+            }
+            default: {}
+        }
+    }
+    return false;
+}
+func a_module_has_binding(project model.Project,module_id usize) bool throws semacore.Error {
+    if module_id>=vec.len(project.modules) {
+        throw semacore.internal_error("invalid sema module reference");
+    }
+    return option.is_some(project.modules[module_id].binding);
+}
+func a_c_module_native_error(state inout semacore.Checker,module_index usize) throws semacore.Error {
+    var module=state.m.resolved.project.modules[module_index];
+    for owner in state.m.resolved.project.modules {
+        for imported in owner.imports {
+            if imported.target==module.id {
+                throw semacore.unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                    node:imported.node),"C ABI modules are native-only");
+            }
+        }
+    }
+}
+func a_binding_backend_error(state inout semacore.Checker,module_index usize) throws semacore.Error {
+    var module=state.m.resolved.project.modules[module_index];
+    var allowed=vec.empty[string]();
+    switch module.binding {
+        case option.Option.Some(reference): {
+            if reference.bundle>=vec.len(state.m.resolved.project.bindings) {
+                throw semacore.internal_error("invalid binding bundle reference");
+            }
+            allowed=state.m.resolved.project.bindings[reference.bundle].allowed_backends;
+        }
+        case option.Option.None: {}
+    }
+    var backend="native";
+    if !a_backend_native(state.m.config.backend) {backend="python";}
+    if semacore.a_contains_string(allowed,backend) {return;}
+    for owner in state.m.resolved.project.modules {
+        for imported in owner.imports {
+            if imported.target==module.id {
+                throw semacore.unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                    node:imported.node),"external module is unavailable for this backend");
+            }
+        }
+    }
+}
+pub func declarations(state inout semacore.Checker) throws semacore.Error {
+    let project=state.m.resolved.project;
+    let has_read_error=a_has_read_error(project);
+    if vec.len(project.foreign_bindings)>0 && !has_read_error {
+        for owner in project.modules {
+            for imported in owner.imports {
+                if a_module_has_binding(project,imported.target) {
+                    throw semacore.unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                        node:imported.node),
+                        "foreign reads require the declared lang.py.Error type (toolchain std binding)");
+                }
+            }
+        }
+    }
+    try {state.m.foreign_bindings=foreignlib.binding_records(project,inout state.m.types);}
+    catch error model.SupportError {throw semacore.Error.Support(error);}
+    let top=vec.empty[model.NodeRef]();
+    for var module_index usize=0;module_index<vec.len(project.modules);module_index+=1 {
+        let module=project.modules[module_index];
+        if option.is_some(module.c_binding) {
+            if !a_backend_native(state.m.config.backend) {
+                a_c_module_native_error(inout state,module_index);
+            }
+            continue;
+        }
+        if option.is_some(module.binding) {
+            a_binding_backend_error(inout state,module_index);
+            continue;
+        }
+        for var file_index usize=0;file_index<vec.len(module.files);file_index+=1 {
+            let file_ref=model.NodeRef(module:module.id,file:file_index,node:0);
+            let file=semacore.parsed_file(inout state,file_ref);
+            let root=semacore.ast(inout state,semacore.at(file_ref,file.root));
+            for child_id in root.children {
+                vec.push(top,model.NodeRef(module:module.id,file:file_index,node:child_id));
+            }
+        }
+    }
+    for r in top {
+        let node=semacore.ast(inout state,r);
+        if sematypes.a_kind_ast(node.kind,model.AstKind.Struct) ||
+           sematypes.a_kind_ast(node.kind,model.AstKind.Enum) {
+            let symbol_id=semacore.definition(inout state,r);
+            let shape=vec.empty[hir.GenericParam]();
+            for child_id in node.children {
+                var child_ref=semacore.at(r,child_id);
+                if !sematypes.a_kind_ast(semacore.ast(inout state,child_ref).kind,model.AstKind.GenericParameter) {continue;}
+                vec.push(shape,hir.GenericParam(symbol:semacore.definition(inout state,child_ref),
+                    trait_ref:option.Option[hir.TraitRef].None,
+                    source:semacore.source(inout state,child_ref)));
+            }
+            let index=vec.len(state.m.nominals);
+            semacore.a_nominal_id_set(state.nominal_ids,symbol_id,index);
+            var kind=model.TypeKind.NominalStruct;
+            if sematypes.a_kind_ast(node.kind,model.AstKind.Enum) {kind=model.TypeKind.NominalEnum;}
+            vec.push(state.m.nominals,hir.NominalDecl(symbol:symbol_id,kind:kind,
+                params:shape,fields:[],variants:[],source:semacore.source(inout state,r)));
+        }
+    }
+    for r in top {
+        if !sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.Trait) {continue;}
+        var parameters=vec.empty[hir.GenericParam]();
+        for child_id in semacore.ast(inout state,r).children {
+            var child_ref=semacore.at(r,child_id);
+            if !sematypes.a_kind_ast(semacore.ast(inout state,child_ref).kind,model.AstKind.GenericParameter) {continue;}
+            vec.push(parameters,hir.GenericParam(symbol:semacore.definition(inout state,child_ref),
+                trait_ref:option.Option[hir.TraitRef].None,source:semacore.source(inout state,child_ref)));
+        }
+        semacore.a_generic_params_set(state.trait_parameters,semacore.definition(inout state,r),parameters);
+    }
+    for var index usize=0;index<vec.len(state.m.nominals);index+=1 {
+        var declaration=state.m.nominals[index];
+        var parameters=sematypes.generics(inout state,declaration.source.node);
+        if vec.len(parameters)!=vec.len(declaration.params) {
+            throw semacore.internal_error("nominal parameter registration mismatch");
+        }
+        for var parameter_index usize=0;parameter_index<vec.len(parameters);parameter_index+=1 {
+            if parameters[parameter_index].symbol!=declaration.params[parameter_index].symbol {
+                throw semacore.internal_error("nominal parameter registration order mismatch");
+            }
+        }
+        var updated=declaration;
+        updated.params=parameters;
+        state.m.nominals[index]=updated;
+    }
+    for r in top {
+        if !sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.Trait) {continue;}
+        var self= self_parameter(inout state,r);
+        semacore.a_symbol_type_set(state.self_types,self,sematypes.parameter_type(inout state,self));
+        var parameters=sematypes.generics(inout state,r);
+        var found=semacore.a_generic_params_get(state.trait_parameters,semacore.definition(inout state,r));
+        var registered=vec.empty[hir.GenericParam]();
+        switch found {
+            case option.Option.None:throw semacore.internal_error("trait parameter registration mismatch");
+            case option.Option.Some(value):registered=value;
+        }
+        if vec.len(registered)!=vec.len(parameters) {
+            throw semacore.internal_error("trait parameter registration mismatch");
+        }
+        semacore.a_generic_params_set(state.trait_parameters,semacore.definition(inout state,r),parameters);
+        let self_args=vec.empty[usize]();
+        for parameter in parameters {vec.push(self_args,sematypes.parameter_type(inout state,parameter.symbol));}
+        semacore.a_bound_set(state.bounds,self,option.Option[hir.TraitRef].Some(
+            hir.TraitRef(declaration:semacore.definition(inout state,r),args:self_args)));
+        var tr=hir.TraitDecl(symbol:semacore.definition(inout state,r),self:self,params:parameters,
+            methods:[],source:semacore.source(inout state,r));
+        for child_id in semacore.ast(inout state,r).children {
+            var method_ref=semacore.at(r,child_id);
+            if !sematypes.a_kind_ast(semacore.ast(inout state,method_ref).kind,model.AstKind.Function) {continue;}
+            register_function(inout state,method_ref,vec.empty[hir.GenericParam](),true,
+                option.Option[usize].Some(self),parameters,true);
+            var method=semacore.definition(inout state,method_ref);
+            let declared=semacore.a_parameters_get(state.parameters,method);
+            var declared_parameters=vec.empty[hir.Parameter]();
+            switch declared {
+                case option.Option.Some(value):declared_parameters=value;
+                case option.Option.None: {}
+            }
+            vec.push(tr.methods,hir.MethodPrototype(symbol:method,
+                signature:a_signature_id(inout state,method),
+                parameters:declared_parameters,source:semacore.source(inout state,method_ref)));
+        }
+        if vec.len(tr.params)>0 {
+            for prototype in tr.methods {
+                var own=sematypes.method_own_parameters(inout state,prototype.symbol);
+                sematypes.check_generic_trait_method_modes(inout state,prototype.source.node,
+                    own,prototype.signature,option.Option[usize].Some(tr.self),true);
+            }
+        }
+        vec.push(state.m.traits,tr);
+    }
+    for var index usize=0;index<vec.len(state.m.nominals);index+=1 {
+        var declaration=state.m.nominals[index];
+        let r=declaration.source.node;
+        var saved=semacore.a_copy_ids(state.signature_parameters);
+        vec.clear(state.signature_parameters);
+        for parameter in declaration.params {semacore.a_insert(state.signature_parameters,parameter.symbol);}
+        declaration.fields=vec.empty[hir.FieldDecl]();
+        declaration.variants=vec.empty[hir.VariantDecl]();
+        for child_id in semacore.ast(inout state,r).children {
+            var child_ref=semacore.at(r,child_id);
+            if sematypes.a_kind_ast(semacore.ast(inout state,child_ref).kind,model.AstKind.Field) {
+                var field_type_ref=semacore.child(inout state,child_ref,0);
+                var type_id=sematypes.parse_type(inout state,field_type_ref,
+                    option.Option[usize].None,false);
+                var exported=false;
+                if semacore.token(inout state,child_ref,0)=="pub" {exported=true;}
+                vec.push(declaration.fields,hir.FieldDecl(symbol:semacore.definition(inout state,child_ref),
+                    type_id:type_id,exported:exported,source:semacore.source(inout state,child_ref)));
+            }
+            if sematypes.a_kind_ast(semacore.ast(inout state,child_ref).kind,model.AstKind.Variant) {
+                var variant=hir.VariantDecl(symbol:semacore.definition(inout state,child_ref),
+                    payload:[],source:semacore.source(inout state,child_ref));
+                for field_id in semacore.ast(inout state,child_ref).children {
+                    let field_ref=semacore.at(child_ref,field_id);
+                    let field_type_ref=semacore.child(inout state,field_ref,0);
+                    let type_id=sematypes.parse_type(inout state,field_type_ref,
+                        option.Option[usize].None,false);
+                    vec.push(variant.payload,hir.FieldDecl(symbol:semacore.definition(inout state,field_ref),
+                        type_id:type_id,exported:true,source:semacore.source(inout state,field_ref)));
+                }
+                vec.push(declaration.variants,variant);
+            }
+        }
+        state.signature_parameters=saved;
+        state.m.nominals[index]=declaration;
+    }
+    state.nominal_fields_ready=true;
+    for r in top {
+        if !sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.Impl) {continue;}
+        let type_refs=vec.empty[model.NodeRef]();
+        for child_id in semacore.ast(inout state,r).children {
+            let child_ref=semacore.at(r,child_id);
+            if sematypes.a_kind_ast(semacore.ast(inout state,child_ref).kind,model.AstKind.NamedType) {
+                vec.push(type_refs,child_ref);
+            }
+        }
+        if vec.len(type_refs)==0 {throw semacore.internal_error("impl has no target type");}
+        let self_type=sematypes.parse_type(inout state,type_refs[vec.len(type_refs)-1],
+            option.Option[usize].None,false);
+        let self=self_parameter(inout state,r);
+        semacore.a_symbol_type_set(state.self_types,self,self_type);
+        let parameters=sematypes.generics(inout state,r);
+        var trait_ref=option.Option[hir.TraitRef].None;
+        if vec.len(type_refs)==2 {
+            let declaration=semacore.occurrence(inout state,type_refs[0]);
+            var declaration_id usize=0;var valid=false;
+            switch declaration {
+                case option.Option.Some(value): {
+                    declaration_id=value;
+                    valid=semacore.a_symbol_kind(semacore.symbol(inout state,value).kind,model.SymbolKind.Trait);
+                }
+                case option.Option.None: {}
+            }
+            if !valid {throw semacore.reject(inout state,type_refs[0],"impl requires a nominal trait","E_TYPE_MISMATCH");}
+            let args=vec.empty[usize]();
+            for child_id in semacore.ast(inout state,type_refs[0]).children {
+                vec.push(args,sematypes.parse_type(inout state,semacore.at(type_refs[0],child_id),
+                    option.Option[usize].None,false));
+            }
+            trait_ref=option.Option[hir.TraitRef].Some(sematypes.check_trait_application(inout state,
+                type_refs[0],declaration_id,args));
+        }
+        let self_value=semacore.lookup_type(inout state,self_type);
+        if !semacore.a_kind(self_value.kind,model.TypeKind.NominalStruct) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.NominalEnum) &&
+           !semacore.integer(inout state,self_type) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.Float) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.Bool) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.Vec) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.String) &&
+           !semacore.a_kind(self_value.kind,model.TypeKind.Unit) {
+            throw semacore.unavailable(inout state,r,"impl target is not an implemented value type");
+        }
+        var implementation=hir.ImplDecl(params:parameters,trait_ref:trait_ref,
+            self_parameter:self,self_type:self_type,methods:[],source:semacore.source(inout state,r));
+        for child_id in semacore.ast(inout state,r).children {
+            let method_ref=semacore.at(r,child_id);
+            if !sematypes.a_kind_ast(semacore.ast(inout state,method_ref).kind,model.AstKind.Function) {continue;}
+            register_function(inout state,method_ref,parameters,false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),true);
+            vec.push(implementation.methods,semacore.definition(inout state,method_ref));
+        }
+        for previous in state.m.impls {
+            var same_target=false;
+            switch previous.trait_ref {
+                case option.Option.None:same_target=!option.is_some(implementation.trait_ref);
+                case option.Option.Some(previous_application): {
+                    switch implementation.trait_ref {
+                        case option.Option.Some(current_application):
+                            same_target=previous_application.declaration==current_application.declaration;
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            if same_target && impls_overlap(inout state,previous,implementation) {
+                throw semacore.reject(inout state,r,"duplicate or overlapping impl","E_TYPE_MISMATCH");
+            }
+        }
+        vec.push(state.m.impls,implementation);
+    }
+    for implementation in state.m.impls {
+        var application=hir.TraitRef(declaration:0,args:[]);
+        switch implementation.trait_ref {
+            case option.Option.None:continue;
+            case option.Option.Some(value):application=value;
+        }
+        let found_trait=sematypes.trait_decl(inout state,application.declaration);
+        var trait_index usize=0;
+        switch found_trait {
+            case option.Option.None:throw semacore.reject(inout state,implementation.source.node,
+                "unknown trait implementation","E_TYPE_MISMATCH");
+            case option.Option.Some(value):trait_index=value;
+        }
+        let tr=state.m.traits[trait_index];
+        if vec.len(implementation.methods)!=vec.len(tr.methods) {
+            throw semacore.reject(inout state,implementation.source.node,
+                "impl must define every trait method exactly once","E_TYPE_MISMATCH");
+        }
+        for prototype in tr.methods {
+            var method_found=option.Option[usize].None;
+            let prototype_name=semacore.symbol(inout state,prototype.symbol).name;
+            for method in implementation.methods {
+                if semacore.symbol(inout state,method).name==prototype_name {
+                    method_found=option.Option[usize].Some(method);
+                }
+            }
+            var method usize=0;var valid=false;
+            switch method_found {
+                case option.Option.Some(value):method=value;valid=true;
+                case option.Option.None: {}
+            }
+            if !valid {throw semacore.reject(inout state,implementation.source.node,
+                "impl is missing a trait method","E_TYPE_MISMATCH");}
+            if !sematypes.trait_impl_signature_matches(inout state,tr,implementation,prototype,method) {
+                throw semacore.reject(inout state,implementation.source.node,
+                    "impl method signature does not match trait","E_TYPE_MISMATCH");
+            }
+        }
+    }
+    for tr in state.m.traits {
+        let generic_trait=vec.len(tr.params)>0;
+        for prototype in tr.methods {
+            let own=sematypes.method_own_parameters(inout state,prototype.symbol);
+            sematypes.check_generic_trait_method_modes(inout state,prototype.source.node,
+                own,prototype.signature,option.Option[usize].Some(tr.self),generic_trait);
+        }
+    }
+    let context_methods=vec.empty[usize]();
+    for context in state.trait_signature_context {a_sorted_insert(context_methods,context.method);}
+    for method in context_methods {
+        let found=semacore.a_trait_signature_get(state.trait_signature_context,method);
+        var context=semacore.TraitSignatureEntry(method:method,trait_self:0,trait_self_callback:false);
+        switch found {
+            case option.Option.Some(value):context=value;
+            case option.Option.None: {}
+        }
+        let definition_found=semacore.symbol(inout state,method).definition;
+        var definition=model.NodeRef(module:0,file:0,node:0);
+        switch definition_found {
+            case option.Option.None:throw semacore.internal_error("trait method has no source definition");
+            case option.Option.Some(value):definition=value;
+        }
+        let saved=semacore.a_copy_ids(state.signature_parameters);
+        vec.clear(state.signature_parameters);
+        for parameter in sematypes.method_own_parameters(inout state,method) {
+            semacore.a_insert(state.signature_parameters,parameter.symbol);
+        }
+        for tr in state.m.traits {
+            if tr.self==context.trait_self {
+                for parameter in tr.params {semacore.a_insert(state.signature_parameters,parameter.symbol);}
+            }
+        }
+        let method_signature=a_signature_id(inout state,method);
+        let direct=sematypes.check_inout_graph(inout state,definition,method_signature,
+            true,option.Option[usize].Some(context.trait_self),context.trait_self_callback);
+        state.signature_parameters=saved;
+    }
+    for r in top {
+        if sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.Function) {
+            register_function(inout state,r,vec.empty[hir.GenericParam](),false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        }
+    }
+    for r in top {
+        if sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.Binding) {
+            a_register_const_functions(inout state,r);
+        }
+    }
+}
+func a_register_const_functions(state inout semacore.Checker,r model.NodeRef) throws semacore.Error {
+    if sematypes.a_kind_ast(semacore.ast(inout state,r).kind,model.AstKind.FunctionLiteral) {
+        register_function(inout state,r,vec.empty[hir.GenericParam](),false,
+            option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        return;
+    }
+    for child_id in semacore.ast(inout state,r).children {
+        a_register_const_functions(inout state,semacore.at(r,child_id));
+    }
+}

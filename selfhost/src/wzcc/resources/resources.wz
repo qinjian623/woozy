@@ -110,26 +110,3 @@ pub func ninja() string throws os.Error {
     }
     throw os.Error.System(2, 0);
 }
-
-// GNU Make selected by WOOZY_MAKE or the caller's PATH.  Source-make never
-// writes a real path into a Make rule or target name.
-pub func make() string throws os.Error {
-    switch process.getenv("WOOZY_MAKE") {
-        case option.Option.Some(value): {
-            if value != "" { os.access(value, os.X_OK); return value; }
-        }
-        case option.Option.None: {}
-    }
-    var search = "/usr/bin:/bin";
-    switch process.getenv("PATH") {
-        case option.Option.Some(value): search = value;
-        case option.Option.None: {}
-    }
-    for directory_value in text.split(search, ":") {
-        var candidate = path.join(directory_value, "make");
-        if !path.is_absolute(candidate) { candidate = path.join(os.getcwd(), candidate); }
-        try { os.access(candidate, os.X_OK); return candidate; }
-        catch problem os.Error {}
-    }
-    throw os.Error.System(2, 0);
-}

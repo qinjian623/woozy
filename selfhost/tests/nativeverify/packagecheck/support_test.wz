@@ -1,0 +1,137 @@
+// Staged only by packagecheck/run.py.
+package support;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+pub func selftest_check(label string, condition bool, failures inout usize)
+    throws os.Error {
+    if !condition {
+        failures += 1;
+        io.eprintln("FAIL " + label);
+    }
+}
+
+func sample_function() nativeir.Function {
+    var instruction = nativeir.empty_instruction();
+    instruction.op = nativeir.Op.Binary;
+    instruction.result = option.Option[usize].Some(3);
+    instruction.type_id = 2;
+    instruction.inputs = [10, 11];
+    instruction.methods = [20];
+    instruction.utf8 = "bytes";
+    let instructions = vec.empty[nativeir.Instruction]();
+    vec.push(instructions, instruction);
+    var terminator = nativeir.empty_terminator();
+    terminator.kind = nativeir.Exit.Return;
+    terminator.inputs = [3];
+    terminator.targets = [1];
+    let parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(parameters, nativeir.BlockParameter(value: 3, type_id: 2,
+        call: 1, error: false));
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    vec.push(blocks, nativeir.BasicBlock(instructions: instructions,
+        terminator: terminator, parameters: parameters));
+    let slots = vec.empty[nativeir.Slot]();
+    vec.push(slots, nativeir.Slot(type_id: 2,
+        parameter: option.Option[u32].Some(0), is_inout: false,
+        owner: option.Option[hir.OwnerRef].Some(hir.OwnerRef(
+            kind: hir.OwnerKind.Binding, identity: 6)),
+        owning_parameter: true, binding: option.Option[usize].Some(8)));
+    let handlers = vec.empty[nativeir.Handler]();
+    vec.push(handlers, nativeir.Handler(target: hir.CatchTarget(try_node: 4,
+        index: 2), block: 1, slot: 0, protected_entry: 0));
+    return nativeir.Function(symbol: 1, signature: 2, is_async: false,
+        slots: slots, blocks: blocks, source: empty_span(),
+        handlers: handlers);
+}
+
+pub func test_copies(failures inout usize) throws os.Error {
+    let original = sample_function();
+    let copied = copy_function(original);
+    // Mutate the original's shared Vecs; the copy must keep its arrays.
+    vec.push(original.blocks[0].instructions[0].inputs, 12);
+    vec.push(original.blocks[0].instructions[0].methods, 21);
+    vec.push(original.blocks[0].terminator.inputs, 4);
+    vec.push(original.blocks[0].terminator.targets, 2);
+    vec.push(original.blocks[0].parameters, nativeir.BlockParameter(
+        value: 30, type_id: 2, call: 1, error: true));
+    vec.push(original.slots, nativeir.Slot(type_id: 2,
+        parameter: option.Option[u32].None, is_inout: false,
+        owner: option.Option[hir.OwnerRef].None, owning_parameter: false,
+        binding: option.Option[usize].None));
+    vec.push(original.handlers, nativeir.Handler(target: hir.CatchTarget(
+        try_node: 4, index: 2), block: 0, slot: 0, protected_entry: 0));
+    selftest_check("copy instruction inputs isolated",
+        vec.len(copied.blocks[0].instructions[0].inputs) == 2, inout failures);
+    selftest_check("copy methods isolated",
+        vec.len(copied.blocks[0].instructions[0].methods) == 1,
+        inout failures);
+    selftest_check("copy terminator isolated",
+        vec.len(copied.blocks[0].terminator.inputs) == 1 &&
+        vec.len(copied.blocks[0].terminator.targets) == 1, inout failures);
+    selftest_check("copy parameters isolated",
+        vec.len(copied.blocks[0].parameters) == 1, inout failures);
+    selftest_check("copy slots/handlers isolated",
+        vec.len(copied.slots) == 1 && vec.len(copied.handlers) == 1,
+        inout failures);
+    // Mutate the copy; the original's already-extended arrays must not change
+    // again through the copy.
+    let original_inputs = vec.len(original.blocks[0].instructions[0].inputs);
+    vec.push(copied.blocks[0].instructions[0].inputs, 99);
+    selftest_check("copy does not alias original",
+        vec.len(original.blocks[0].instructions[0].inputs) == original_inputs,
+        inout failures);
+    selftest_check("function identity copied", copied.symbol == 1 &&
+        copied.signature == 2, inout failures);
+    let list = vec.empty[nativeir.Function]();
+    vec.push(list, original);
+    let list_copy = copy_functions(list);
+    vec.push(list, sample_function());
+    selftest_check("copy_functions length", vec.len(list_copy) == 1, inout failures);
+    var diagnostic = model.Diagnostic(code: "E_IR_INVALID", phase: "lowering",
+        severity: "error", message: "x", has_primary: false,
+        primary: empty_span(), related: [], fixits: [], notes: [],
+        has_expected_type: false, expected_type: "",
+        has_actual_type: false, actual_type: "");
+    vec.push(diagnostic.related, model.Related(span: empty_span(),
+        message: "related"));
+    let diagnostic_copy = copy_diagnostic(diagnostic);
+    vec.push(diagnostic.notes, "note");
+    selftest_check("diagnostic related isolated",
+        vec.len(diagnostic_copy.related) == 1, inout failures);
+    selftest_check("diagnostic notes isolated",
+        vec.len(diagnostic_copy.notes) == 0, inout failures);
+}
+
+pub func test_errors(failures inout usize) throws os.Error {
+    var diagnostics = vec.empty[model.Diagnostic]();
+    append_error(inout diagnostics, bad("boom", model.Span(snapshot: 3,
+        begin_byte: 4, end_byte: 5)));
+    selftest_check("bad diagnostic", vec.len(diagnostics) == 1 &&
+        diagnostics[0].code == "E_IR_INVALID" &&
+        diagnostics[0].message == "boom" && diagnostics[0].has_primary &&
+        diagnostics[0].primary.snapshot == 3, inout failures);
+    diagnostics = vec.empty[model.Diagnostic]();
+    append_error(inout diagnostics,
+        support(model.SupportError.Invalid("support text")));
+    selftest_check("support diagnostic", vec.len(diagnostics) == 1 &&
+        diagnostics[0].message == "support text" &&
+        !diagnostics[0].has_primary, inout failures);
+    let converted = support_from_type_error(types.Error.Invalid("typed text"));
+    selftest_check("type error text preserved",
+        support_message(converted) == "typed text", inout failures);
+}
+
+func support_message(value model.SupportError) string {
+    switch value {
+        case model.SupportError.Invalid(text): return text;
+        case model.SupportError.Limit(text): return text;
+    }
+}

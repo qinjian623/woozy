@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cold/warm/private/public/corrupt checks for the source-level Make path.
+"""Cold/warm/private/public/corrupt checks for source-package builds.
 
 Run with ``python3 -B selfhost/tests/source_make/run.py --woozyc BIN``.
 The compiler must have its normal toolchain/runtime/stdlib resources next to
@@ -33,12 +33,14 @@ def run(command, cwd, env, timeout=600):
     return result
 
 
-def build(woozyc, project, out_dir, cache_dir, env, cwd, opt="2", backend=None):
+def build(woozyc, project, out_dir, cache_dir, env, cwd, opt="2", backend=None, jobs="3"):
     command = [
         str(woozyc), "build", "--project", str(project),
         "--out-dir", str(out_dir), "--source-make", "--opt", opt,
         "--format", "json",
     ]
+    if jobs is not None:
+        command.extend(["--jobs", jobs])
     if cache_dir is not None:
         command[6:6] = ["--cache-dir", str(cache_dir)]
     if backend is not None:
@@ -147,7 +149,6 @@ def main():
     args = parser.parse_args()
     woozyc = args.woozyc.resolve()
     env = os.environ.copy()
-    env["MAKEFLAGS"] = "-j3"
     failures = []
 
     with tempfile.TemporaryDirectory(prefix="woozy-source-make-") as temporary:
@@ -157,6 +158,16 @@ def main():
         shutil.copy2(HERE / "lang.toml", project / "lang.toml")
         manifest = project / "lang.toml"
         out_dir = root / "out"
+        env.update(WOOZY_MAKE=str(root / "no-make"), MAKEFLAGS="-n -j99 --jobserver-auth=3,4")
+        invalid = [("--source-make", "--jobs", value) for value in ("0", "-1", "+1", "1x", "")]
+        invalid += [("--source-make", "--jobs"), ("--jobs", "2"),
+                    ("--package-objects", "--jobs", "2")]
+        for options in invalid:
+            command = [str(woozyc), "build", "--project", str(manifest), "--out-dir",
+                       str(out_dir), *options]
+            rejected = run(command, root, env)
+            check(rejected.returncode != 0 and not out_dir.exists(),
+                  f"invalid --jobs accepted: {options}", failures)
         cache_dir = root / "cache"
         math_file = project / "src/libmath/math.wz"
         original_math = math_file.read_text()
@@ -176,12 +187,15 @@ def main():
             check(cold_stats["object_hits"] == 0, "cold object hits", failures)
             executed = run([str(out_dir / "program")], root, env)
             check(executed.returncode == EXPECTED, "cold program value", failures)
-            makefile = (out_dir / "Makefile").read_text()
-            check(str(root) not in makefile, "Makefile contains a real path", failures)
+            check(not (out_dir / "Makefile").exists(), "generated a Makefile", failures)
+            report = json.loads((out_dir / "make-report.json").read_text())
+            check((report["schema_version"], report["phase"]) == (1, "source-make"),
+                  "source-package report format changed", failures)
+            check(len(list(out_dir.glob("module-*.log"))) == 3, "missing module logs", failures)
             for name in ("make.log", "combine.log", "link.log"):
                 check((out_dir / name).is_file(), f"missing {name}", failures)
 
-        warm = build(woozyc, manifest, out_dir, cache_dir, env, root)
+        warm = build(woozyc, manifest, out_dir, cache_dir, env, root, jobs=None)
         check(warm.returncode == 0, "warm build failed", failures)
         if warm.returncode == 0:
             warm_stats = stats(out_dir)
@@ -215,7 +229,7 @@ def main():
               "worker missed the unresolved name in a module body", failures)
         failed_make_log = (out_dir / "make.log").read_text()
         check(failed_make_log != old_make_log and "source-make module start:" in failed_make_log,
-              "body resolution error was diagnosed before Make ran", failures)
+              "body resolution error was diagnosed before the worker ran", failures)
 
         math_file.write_text(original_math.replace(
             "pub func twice(value i32) i32 {",
@@ -288,7 +302,7 @@ def main():
               "shared preparation lost the original unresolved-name diagnostic", failures)
         failed_make_log = (out_dir / "make.log").read_text()
         check(failed_make_log != saved_make_log and "source-make module start:" in failed_make_log,
-              "uncached body resolution error bypassed Make workers", failures)
+              "uncached body resolution error bypassed package workers", failures)
         preserved = run([str(out_dir / "program")], root, env)
         check(preserved.returncode == EXPECTED + 10, "failed uncached build replaced program", failures)
 

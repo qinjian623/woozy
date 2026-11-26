@@ -80,7 +80,7 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-输出 `Hello, world!`。运行生成的 Python 代码需要 Python 3.12。分包构建使用系统的 Make 或 Ninja，TLS 需要单独构建附加库。[构建说明](development/docs/BUILD.md#安装自举版工具链) · [标准库说明](docs/STDLIB.md)
+输出 `Hello, world!`。运行生成的 Python 代码需要 Python 3.12。`--package-objects` 使用 Ninja，`--source-make` 由 Woozy 编译器直接安排分包编译。TLS 需要单独构建附加库。[构建说明](development/docs/BUILD.md#安装自举版工具链) · [标准库说明](docs/STDLIB.md)
 
 ## 编辑器配置
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check and run A-side sema declaration/type/generic tests.
 
-The staged sema package contains the production shared records, common helpers,
-and A's helpers/types/declarations.  It deliberately excludes a_instantiate:
+The staged project contains the production shared records, common helpers,
+and A's helpers/types/declarations. It deliberately excludes a_instantiate:
 instantiate/transform call B's annotate/flow, so this runner makes no complete
 Checker or self-hosting claim.
 """
@@ -26,8 +26,9 @@ SELFHOST = ROOT / "selfhost" / "src" / "wzcc"
 sys.path.insert(0, str(HERE.parents[1]))
 from corpus import _run_process_impl  # noqa: E402
 DEFAULT_STAGE0 = ROOT / "build" / "woozy-stdlib-native" / "woozyc"
-SEMA_FILES = ("state.wz", "errors.wz", "common.wz",
-              "a_helpers.wz", "a_types.wz", "a_declarations.wz")
+SEMA_FILES = ("core/state.wz", "core/errors.wz", "core/common.wz",
+              "core/a_helpers.wz", "typecheck/a_types.wz",
+              "declarations/a_declarations.wz")
 EXPECTED_CHECKS = 47
 SUMMARY = re.compile(r"SEMA_A passed=(\d+) failed=(\d+)\s*")
 
@@ -37,9 +38,14 @@ def stage_project(work: Path) -> Path:
     modules = project / "src" / "wzcc"
     sema = modules / "sema"
     sema.mkdir(parents=True)
+    sema_source = SELFHOST / "sema"
     for name in SEMA_FILES:
-        shutil.copy2(SELFHOST / "sema" / name, sema / name)
-    shutil.copy2(HERE / "helpers.wz", sema / "helpers.wz")
+        target = sema / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sema_source / name, target)
+    shutil.copytree(sema_source / "borrow", sema / "borrow")
+    shutil.copy2(HERE / "helpers.wz", sema / "declarations" / "helpers.wz")
+    shutil.copy2(HERE / "typecheck_helpers.wz", sema / "typecheck" / "test_helpers.wz")
     for module in sorted(SELFHOST.iterdir()):
         if module.is_dir() and module.name != "sema":
             (modules / module.name).symlink_to(module, target_is_directory=True)

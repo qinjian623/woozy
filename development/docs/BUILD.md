@@ -60,7 +60,7 @@ python3.12 tests/tooling/installed_bundle_test.py "$HOME/.local/opt/woozy-curren
 
 安装器把编译器、标准库、Native/hosted 运行库、Python 运行库、四个 LLVM 工具和 Clang 自带头文件放在同一目录。安装目标须尚不存在。搬动时移动整个目录，可以用指向其中 `woozyc` 的符号链接将命令加入 PATH。
 
-如果 LLVM 提示缺少系统未提供的动态库，可用 `--compat-lib /path/to/libxml2.so.2` 等参数按所需文件名复制兼容库，可重复传入该选项。安装目录中的 LLVM 启动脚本会自行查找这些库，无需在 shell 配置中设置 `LD_LIBRARY_PATH`。目标机器仍需兼容已有二进制所用的 Linux x86_64 系统 ABI 和其他系统库。原生分包构建仍使用系统的 Make 或 Ninja，hosted 构建需要宿主 C 开发环境，执行 Python 输出需 Python 3.12，TLS 附加库单独构建。
+如果 LLVM 提示缺少系统未提供的动态库，可用 `--compat-lib /path/to/libxml2.so.2` 等参数按所需文件名复制兼容库，可重复传入该选项。安装目录中的 LLVM 启动脚本会自行查找这些库，无需在 shell 配置中设置 `LD_LIBRARY_PATH`。目标机器仍需兼容已有二进制所用的 Linux x86_64 系统 ABI 和其他系统库。普通原生分包构建使用 Ninja，Woozy 版的 `--source-make` 由自身安排分包编译。hosted 构建需要宿主 C 开发环境，执行 Python 输出需 Python 3.12，TLS 附加库单独构建。
 
 在 Apple Silicon 上用同一条安装命令，将 `--compiler` 指向原生 Wz 编译器，将 `--runtime-dir` 指向含 `liblang_darwin_core.a` 的目录，将 `--llvm-bin` 指向 macOS arm64 的 LLVM 22.1.8。链接程序还需要 macOS SDK。先用 [Mac 自举说明](SELFHOST_BOOTSTRAP.md#macos-arm64) 构建原生编译器。打包工具在 Mac 上生成 `woozy-macos-arm64.tar.gz` 和对应的 SHA-256 文件。
 

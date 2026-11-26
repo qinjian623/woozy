@@ -1,0 +1,747 @@
+// CFG setup and function-local analyses.
+//
+// Direct port of the setup half of src/ir/verify.cpp: definitions, address
+// roots, reachability/dominators, enum facts, slot initialization and
+// system-call order/dataflow.  All inputs are independent copies.
+package cfg;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/containers" as nvcontainers;
+import "app/wzcc/nativeverify/state" as nvstate;
+import "app/wzcc/nativeverify/support" as nvsupport;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func hir_function_for(h hir.HirModule, symbol usize)
+    option.Option[hir.HirFunction] {
+    for function in h.functions {
+        if function.symbol == symbol {
+            return option.Option[hir.HirFunction].Some(function);
+        }
+    }
+    return option.Option[hir.HirFunction].None;
+}
+
+func value_op_produces_address(op nativeir.Op) bool {
+    return nvsupport.op_is(op, nativeir.Op.Address) ||
+           nvsupport.op_is(op, nativeir.Op.FieldAddress) ||
+           nvsupport.op_is(op, nativeir.Op.VecElementAddress);
+}
+
+// C++ Verifier::function's use lambda: an undefined value or one that does
+// not dominate the use is a Bad at the consumer's span.
+pub func use_value(state nvstate.Body, value usize, block usize, position usize,
+               span model.Span) nvcontainers.Definition throws nvsupport.VerifyError {
+    let found = nvcontainers.definition_find(state.definitions, value);
+    var definition = nvcontainers.Definition(block: 0, position: 0, type_id: 0,
+        address: false, source: nvsupport.empty_span());
+    var present = false;
+    switch found {
+        case option.Option.Some(item): definition = item; present = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(present, "undefined value", span);
+    var dominates = false;
+    if definition.block == block {
+        dominates = definition.position < position;
+    } else {
+        dominates = nvcontainers.bool_set_has(state.reachable, block) &&
+                    nvcontainers.bool_set_has(state.dom[block], definition.block);
+    }
+    nvsupport.need(dominates, "value definition does not dominate use", span);
+    return definition;
+}
+
+pub func check_slots(state inout nvstate.Body) throws nvsupport.VerifyError {
+    let span = state.f.source;
+    let signature = state.signature;
+    let found = nvstate.symbol_find(state.m.symbols, state.f.symbol);
+    var signature_ok = false;
+    switch found {
+        case option.Option.Some(value):
+            signature_ok = value == state.f.signature;
+        case option.Option.None: {}
+    }
+    nvsupport.need(signature_ok, "function identity/signature differs from verified HIR",
+        span);
+    nvsupport.need(vec.len(state.f.blocks) > 0, "function has no entry block", span);
+    var parameters = nvcontainers.bool_set(vec.len(signature.parameters));
+    let slots = state.f.slots;
+    for slot in slots {
+        nvsupport.require_type(state.m.h, slot.type_id, span);
+        var parameter usize = 0;
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(value): parameter = usize(value); is_parameter = true;
+            case option.Option.None: {}
+        }
+        if is_parameter {
+            nvsupport.need(parameter < vec.len(signature.parameters) &&
+                     nvcontainers.bool_set_add(inout parameters, parameter),
+                 "invalid/duplicate parameter slot", span);
+            let declared = nvsupport.parameter_type(signature, parameter, span);
+            nvsupport.need(slot.type_id == declared.type_id &&
+                     slot.is_inout ==
+                         (nvsupport.param_mode_id(declared.mode) ==
+                             nvsupport.param_mode_id(model.ParamMode.Inout)),
+                 "parameter slot type/mode mismatch", span);
+        } else {
+            nvsupport.need(!slot.is_inout, "local slot cannot be an incoming pointer",
+                span);
+            var binding usize = 0;
+            var has_binding = false;
+            switch slot.binding {
+                case option.Option.Some(value): binding = value; has_binding = true;
+                case option.Option.None: {}
+            }
+            if has_binding {
+                let hir_function = hir_function_for(state.m.h, state.f.symbol);
+                switch hir_function {
+                    case option.Option.Some(function): {
+                        for capture in function.captures {
+                            if capture.local == binding {
+                                nvsupport.need(capture.type_id == slot.type_id &&
+                                         !option.is_some(slot.owner),
+                                     "capture local slot type/ownership",
+                                     span);
+                            }
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    nvsupport.need(nvcontainers.bool_set_count(parameters) == vec.len(signature.parameters),
+         "missing parameter slot", span);
+    let hir_function = hir_function_for(state.m.h, state.f.symbol);
+    switch hir_function {
+        case option.Option.Some(function): {
+            for capture in function.captures {
+                var found_slot = false;
+                for slot in slots {
+                    var binding usize = 0;
+                    var has_binding = false;
+                    switch slot.binding {
+                        case option.Option.Some(value):
+                            binding = value; has_binding = true;
+                        case option.Option.None: {}
+                    }
+                    if has_binding && binding == capture.local {
+                        nvsupport.need(slot.type_id == capture.type_id &&
+                                 !option.is_some(slot.parameter) &&
+                                 !slot.is_inout && !option.is_some(slot.owner),
+                             "capture local slot identity", span);
+                        found_slot = true;
+                    }
+                }
+                nvsupport.need(found_slot, "capture local has no entry slot", span);
+            }
+        }
+        case option.Option.None: {}
+    }
+}
+
+func terminator_shape(kind nativeir.Exit, inputs usize, targets usize,
+                      distinct_targets bool) bool {
+    if nvsupport.exit_is(kind, nativeir.Exit.Branch) {
+        return inputs == 0 && targets == 1;
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.Conditional) {
+        return inputs == 1 && targets == 2;
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.ErrorReturn) ||
+       nvsupport.exit_is(kind, nativeir.Exit.Return) {
+        return inputs == 1 && targets == 0;
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.Unreachable) {
+        return inputs == 0 && targets == 0;
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.TryCall) {
+        return inputs > 0 && targets == 2 && distinct_targets;
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.Await) {
+        return true; // arity and distinctness checked with the Task type
+    }
+    if nvsupport.exit_is(kind, nativeir.Exit.CancelReturn) {
+        return inputs == 0 && targets == 0;
+    }
+    return false; // Missing
+}
+
+// Constant literal roots of this function, keyed like the C++ multimap.
+func collect_constant_roots(state inout nvstate.Body) throws nvsupport.VerifyError {
+    for var index usize = 0; index < vec.len(state.m.h.nodes); index += 1 {
+        let node = state.m.h.nodes[index];
+        if !nvsupport.kind_is(hir.node_kind(node.data), hir.NodeKind.ConstantLiteral) {
+            continue;
+        }
+        if nvsupport.hir_scope_function(state.m.h, node.scope) != state.f.symbol {
+            continue;
+        }
+        nvcontainers.constant_root_insert(inout state.constant_roots,
+            node.source.span.snapshot, node.source.span.begin_byte,
+            node.source.span.end_byte, node.type_id, index);
+    }
+}
+
+pub func collect_definitions(state inout nvstate.Body) throws nvsupport.VerifyError {
+    let block_count = vec.len(state.f.blocks);
+    state.predecessors = vec.empty[nvcontainers.BoolSet]();
+    vec.reserve(state.predecessors, block_count);
+    for var block usize = 0; block < block_count; block += 1 {
+        vec.push(state.predecessors, nvcontainers.bool_set(block_count));
+    }
+    collect_constant_roots(inout state);
+    for var b usize = 0; b < block_count; b += 1 {
+        let bb = state.f.blocks[b];
+        let terminator = bb.terminator;
+        var distinct = false;
+        if vec.len(terminator.targets) == 2 {
+            distinct = terminator.targets[0] != terminator.targets[1];
+        }
+        nvsupport.need(terminator_shape(terminator.kind, vec.len(terminator.inputs),
+                 vec.len(terminator.targets), distinct),
+             "missing or malformed terminator", terminator.source);
+        for dest in terminator.targets {
+            nvsupport.need(dest < block_count && dest != 0,
+                 "invalid branch target or edge into entry", terminator.source);
+            nvcontainers.bool_set_add(inout state.predecessors[dest], b);
+        }
+        for parameter in bb.parameters {
+            nvsupport.need(nvcontainers.definition_insert(inout state.definitions, parameter.value,
+                     nvcontainers.Definition(block: b, position: 0,
+                         type_id: parameter.type_id, address: false,
+                         source: state.f.source)),
+                 "duplicate block parameter", terminator.source);
+        }
+        for var p usize = 0; p < vec.len(bb.instructions); p += 1 {
+            let instruction = bb.instructions[p];
+            nvsupport.require_type(state.m.h, instruction.type_id, instruction.source);
+            nvsupport.need(option.is_some(instruction.result) ==
+                     nvsupport.op_writes_result(instruction.op),
+                 "invalid instruction result", instruction.source);
+            switch instruction.result {
+                case option.Option.Some(result): {
+                    nvsupport.need(nvcontainers.definition_insert(inout state.definitions, result,
+                             nvcontainers.Definition(block: b, position: p + 1,
+                                 type_id: instruction.type_id,
+                                 address: value_op_produces_address(
+                                     instruction.op),
+                                 source: instruction.source)),
+                         "duplicate value definition", instruction.source);
+                    nvcontainers.instruction_insert(inout state.instructions, result,
+                        instruction);
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    // A block parameter is defined on its TryCall edge.  Use that call's real
+    // source span for the receiver/index location check rather than the
+    // parameter block's outgoing terminator.
+    for var b usize = 0; b < block_count; b += 1 {
+        if nvcontainers.bool_set_count(state.predecessors[b]) != 1 {
+            continue;
+        }
+        let predecessor = nvcontainers.bool_set_first(state.predecessors[b]);
+        for parameter in state.f.blocks[b].parameters {
+            nvcontainers.definition_set_source(inout state.definitions, parameter.value,
+                state.f.blocks[predecessor].terminator.source);
+        }
+    }
+}
+
+func resolve_address(state nvstate.Body, value usize)
+    option.Option[nvcontainers.AddressRoot] throws nvsupport.VerifyError {
+    var visited = nvcontainers.node_set();
+    var current = value;
+    var depth usize = 0;
+    for true {
+        nvsupport.need(nvcontainers.node_set_insert(inout visited, current),
+             "Vec element address chain cycle", state.f.source);
+        let found = nvcontainers.instruction_find(state.instructions, current);
+        var instruction = nativeir.empty_instruction();
+        var present = false;
+        switch found {
+            case option.Option.Some(item): instruction = item; present = true;
+            case option.Option.None: {}
+        }
+        if !present {
+            return option.Option[nvcontainers.AddressRoot].None;
+        }
+        if nvsupport.op_is(instruction.op, nativeir.Op.VecElementAddress) {
+            return option.Option[nvcontainers.AddressRoot].Some(nvcontainers.AddressRoot(value: current,
+                root: current, depth: depth));
+        }
+        if !nvsupport.op_is(instruction.op, nativeir.Op.FieldAddress) ||
+           vec.len(instruction.inputs) != 1 {
+            return option.Option[nvcontainers.AddressRoot].None;
+        }
+        current = instruction.inputs[0];
+        depth += 1;
+    }
+    return option.Option[nvcontainers.AddressRoot].None;
+}
+
+pub func collect_address_roots(state inout nvstate.Body) throws nvsupport.VerifyError {
+    // Iterating the value map is the C++ ascending ValueId order.
+    for entry in state.instructions.entries {
+        if !nvsupport.op_is(entry.instruction.op, nativeir.Op.VecElementAddress) &&
+           !nvsupport.op_is(entry.instruction.op, nativeir.Op.FieldAddress) {
+            continue;
+        }
+        let found = resolve_address(state, entry.value);
+        switch found {
+            case option.Option.Some(info): {
+                nvcontainers.address_root_insert(inout state.address_roots, entry.value,
+                    info.root, info.depth);
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+func address_use(state inout nvstate.Body, consumer nativeir.Instruction,
+                 value usize, operand usize, source model.Span)
+    throws nvsupport.VerifyError {
+    let found = nvcontainers.address_root_find(state.address_roots, value);
+    var info = nvcontainers.AddressRoot(value: 0, root: 0, depth: 0);
+    var present = false;
+    switch found {
+        case option.Option.Some(item): info = item; present = true;
+        case option.Option.None: {}
+    }
+    if !present {
+        return;
+    }
+    if nvsupport.op_is(consumer.op, nativeir.Op.FieldAddress) ||
+       nvsupport.op_is(consumer.op, nativeir.Op.BeginBorrow) {
+        return;
+    }
+    if nvsupport.op_is(consumer.op, nativeir.Op.LoadIndirect) ||
+       nvsupport.op_is(consumer.op, nativeir.Op.StoreIndirect) ||
+       nvsupport.op_is(consumer.op, nativeir.Op.ReplaceIndirect) {
+        nvsupport.need(info.depth > 0,
+             "Vec element address used without a field replacement", source);
+        if !nvsupport.op_is(consumer.op, nativeir.Op.LoadIndirect) {
+            nvcontainers.value_count_add(inout state.address_writes, info.root);
+        }
+        return;
+    }
+    if nvsupport.op_is(consumer.op, nativeir.Op.Call) {
+        let signature = nvsupport.require_type(state.m.h, consumer.signature, source);
+        nvsupport.need(operand > 0 && operand - 1 < vec.len(signature.parameters) &&
+                 nvsupport.param_mode_id(signature.parameters[operand - 1].mode) ==
+                     nvsupport.param_mode_id(model.ParamMode.Inout),
+             "Vec element address escapes through an ordinary call argument",
+             source);
+        nvcontainers.node_set_insert(inout state.address_inout_roots, info.root);
+        return;
+    }
+    nvsupport.need(false,
+         "Vec element address escapes its field replacement or inout argument",
+         source);
+}
+
+pub func check_address_usage(state inout nvstate.Body) throws nvsupport.VerifyError {
+    for bb in state.f.blocks {
+        for instruction in bb.instructions {
+            for var operand usize = 0;
+                operand < vec.len(instruction.inputs); operand += 1 {
+                address_use(inout state, instruction,
+                    instruction.inputs[operand], operand, instruction.source);
+            }
+        }
+        let terminator = bb.terminator;
+        for var operand usize = 0; operand < vec.len(terminator.inputs);
+            operand += 1 {
+            let value = terminator.inputs[operand];
+            let found = nvcontainers.address_root_find(state.address_roots, value);
+            var info = nvcontainers.AddressRoot(value: 0, root: 0, depth: 0);
+            var present = false;
+            switch found {
+                case option.Option.Some(item): info = item; present = true;
+                case option.Option.None: {}
+            }
+            if !present {
+                continue;
+            }
+            nvsupport.need(nvsupport.exit_is(terminator.kind, nativeir.Exit.TryCall) && operand > 0,
+                 "Vec element address escapes through a terminator",
+                 terminator.source);
+            let signature = nvsupport.require_type(state.m.h, terminator.signature,
+                terminator.source);
+            nvsupport.need(operand - 1 < vec.len(signature.parameters) &&
+                     nvsupport.param_mode_id(signature.parameters[operand - 1].mode) ==
+                         nvsupport.param_mode_id(model.ParamMode.Inout),
+                 "Vec element address escapes through an ordinary TryCall argument",
+                 terminator.source);
+            nvcontainers.node_set_insert(inout state.address_inout_roots, info.root);
+        }
+    }
+    for entry in state.address_roots.entries {
+        if entry.depth == 0 {
+            nvsupport.need(nvcontainers.value_count_get(state.address_writes, entry.root) == 1 ||
+                     nvcontainers.node_set_has(state.address_inout_roots, entry.root),
+                 "Vec element address does not perform exactly one field write or direct inout call",
+                 state.f.source);
+        }
+    }
+}
+
+pub func compute_reachability(state inout nvstate.Body) throws nvsupport.VerifyError {
+    var stack = vec.empty[usize]();
+    vec.push(stack, 0);
+    for vec.len(stack) > 0 {
+        let popped = vec.pop(stack);
+        var block usize = 0;
+        switch popped {
+            case option.Option.Some(value): block = value;
+            case option.Option.None: {}
+        }
+        if !nvcontainers.bool_set_add(inout state.reachable, block) {
+            continue;
+        }
+        for target in state.f.blocks[block].terminator.targets {
+            vec.push(stack, target);
+        }
+    }
+    nvsupport.need(nvcontainers.bool_set_count(state.reachable) == vec.len(state.f.blocks),
+         "unreachable native block", state.f.source);
+}
+
+pub func compute_dominators(state inout nvstate.Body) {
+    let block_count = vec.len(state.f.blocks);
+    state.dom = vec.empty[nvcontainers.BoolSet]();
+    vec.reserve(state.dom, block_count);
+    for var block usize = 0; block < block_count; block += 1 {
+        vec.push(state.dom, nvcontainers.bool_set_copy(state.reachable));
+    }
+    state.dom[0] = nvcontainers.bool_set(block_count);
+    nvcontainers.bool_set_add(inout state.dom[0], 0);
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if b == 0 || !nvcontainers.bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = nvcontainers.bool_set_copy(state.reachable);
+            for var p usize = 0; p < block_count; p += 1 {
+                if !nvcontainers.bool_set_has(state.predecessors[b], p) ||
+                   !nvcontainers.bool_set_has(state.reachable, p) {
+                    continue;
+                }
+                next = nvcontainers.bool_set_intersect(next, state.dom[p]);
+            }
+            nvcontainers.bool_set_add(inout next, b);
+            if !nvcontainers.bool_set_equal(next, state.dom[b]) {
+                state.dom[b] = next;
+                changed = true;
+            }
+        }
+    }
+}
+
+pub func compute_facts(state inout nvstate.Body) {
+    let block_count = vec.len(state.f.blocks);
+    var universe = nvcontainers.fact_set();
+    for entry in state.instructions.entries {
+        let instruction = entry.instruction;
+        if !nvsupport.op_is(instruction.op, nativeir.Op.EnumTest) ||
+           vec.len(instruction.inputs) != 1 {
+            continue;
+        }
+        nvcontainers.fact_insert(inout universe, instruction.inputs[0],
+            instruction.variant, true);
+        nvcontainers.fact_insert(inout universe, instruction.inputs[0],
+            instruction.variant, false);
+    }
+    state.facts = nvcontainers.fact_set_vec(block_count, universe);
+    state.facts[0] = nvcontainers.fact_set();
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if b == 0 || !nvcontainers.bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = nvcontainers.fact_set_copy(universe);
+            for var p usize = 0; p < block_count; p += 1 {
+                if !nvcontainers.bool_set_has(state.predecessors[b], p) {
+                    continue;
+                }
+                var edge = nvcontainers.fact_set_copy(state.facts[p]);
+                let terminator = state.f.blocks[p].terminator;
+                if nvsupport.exit_is(terminator.kind, nativeir.Exit.Conditional) &&
+                   terminator.targets[0] != terminator.targets[1] {
+                    let found = nvcontainers.instruction_find(state.instructions,
+                        terminator.inputs[0]);
+                    switch found {
+                        case option.Option.Some(test): {
+                            if nvsupport.op_is(test.op, nativeir.Op.EnumTest) &&
+                               vec.len(test.inputs) == 1 {
+                                nvcontainers.fact_insert(inout edge, test.inputs[0],
+                                    test.variant,
+                                    terminator.targets[0] == b);
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                next = nvcontainers.fact_set_intersect(next, edge);
+            }
+            if !nvcontainers.fact_set_equal(next, state.facts[b]) {
+                state.facts[b] = next;
+                changed = true;
+            }
+        }
+    }
+}
+
+// C++'s lambda capture_slot: a local slot whose binding is a HIR capture.
+pub func capture_slot(state nvstate.Body, index usize) bool {
+    if index >= vec.len(state.f.slots) {
+        return false;
+    }
+    let slot = state.f.slots[index];
+    var binding usize = 0;
+    var has_binding = false;
+    switch slot.binding {
+        case option.Option.Some(value): binding = value; has_binding = true;
+        case option.Option.None: {}
+    }
+    if !has_binding {
+        return false;
+    }
+    let hir_function = hir_function_for(state.m.h, state.f.symbol);
+    switch hir_function {
+        case option.Option.Some(function): {
+            for capture in function.captures {
+                if capture.local == binding {
+                    return true;
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    return false;
+}
+
+pub func compute_initialization(state inout nvstate.Body) {
+    let block_count = vec.len(state.f.blocks);
+    let slot_count = vec.len(state.f.slots);
+    var all_slots = nvcontainers.bool_set(slot_count);
+    var incoming = nvcontainers.bool_set(slot_count);
+    for var index usize = 0; index < slot_count; index += 1 {
+        nvcontainers.bool_set_add(inout all_slots, index);
+        if option.is_some(state.f.slots[index].parameter) ||
+           capture_slot(state, index) {
+            nvcontainers.bool_set_add(inout incoming, index);
+        }
+    }
+    state.initialized = nvcontainers.bool_set_vec(block_count, all_slots);
+    state.initialized_out = nvcontainers.bool_set_vec(block_count, all_slots);
+    state.initialized[0] = nvcontainers.bool_set_copy(incoming);
+    var changed = true;
+    for changed {
+        changed = false;
+        for var b usize = 0; b < block_count; b += 1 {
+            if !nvcontainers.bool_set_has(state.reachable, b) {
+                continue;
+            }
+            var next = nvcontainers.bool_set_copy(all_slots);
+            if b == 0 {
+                next = nvcontainers.bool_set_copy(incoming);
+            } else {
+                for var p usize = 0; p < block_count; p += 1 {
+                    if !nvcontainers.bool_set_has(state.predecessors[b], p) ||
+                       !nvcontainers.bool_set_has(state.reachable, p) {
+                        continue;
+                    }
+                    next = nvcontainers.bool_set_intersect(next, state.initialized_out[p]);
+                }
+            }
+            var written = nvcontainers.bool_set_copy(next);
+            for instruction in state.f.blocks[b].instructions {
+                if nvsupport.op_is(instruction.op, nativeir.Op.Store) {
+                    nvcontainers.bool_set_add(inout written, instruction.slot);
+                }
+            }
+            if !nvcontainers.bool_set_equal(next, state.initialized[b]) ||
+               !nvcontainers.bool_set_equal(written, state.initialized_out[b]) {
+                state.initialized[b] = next;
+                state.initialized_out[b] = written;
+                changed = true;
+            }
+        }
+    }
+}
+
+pub func hir_child(node hir.HirNode, index usize) usize throws nvsupport.VerifyError {
+    if index >= vec.len(node.children) {
+        throw nvsupport.support(model.SupportError.Invalid("invalid HIR child index"));
+    }
+    return node.children[index];
+}
+
+// Fixed operations are effects: individually valid calls may not be
+// reordered.  HIR children retain source evaluation order; the postorder walk
+// records system/C calls in the order execution reaches them.
+pub func compute_system_order(state inout nvstate.Body) throws nvsupport.VerifyError {
+    let function = hir_function_for(state.m.h, state.f.symbol);
+    var body usize = 0;
+    var present = false;
+    switch function {
+        case option.Option.Some(value): body = value.body; present = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(present, "native function has no HIR body", state.f.source);
+    var pending_ids = vec.empty[usize]();
+    var pending_visited = vec.empty[bool]();
+    vec.push(pending_ids, body);
+    vec.push(pending_visited, false);
+    var sequence usize = 0;
+    for vec.len(pending_ids) > 0 {
+        let popped_id = vec.pop(pending_ids);
+        let popped_visited = vec.pop(pending_visited);
+        var id usize = 0;
+        var visited = false;
+        switch popped_id {
+            case option.Option.Some(value): id = value;
+            case option.Option.None: {}
+        }
+        switch popped_visited {
+            case option.Option.Some(value): visited = value;
+            case option.Option.None: {}
+        }
+        let node = nvsupport.hir_node(state.m.h, id);
+        if !visited {
+            vec.push(pending_ids, id);
+            vec.push(pending_visited, true);
+            if nvsupport.kind_is(hir.node_kind(node.data), hir.NodeKind.For) {
+                vec.push(state.system_loop_sources, node.source.span);
+                // HIR stores step before body; execution performs body first.
+                vec.push(pending_ids, hir_child(node, 2));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 3));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 1));
+                vec.push(pending_visited, false);
+                vec.push(pending_ids, hir_child(node, 0));
+                vec.push(pending_visited, false);
+            } else {
+                if nvsupport.kind_is(hir.node_kind(node.data), hir.NodeKind.ForIn) {
+                    vec.push(state.system_loop_sources, node.source.span);
+                }
+                for var index usize = vec.len(node.children); index > 0;
+                    index -= 1 {
+                    vec.push(pending_ids, node.children[index - 1]);
+                    vec.push(pending_visited, false);
+                }
+            }
+        } else {
+            switch node.data {
+                case hir.NodeData.Call(call): {
+                    let kind = nvsupport.callee_kind_id(call.kind);
+                    if kind == nvsupport.callee_kind_id(hir.CalleeKind.System) ||
+                       kind == nvsupport.callee_kind_id(hir.CalleeKind.CForeign) {
+                        nvcontainers.node_order_insert(inout state.system_order, id,
+                            sequence);
+                        sequence += 1;
+                    }
+                }
+                default: {}
+            }
+        }
+    }
+}
+
+func backedge(state nvstate.Body, from usize, to usize) bool throws nvsupport.VerifyError {
+    if !nvcontainers.bool_set_has(state.dom[from], to) {
+        return false;
+    }
+    let source = state.f.blocks[from].terminator.source;
+    var matches = false;
+    for loop_span in state.system_loop_sources {
+        if nvsupport.same_span(loop_span, source) {
+            matches = true;
+        }
+    }
+    nvsupport.need(matches, "system operation loop edge has no HIR loop", source);
+    return true;
+}
+
+pub func compute_system_flow(state inout nvstate.Body) throws nvsupport.VerifyError {
+    let block_count = vec.len(state.f.blocks);
+    var system_in = vec.make[option.Option[usize]](block_count,
+        option.Option[usize].None);
+    var system_out = vec.make[option.Option[usize]](block_count,
+        option.Option[usize].None);
+    if vec.len(state.system_order.entries) > 0 {
+        var changed = true;
+        for changed {
+            changed = false;
+            for var b usize = 0; b < block_count; b += 1 {
+                if !nvcontainers.bool_set_has(state.reachable, b) {
+                    continue;
+                }
+                var previous = option.Option[usize].None;
+                for var p usize = 0; p < block_count; p += 1 {
+                    if !nvcontainers.bool_set_has(state.predecessors[b], p) ||
+                       backedge(state, p, b) {
+                        continue;
+                    }
+                    switch system_out[p] {
+                        case option.Option.Some(value): {
+                            var replace = true;
+                            switch previous {
+                                case option.Option.Some(current):
+                                    replace = value > current;
+                                case option.Option.None: {}
+                            }
+                            if replace {
+                                previous = option.Option[usize].Some(value);
+                            }
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                if nvsupport.compare_option(system_in[b], previous) != 0 {
+                    system_in[b] = previous;
+                    changed = true;
+                }
+                for instruction in state.f.blocks[b].instructions {
+                    if nvsupport.op_is(instruction.op, nativeir.Op.CleanupBegin) ||
+                       nvsupport.op_is(instruction.op, nativeir.Op.CleanupEnd) {
+                        previous = option.Option[usize].None;
+                    }
+                    if nvsupport.op_is(instruction.op, nativeir.Op.SystemCall) {
+                        switch instruction.origin {
+                            case option.Option.Some(origin): {
+                                let position = nvcontainers.node_order_find(
+                                    state.system_order, origin);
+                                switch position {
+                                    case option.Option.Some(value):
+                                        previous =
+                                            option.Option[usize].Some(value);
+                                    case option.Option.None: {}
+                                }
+                            }
+                            case option.Option.None: {}
+                        }
+                    }
+                }
+                if nvsupport.compare_option(system_out[b], previous) != 0 {
+                    system_out[b] = previous;
+                    changed = true;
+                }
+            }
+        }
+    }
+    state.system_in = system_in;
+    state.system_out = system_out;
+}

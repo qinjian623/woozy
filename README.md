@@ -82,7 +82,7 @@ woozyc build --project examples/hello/lang.toml --backend native --out-dir build
 ./build/hello/program
 ```
 
-This prints `Hello, world!`. Running generated Python code requires Python 3.12. Package builds use the system Make or Ninja, and TLS requires a separately built addon. See the [build guide](development/docs/BUILD.md#安装自举版工具链) and the [standard library guide](docs/STDLIB.md).
+This prints `Hello, world!`. Running generated Python code requires Python 3.12. The `--package-objects` mode uses Ninja. Woozy schedules `--source-make` package builds itself. TLS requires a separately built addon. See the [build guide](development/docs/BUILD.md#安装自举版工具链) and the [standard library guide](docs/STDLIB.md).
 
 ## Editor setup
 

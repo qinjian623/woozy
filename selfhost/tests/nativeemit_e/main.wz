@@ -1,8 +1,9 @@
 package app;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/values" as emitvalues;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
-import "app/wzcc/nativeemit" as n;
 import "app/wzcc/nativeir" as nativeir;
 import "std/io" as io;
 import "std/os" as os;
@@ -129,20 +130,22 @@ func fixture_project() model.Project {
         c_bindings: [], c_types: types, c_callables: callables,
         c_libraries: [], c_library_dirs: []);
 }
-func adapter_source() string throws n.Error {
+func adapter_source() string throws emitcore.Error {
     let resolved = model.ResolvedProject(project: fixture_project(), symbols: [],
         occurrences: [], deferred_members: [], self_parameters: []);
     let input = nativeir.empty_module(hir.empty_module(resolved, 0,
         model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
-    var state = n.new_emitter(input, n.default_options());
+    var state = emitcore.new_emitter(input, emitcore.Settings(
+        triple: "x86_64-unknown-linux-gnu", cpu: "generic", features: "",
+        optimization: 0, debug_info: false));
     vec.push(state.e.used_callables, u32(1));
     vec.push(state.e.used_callables, u32(2));
     vec.push(state.e.used_callables, u32(3));
     vec.push(state.e.used_resources, u32(2));
     vec.push(state.e.used_resources, u32(4));
     vec.push(state.e.used_callbacks,
-        n.UsedCallback(symbol: 7, c_type: 3));
-    n.finalize_c_adapter(inout state);
+        emitcore.UsedCallback(symbol: 7, c_type: 3));
+    emitvalues.finalize_c_adapter(inout state);
     return state.e.adapter_source;
 }
 func main() i32 throws os.Error {
@@ -150,9 +153,9 @@ func main() i32 throws os.Error {
         let source = adapter_source();
         if source == "" { return 2; }
         io.print(source);
-    } catch error n.Error {
+    } catch error emitcore.Error {
         switch error {
-            case n.Error.Failure(code, kind, message): {
+            case emitcore.Error.Failure(code, kind, message): {
                 io.eprintln(code + ": " + message);
             }
         }

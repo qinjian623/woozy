@@ -90,30 +90,15 @@ try:
             (target / source.name).write_bytes(source.read_bytes())
             inputs.append({'source': str(source), 'sha256': sha(source)})
     target = PROJECT / 'src/wzcc/nativeemit'
-    target.mkdir(exist_ok=True)
-    # Test the production text helpers even while other emitter files are incomplete.
-    # SH37 made state/text reference the same-package debug.wz.  Package import
-    # edges do not expose that dependency, so select debug.wz explicitly, but
-    # keep selecting only state/text for trees that predate it.
-    uses_debug = ('DebugState' in (NATIVEEMIT / 'state.wz').read_text() or
-                  'debug_line(' in (NATIVEEMIT / 'text.wz').read_text())
-    names = ['state.wz', 'text.wz'] + (['debug.wz'] if uses_debug else [])
-    for filename in names:
-        source = NATIVEEMIT / filename
+    core = NATIVEEMIT / 'core'
+    for source in (NATIVEEMIT / 'api.wz', *(core / name for name in ('state.wz', 'text.wz', 'b_type.wz'))):
         if not source.is_file():
             raise RuntimeError(f'missing nativeemit dependency {source}')
-        (target / source.name).write_bytes(source.read_bytes())
-        inputs.append({'source': str(source), 'sha256': sha(source)})
-    if uses_debug:
-        # debug_scalar calls B's private type_of.  Stage that one production
-        # body instead of all of B (or a stand-in type table).
-        source = HERE / 'fixture_type_of.wz'
-        (target / source.name).write_bytes(source.read_bytes())
-        inputs.append({'source': str(source), 'sha256': sha(source)})
-        if (NATIVEEMIT / 'debug_types.wz').is_file():
-            source = HERE / 'fixture_debug_type.wz'
-            (target / source.name).write_bytes(source.read_bytes())
-            inputs.append({'source': str(source), 'sha256': sha(source)})
+    for source in (NATIVEEMIT / 'api.wz', *sorted(core.rglob('*.wz'))):
+        destination = target / source.relative_to(NATIVEEMIT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+        inputs.append({'source': str(source), 'sha256': sha(destination)})
     (PROJECT / 'src/main.wz').write_bytes((HERE / 'main.wz').read_bytes())
     inputs.append({'source': str(HERE / 'main.wz'), 'sha256': sha(HERE / 'main.wz')})
     # SH31 added interface/digest imports to nativeemit/state.wz.  Copy only

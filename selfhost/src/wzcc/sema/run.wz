@@ -1,5 +1,8 @@
 // CPP check.cpp:6687-6798. Declaration/body algorithms remain in A/B files.
 package sema;
+import "app/wzcc/sema/core" as semacore;
+import "app/wzcc/sema/typecheck" as sematypes;
+import "app/wzcc/sema/declarations" as semadecl;
 
 import "app/wzcc/hir" as hir;
 import "app/wzcc/frontcache" as frontcache;
@@ -11,19 +14,19 @@ import "app/wzcc/valueops" as valueops;
 import "std/option" as option;
 import "std/vec" as vec;
 
-func run_key_less(left NodeKey, right NodeKey) bool {
-    return node_key_less(left, right);
+func run_key_less(left semacore.NodeKey, right semacore.NodeKey) bool {
+    return semacore.node_key_less(left, right);
 }
 
 // emplace keeps the first definition; occurrence assignment keeps the last.
-func run_put_node_symbol(entries Vec[NodeSymbolEntry], key NodeKey,
+func run_put_node_symbol(entries Vec[semacore.NodeSymbolEntry], key semacore.NodeKey,
                          id usize, replace bool) {
-    let position = node_symbol_position(entries, key);
-    if position < vec.len(entries) && same_node_key(entries[position].key, key) {
+    let position = semacore.node_symbol_position(entries, key);
+    if position < vec.len(entries) && semacore.same_node_key(entries[position].key, key) {
         if replace { entries[position].symbol = id; }
         return;
     }
-    let entry = NodeSymbolEntry(key: key, symbol: id);
+    let entry = semacore.NodeSymbolEntry(key: key, symbol: id);
     vec.push(entries, entry);
     var index = vec.len(entries) - 1;
     for index > position {
@@ -46,10 +49,10 @@ func run_insert_index(values Vec[usize], value usize) {
     values[position] = value;
 }
 
-func run_sort_node_symbols(entries Vec[NodeSymbolEntry]) {
+func run_sort_node_symbols(entries Vec[semacore.NodeSymbolEntry]) {
     let n = vec.len(entries);
     if n < 2 { return; }
-    let scratch = vec.empty[NodeSymbolEntry]();
+    let scratch = vec.empty[semacore.NodeSymbolEntry]();
     vec.reserve(scratch, n);
     for var index usize = 0; index < n; index += 1 { vec.push(scratch, entries[index]); }
     var width usize = 1;
@@ -115,8 +118,8 @@ func run_dedup_sorted(values Vec[usize]) Vec[usize] {
 }
 
 // module already owns its mutable resolved/type arrays.
-func initialize_checker(module hir.HirModule) Checker throws Error {
-    var state = Checker(m: module, selected_body_module: option.Option[usize].None,
+func initialize_checker(module hir.HirModule) semacore.Checker throws semacore.Error {
+    var state = semacore.Checker(m: module, selected_body_module: option.Option[usize].None,
         selected_templates: [], occurrences: [], definitions: [],
         signatures: [], trait_signature_context: [], parameters: [], locals: [],
         constants: [], evaluating: [], function: 0, scope: 0, cleanup_depth: 0,
@@ -131,18 +134,18 @@ func initialize_checker(module hir.HirModule) Checker throws Error {
         async_functions: [], closures: [], capture_by_origin: [],
         capture_by_local: [], current_captures: [], weak_validated: [],
         nominal_fields_ready: false);
-    let unit = scalar(inout state, model.TypeKind.Unit, 0);
+    let unit = semacore.scalar(inout state, model.TypeKind.Unit, 0);
     state.unit = unit;
-    let boolean = scalar(inout state, model.TypeKind.Bool, 0);
+    let boolean = semacore.scalar(inout state, model.TypeKind.Bool, 0);
     state.boolean = boolean;
-    let i64_type = scalar(inout state, model.TypeKind.SignedInt, 64);
+    let i64_type = semacore.scalar(inout state, model.TypeKind.SignedInt, 64);
     state.i64_type = i64_type;
-    let raw_defs = vec.empty[NodeSymbolEntry]();
+    let raw_defs = vec.empty[semacore.NodeSymbolEntry]();
     vec.reserve(raw_defs, vec.len(state.m.resolved.symbols));
     for symbol in state.m.resolved.symbols {
         switch symbol.definition {
             case option.Option.Some(location):
-                vec.push(raw_defs, NodeSymbolEntry(key: node_key(location),
+                vec.push(raw_defs, semacore.NodeSymbolEntry(key: semacore.node_key(location),
                     symbol: symbol.id));
             case option.Option.None: {}
         }
@@ -150,20 +153,20 @@ func initialize_checker(module hir.HirModule) Checker throws Error {
     run_sort_node_symbols(raw_defs);
     for entry in raw_defs {
         let len_defs = vec.len(state.definitions);
-        if len_defs == 0 || !same_node_key(state.definitions[len_defs - 1].key, entry.key) {
+        if len_defs == 0 || !semacore.same_node_key(state.definitions[len_defs - 1].key, entry.key) {
             vec.push(state.definitions, entry);
         }
     }
-    let raw_occ = vec.empty[NodeSymbolEntry]();
+    let raw_occ = vec.empty[semacore.NodeSymbolEntry]();
     vec.reserve(raw_occ, vec.len(state.m.resolved.occurrences));
     for occurrence in state.m.resolved.occurrences {
-        vec.push(raw_occ, NodeSymbolEntry(key: node_key(occurrence.source),
+        vec.push(raw_occ, semacore.NodeSymbolEntry(key: semacore.node_key(occurrence.source),
             symbol: occurrence.symbol));
     }
     run_sort_node_symbols(raw_occ);
     for entry in raw_occ {
         let len_occ = vec.len(state.occurrences);
-        if len_occ > 0 && same_node_key(state.occurrences[len_occ - 1].key, entry.key) {
+        if len_occ > 0 && semacore.same_node_key(state.occurrences[len_occ - 1].key, entry.key) {
             state.occurrences[len_occ - 1] = entry;
         } else {
             vec.push(state.occurrences, entry);
@@ -173,31 +176,31 @@ func initialize_checker(module hir.HirModule) Checker throws Error {
 }
 
 func make_checker(resolved model.ResolvedProject,
-                  config model.CheckConfig) Checker throws Error {
+                  config model.CheckConfig) semacore.Checker throws semacore.Error {
     var module = hir.empty_module(resolved, resolved.project.entry, config);
     // Wz Vec copies share storage; CPP's owned symbol table must be isolated.
     try { module = hirclone.clone_module(module); }
-    catch error model.SupportError { throw Error.Support(error); }
+    catch error model.SupportError { throw semacore.Error.Support(error); }
     return initialize_checker(module);
 }
 
-func run_generic_owners(entries Vec[GenericParamsEntry]) Vec[usize] {
+func run_generic_owners(entries Vec[semacore.GenericParamsEntry]) Vec[usize] {
     let owners = vec.empty[usize]();
     vec.reserve(owners, vec.len(entries));
     for entry in entries { vec.push(owners, entry.owner); }
     return run_dedup_sorted(owners);
 }
 
-func run_body_symbols(entries Vec[BodyEntry]) Vec[usize] {
+func run_body_symbols(entries Vec[semacore.BodyEntry]) Vec[usize] {
     let symbols = vec.empty[usize]();
     vec.reserve(symbols, vec.len(entries));
     for entry in entries { vec.push(symbols, entry.symbol); }
     return run_dedup_sorted(symbols);
 }
 
-func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
+func run_check_bounds(state inout semacore.Checker, parameters Vec[hir.GenericParam],
                       self option.Option[usize], environment Vec[usize],
-                      impl_index option.Option[usize]) throws Error {
+                      impl_index option.Option[usize]) throws semacore.Error {
     let saved = state.signature_parameters;
     state.signature_parameters = vec.empty[usize]();
     for parameter in parameters {
@@ -211,8 +214,8 @@ func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
     for parameter in parameters {
         switch parameter.trait_ref {
             case option.Option.Some(bound): {
-                let application = parameter_type(inout state, parameter.symbol);
-                check_trait_parameter_bounds(inout state, parameter.source.node,
+                let application = sematypes.parameter_type(inout state, parameter.symbol);
+                sematypes.check_trait_parameter_bounds(inout state, parameter.source.node,
                     bound, application, 0);
             }
             case option.Option.None: {}
@@ -220,11 +223,11 @@ func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
     }
     switch impl_index {
         case option.Option.Some(index): {
-            if index >= vec.len(state.m.impls) { throw internal_error("invalid sema implementation reference"); }
+            if index >= vec.len(state.m.impls) { throw semacore.internal_error("invalid sema implementation reference"); }
             let implementation = state.m.impls[index];
             switch implementation.trait_ref {
                 case option.Option.Some(bound):
-                    check_trait_parameter_bounds(inout state, implementation.source.node,
+                    sematypes.check_trait_parameter_bounds(inout state, implementation.source.node,
                         bound, implementation.self_type, 0);
                 case option.Option.None: {}
             }
@@ -236,29 +239,29 @@ func run_check_bounds(state inout Checker, parameters Vec[hir.GenericParam],
 
 // Return ownership's real phase result: its empty-diagnostic failure means
 // Cancelled in CPP, which must not be disguised as Error.Support.
-func run_checker(state inout Checker) model.UnitResult throws Error {
+func run_checker(state inout semacore.Checker) model.UnitResult throws semacore.Error {
     return run_checker_cached(inout state, frontcache.context("", ""));
 }
-func run_checker_cached(state inout Checker, cache frontcache.Context) model.UnitResult throws Error {
+func run_checker_cached(state inout semacore.Checker, cache frontcache.Context) model.UnitResult throws semacore.Error {
     return run_checker_selected(inout state, cache, option.Option[usize].None, []);
 }
-func run_checker_package(state inout Checker, cache frontcache.Context,
-                             package_id usize) model.UnitResult throws Error {
+func run_checker_package(state inout semacore.Checker, cache frontcache.Context,
+                             package_id usize) model.UnitResult throws semacore.Error {
     return run_checker_selected(inout state, cache, option.Option[usize].Some(package_id), []);
 }
 // Package workers use the same project-wide declaration phase but inspect only
 // function bodies owned by one canonical Module.  No body-cache reader or
 // writer participates in this mode.
-func run_checker_selected(state inout Checker, cache frontcache.Context,
-                          selected option.Option[usize], templates Vec[model.NodeRef]) model.UnitResult throws Error {
+func run_checker_selected(state inout semacore.Checker, cache frontcache.Context,
+                          selected option.Option[usize], templates Vec[model.NodeRef]) model.UnitResult throws semacore.Error {
     state.selected_body_module = selected;
     state.selected_templates = templates;
     prepare_declarations(inout state);
     return run_checker_bodies(inout state, cache, selected, templates);
 }
 
-func prepare_declarations(state inout Checker) throws Error {
-    declarations(inout state);
+func prepare_declarations(state inout semacore.Checker) throws semacore.Error {
+    semadecl.declarations(inout state);
     for trait_declaration in state.m.traits {
         run_check_bounds(inout state, trait_declaration.params,
             option.Option[usize].Some(trait_declaration.self), [], option.Option[usize].None);
@@ -276,12 +279,12 @@ func prepare_declarations(state inout Checker) throws Error {
     // generic_params and bodies are CPP maps, not declaration-order arrays.
     for owner in run_generic_owners(state.generic_params) {
         var parameters = vec.empty[hir.GenericParam]();
-        switch a_generic_params_get(state.generic_params, owner) {
+        switch semacore.a_generic_params_get(state.generic_params, owner) {
             case option.Option.Some(found): parameters = found;
             case option.Option.None: {}
         }
         var self = option.Option[usize].None;
-        switch a_trait_signature_get(state.trait_signature_context, owner) {
+        switch semacore.a_trait_signature_get(state.trait_signature_context, owner) {
             case option.Option.Some(entry):
                 self = option.Option[usize].Some(entry.trait_self);
             case option.Option.None: {}
@@ -304,15 +307,15 @@ func prepare_declarations(state inout Checker) throws Error {
         for var file_index usize = 0; file_index < vec.len(module.files);
             file_index += 1 {
             let file_ref = model.NodeRef(module: module.id, file: file_index, node: 0);
-            let file = parsed_file(inout state, file_ref);
-            let root_ref = at(file_ref, file.root);
-            let root = ast(inout state, root_ref);
+            let file = semacore.parsed_file(inout state, file_ref);
+            let root_ref = semacore.at(file_ref, file.root);
+            let root = semacore.ast(inout state, root_ref);
             for id in root.children {
-                let location = at(file_ref, id);
-                let value = ast(inout state, location);
+                let location = semacore.at(file_ref, id);
+                let value = semacore.ast(inout state, location);
                 switch value.kind {
                     case model.AstKind.Binding: {
-                        let binding = definition(inout state, location);
+                        let binding = semacore.definition(inout state, location);
                         constant(inout state, binding);
                     }
                     default: {}
@@ -332,13 +335,13 @@ func prepare_declarations(state inout Checker) throws Error {
     }
 }
 
-func run_checker_bodies(state inout Checker, cache frontcache.Context,
+func run_checker_bodies(state inout semacore.Checker, cache frontcache.Context,
                         selected option.Option[usize],
-                        templates Vec[model.NodeRef]) model.UnitResult throws Error {
+                        templates Vec[model.NodeRef]) model.UnitResult throws semacore.Error {
     state.selected_body_module = selected;
     state.selected_templates = templates;
     for template_ref in templates {
-        let template_symbol = definition(inout state, template_ref);
+        let template_symbol = semacore.definition(inout state, template_ref);
         check_body(inout state, template_symbol);
     }
     var restored = vec.empty[usize]();
@@ -369,7 +372,7 @@ func run_checker_bodies(state inout Checker, cache frontcache.Context,
     }
     let type_roots = types.size(state.m.types);
     for var id usize = 1; id <= type_roots; id += 1 {
-        let value = lookup_type(inout state, id);
+        let value = semacore.lookup_type(inout state, id);
         var nominal_type = false;
         switch value.kind {
             case model.TypeKind.NominalStruct: nominal_type = true;
@@ -377,39 +380,39 @@ func run_checker_bodies(state inout Checker, cache frontcache.Context,
             default: {}
         }
         if !nominal_type { continue; }
-        let declaration = nominal(inout state, id);
+        let declaration = sematypes.nominal(inout state, id);
         let substitutions = vec.empty[model.Substitution]();
         for var parameter usize = 0; parameter < vec.len(declaration.params);
             parameter += 1 {
             if parameter >= vec.len(value.type_args) {
-                throw internal_error("nominal type argument count");
+                throw semacore.internal_error("nominal type argument count");
             }
             vec.push(substitutions, model.Substitution(
                 symbol: declaration.params[parameter].symbol,
                 type_id: value.type_args[parameter]));
         }
-        check_constraints(inout state, declaration.source.node, declaration.params,
+        sematypes.check_constraints(inout state, declaration.source.node, declaration.params,
             value.type_args, option.Option[Vec[model.Substitution]].Some(substitutions));
     }
-    validate_weak_types_before_publish(inout state);
+    sematypes.validate_weak_types_before_publish(inout state);
     var infinite = option.Option[usize].None;
     try { infinite = valueops.infinite_value_layout(state.m); }
-    catch error model.SupportError { throw Error.Support(error); }
+    catch error model.SupportError { throw semacore.Error.Support(error); }
     switch infinite {
         case option.Option.Some(id): {
             var found = false;
             var index usize = 0;
-            switch a_nominal_id_get(state.nominal_ids, id) {
+            switch semacore.a_nominal_id_get(state.nominal_ids, id) {
                 case option.Option.Some(nominal_index): {
                     found = true;
                     index = nominal_index;
                 }
                 case option.Option.None: {}
             }
-            if !found { throw internal_error("map::at"); }
-            if index >= vec.len(state.m.nominals) { throw internal_error("invalid sema nominal reference"); }
+            if !found { throw semacore.internal_error("map::at"); }
+            if index >= vec.len(state.m.nominals) { throw semacore.internal_error("invalid sema nominal reference"); }
             let location = state.m.nominals[index].source.node;
-            throw reject(inout state, location,
+            throw semacore.reject(inout state, location,
                 "value type has an infinite recursive layout", "E_TYPE_MISMATCH");
         }
         case option.Option.None: {}
@@ -417,8 +420,8 @@ func run_checker_bodies(state inout Checker, cache frontcache.Context,
     return ownership.produce_ownership(inout state.m);
 }
 
-func run_checker_templates(state inout Checker, cache frontcache.Context,
+func run_checker_templates(state inout semacore.Checker, cache frontcache.Context,
                            package_id usize, templates Vec[model.NodeRef])
-    model.UnitResult throws Error {
+    model.UnitResult throws semacore.Error {
     return run_checker_selected(inout state, cache, option.Option[usize].Some(package_id), templates);
 }

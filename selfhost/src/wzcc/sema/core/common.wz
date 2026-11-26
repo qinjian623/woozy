@@ -1,0 +1,254 @@
+// CPP check.cpp:129-207,414-500. No declaration/expression checker algorithms.
+package core;
+
+import "app/wzcc/semaeffects" as effects;
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/number" as number;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func internal_error(message string) Error {
+    return Error.Support(model.SupportError.Invalid(message));
+}
+pub func same_node_key(left NodeKey, right NodeKey) bool {
+    return left.module==right.module && left.file==right.file && left.node==right.node;
+}
+pub func node_key(r model.NodeRef) NodeKey {
+    return NodeKey(module:r.module,file:r.file,node:r.node);
+}
+// One private (module,file,node) lower_bound shared by the index builder and
+// its readers. The table never stores duplicate keys; callers still compare
+// the returned entry so an absent neighbouring key is not treated as a hit.
+pub func node_key_less(left NodeKey,right NodeKey) bool {
+    if left.module!=right.module {return left.module<right.module;}
+    if left.file!=right.file {return left.file<right.file;}
+    return left.node<right.node;
+}
+pub func node_symbol_position(entries Vec[NodeSymbolEntry],key NodeKey) usize {
+    var low usize=0;var high usize=vec.len(entries);
+    for low<high {
+        let middle=low+(high-low)/2;
+        if node_key_less(entries[middle].key,key) {low=middle+1;}
+        else {high=middle;}
+    }
+    return low;
+}
+pub func parsed_file(state inout Checker, r model.NodeRef) model.ParseResult throws Error {
+    let project=state.m.resolved.project;
+    if r.module>=vec.len(project.modules) {throw internal_error("invalid sema module reference");}
+    let module=project.modules[r.module];
+    if r.file>=vec.len(module.files) {throw internal_error("invalid sema file reference");}
+    let index=module.files[r.file];
+    if index>=vec.len(project.files) {throw internal_error("invalid sema parse reference");}
+    return project.files[index];
+}
+pub func ast(state inout Checker, r model.NodeRef) model.AstNode throws Error {
+    let file=parsed_file(inout state,r);
+    if r.node>=vec.len(file.nodes) {throw internal_error("invalid sema AST reference");}
+    return file.nodes[r.node];
+}
+pub func child(state inout Checker, r model.NodeRef, index usize) model.NodeRef throws Error {
+    let value=ast(inout state,r);
+    if index>=vec.len(value.children) {throw internal_error("invalid sema child reference");}
+    return at(r,value.children[index]);
+}
+pub func at(r model.NodeRef, node usize) model.NodeRef {
+    return model.NodeRef(module:r.module,file:r.file,node:node);
+}
+pub func token(state inout Checker, r model.NodeRef, offset usize) string throws Error {
+    let file=parsed_file(inout state,r);let n=ast(inout state,r);
+    let length=vec.len(file.lexed.tokens);
+    if n.token_begin>=length || offset>=length-n.token_begin {throw internal_error("invalid sema token reference");}
+    return file.lexed.tokens[n.token_begin+offset].spelling;
+}
+pub func first(state inout Checker, r model.NodeRef) string throws Error {
+    let initial=token(inout state,r,0);
+    if initial=="pub" {return token(inout state,r,1);}
+    return initial;
+}
+pub func has_async_marker(state inout Checker, r model.NodeRef) bool throws Error {
+    let n=ast(inout state,r);
+    for id in n.children {
+        let value=ast(inout state,at(r,id));
+        switch value.kind {case model.AstKind.Async:return true;default:{}}
+    }
+    return false;
+}
+pub func source(state inout Checker, r model.NodeRef) hir.HirSource throws Error {
+    let n=ast(inout state,r);return hir.HirSource(node:r,span:n.span);
+}
+pub func reject_source(location hir.HirSource, message string, code string) Error {
+    let diagnostic=model.diagnostic(code,"type",message,location.span);
+    var failure=model.FailureKind.Source;
+    if code=="E_CAPABILITY_UNAVAILABLE" {failure=model.FailureKind.Unsupported;}
+    return Error.Rejected(diagnostic:diagnostic,failure:failure);
+}
+pub func reject(state inout Checker, r model.NodeRef, message string, code string) Error throws Error {
+    return reject_source(source(inout state,r),message,code);
+}
+pub func unavailable(state inout Checker, r model.NodeRef, feature string) Error throws Error {
+    return reject(inout state,r,feature,"E_CAPABILITY_UNAVAILABLE");
+}
+pub func private_type_leak(state inout Checker, r model.NodeRef, private_type usize) Error throws Error {
+    let private_symbol=symbol(inout state,private_type);
+    var diagnostic=model.diagnostic("E_PRIVATE_TYPE_LEAK","type",
+        "public interface uses private type: "+private_symbol.name,source(inout state,r).span);
+    switch private_symbol.declaration {
+        case option.Option.Some(span):vec.push(diagnostic.related,model.Related(span:span,message:"private type declaration"));
+        case option.Option.None:{}
+    }
+    return Error.Rejected(diagnostic:diagnostic,failure:model.FailureKind.Source);
+}
+pub func definition(state inout Checker, r model.NodeRef) usize throws Error {
+    let key=node_key(r);let position=node_symbol_position(state.definitions,key);
+    if position>=vec.len(state.definitions) {throw internal_error("missing sema definition");}
+    if !same_node_key(state.definitions[position].key,key) {throw internal_error("missing sema definition");}
+    return state.definitions[position].symbol;
+}
+pub func occurrence(state inout Checker, r model.NodeRef) option.Option[usize] throws Error {
+    var value=r;
+    for {
+        let n=ast(inout state,value);var parenthesized=false;
+        switch n.kind {case model.AstKind.Parenthesized:parenthesized=true;default:{}}
+        if !parenthesized {break;}
+        value=child(inout state,value,0);
+    }
+    let key=node_key(value);let position=node_symbol_position(state.occurrences,key);
+    if position<vec.len(state.occurrences) && same_node_key(state.occurrences[position].key,key) {
+        return option.Option[usize].Some(state.occurrences[position].symbol);
+    }
+    return option.Option[usize].None;
+}
+pub func symbol(state inout Checker, id usize) model.Symbol throws Error {
+    if id>=vec.len(state.m.resolved.symbols) {throw internal_error("invalid sema symbol reference");}
+    return state.m.resolved.symbols[id];
+}
+pub func lookup_type(state inout Checker, id usize) model.Type throws Error {
+    switch types.find(state.m.types,id) {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw internal_error("invalid sema type reference");
+    }
+}
+pub func intern_type(state inout Checker, value model.Type) usize throws Error {
+    try {return types.intern(inout state.m.types,value);}
+    catch error types.Error {throw Error.Support(support_from_type_error(error));}
+}
+pub func substitute_type(state inout Checker, id usize, substitutions Vec[model.Substitution]) usize throws Error {
+    try {return types.substitute(id,substitutions,inout state.m.types);}
+    catch error types.Error {throw Error.Support(support_from_type_error(error));}
+}
+pub func scalar(state inout Checker, kind model.TypeKind, bits u32) usize throws Error {
+    var value=model.empty_type(kind);value.bits=bits;return intern_type(inout state,value);
+}
+pub func integer(state inout Checker, id usize) bool throws Error {
+    let value=lookup_type(inout state,id);
+    switch value.kind {
+        case model.TypeKind.SignedInt:return true;
+        case model.TypeKind.UnsignedInt:return true;
+        case model.TypeKind.Isize:return true;
+        case model.TypeKind.Usize:return true;
+        default:return false;
+    }
+}
+func signed_(state inout Checker, id usize) bool throws Error {
+    let value=lookup_type(inout state,id);
+    switch value.kind {case model.TypeKind.SignedInt:return true;case model.TypeKind.Isize:return true;default:return false;}
+}
+pub func width(state inout Checker, id usize) u32 throws Error {
+    let value=lookup_type(inout state,id);
+    try {return types.bit_width(value,state.m.config);}
+    catch error types.Error {throw Error.Support(support_from_type_error(error));}
+}
+func modulus(state inout Checker, id usize) bigint.BigInt throws Error {
+    return bigint.shift_left(bigint.from_i64(1),u64(width(inout state,id)));
+}
+pub func support_from_number_error(error number.Error) model.SupportError {
+    switch error {
+        case number.Error.InvalidLiteral(message):return model.SupportError.Invalid(message);
+        case number.Error.InvalidWidth:return model.SupportError.Invalid("invalid integer width");
+        case number.Error.ZeroDenominator:return model.SupportError.Invalid("zero denominator");
+        case number.Error.NonFiniteInteger:return model.SupportError.Invalid("non-finite integer");
+        case number.Error.IntegerRange:return model.SupportError.Invalid("integer range");
+    }
+}
+pub func wrap(state inout Checker, value bigint.BigInt, id usize) bigint.BigInt throws Error {
+    let target_width=width(inout state,id);let target_signed=signed_(inout state,id);
+    try {return number.wrap_integer(value,target_width,target_signed).value;}
+    catch error number.Error {throw Error.Support(support_from_number_error(error));}
+}
+pub func range(state inout Checker, r model.NodeRef, value bigint.BigInt, id usize) throws Error {
+    let mod=modulus(inout state,id);let is_signed=signed_(inout state,id);
+    var high=mod;var low=bigint.zero();
+    if is_signed {high=bigint.shift_right(mod,1);low=bigint.negate(high);}
+    if bigint.compare(value,low)<0 || bigint.compare(value,high)>=0 {
+        throw reject(inout state,r,"integer constant is outside the target type range","E_TYPE_MISMATCH");
+    }
+}
+func bits(state inout Checker, value bigint.BigInt, id usize) u64 throws Error {
+    let target_width=width(inout state,id);
+    try {return number.wrap_integer(value,target_width,false).bits;}
+    catch error number.Error {throw Error.Support(support_from_number_error(error));}
+}
+pub func node(state inout Checker, r model.NodeRef, type_id usize, data hir.NodeData, children Vec[usize]) usize throws Error {
+    // Payloads are finished before publication. Do not mutate a payload Vec
+    // through a retained caller alias; callers modifying later must copy first.
+    let copied_children=vec.empty[usize]();for id in children {vec.push(copied_children,id);}
+    let location=source(inout state,r);let id=vec.len(state.m.nodes);
+    vec.push(state.m.nodes,hir.HirNode(type_id:type_id,source:location,scope:state.scope,
+        children:copied_children,data:data,errors:[],exits:[]));
+    return id;
+}
+pub func int_literal(state inout Checker, r model.NodeRef, value bigint.BigInt, type_id usize) Expr throws Error {
+    if !integer(inout state,type_id) {throw reject(inout state,r,"integer literal requires an integer context","E_TYPE_MISMATCH");}
+    range(inout state,r,value,type_id);
+    let payload=hir.IntegerLiteral(decimal:bigint.format_decimal(value),bits:bits(inout state,value,type_id));
+    let id=node(inout state,r,type_id,hir.NodeData.IntegerLiteral(value:payload),[]);
+    return Expr(id:id,value:Value(type_id:type_id,integer:option.Option[bigint.BigInt].Some(value),
+        boolean:option.Option[bool].None,floating:option.Option[u64].None,string_value:option.Option[string].None));
+}
+pub func mode(state inout Checker, r model.NodeRef) model.ParamMode throws Error {
+    let n=ast(inout state,r);
+    if vec.len(n.children)==0 {throw internal_error("parameter has no type child");}
+    let type_node=ast(inout state,at(r,n.children[0]));let file=parsed_file(inout state,r);
+    if type_node.token_begin>vec.len(file.lexed.tokens) {throw internal_error("invalid parameter token range");}
+    for var index=n.token_begin;index<type_node.token_begin;index+=1 {
+        let spelling=file.lexed.tokens[index].spelling;
+        if spelling=="inout" {return model.ParamMode.Inout;}
+        if spelling=="move" {return model.ParamMode.Move;}
+    }
+    return model.ParamMode.Ordinary;
+}
+pub func expression_mode(state inout Checker, input model.NodeRef) ArgumentMode throws Error {
+    var value=input;
+    for {
+        let n=ast(inout state,value);var parenthesized=false;
+        switch n.kind {case model.AstKind.Parenthesized:parenthesized=true;default:{}}
+        if !parenthesized {break;}value=child(inout state,value,0);
+    }
+    let marked=value;let n=ast(inout state,value);var unary=false;
+    switch n.kind {case model.AstKind.Unary:unary=true;default:{}}
+    var requested=model.ParamMode.Ordinary;var has_marker=false;
+    if unary {
+        let spelling=token(inout state,value,0);
+        if spelling=="inout" || spelling=="move" {
+            requested=model.ParamMode.Move;if spelling=="inout" {requested=model.ParamMode.Inout;}
+            value=child(inout state,value,0);has_marker=true;
+        }
+    }
+    return ArgumentMode(value:value,marked:marked,requested:requested,has_marker:has_marker);
+}
+pub func argument_mode(state inout Checker, r model.NodeRef) ArgumentMode throws Error {
+    let value=child(inout state,r,0);
+    return expression_mode(inout state,value);
+}
+
+pub func effect_error(state inout Checker, problem effects.Error) Error throws Error {
+    switch problem {
+        case effects.Error.Support(detail): return Error.Support(detail);
+        case effects.Error.Rejected(location, message, code):
+            return reject(inout state, location, message, code);
+    }
+}

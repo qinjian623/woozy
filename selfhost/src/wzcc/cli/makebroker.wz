@@ -1,180 +1,193 @@
-// Make owns concurrency. Each live recipe holds one job slot until a compiler
-// cloned from the prepared parent finishes that package.
+// Direct source-make scheduler. The driver prepares the immutable project and
+// optional shared declarations, then this supervisor keeps at most --jobs
+// package workers alive. Scheduling never runs GNU Make, a shell, an internal
+// worker subcommand, or a broker socket.
 package cli;
 
 import "app/wzcc/model" as model;
 import "app/wzcc/resolve" as resolve;
 import "app/wzcc/sema" as sema;
 import "app/wzcc/source" as source;
+import "std/fs" as fs;
 import "std/io" as io;
-import "std/net" as net;
 import "std/option" as option;
 import "std/os" as os;
 import "std/process" as process;
 import "std/strconv" as strconv;
-import "std/text" as text;
 import "std/vec" as vec;
 
-const MAKE_SOCKET string = ".wz-source-make/worker";
+const WORKER_DIR string = ".wz-source-make";
 
-struct MakeBroker {
+struct ActiveWorker {
     pid i32;
-    lifetime os.File;
+    package_index usize;
 }
 
-func broker_close(file os.File) {
+struct MakeRun {
+    ok bool;
+    log string;
+}
+
+func close_quietly(file os.File) {
     try { os.close(file); } catch problem os.Error {}
 }
 
-func finish_make_broker(broker MakeBroker) {
-    broker_close(broker.lifetime);
-    try { let status = process.wait(broker.pid); } catch problem os.Error {}
+func worker_capture(package_value MakePackage) string {
+    return WORKER_DIR + "/worker-" + package_value.fixed + ".log";
 }
 
-func start_make_broker(directory string, options Options, original model.Project,
-                       state MakeState, prepared resolve.PreparedProject,
-                       manager source.Manager) MakeBroker throws os.Error {
-    let listener = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC | net.SOCK_NONBLOCK, 0);
-    defer { broker_close(net.file(listener)); }
-    let lifetime = os.pipe(u32(os.O_CLOEXEC));
-    defer { broker_close(lifetime.read_end); }
-    var keep = false;
-    defer { if !keep { broker_close(lifetime.write_end); } }
-    let ready = os.pipe(u32(os.O_CLOEXEC));
-    defer { broker_close(ready.read_end); }
-    var pid i32 = 0;
-    try { pid = process.fork(); }
-    catch problem os.Error { broker_close(ready.write_end); throw problem; }
-    if pid == 0 {
-        broker_close(lifetime.write_end);
-        broker_close(ready.read_end);
-        try {
-            // The private staging path itself may be longer than sockaddr_un.
-            os.chdir(directory);
-            net.bind(listener, net.unix_address(MAKE_SOCKET));
-            net.listen(listener, 128);
-            let quiet = os.open("/dev/null", os.O_WRONLY | os.O_CLOEXEC, 0);
-            let output = os.dup2(quiet, 1);
-            let error = os.dup2(quiet, 2);
-            if os.fd(quiet) >= 3 { broker_close(quiet); }
-            os.write_all_text(ready.write_end, "1");
-            broker_close(ready.write_end);
-            var declarations = option.Option[sema.PreparedPackages].None;
-            if state.cache_dir == "" && vec.len(state.packages) > 1 {
-                declarations = sema.prepare_packages(resolve.resolve_prepared_project(prepared),
-                    option.Option[model.CheckConfig].None);
-            }
-            serve_make_broker(listener, lifetime.read_end, options, original,
-                state, prepared, declarations, manager);
-        } catch problem os.Error {}
-        os.exit(0);
-    }
-    broker_close(ready.write_end);
-    let broker = MakeBroker(pid: pid, lifetime: lifetime.write_end);
-    keep = true;
+func redirect_worker_output(package_value MakePackage) throws os.Error {
+    let output = os.open(worker_capture(package_value),
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600);
+    defer { if os.fd(output) >= 3 { close_quietly(output); } }
+    let standard_output = os.dup2(output, 1);
+    let standard_error = os.dup2(output, 2);
+}
+
+func status_text(status process.WaitStatus) string {
+    let signalled = process.signaled(status);
+    var code = process.exit_status(status);
+    if signalled { code = 128 + process.term_signal(status); }
+    var signal_text = "false";
+    if signalled { signal_text = "true"; }
+    return "exit=" + strconv.format_i64(i64(code)) + " signalled=" + signal_text;
+}
+
+func worker_child(options Options, manager source.Manager, state MakeState,
+                  original model.Project, prepared resolve.PreparedProject,
+                  declarations option.Option[sema.PreparedPackages],
+                  package_value MakePackage) {
+    var status i32 = 125;
     try {
-        if io.read_text(ready.read_end) != "1" { throw invalid_state(); }
+        redirect_worker_output(package_value);
+        let compiled = source_make_compile(options, manager, state, original,
+            prepared, declarations, package_value);
+        status = compiled;
     } catch problem os.Error {
-        finish_make_broker(broker);
-        throw problem;
+        try { io.eprintln("source-make worker failed: " + source_os_text(problem)); }
+        catch ignored os.Error {}
+        status = 125;
     }
-    return broker;
+    os.exit(status);
 }
 
-func serve_make_broker(listener net.Socket, lifetime os.File, options Options,
-                       original model.Project, state MakeState,
-                       prepared resolve.PreparedProject,
-                       declarations option.Option[sema.PreparedPackages],
-                       manager source.Manager) throws os.Error {
-    let rows = [
-        net.PollFd(fd: os.fd(lifetime), events: net.POLLIN, revents: 0),
-        net.PollFd(fd: net.fd(listener), events: net.POLLIN, revents: 0)
-    ];
-    var running usize = 0;
-    defer {
-        broker_close(net.file(listener));
-        for running != 0 {
-            try { let stopped = process.wait(-1); } catch problem os.Error { break; }
-            running -= 1;
+func remove_worker(active Vec[ActiveWorker], pid i32) option.Option[ActiveWorker] {
+    for var index usize = 0; index < vec.len(active); index += 1 {
+        if active[index].pid == pid {
+            return option.Option[ActiveWorker].Some(vec.remove_at(active, index));
         }
     }
-    for true {
-        try { let ready = net.poll(rows, -1); }
-        catch problem os.Error {
-            switch problem {
-                case os.Error.Interrupted(code, completed): continue;
-                default: throw problem;
-            }
-        }
-        if rows[0].revents != 0 { return; }
-        if (rows[1].revents & net.POLLIN) == 0 { throw invalid_state(); }
-        var peer = listener;
-        try { peer = net.accept(listener, u32(net.SOCK_CLOEXEC)).socket; }
-        catch problem os.Error {
-            switch problem {
-                case os.Error.Interrupted(code, completed): continue;
-                case os.Error.WouldBlock(code, completed): continue;
-                default: throw problem;
-            }
-        }
-        var pid i32 = 0;
-        try { pid = process.fork(); }
-        catch problem os.Error { broker_close(net.file(peer)); throw problem; }
-        if pid == 0 {
-            broker_close(net.file(listener));
-            broker_close(lifetime);
-            try {
-                let request = vec.make[u8](16, 0);
-                if net.recv(peer, request, 16, net.MSG_WAITALL) != 16 { throw invalid_state(); }
-                let id = decode_make_request(request);
-                switch package_by_fixed(state, id) {
-                    case option.Option.None: throw invalid_state();
-                    case option.Option.Some(package_value): {
-                        let status = source_make_compile(options, manager, state, original,
-                            prepared, declarations, package_value);
-                        net.send_all(peer, [u8(status)], 0);
-                    }
-                }
-            } catch problem os.Error {}
-            os.exit(0);
-        }
-        broker_close(net.file(peer));
-        running += 1;
-        for running != 0 {
-            let finished = process.waitpid(-1, process.WNOHANG);
-            if finished.pid == 0 { break; }
-            running -= 1;
-        }
-    }
+    return option.Option[ActiveWorker].None;
 }
 
-func decode_make_request(bytes Vec[u8]) string throws os.Error {
-    try { return text.from_bytes(bytes); }
-    catch problem text.Error { throw invalid_state(); }
-}
-
-pub func source_make_worker(options Options, manager inout source.Manager) i32 throws os.Error {
-    let state = read_state(MAKE_STATE);
-    switch package_by_fixed(state, options.make_package) {
+func reap_status(packages Vec[MakePackage], active Vec[ActiveWorker],
+                 status process.WaitStatus, log inout string) bool {
+    switch remove_worker(active, status.pid) {
+        case option.Option.Some(worker): {
+            let package_value = packages[worker.package_index];
+            let succeeded = process.exited(status) && process.exit_status(status) == 0;
+            append_log(inout log, "worker end: " + package_value.fixed + " " +
+                status_text(status));
+            return succeeded;
+        }
         case option.Option.None: {
-            return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
-                "source-make worker package id is not in the state record", model.FailureKind.Internal);
-        }
-        case option.Option.Some(package_value): {
-            io.println("source-make module start: " + package_value.fixed +
-                " target=" + object_name(package_value));
-            let peer = net.socket(net.AF_UNIX, net.SOCK_STREAM | net.SOCK_CLOEXEC, 0);
-            defer { broker_close(net.file(peer)); }
-            net.connect(peer, net.unix_address(MAKE_SOCKET));
-            net.send_all(peer, text.bytes(package_value.fixed), 0);
-            let result = vec.make[u8](1, 0);
-            if net.recv(peer, result, 1, net.MSG_WAITALL) != 1 {
-                return fail(options, manager.snapshots, "E_INTERNAL_ERROR", "codegen",
-                    "prepared source-make worker did not return a status", model.FailureKind.Internal);
-            }
-            io.println("source-make module end: " + package_value.fixed +
-                " exit=" + strconv.format_i64(i64(result[0])));
-            return i32(result[0]);
+            append_log(inout log, "unexpected worker status: pid=" +
+                strconv.format_i64(i64(status.pid)) + " " + status_text(status));
+            return false;
         }
     }
+}
+
+func append_worker_logs(log inout string, packages Vec[MakePackage]) {
+    for package_value in packages {
+        var output = "";
+        try { output = fs.read_text(worker_capture(package_value)); }
+        catch problem os.Error {}
+        if output != "" {
+            append_log(inout log, "worker output: " + package_value.fixed);
+            append_log(inout log, output);
+        }
+    }
+}
+
+func all_objects_present(packages Vec[MakePackage], log inout string) bool {
+    var present = true;
+    for package_value in packages {
+        var exists = false;
+        try { exists = fs.is_file(os.stat(object_name(package_value))); }
+        catch problem os.Error {}
+        if !exists {
+            append_log(inout log, "missing object: " + object_name(package_value));
+            present = false;
+        }
+    }
+    return present;
+}
+
+func run_source_make(options Options, state MakeState, original model.Project,
+                         prepared resolve.PreparedProject,
+                         manager source.Manager) MakeRun {
+    var jobs = options.jobs;
+    if jobs == 0 { jobs = 1; }
+    var declarations = option.Option[sema.PreparedPackages].None;
+    if state.cache_dir == "" && vec.len(state.packages) > 1 {
+        declarations = sema.prepare_packages(resolve.resolve_prepared_project(prepared),
+            option.Option[model.CheckConfig].None);
+    }
+    var workdir = "";
+    try { workdir = os.getcwd(); } catch problem os.Error {}
+    var log = "source-make driver\nworkdir: " + workdir + "\n";
+    append_log(inout log, "packages: " + strconv.format_u64(u64(vec.len(state.packages))));
+    append_log(inout log, "jobs: " + strconv.format_u64(u64(jobs)));
+    let active = vec.empty[ActiveWorker]();
+    var next usize = 0;
+    var failed = false;
+    for true {
+        for true {
+            if failed || next >= vec.len(state.packages) || vec.len(active) >= jobs { break; }
+            let package_value = state.packages[next];
+            var pid i32 = 0;
+            var forked = false;
+            try { pid = process.fork(); forked = true; }
+            catch problem os.Error {
+                append_log(inout log, "worker fork failed: " + source_os_text(problem));
+                failed = true;
+            }
+            if forked {
+                if pid == 0 {
+                    worker_child(options, manager, state, original, prepared,
+                        declarations, package_value);
+                }
+                vec.push(active, ActiveWorker(pid: pid, package_index: next));
+                append_log(inout log, "worker start: " + package_value.fixed +
+                    " pid=" + strconv.format_i64(i64(pid)));
+                next += 1;
+            }
+        }
+        if vec.len(active) == 0 { break; }
+        var status = process.WaitStatus(pid: 0, status: 0);
+        var wait_failed = false;
+        try { status = process.wait(-1); }
+        catch problem os.Error {
+            append_log(inout log, "worker wait failed: " + source_os_text(problem));
+            failed = true;
+            wait_failed = true;
+        }
+        if wait_failed {
+            for worker in active {
+                try {
+                    let stopped = process.wait(worker.pid);
+                    append_log(inout log, "worker end: " +
+                        state.packages[worker.package_index].fixed + " " +
+                        status_text(stopped));
+                } catch problem os.Error {}
+            }
+            vec.clear(active);
+            break;
+        }
+        if !reap_status(state.packages, active, status, inout log) { failed = true; }
+    }
+    append_worker_logs(inout log, state.packages);
+    if !failed && !all_objects_present(state.packages, inout log) { failed = true; }
+    return MakeRun(ok: !failed && next >= vec.len(state.packages), log: log);
 }

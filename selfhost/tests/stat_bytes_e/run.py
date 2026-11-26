@@ -38,7 +38,7 @@ parser.add_argument('--woozyc', type=Path,
 parser.add_argument('--root-joint', type=Path,
                     default=ROOT / 'selfhost/src/wzcc')
 parser.add_argument('--e-source', type=Path,
-                    default=ROOT / 'selfhost/src/wzcc/nativeemit')
+                    help='E source override (default root-joint/nativeemit)')
 parser.add_argument('--toolchain-root', type=Path,
                     default=Path(os.environ.get('WOOZY_TOOLCHAIN_ROOT',
                                                 str(ROOT.parent / 'toolchains'))))
@@ -63,7 +63,8 @@ OPT = TOOLS / 'opt'
 LD_LLD = TOOLS / 'ld.lld'
 STAGE0 = args.woozyc.expanduser().resolve()
 ROOT_JOINT = args.root_joint.expanduser().resolve()
-E_SOURCE = args.e_source.expanduser().resolve()
+E_SOURCE = (args.e_source.expanduser().resolve()
+            if args.e_source else ROOT_JOINT / 'nativeemit')
 RUNTIME = (args.runtime_archive.expanduser().resolve() if args.runtime_archive
            else STAGE0.parent / 'native/liblang_native_runtime.a')
 ENV = dict(os.environ)
@@ -134,8 +135,20 @@ def main() -> int:
         target.write_bytes(source.read_bytes())
         inputs.append({'kind': 'root-joint', 'path': str(source),
                        'sha256': sha(source)})
-    for source in sorted(E_SOURCE.glob('e_*.wz')):
-        target = project / 'src/wzcc/nativeemit' / source.name
+    root_emitter = ROOT_JOINT / 'nativeemit'
+    c_layout = Path('core/c_abi_types.wz')
+    expected_e = {path.relative_to(root_emitter) for path in root_emitter.rglob('e_*.wz')}
+    selected_e = {path.relative_to(E_SOURCE) for path in E_SOURCE.rglob('e_*.wz')}
+    if (root_emitter / c_layout).is_file():
+        expected_e.add(c_layout)
+    if (E_SOURCE / c_layout).is_file():
+        selected_e.add(c_layout)
+    if not selected_e or not expected_e <= selected_e:
+        raise RuntimeError(f'E source paths differ between {E_SOURCE} and {root_emitter}')
+    for relative in sorted(selected_e):
+        source = E_SOURCE / relative
+        target = project / 'src/wzcc/nativeemit' / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
         inputs.append({'kind': 'e-source', 'path': str(source),
                        'sha256': sha(source)})

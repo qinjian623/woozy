@@ -42,17 +42,27 @@ def stage_project(work: Path, a_dir: Path, hirverify_dir: Path,
     modules = project / "src" / "wzcc"
     sema = modules / "sema"
     sema.mkdir(parents=True)
-    shared = ["state.wz", "errors.wz", "clone.wz", "common.wz", "run.wz"]
+    shared = ["run.wz"]
     if not slim:
         shared.append("check.wz")
+    sema_source = SELFHOST / "sema"
     for name in shared:
-        shutil.copy2(SELFHOST / "sema" / name, sema / name)
-    copy_files(SELFHOST / "sema", sema, "b_*.wz")
+        shutil.copy2(sema_source / name, sema / name)
+    copy_files(sema_source, sema, "b_*.wz")
     if not list(sema.glob("b_*.wz")):
-        raise RuntimeError(f"no B-side sema files in {SELFHOST / 'sema'}")
-    copy_files(a_dir, sema, "a_*.wz")
-    if not list(sema.glob("a_*.wz")):
-        raise RuntimeError(f"no A-side sema files in {a_dir}")
+        raise RuntimeError(f"no B-side sema files in {sema_source}")
+    for package in sorted(sema_source.iterdir()):
+        if package.is_dir():
+            shutil.copytree(package, sema / package.name, ignore=shutil.ignore_patterns("a_*.wz"))
+    a_files = {source.relative_to(sema_source) for source in sema_source.rglob("a_*.wz")}
+    a_files.update(source.relative_to(a_dir) for source in a_dir.rglob("a_*.wz"))
+    for name in sorted(a_files):
+        source = a_dir / name
+        if not source.is_file():
+            raise RuntimeError(f"missing staged A-side sema file: {source}")
+        target = sema / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     if not slim:
         if not hirverify_dir.is_dir():
             raise RuntimeError(f"hirverify directory missing: {hirverify_dir}")
@@ -156,7 +166,7 @@ def main() -> int:
     parser.add_argument("--woozyc", required=True,
                         help="stage-0 woozyc executable")
     parser.add_argument("--a-dir", required=True,
-                        help="directory containing the real a_*.wz files")
+                        help="sema source directory containing the real a_*.wz files in their package directories")
     parser.add_argument("--hirverify-dir", default="",
                         help="directory containing the real hirverify package; "
                              "required unless --slim")
@@ -191,9 +201,14 @@ def main() -> int:
     env = environment(work, toolchain_root)
     print(f"work-dir: {work}", flush=True)
 
-    for source in sorted((SELFHOST / "sema").glob("b_*.wz")):
+    sema_source = SELFHOST / "sema"
+    syntax_sources = sorted(source for source in sema_source.rglob("*.wz")
+                            if source.name.startswith("b_") or
+                            (source.parent != sema_source and not source.name.startswith("a_")))
+    for source in syntax_sources:
+        label = "-".join(source.relative_to(sema_source).with_suffix("").parts)
         command([str(woozyc), "check", "--syntax-only", str(source)],
-                source.stem + "-syntax", work, args.timeout, env)
+                label + "-syntax", work, args.timeout, env)
     print("PASS: per-file syntax checks", flush=True)
 
     manifest = str(project / "lang.toml")

@@ -214,134 +214,144 @@ func run_built(built nativeverify.VerifiedModule) i32 throws os.Error {
         io.println("snapshot isolation ok");
     }
 
-    if vec.len(pristine.functions) == 0 ||
-       vec.len(pristine.functions[0].blocks) == 0 {
-        expect_skip("all: no lowered functions/blocks");
-    } else {
-        // 1. Unreachable appended block.
-        var mutated = nativeverify.snapshot(built);
-        let extra = nativeir.BasicBlock(instructions: [],
-            terminator: nativeir.Terminator(kind: nativeir.Exit.Unreachable,
-                inputs: [], targets: [], source: span(1, 0, 0),
-                signature: 0, exit: option.Option[nativeir.ExitSite].None,
-                origin: option.Option[usize].None),
-            parameters: []);
-        vec.push(mutated.functions[0].blocks, extra);
-        expect_reject("unreachable-block", nativeverify.verify(mutated),
-            inout failures);
-
-        // 2. Missing terminator in the entry block.
-        mutated = nativeverify.snapshot(built);
-        mutated.functions[0].blocks[0].terminator =
-            nativeir.empty_terminator();
-        expect_reject("missing-terminator", nativeverify.verify(mutated),
-            inout failures);
-
-        // 3. Invalid slot type.
-        if vec.len(pristine.functions[0].slots) == 0 {
-            expect_skip("invalid-slot: no slots");
+    try {
+        if vec.len(pristine.functions) == 0 ||
+           vec.len(pristine.functions[0].blocks) == 0 {
+            expect_skip("all: no lowered functions/blocks");
         } else {
-            mutated = nativeverify.snapshot(built);
-            mutated.functions[0].slots[0].type_id = 0;
-            expect_reject("invalid-slot", nativeverify.verify(mutated),
+            // 1. Unreachable appended block.
+            var mutated = nativeverify.snapshot(built);
+            let extra = nativeir.BasicBlock(instructions: [],
+                terminator: nativeir.Terminator(kind: nativeir.Exit.Unreachable,
+                    inputs: [], targets: [], source: span(1, 0, 0),
+                    signature: 0, exit: option.Option[nativeir.ExitSite].None,
+                    origin: option.Option[usize].None),
+                parameters: []);
+            vec.push(mutated.functions[0].blocks, extra);
+            expect_reject("unreachable-block", nativeverify.verify(mutated),
                 inout failures);
-        }
 
-        // 4. Owning slot identity changes; the frozen HIR cannot confirm it.
-        var owner_ready = false;
-        for slot in pristine.functions[0].slots {
-            if option.is_some(slot.owner) {
-                owner_ready = true;
-            }
-        }
-        if !owner_ready {
-            expect_skip("owner-identity: no owning slot");
-        } else {
+            // 2. Missing terminator in the entry block.
             mutated = nativeverify.snapshot(built);
-            var owner_changed = false;
-            for var index usize = 0;
-                index < vec.len(mutated.functions[0].slots); index += 1 {
-                if owner_changed {
-                    continue;
-                }
-                switch mutated.functions[0].slots[index].owner {
-                    case option.Option.Some(owner): {
-                        var changed = owner;
-                        changed.identity = changed.identity + 1;
-                        mutated.functions[0].slots[index].owner =
-                            option.Option[hir.OwnerRef].Some(changed);
-                        owner_changed = true;
-                    }
-                    case option.Option.None: {}
-                }
-            }
-            expect_reject("owner-identity", nativeverify.verify(mutated),
+            mutated.functions[0].blocks[0].terminator =
+                nativeir.empty_terminator();
+            expect_reject("missing-terminator", nativeverify.verify(mutated),
                 inout failures);
-        }
 
-        // 5. Flip an error-channel block parameter.
-        var parameter_ready = false;
-        for block in pristine.functions[0].blocks {
-            for parameter in block.parameters {
-                parameter_ready = true;
-            }
-        }
-        if !parameter_ready {
-            expect_skip("error-parameter: no block parameters");
-        } else {
-            mutated = nativeverify.snapshot(built);
-            for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
-                b += 1 {
-                if vec.len(mutated.functions[0].blocks[b].parameters) == 0 {
-                    continue;
-                }
-                mutated.functions[0].blocks[b].parameters[0].error =
-                    !mutated.functions[0].blocks[b].parameters[0].error;
-                break;
-            }
-            expect_reject("error-parameter", nativeverify.verify(mutated),
-                inout failures);
-        }
-
-        // 6. Duplicate an SSA definition.
-        let pair = first_value_pair(pristine.functions[0]);
-        switch pair {
-            case option.Option.None: expect_skip("duplicate-value");
-            case option.Option.Some(value): {
+            // 3. Invalid slot type.
+            if vec.len(pristine.functions[0].slots) == 0 {
+                expect_skip("invalid-slot: no slots");
+            } else {
                 mutated = nativeverify.snapshot(built);
-                mutated.functions[0].blocks[value.left / 100000]
-                    .instructions[value.left % 100000].result =
-                    option.Option[usize].Some(value.right);
-                expect_reject("duplicate-value", nativeverify.verify(mutated),
+                mutated.functions[0].slots[0].type_id = 0;
+                expect_reject("invalid-slot", nativeverify.verify(mutated),
+                    inout failures);
+            }
+
+            // 4. Owning slot identity changes; the frozen HIR cannot confirm it.
+            var owner_ready = false;
+            for slot in pristine.functions[0].slots {
+                if option.is_some(slot.owner) {
+                    owner_ready = true;
+                }
+            }
+            if !owner_ready {
+                expect_skip("owner-identity: no owning slot");
+            } else {
+                mutated = nativeverify.snapshot(built);
+                var owner_changed = false;
+                for var index usize = 0;
+                    index < vec.len(mutated.functions[0].slots); index += 1 {
+                    if owner_changed {
+                        continue;
+                    }
+                    switch mutated.functions[0].slots[index].owner {
+                        case option.Option.Some(owner): {
+                            var changed = owner;
+                            changed.identity = changed.identity + 1;
+                            mutated.functions[0].slots[index].owner =
+                                option.Option[hir.OwnerRef].Some(changed);
+                            owner_changed = true;
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                expect_reject("owner-identity", nativeverify.verify(mutated),
+                    inout failures);
+            }
+
+            // 5. Flip an error-channel block parameter.
+            var parameter_ready = false;
+            for block in pristine.functions[0].blocks {
+                for parameter in block.parameters {
+                    parameter_ready = true;
+                }
+            }
+            if !parameter_ready {
+                expect_skip("error-parameter: no block parameters");
+            } else {
+                mutated = nativeverify.snapshot(built);
+                for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
+                    b += 1 {
+                    if vec.len(mutated.functions[0].blocks[b].parameters) == 0 {
+                        continue;
+                    }
+                    mutated.functions[0].blocks[b].parameters[0].error =
+                        !mutated.functions[0].blocks[b].parameters[0].error;
+                    break;
+                }
+                expect_reject("error-parameter", nativeverify.verify(mutated),
+                    inout failures);
+            }
+
+            // 6. Duplicate an SSA definition.
+            let pair = first_value_pair(pristine.functions[0]);
+            switch pair {
+                case option.Option.None: expect_skip("duplicate-value");
+                case option.Option.Some(value): {
+                    mutated = nativeverify.snapshot(built);
+                    mutated.functions[0].blocks[value.left / 100000]
+                        .instructions[value.left % 100000].result =
+                        option.Option[usize].Some(value.right);
+                    expect_reject("duplicate-value", nativeverify.verify(mutated),
+                        inout failures);
+                }
+            }
+
+            // 7. Await cancel edge, when this program contains an await.
+            var await_ready = false;
+            for block in pristine.functions[0].blocks {
+                if nativeir.exit_id(block.terminator.kind) ==
+                   nativeir.exit_id(nativeir.Exit.Await) {
+                    await_ready = true;
+                }
+            }
+            if !await_ready {
+                expect_skip("await-edge: no await");
+            } else {
+                mutated = nativeverify.snapshot(built);
+                for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
+                    b += 1 {
+                    let terminator = mutated.functions[0].blocks[b].terminator;
+                    if nativeir.exit_id(terminator.kind) !=
+                       nativeir.exit_id(nativeir.Exit.Await) {
+                        continue;
+                    }
+                    mutated.functions[0].blocks[b].terminator.targets[2] =
+                        terminator.targets[0];
+                    break;
+                }
+                expect_reject("await-edge", nativeverify.verify(mutated),
                     inout failures);
             }
         }
-
-        // 7. Await cancel edge, when this program contains an await.
-        var await_ready = false;
-        for block in pristine.functions[0].blocks {
-            if nativeir.exit_id(block.terminator.kind) ==
-               nativeir.exit_id(nativeir.Exit.Await) {
-                await_ready = true;
-            }
-        }
-        if !await_ready {
-            expect_skip("await-edge: no await");
-        } else {
-            mutated = nativeverify.snapshot(built);
-            for var b usize = 0; b < vec.len(mutated.functions[0].blocks);
-                b += 1 {
-                let terminator = mutated.functions[0].blocks[b].terminator;
-                if nativeir.exit_id(terminator.kind) !=
-                   nativeir.exit_id(nativeir.Exit.Await) {
-                    continue;
-                }
-                mutated.functions[0].blocks[b].terminator.targets[2] =
-                    terminator.targets[0];
-                break;
-            }
-            expect_reject("await-edge", nativeverify.verify(mutated),
-                inout failures);
+    } catch error model.SupportError {
+        failures += 1;
+        switch error {
+            case model.SupportError.Invalid(message):
+                io.eprintln("FAIL mutation snapshot invalid: " + message);
+            case model.SupportError.Limit(message):
+                io.eprintln("FAIL mutation snapshot exceeded limit: " + message);
         }
     }
 
@@ -369,7 +379,7 @@ func first_value_pair(value nativeir.Function) option.Option[ValuePair] {
             position < vec.len(value.blocks[block].instructions);
             position += 1 {
             let instruction = value.blocks[block].instructions[position];
-            var result = 0;
+            var result usize = 0;
             var has_result = false;
             switch instruction.result {
                 case option.Option.Some(item): result = item;

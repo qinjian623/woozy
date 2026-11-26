@@ -6,6 +6,7 @@
 // function can be executed with a real vector descriptor and the actual
 // runtime stat symbol.
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
@@ -40,14 +41,14 @@ func sb_enum(symbol usize, params Vec[hir.GenericParam],
     return hir.NominalDecl(symbol: symbol, kind: model.TypeKind.NominalEnum,
         params: params, fields: [], variants: variants, source: sb_source());
 }
-func sb_intern(c inout types.Context, v model.Type) usize throws Error {
+func sb_intern(c inout types.Context, v model.Type) usize throws emitcore.Error {
     try { return types.intern(inout c, v); }
     catch e types.Error {
-        switch e { case types.Error.Invalid(m): throw invalid(m); }
+        switch e { case types.Error.Invalid(m): throw emitcore.invalid(m); }
     }
 }
 func sb_function_type(c inout types.Context, parameters Vec[usize],
-                      result usize) usize throws Error {
+                      result usize) usize throws emitcore.Error {
     var value = model.empty_type(model.TypeKind.Function);
     var fields Vec[model.ParameterType] = [];
     for item in parameters {
@@ -75,22 +76,22 @@ func sb_record(id u32, name string, fields Vec[model.CFieldDecl], size u64,
         parameters: [],
         registration: option.Option[model.CRegistrationDecl].None);
 }
-func sb_begin(state inout Emitter, name string, parameters Vec[string],
-              result string) usize throws Error {
-    let function = new_function(name, Signature(result: result,
+func sb_begin(state inout emitcore.Emitter, name string, parameters Vec[string],
+              result string) usize throws emitcore.Error {
+    let function = emitcore.new_function(name, emitcore.Signature(result: result,
         parameters: parameters), "", "", inout state);
-    let entry = new_block(function, "entry", inout state);
-    position(entry, inout state);
+    let entry = emitcore.new_block(function, "entry", inout state);
+    emitcore.position(entry, inout state);
     return function;
 }
-func sb_value(returned option.Option[Value]) Value throws Error {
+func sb_value(returned option.Option[emitcore.Value]) emitcore.Value throws emitcore.Error {
     switch returned {
         case option.Option.Some(value): return value;
-        case option.Option.None: throw invalid("stat_bytes emission returned no value");
+        case option.Option.None: throw emitcore.invalid("stat_bytes emission returned no value");
     }
 }
 
-pub func e_stat_bytes_case() EStatBytesCase throws Error {
+pub func e_stat_bytes_case() EStatBytesCase throws emitcore.Error {
     var resolved = model.ResolvedProject(project: model.empty_project(),
         symbols: [], occurrences: [], deferred_members: [],
         self_parameters: []);
@@ -119,7 +120,7 @@ pub func e_stat_bytes_case() EStatBytesCase throws Error {
 
     var fields = vec.empty[model.CFieldDecl]();
     for var index usize = 0; index < 120; index += 1 {
-        vec.push(fields, sb_cfield("b" + number(index), sb_scalar("i8"),
+        vec.push(fields, sb_cfield("b" + emitcore.number(index), sb_scalar("i8"),
             u64(index)));
     }
     module.resolved.project.c_types = [
@@ -130,9 +131,9 @@ pub func e_stat_bytes_case() EStatBytesCase throws Error {
             sb_variant(11, [sb_field(12, fileinfo_id)]),
             sb_variant(13, [sb_field(14, i32_id)])])];
 
-    var state = new_emitter(nativeir.empty_module(module), default_options());
-    declare_runtime_types(inout state);
-    let result_layout = lower_type(result_id, inout state);
+    var state = emitcore.new_emitter(nativeir.empty_module(module), core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
+    let result_layout = emitcore.lower_type(result_id, inout state);
     let function = sb_begin(inout state, "ex_stat_bytes", ["ptr"],
         result_layout);
     var instruction = nativeir.empty_instruction();
@@ -142,15 +143,15 @@ pub func e_stat_bytes_case() EStatBytesCase throws Error {
     instruction.system = option.Option[u32].Some(213);
     // Use the production B emit_instruction path, not a private helper.
     vec.clear(state.frame.values);
-    let argument = parameter(state, function, 0);
-    vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: vec_id,
+    let argument = emitcore.parameter(state, function, 0);
+    vec.push(state.frame.values, emitcore.ValueBinding(value_id: 0, type_id: vec_id,
         value: argument, stack_address: false));
     var inputs Vec[usize] = [];
     vec.push(inputs, 0);
     instruction.inputs = inputs;
     instruction.result = option.Option[usize].Some(1);
     emit_instruction(instruction, inout state);
-    let value = value(state, 1);
-    terminate("ret " + typed(value), inout state);
-    return EStatBytesCase(llvm: text.join(sections(state), ""));
+    let value = emitcore.value(state, 1);
+    emitcore.terminate("ret " + emitcore.typed(value), inout state);
+    return EStatBytesCase(llvm: text.join(emitcore.sections(state), ""));
 }

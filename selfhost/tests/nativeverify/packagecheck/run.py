@@ -116,15 +116,19 @@ def main(argv: list[str] | None = None) -> int:
     for package, path in sources.items():
         target = wizard / package
         target.mkdir(parents=True)
-        for file in sorted(path.glob("*.wz")):
-            if package == "nativeverify" and "hirverify" not in sources and \
-                    file.name == "nativeverify.wz":
+        for file in sorted(path.rglob("*.wz")):
+            relative = file.relative_to(path)
+            if (package == "nativeverify" and "hirverify" not in sources and
+                    relative == pathlib.Path("nativeverify.wz")):
                 continue
-            shutil.copy2(file, target / file.name)
-    # The self test is package-internal test scaffolding from this test
-    # directory; it uses the real private helpers and is never installed.
-    if "nativeverify" in sources:
-        shutil.copy2(HERE / "selftest.wz", wizard / "nativeverify/selftest.wz")
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file, destination)
+    verifier = wizard / "nativeverify"
+    shutil.copy2(HERE / "selftest.wz", verifier / "selftest.wz")
+    for package in ("obligations", "ownership", "support"):
+        name = f"{package}_test.wz"
+        shutil.copy2(HERE / name, verifier / package / name)
     imports = [name for name in IMPORTS if name in sources]
     lines = ["package app;"]
     for name in imports:

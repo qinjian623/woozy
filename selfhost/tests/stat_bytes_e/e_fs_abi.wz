@@ -6,6 +6,8 @@
 // The driver checks both the emitted call signatures (descriptor pointer,
 // never a data/length pair) and real success/failure results.
 package nativeemit;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeemit/values" as emitvalues;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
 import "app/wzcc/nativeir" as nativeir;
@@ -20,10 +22,10 @@ func fa_struct(symbol usize, fields Vec[hir.FieldDecl]) hir.NominalDecl {
     return hir.NominalDecl(symbol: symbol, kind: model.TypeKind.NominalStruct,
         params: [], fields: fields, variants: [], source: sb_source());
 }
-func fa_function(state inout Emitter, name string, parameters Vec[string],
+func fa_function(state inout emitcore.Emitter, name string, parameters Vec[string],
                  signature usize, result usize,
-                 operation u32) throws Error {
-    let result_layout = lower_type(result, inout state);
+                 operation u32) throws emitcore.Error {
+    let result_layout = emitcore.lower_type(result, inout state);
     let function = sb_begin(inout state, name, parameters, result_layout);
     var instruction = nativeir.empty_instruction();
     instruction.op = nativeir.Op.SystemCall;
@@ -33,19 +35,19 @@ func fa_function(state inout Emitter, name string, parameters Vec[string],
     vec.clear(state.frame.values);
     var inputs Vec[usize] = [];
     for var index usize = 0; index < vec.len(parameters); index += 1 {
-        vec.push(state.frame.values, ValueBinding(value_id: index, type_id: 0,
-            value: parameter(state, function, index), stack_address: false));
+        vec.push(state.frame.values, emitcore.ValueBinding(value_id: index, type_id: 0,
+            value: emitcore.parameter(state, function, index), stack_address: false));
         vec.push(inputs, index);
     }
     instruction.inputs = inputs;
     let result_id = vec.len(inputs);
     instruction.result = option.Option[usize].Some(result_id);
     emit_instruction(instruction, inout state);
-    let value = value(state, result_id);
-    terminate("ret " + typed(value), inout state);
+    let value = emitcore.value(state, result_id);
+    emitcore.terminate("ret " + emitcore.typed(value), inout state);
 }
 
-pub func e_fs_abi_case() EFsAbiCase throws Error {
+pub func e_fs_abi_case() EFsAbiCase throws emitcore.Error {
     var resolved = model.ResolvedProject(project: model.empty_project(),
         symbols: [], occurrences: [], deferred_members: [],
         self_parameters: []);
@@ -91,27 +93,27 @@ pub func e_fs_abi_case() EFsAbiCase throws Error {
         fa_struct(10, [
             sb_field(11, i64_id), sb_field(12, i64_id)])];
 
-    var state = new_emitter(nativeir.empty_module(module), default_options());
-    declare_runtime_types(inout state);
+    var state = emitcore.new_emitter(nativeir.empty_module(module), core_settings(default_options()));
+    emitcore.declare_runtime_types(inout state);
     fa_function(inout state, "ex_getcwd", ["ptr", "i64"], sig_getcwd, i64_id, 50);
     fa_function(inout state, "ex_getdents", ["i32", "ptr", "i64"],
         sig_getdents, i64_id, 51);
-    let str_layout = lower_type(str_id, inout state);
-    let timespec_layout = lower_type(timespec_id, inout state);
+    let str_layout = emitcore.lower_type(str_id, inout state);
+    let timespec_layout = emitcore.lower_type(timespec_id, inout state);
     // Pass the string by address in this probe so the test isolates the Vec
     // descriptor ABI rather than the aggregate string calling convention.
-    let i64_layout = lower_type(i64_id, inout state);
+    let i64_layout = emitcore.lower_type(i64_id, inout state);
     let readlink_function = sb_begin(inout state, "ex_readlink",
         ["ptr", "ptr", "i64"], i64_layout);
-    let string_address = parameter(state, readlink_function, 0);
-    let string_value = e_load(str_layout, string_address, inout state);
+    let string_address = emitcore.parameter(state, readlink_function, 0);
+    let string_value = emitvalues.e_load(str_layout, string_address, inout state);
     vec.clear(state.frame.values);
-    vec.push(state.frame.values, ValueBinding(value_id: 0, type_id: str_id,
+    vec.push(state.frame.values, emitcore.ValueBinding(value_id: 0, type_id: str_id,
         value: string_value, stack_address: false));
-    vec.push(state.frame.values, ValueBinding(value_id: 1, type_id: 0,
-        value: parameter(state, readlink_function, 1), stack_address: false));
-    vec.push(state.frame.values, ValueBinding(value_id: 2, type_id: 0,
-        value: parameter(state, readlink_function, 2), stack_address: false));
+    vec.push(state.frame.values, emitcore.ValueBinding(value_id: 1, type_id: 0,
+        value: emitcore.parameter(state, readlink_function, 1), stack_address: false));
+    vec.push(state.frame.values, emitcore.ValueBinding(value_id: 2, type_id: 0,
+        value: emitcore.parameter(state, readlink_function, 2), stack_address: false));
     var readlink_instruction = nativeir.empty_instruction();
     readlink_instruction.op = nativeir.Op.SystemCall;
     readlink_instruction.type_id = i64_id;
@@ -124,11 +126,11 @@ pub func e_fs_abi_case() EFsAbiCase throws Error {
     readlink_instruction.inputs = readlink_inputs;
     readlink_instruction.result = option.Option[usize].Some(3);
     emit_instruction(readlink_instruction, inout state);
-    let readlink_value = value(state, 3);
-    terminate("ret " + typed(readlink_value), inout state);
+    let readlink_value = emitcore.value(state, 3);
+    emitcore.terminate("ret " + emitcore.typed(readlink_value), inout state);
     fa_function(inout state, "ex_nanosleep",
         [timespec_layout, "ptr"], sig_nanosleep, i64_id, 75);
     fa_function(inout state, "ex_getrandom", ["ptr", "i64", "i32"],
         sig_getrandom, i64_id, 76);
-    return EFsAbiCase(llvm: text.join(sections(state), ""));
+    return EFsAbiCase(llvm: text.join(emitcore.sections(state), ""));
 }

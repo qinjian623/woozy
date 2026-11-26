@@ -1,7 +1,8 @@
 package app;
 import "app/wzcc/hir" as hir;
 import "app/wzcc/model" as model;
-import "app/wzcc/nativeemit" as n;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativeemit/core" as n;
 import "app/wzcc/nativeir" as nativeir;
 import "app/wzcc/types" as types;
 import "std/io" as io;
@@ -16,8 +17,12 @@ func input() nativeir.Module {
     return nativeir.empty_module(hir.empty_module(resolved, 0,
         model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
 }
-func checks(options n.Options) Vec[string] throws n.Error {
-    var state = n.new_emitter(input(), options);
+func make_emitter(options nativeemit.Options) n.Emitter throws n.Error {
+    return n.new_emitter(input(), n.Settings(triple: options.triple, cpu: options.cpu,
+        features: options.features, optimization: options.optimization, debug_info: options.debug_info));
+}
+func checks(options nativeemit.Options) Vec[string] throws n.Error {
+    var state = make_emitter(options);
     try { let private_type = types.intern(inout state.storage_types, model.empty_type(model.TypeKind.Unit)); }
     catch error types.Error { return []; }
     if types.size(state.input.hir.types) != 0 || types.size(state.storage_types) != 1 { return []; }
@@ -105,9 +110,9 @@ func checks(options n.Options) Vec[string] throws n.Error {
     catch error n.Error { rejected = true; }
     if !rejected { return []; }
     n.restore_cursor(empty_cursor, inout state);
-    var invalid_options = n.default_options(); invalid_options.features = "+fma";
+    var invalid_options = nativeemit.default_options(); invalid_options.features = "+fma";
     rejected = false;
-    try { let bad = n.new_emitter(input(), invalid_options); }
+    try { let bad = make_emitter(invalid_options); }
     catch error n.Error {
         switch error {
             case n.Error.Failure(code, kind, message): {
@@ -121,7 +126,7 @@ func checks(options n.Options) Vec[string] throws n.Error {
         }
     }
     if !rejected { return []; }
-    var incomplete = n.new_emitter(input(), n.default_options());
+    var incomplete = make_emitter(nativeemit.default_options());
     let incomplete_function = n.new_function("incomplete", n.Signature(result: "void", parameters: []), "", "", inout incomplete);
     let incomplete_block = n.new_block(incomplete_function, "entry", inout incomplete);
     rejected = false;
@@ -132,7 +137,7 @@ func checks(options n.Options) Vec[string] throws n.Error {
 }
 func main() i32 throws os.Error {
     let args = process.args();
-    var options = n.default_options();
+    var options = nativeemit.default_options();
     if vec.len(args) >= 2 { options.triple = args[1]; }
     if vec.len(args) >= 3 { options.debug_info = args[2] == "-g"; }
     try {

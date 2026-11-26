@@ -1,10 +1,10 @@
-# Source-level Make packages
+# Source-package builds
 
 This directory is a self-test fixture for:
 
 ```sh
 woozyc build --project selfhost/tests/source_make/lang.toml \
-  --out-dir OUT --source-make --cache-dir CACHE --opt 0|2 --format json
+  --out-dir OUT --source-make --jobs 3 --cache-dir CACHE --opt 0|2 --format json
 ```
 
 The fixture has three canonical `model.Module` packages:
@@ -33,16 +33,16 @@ rejected explicitly with `E_CAPABILITY_UNAVAILABLE`.
 ## Caches and logs
 
 The cache key binds the canonical package, every current source byte, real
-transitive dependency interfaces, the compiler/LLVM/runtime/make fingerprints,
+transitive dependency interfaces, the compiler/LLVM/runtime fingerprints,
 target and optimization.  Only a package object is cached, after its checks
 and object build pass.  A package whose private body changes is rebuilt while
 its importers reuse their objects.  A public interface change invalidates the
 actual importers.
 
-`Makefile`, `make.log`, `preflight.log`, `combine.log`, `link.log`,
-`make-report.json`, `cache-statistics.json`, and one `module-<fixed>.log`
-per package are published for inspection.  Real paths are stored in the
-private length-prefixed state record; Make targets use fixed-width package ids.
+`make.log`, `preflight.log`, `combine.log`, `link.log`, `make-report.json`,
+`cache-statistics.json`, and one `module-<fixed>.log` per package are published
+for inspection. The tests verify the report format and absence of a generated
+Makefile.
 
 ## Run
 
@@ -51,5 +51,5 @@ python3 -B selfhost/tests/source_make/run.py --woozyc /path/to/woozyc
 ```
 
 The compiler needs its normal `toolchain/`, `runtime/` and `stdlib/` resources,
-LLVM 22.1.8, and GNU Make.  If the local LLVM build needs the legacy libxml2,
+and LLVM 22.1.8. If the local LLVM build needs the legacy libxml2,
 inherit the appropriate `LD_LIBRARY_PATH`.

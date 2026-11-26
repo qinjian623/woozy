@@ -69,7 +69,7 @@ This example uses `std/os` and `std/io`, so it targets the Linux x86_64 Native b
 
 ## Requirements and backend differences
 
-- **Native backend:** produces Linux x86_64 programs and uses the bundled LLVM tools. It supports system interfaces, threads, processes, async/await, C bindings, and standalone executables. Advanced native package builds still use the system Make or Ninja; `--source-make` specifically requires GNU Make.
+- **Native backend:** produces Linux x86_64 programs and uses the bundled LLVM tools. It supports system interfaces, threads, processes, async/await, C bindings, and standalone executables. The `--package-objects` mode uses Ninja. Woozy schedules `--source-make` packages itself and accepts `--jobs N` to set the maximum number of concurrent package jobs.
 - **Python backend:** emits `program.py` and `langrt.py`; executing that output requires Python 3.12. The Python backend uses the same language rules but does not support the Linux system modules or async/await.
 - **Hosted programs:** programs that use libc-dependent C libraries must select the hosted runtime. Hosted builds need a host C development environment.
 - **TLS:** `std/tls` and `std/https` are not part of the default runtime. They require the hosted runtime plus a separately built `libwoozy_tls.a` addon and declared `ssl`, `crypto`, and `stdc++` dependencies, as described in the [standard library guide](STDLIB.md#stdtls-和-stdhttps). OpenSSL 3 is required. Ordinary Native programs do not link OpenSSL or the C++ runtime.
@@ -95,9 +95,9 @@ This release note is a draft for the unpublished v0.1.0 package. The final archi
 - Python generation and execution of the iterator fixture;
 - dependency-lock checks and project test discovery, execution, and reporting;
 - LSP completion, hover, go-to-definition, and project diagnostics;
-- GDB checks for Native builds, including source-level Make builds;
+- GDB checks for Native builds, including `--source-make` builds;
 - TCP chat and HTTP server tests on loopback;
-- language regression tests and the source-level Make bootstrap.
+- language regression tests and the source-package bootstrap.
 
 The published v0.1.0-rc.1 check in [GitHub Actions run 44698760308](https://github.com/qinjian623/woozy/actions/runs/44698760308) passed, but it applies only to the RC archive and does not verify the final v0.1.0 package. Other Linux distributions, CPU architectures, and host configurations remain outside this release scope.
 

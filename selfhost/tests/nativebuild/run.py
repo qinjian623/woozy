@@ -143,28 +143,15 @@ try:
     (project / 'lang.toml').write_text('schema_version=1\n[package]\nname="nativebuild_check"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n')
     packages = ['model', 'types', 'hir', 'nativeir', 'resources', 'toolio', 'nativebuild', 'render']
     sources = [p for package in packages for p in sorted((SOURCE / package).glob('*.wz'))]
-    # B–E may still be incomplete: only the accepted shared Output/text files are needed here.
-    sources += [SOURCE / 'nativeemit' / name for name in ['state.wz', 'text.wz']]
-    debug = SOURCE / 'nativeemit/debug.wz'
-    if debug.is_file():
-        sources.append(debug)
+    sources.append(SOURCE / 'nativeemit/api.wz')
     for source in sources:
         target = project / 'src/wzcc' / source.relative_to(SOURCE)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
         inputs.append({'source': str(source), 'sha256': sha(target)})
-    if debug.is_file():
-        fixture = HERE.parent / 'nativeemit_text/fixture_type_of.wz'
-        shutil.copy2(fixture, project / 'src/wzcc/nativeemit/fixture_type_of.wz')
-        inputs.append({'source': str(fixture), 'sha256': sha(fixture)})
-        if (SOURCE / 'nativeemit/debug_types.wz').is_file():
-            fixture = HERE.parent / 'nativeemit_text/fixture_debug_type.wz'
-            shutil.copy2(fixture, project / 'src/wzcc/nativeemit' / fixture.name)
-            inputs.append({'source': str(fixture), 'sha256': sha(fixture)})
     shutil.copy2(HERE / 'main.wz', project / 'src/main.wz')
-    # SH31 added frontcache to nativebuild.wz and interface to the shared
-    # nativeemit state.  Copy the real import closure instead of a stale
-    # hand-written package list; existing reduced nativeemit files stay as-is.
+    # Stage the nativebuild dependency packages without replacing the reduced
+    # nativeemit API already copied above.
     skipped_existing = []
     for record in complete_import_closure(project / 'src', SOURCE,
                                            skipped=skipped_existing):

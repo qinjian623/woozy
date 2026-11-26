@@ -1,0 +1,144 @@
+// Place roots, field/index paths and overlap comparisons (CPP 2454-2864).
+package borrow;
+
+import "app/wzcc/semaeffects" as effects;
+import "app/wzcc/hir" as hir;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub func place_root(module hir.HirModule, id usize)
+    option.Option[usize] throws effects.Error {
+    if id >= vec.len(module.nodes) {
+        throw internal_error("invalid place node");
+    }
+    let n = module.nodes[id];
+    switch effects.b_node_read(n) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch effects.b_node_place(n) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    let kind = hir.node_kind(n.data);
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+        if vec.len(n.children) == 0 {
+            throw internal_error("place has no receiver");
+        }
+        return place_root(module, n.children[0]);
+    }
+    return option.Option[usize].None;
+}
+
+func place_path(module hir.HirModule, id usize)
+    Vec[PlacePath] throws effects.Error {
+    let n = module.nodes[id];
+    let kind = hir.node_kind(n.data);
+    if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.FieldRead) {
+        if vec.len(n.children) == 0 {
+            throw internal_error("field place has no receiver");
+        }
+        let path = place_path(module, n.children[0]);
+        var field usize = 0;
+        if effects.b_node_kind_is(kind, hir.NodeKind.FieldPlace) {
+            switch n.data {
+                case hir.NodeData.FieldPlace(value): field = value.field;
+                default: throw internal_error("field place payload mismatch");
+            }
+        } else {
+            switch n.data {
+                case hir.NodeData.FieldRead(value): field = value.field;
+                default: throw internal_error("field read payload mismatch");
+            }
+        }
+        vec.push(path, PlacePath(is_index: false, known: true, value: u64(field)));
+        return path;
+    }
+    if effects.b_node_kind_is(kind, hir.NodeKind.IndexPlace) ||
+       effects.b_node_kind_is(kind, hir.NodeKind.IndexRead) {
+        if vec.len(n.children) < 2 {
+            throw internal_error("index place has no index");
+        }
+        let path = place_path(module, n.children[0]);
+        let index = module.nodes[n.children[1]];
+        let index_kind = hir.node_kind(index.data);
+        var known = false;
+        var value = u64(n.children[1]);
+        if effects.b_node_kind_is(index_kind, hir.NodeKind.IntegerLiteral) {
+            known = true;
+            switch index.data {
+                case hir.NodeData.IntegerLiteral(literal): value = literal.bits;
+                default: {}
+            }
+        }
+        vec.push(path, PlacePath(is_index: true, known: known, value: value));
+        return path;
+    }
+    return vec.empty[PlacePath]();
+}
+
+func b_paths_overlap(a Vec[PlacePath], b Vec[PlacePath]) bool {
+    var length = vec.len(a);
+    if vec.len(b) < length { length = vec.len(b); }
+    for var index usize = 0; index < length; index += 1 {
+        if a[index].is_index || b[index].is_index {
+            if !a[index].is_index || !b[index].is_index { return true; }
+            if a[index].known && b[index].known &&
+               a[index].value == b[index].value { continue; }
+            if a[index].known && b[index].known { return false; }
+            return true;
+        }
+        if a[index].value != b[index].value { return false; }
+    }
+    return true;
+}
+
+func container_path(path Vec[PlacePath]) ContainerPath {
+    let indexes = vec.empty[PlacePath]();
+    let fields = vec.empty[u64]();
+    for part in path {
+        if part.is_index {
+            vec.push(indexes, part);
+            vec.clear(fields);
+        } else if vec.len(indexes) != 0 {
+            vec.push(fields, part.value);
+        }
+    }
+    return ContainerPath(indexes: indexes, fields: fields);
+}
+
+func container_overlap(a ContainerPath, b ContainerPath) bool {
+    if vec.len(a.indexes) != vec.len(b.indexes) { return true; }
+    if vec.len(a.indexes) == 0 { return true; }
+    let left = a.indexes[vec.len(a.indexes) - 1];
+    let right = b.indexes[vec.len(b.indexes) - 1];
+    if !left.known || !right.known { return true; }
+    if left.value != right.value { return false; }
+    var length = vec.len(a.fields);
+    if vec.len(b.fields) < length { length = vec.len(b.fields); }
+    for var index usize = 0; index < length; index += 1 {
+        if a.fields[index] != b.fields[index] { return false; }
+    }
+    return true;
+}
+
+func places_overlap(root_a usize, a Vec[PlacePath], root_b usize,
+                    b Vec[PlacePath]) bool {
+    let ca = container_path(a);
+    let cb = container_path(b);
+    if vec.len(ca.indexes) != 0 && vec.len(cb.indexes) != 0 {
+        return container_overlap(ca, cb);
+    }
+    return root_a == root_b && b_paths_overlap(a, b);
+}
+
+func path_contains_index(value Vec[PlacePath]) bool {
+    for part in value { if part.is_index { return true; } }
+    return false;
+}

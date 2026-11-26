@@ -74,7 +74,7 @@ func help_text() string {
         "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       woozyc build --project MANIFEST --out-dir DIR [--std-binding BUNDLE] [--backend native|python] [--format json]\n" +
         "       Native build also accepts -g (DWARF), --opt 0|2, --target TRIPLE and --package-objects\n" +
-        "       Source Make: build --project MANIFEST --out-dir DIR --source-make [--cache-dir DIR] [--opt 0|2] [-g]\n" +
+        "       Source Make: build --project MANIFEST --out-dir DIR --source-make [--cache-dir DIR] [--jobs N] [--opt 0|2] [-g]\n" +
         "       macOS arm64 objects: add --objects-only --target " + nativeemit.DARWIN_ARM64_TRIPLE;
 }
 func syntax_command(options Options, manager inout source.Manager) i32 throws os.Error {
@@ -148,15 +148,6 @@ pub func run(args Vec[string]) i32 throws os.Error {
     }
     if options.command == "fmt" { return format_command(options, inout manager); }
     if options.command == "test" { return project_test_command(options, inout manager); }
-    if options.command == "__source_make_worker" {
-        return source_make_worker(options, inout manager);
-    }
-    if options.command == "__source_make_combine" {
-        return source_make_combine(options);
-    }
-    if options.command == "__source_make_link" {
-        return source_make_link(options);
-    }
     if options.syntax { return syntax_command(options, inout manager); }
     return project_command(options, inout manager);
 }

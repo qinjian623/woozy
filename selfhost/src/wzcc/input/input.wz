@@ -9,6 +9,7 @@ package input;
 
 import "app/wzcc/model" as model;
 import "app/wzcc/source" as source;
+import "std/io" as io;
 import "std/os" as os;
 import "std/vec" as vec;
 
@@ -39,30 +40,17 @@ func open_input(path string) os.File throws Failure {
     catch problem os.Error { throw Failure.Open(problem); }
 }
 
-// Read all bytes with the existing typed os calls. The C++ implementation uses
-// std::ifstream; opening a directory succeeds there and fails on the first
+// Read all bytes with the existing typed os/io calls. The C++ implementation
+// uses std::ifstream; opening a directory succeeds there and fails on the first
 // read, so the open/read split follows the syscall that failed. Closing is
 // ignored because an ifstream destructor never reports a close failure.
 func read_bytes(path string) Vec[u8] throws Failure {
     let file = open_input(path);
     var closed = false;
     defer { if !closed { try { os.close(file); } catch error os.Error {} } }
-    let out = vec.empty[u8]();
-    let buffer = vec.make[u8](65536,0);
-    for true {
-        var count usize = 0;
-        try { count = os.read(file,buffer,vec.len(buffer)); }
-        catch problem os.Error {
-            switch problem {
-                case os.Error.Interrupted(code,completed): continue;
-                default: throw Failure.Read(problem);
-            }
-        }
-        if count == 0 { break; }
-        for var index usize = 0; index < count; index += 1 {
-            vec.push(out,buffer[index]);
-        }
-    }
+    var out = vec.empty[u8]();
+    try { out = io.read_all(file); }
+    catch problem os.Error { throw Failure.Read(problem); }
     closed = true;
     try { os.close(file); } catch problem os.Error {}
     return out;

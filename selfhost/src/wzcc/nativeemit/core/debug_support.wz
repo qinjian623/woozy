@@ -1,0 +1,101 @@
+package core;
+
+import "app/wzcc/model" as model;
+import "std/map" as map;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct DebugSource {
+    pub source model.Source;
+    pub file string;
+    pub lines Vec[u64];
+}
+pub struct DebugState {
+    pub sources Vec[DebugSource];
+    pub snapshots map.Map[u64, usize];
+    pub locations map.Map[string, string];
+    pub types map.Map[usize, string];
+    pub scope_ids map.Map[usize, Vec[usize]];
+    pub bindings map.Map[usize, usize];
+    pub visible map.Map[usize, u64];
+    pub unit string;
+    pub generated_file string;
+    pub generated_unit string;
+    pub named Vec[string];
+}
+pub struct DebugSlot {
+    pub slot usize;
+    pub variable string;
+    pub location string;
+    pub parameter bool;
+    pub declared bool;
+    pub binding usize;
+    pub hir_scope usize;
+    pub visible u64;
+    pub visibility_scope string;
+    pub capture bool;
+    pub dynamic_storage bool;
+    pub value_bytes usize;
+}
+pub struct DebugScope {
+    pub hir_scope usize;
+    pub span model.Span;
+    pub scope string;
+    pub slots Vec[usize];
+}
+
+pub struct DebugFrame {
+    pub scope_indices map.Map[usize, usize];
+    pub slot_indices map.Map[usize, usize];
+    pub variables map.Map[usize, string];
+    pub visibility map.Map[usize, string];
+}
+// Unlike define_metadata's small structural cache, debug nodes are unique or
+// cached by maps. Do not linearly search all existing locations for each node.
+pub func debug_node(body string, state inout Emitter) string {
+    let id = "!" + number(vec.len(state.metadata));
+    vec.push(state.metadata, MetadataText(key: "debug." + id, body: body));
+    return id;
+}
+pub func debug_context(state Emitter) DebugState throws Error {
+    switch state.debug {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw invalid("debug state not initialized");
+    }
+}
+pub func debug_quote(value string) string throws Error {
+    return "\"" + escape_bytes(text.bytes(value)) + "\"";
+}
+func debug_unknown_location(function usize, state inout Emitter) string throws Error {
+    if !option.is_some(state.debug) { return ""; }
+    let debug = debug_context(state);
+    var scope = state.functions[function].debug_scope;
+    if scope == "" {
+        let file = debug.generated_file;
+        let signature = debug_node("!DISubroutineType(types: !{})", inout state);
+        var display_name = state.functions[function].name;
+        if display_name == "main" { display_name = "__woozy_native_entry"; }
+        let name = debug_quote(display_name);
+        scope = debug_node("distinct !DISubprogram(name: " + name +
+            ", scope: " + file + ", file: " + file + ", type: " + signature +
+            ", flags: DIFlagArtificial, spFlags: DISPFlagDefinition, unit: " + debug.generated_unit + ")", inout state);
+        state.functions[function].debug_scope = scope;
+    }
+    let key = scope + ":unknown";
+    switch map.get(debug.locations, key) {
+        case option.Option.Some(found): return found;
+        case option.Option.None: {}
+    }
+    // An inline site needs a valid scope, even when no source line exists.
+    let location = debug_node("!DILocation(line: 0, scope: " + scope + ")", inout state);
+    let ignored = map.insert(debug.locations, key, location);
+    return location;
+}
+func debug_line(line string, function usize, state inout Emitter) string throws Error {
+    if text.starts_with(line, "#dbg_") { return line; }
+    var location = state.functions[function].debug_location;
+    if location == "" { location = debug_unknown_location(function, inout state); }
+    if location == "" { return line; }
+    return line + ", !dbg " + location;
+}

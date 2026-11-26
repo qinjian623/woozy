@@ -1,4 +1,5 @@
 package app;
+import "app/wzcc/nativeemit/core" as emitcore;
 import "app/wzcc/nativeemit" as n;
 import "std/io" as io;
 import "std/os" as os;
@@ -9,9 +10,9 @@ func main() i32 throws os.Error {
         io.print("===STAT_BYTES===\n" + stat.llvm + "===END_STAT_BYTES===\n");
         let fs = n.e_fs_abi_case();
         io.print("===FS_ABI===\n" + fs.llvm + "===END_FS_ABI===\n");
-    } catch error n.Error {
+    } catch error emitcore.Error {
         switch error {
-            case n.Error.Failure(code, kind, message): {
+            case emitcore.Error.Failure(code, kind, message): {
                 io.eprintln(code + ": " + message);
             }
         }

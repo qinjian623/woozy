@@ -1,0 +1,1742 @@
+package values;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit/core" as emitcore;
+import "app/wzcc/nativeir" as nativeir;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Async coroutine emission and source-level cycle collection.
+//
+// This file owns only the D share of the nativeemit package: promise layouts,
+// coroutine declarations/prologue/epilogue, await/return/cancel lowering,
+// FrameGcOps construction and the gc_ops.inc algorithms.  It addresses the
+// NativeIR blocks, slots, active flags and incoming addresses that B created;
+// it does not reset FunctionFrame or copy nativelayout's algorithms.
+
+
+func d_unsupported(message string) emitcore.Error {
+    return emitcore.Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported, message);
+}
+
+func d_kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+// Ordered identity arrays stand in for the C++ std::set of active type IDs.
+func d_contains_id(values Vec[usize], id usize) bool {
+    for value in values {
+        if value == id { return true; }
+    }
+    return false;
+}
+
+func d_same_ids(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+// Cache keys are private snapshots.  A Vec is a shared handle in Woozy, so
+// retaining the caller's array would let a later mutation change an old key.
+func d_copy_ids(values Vec[usize]) Vec[usize] {
+    var out = vec.empty[usize]();
+    for value in values { vec.push(out, value); }
+    return out;
+}
+
+func d_fields_key(fields Vec[usize]) string {
+    var key = "e";
+    for field in fields {
+        key += emitcore.number(field) + ",";
+    }
+    return key;
+}
+
+func d_block_at(function_index usize, block_index usize, state emitcore.Emitter) emitcore.BlockRef throws emitcore.Error {
+    if function_index >= vec.len(state.functions) { throw emitcore.invalid("LLVM function index out of range"); }
+    if block_index >= vec.len(state.functions[function_index].blocks) {
+        throw emitcore.invalid("LLVM block index out of range");
+    }
+    let label = state.functions[function_index].blocks[block_index].label;
+    return emitcore.BlockRef(function_index: function_index, block_index: block_index,
+        reference: "%" + emitcore.quoted_name(label));
+}
+
+func d_entry_block(function_index usize, state emitcore.Emitter) emitcore.BlockRef throws emitcore.Error {
+    return d_block_at(function_index, 0, state);
+}
+
+func d_native_function(state emitcore.Emitter, function_index usize) nativeir.Function throws emitcore.Error {
+    if function_index >= vec.len(state.input.functions) {
+        throw emitcore.invalid("NativeIR function index out of range");
+    }
+    return state.input.functions[function_index];
+}
+
+func d_text_index(state emitcore.Emitter, function_index usize) usize throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let source = emitcore.source_function(state, function.symbol);
+    return source.text_index;
+}
+
+func d_find_function_index(state emitcore.Emitter, symbol usize) usize throws emitcore.Error {
+    for var index usize = 0; index < vec.len(state.input.functions); index += 1 {
+        if state.input.functions[index].symbol == symbol { return index; }
+    }
+    throw emitcore.invalid("entry SymbolId is not a verified function");
+}
+
+func d_hir_index(state emitcore.Emitter, symbol usize) option.Option[usize] {
+    for var index usize = 0; index < vec.len(state.input.hir.functions); index += 1 {
+        if state.input.hir.functions[index].symbol == symbol {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func d_async_state(state emitcore.Emitter) emitcore.AsyncState throws emitcore.Error {
+    switch state.frame.async_state {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw emitcore.invalid("current function has no async frame state");
+    }
+}
+
+func d_incoming_address(state emitcore.Emitter, block usize) emitcore.Value throws emitcore.Error {
+    for entry in state.frame.incoming {
+        if entry.block == block {
+            switch entry.address {
+                case option.Option.Some(value): return value;
+                case option.Option.None: throw emitcore.invalid("await side target has no incoming address");
+            }
+        }
+    }
+    throw emitcore.invalid("await side target has no incoming record");
+}
+
+func d_incoming_unique(state emitcore.Emitter, block usize) bool {
+    for entry in state.frame.incoming {
+        if entry.block == block {
+            return entry.end_after_load;
+        }
+    }
+    return false;
+}
+
+func d_gep(type_name string, base emitcore.Value, index usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result("ptr", "getelementptr inbounds " + type_name + ", ptr " +
+        base.reference + ", i32 0, i32 " + emitcore.number(index), inout state);
+}
+
+func d_gep_bytes(base emitcore.Value, offset emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result("ptr", "getelementptr i8, ptr " + base.reference + ", i64 " +
+        offset.reference, inout state);
+}
+
+func d_load(type_name string, address emitcore.Value, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.result(type_name, "load " + type_name + ", ptr " + address.reference, inout state);
+}
+
+func d_store(type_name string, value emitcore.Value, address emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    emitcore.append("store " + type_name + " " + value.reference + ", ptr " + address.reference, inout state);
+}
+
+// Promise field indices are canonical for the Task type: status, claimed, then
+// the result and error storage when they are not Unit.
+func d_promise_field(promise emitcore.Value, layout emitcore.PromiseLayout, index usize,
+                     state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return d_gep(layout.type_name, promise, index, inout state);
+}
+
+func d_promise_slot(promise emitcore.Value, layout emitcore.PromiseLayout, error bool,
+                    state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    if error {
+        switch layout.error_slot {
+            case option.Option.Some(slot): return d_promise_field(promise, layout, usize(slot), inout state);
+            case option.Option.None: throw emitcore.invalid("promise slot is absent for a Unit error payload");
+        }
+    }
+    switch layout.result_slot {
+        case option.Option.Some(slot): return d_promise_field(promise, layout, usize(slot), inout state);
+        case option.Option.None: throw emitcore.invalid("promise slot is absent for a Unit result payload");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// C resource reachability (rejects stopped-world C releases before output).
+
+pub func type_owns_c_resource(type_id usize, state inout emitcore.Emitter) bool throws emitcore.Error {
+    return d_type_owns_c_resource(type_id, vec.empty[usize](), 0, false, inout state);
+}
+
+// Indirect payloads can be defined in another emitted object.
+pub func map_probe_requires_copy(type_id usize, state inout emitcore.Emitter) bool throws emitcore.Error {
+    return d_type_owns_c_resource(type_id, vec.empty[usize](), 0, true, inout state);
+}
+
+func d_type_owns_c_resource(type_id usize, active Vec[usize], depth u32,
+                            indirect bool, state inout emitcore.Emitter) bool throws emitcore.Error {
+    if depth > 64 { return true; }
+    // Read the whole-flag values before any nested inout calls.
+    let closure_owns = state.d.closure_owns_c_resource;
+    let trait_box_owns = state.d.trait_box_owns_c_resource;
+    let value = emitcore.type_of(state, type_id);
+    if d_kind_is(value.kind, model.TypeKind.CForeignResource) { return true; }
+    if d_kind_is(value.kind, model.TypeKind.Vec) ||
+       d_kind_is(value.kind, model.TypeKind.Slice) {
+        if vec.len(value.type_args) == 0 { throw emitcore.invalid("container type has no element type"); }
+        return d_type_owns_c_resource(value.type_args[0], active, depth + 1, indirect, inout state);
+    }
+    if d_kind_is(value.kind, model.TypeKind.Function) { return indirect || closure_owns; }
+    if d_kind_is(value.kind, model.TypeKind.TraitObject) { return indirect || trait_box_owns; }
+    if d_kind_is(value.kind, model.TypeKind.NominalStruct) ||
+       d_kind_is(value.kind, model.TypeKind.NominalEnum) {
+        if d_contains_id(active, type_id) { return false; }
+        vec.push(active, type_id);
+        var found = false;
+        if d_kind_is(value.kind, model.TypeKind.NominalStruct) {
+            let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None, inout state);
+            for field in fields {
+                if d_type_owns_c_resource(field.type_id, active, depth + 1, indirect, inout state) {
+                    found = true;
+                    break;
+                }
+            }
+        } else {
+            let declaration = emitcore.aggregate_declaration(state, type_id);
+            for variant in declaration.variants {
+                if found { break; }
+                let variant_fields = emitcore.aggregate_fields(type_id, option.Option[usize].Some(variant.symbol), inout state);
+                for variant_field in variant_fields {
+                    if d_type_owns_c_resource(variant_field.type_id, active, depth + 1, indirect, inout state) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        d_remove_id(active, type_id);
+        return found;
+    }
+    return false;
+}
+
+func d_remove_id(values Vec[usize], id usize) {
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] == id {
+            for var move_index usize = index; move_index + 1 < vec.len(values); move_index += 1 {
+                values[move_index] = values[move_index + 1];
+            }
+            vec.resize(values, vec.len(values) - 1, 0);
+            return;
+        }
+    }
+}
+
+// A closure or trait box that can reach a C resource must reject async frames
+// and promises before any output is produced.  The two flags are monotonic and
+// reach a bounded fixed point (at most two false -> true transitions).
+pub func scan_c_resource_flags(state inout emitcore.Emitter) throws emitcore.Error {
+    var changed = true;
+    for changed {
+        changed = false;
+        for var index usize = 0; index < vec.len(state.input.hir.nodes); index += 1 {
+            let node = state.input.hir.nodes[index];
+            switch node.data {
+                case hir.NodeData.FunctionValue(value): {
+                    var owns = false;
+                    for capture in value.captures {
+                        if type_owns_c_resource(capture.type_id, inout state) {
+                            owns = true;
+                            break;
+                        }
+                    }
+                    switch value.bound {
+                        case option.Option.Some(receiver): {
+                            if type_owns_c_resource(receiver.type_id, inout state) { owns = true; }
+                        }
+                        case option.Option.None: {}
+                    }
+                    if owns && !state.d.closure_owns_c_resource {
+                        state.d.closure_owns_c_resource = true;
+                        changed = true;
+                    }
+                }
+                case hir.NodeData.TraitObjectInit(value): {
+                    if type_owns_c_resource(value.concrete, inout state) &&
+                       !state.d.trait_box_owns_c_resource {
+                        state.d.trait_box_owns_c_resource = true;
+                        changed = true;
+                    }
+                }
+                default: {}
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Promise and coroutine declarations.
+
+pub func promise_type(task_type usize, state inout emitcore.Emitter) emitcore.PromiseLayout throws emitcore.Error {
+    for cached in state.d.promises {
+        if cached.task_type == task_type { return cached; }
+    }
+    let task = emitcore.type_of(state, task_type);
+    if !d_kind_is(task.kind, model.TypeKind.Task) || vec.len(task.type_args) != 2 {
+        throw emitcore.invalid("async signature result is not a Task");
+    }
+    let result_type = task.type_args[0];
+    let error_type = task.type_args[1];
+    var fields = "i32, i32";
+    var result_slot = option.Option[u32].None;
+    var error_slot = option.Option[u32].None;
+    var next_slot u32 = 2;
+    let result = emitcore.type_of(state, result_type);
+    if !d_kind_is(result.kind, model.TypeKind.Unit) {
+        result_slot = option.Option[u32].Some(next_slot);
+        next_slot += 1;
+        let lowered = emitcore.lower_type(result_type, inout state);
+        fields += ", " + lowered;
+    }
+    let error = emitcore.type_of(state, error_type);
+    if !d_kind_is(error.kind, model.TypeKind.Unit) {
+        error_slot = option.Option[u32].Some(next_slot);
+        let error_lowered = emitcore.lower_type(error_type, inout state);
+        fields += ", " + error_lowered;
+    }
+    let type_name = emitcore.define_type("lang.promise." + emitcore.number(task_type), "{ " + fields + " }", inout state);
+    let layout = emitcore.PromiseLayout(task_type: task_type, type_name: type_name,
+        result_slot: result_slot, error_slot: error_slot);
+    vec.push(state.d.promises, layout);
+    return layout;
+}
+
+pub func coroutine_signature(type_id usize, state inout emitcore.Emitter) emitcore.Signature throws emitcore.Error {
+    let value = emitcore.type_of(state, type_id);
+    var parameters = vec.empty[string]();
+    for parameter in value.parameters {
+        var spelling = "";
+        switch parameter.mode {
+            case model.ParamMode.Inout: spelling = "ptr";
+            default: spelling = emitcore.lower_type(parameter.type_id, inout state);
+        }
+        vec.push(parameters, spelling);
+    }
+    vec.push(parameters, "ptr");
+    return emitcore.Signature(result: "void", parameters: parameters);
+}
+
+func d_append_signature_parameter(signature emitcore.Signature, spelling string) emitcore.Signature {
+    var parameters = vec.empty[string]();
+    for parameter in signature.parameters { vec.push(parameters, parameter); }
+    vec.push(parameters, spelling);
+    return emitcore.Signature(result: signature.result, parameters: parameters);
+}
+
+pub func declare_async(function_index usize, state inout emitcore.Emitter) emitcore.SourceFunction throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let symbol = function.symbol;
+    let signature_id = function.signature;
+    if !emitcore.owns_function(state, symbol) {
+        let sig = emitcore.signature(signature_id, false, false, inout state);
+        let external_name = emitcore.source_name(state, symbol);
+        let code = emitcore.declare_function(external_name, sig, inout state);
+        vec.push(state.d.async_symbols, emitcore.AsyncSymbols(symbol: symbol,
+            coroutine: code, start: code, resume: code, destroy: code));
+        return emitcore.SourceFunction(symbol: symbol, signature: signature_id,
+            native_index: function_index, text_index: 0,
+            hir_index: d_hir_index(state, symbol), code: code);
+    }
+    let id = emitcore.number(symbol);
+    let hir_index = d_hir_index(state, symbol);
+    switch hir_index {
+        case option.Option.Some(value): {
+            if vec.len(state.input.hir.functions[value].captures) != 0 {
+                throw d_unsupported("async capture entry is not supported");
+            }
+        }
+        case option.Option.None: {}
+    }
+    let signature_value = emitcore.type_of(state, signature_id);
+    let task_type = signature_value.result;
+    let task = emitcore.type_of(state, task_type);
+    if !d_kind_is(task.kind, model.TypeKind.Task) || vec.len(task.type_args) != 2 {
+        throw emitcore.invalid("async signature result is not a Task");
+    }
+    for slot in function.slots {
+        if option.is_some(slot.owner) && !slot.is_inout &&
+           type_owns_c_resource(slot.type_id, inout state) {
+            throw d_unsupported("async function frame owns an external C resource: stopped-world frame clear has no safe C release path");
+        }
+    }
+    for payload in task.type_args {
+        if type_owns_c_resource(payload, inout state) {
+            throw d_unsupported("async Task promise owns an external C resource: stopped-world frame clear has no safe C release path");
+        }
+    }
+    let coroutine = coroutine_signature(signature_id, inout state);
+    let start_signature = emitcore.signature(signature_id, false, false, inout state);
+    let saved = emitcore.save_cursor(state);
+    let text_index = emitcore.new_function("lang.async." + id, coroutine, "internal",
+        "presplitcoroutine", inout state);
+    var start_name = "lang.start." + id;
+    var start_linkage = "internal";
+    if option.is_some(state.package_selection) { start_name = emitcore.source_name(state, symbol); start_linkage = ""; }
+    let start = emitcore.new_function(start_name, start_signature, start_linkage, "", inout state);
+    let resume_signature = emitcore.Signature(result: "void", parameters: ["ptr"]);
+    let resume = emitcore.new_function("lang.resume." + id, resume_signature, "internal", "", inout state);
+    let destroy = emitcore.new_function("lang.destroy." + id, resume_signature, "internal", "", inout state);
+    let coroutine_value = emitcore.function_reference(state, text_index);
+    let start_value = emitcore.function_reference(state, start);
+    let resume_value = emitcore.function_reference(state, resume);
+    let destroy_value = emitcore.function_reference(state, destroy);
+    vec.push(state.d.async_symbols, emitcore.AsyncSymbols(symbol: symbol,
+        coroutine: coroutine_value, start: start_value, resume: resume_value,
+        destroy: destroy_value));
+
+    // One shared resume/destroy wrapper pair, exactly the runtime callback ABI.
+    let resume_entry = emitcore.new_block(resume, "resume", inout state);
+    emitcore.position(resume_entry, inout state);
+    var runtime_args = vec.empty[emitcore.Value]();
+    vec.push(runtime_args, emitcore.parameter(state, resume, 0));
+    let runtime_call = emitcore.runtime("llvm.coro.resume", "void", runtime_args, inout state);
+    emitcore.terminate("ret void", inout state);
+
+    // start allocates the future, calls the coroutine with it, then returns it.
+    let start_entry = emitcore.new_block(start, "start", inout state);
+    emitcore.position(start_entry, inout state);
+    let future = emitcore.runtime("lang_async_task_new_v1", "ptr", [], inout state);
+    var call_args = vec.empty[emitcore.Value]();
+    for var index usize = 0; index < vec.len(start_signature.parameters); index += 1 {
+        vec.push(call_args, emitcore.parameter(state, start, index));
+    }
+    vec.push(call_args, future);
+    let coroutine_call = emitcore.call(coroutine, coroutine_value, call_args, inout state);
+    emitcore.terminate("ret ptr " + future.reference, inout state);
+
+    let destroy_entry = emitcore.new_block(destroy, "destroy", inout state);
+    emitcore.position(destroy_entry, inout state);
+    var destroy_args = vec.empty[emitcore.Value]();
+    vec.push(destroy_args, emitcore.parameter(state, destroy, 0));
+    let destroy_call = emitcore.runtime("llvm.coro.destroy", "void", destroy_args, inout state);
+    emitcore.terminate("ret void", inout state);
+
+    emitcore.restore_cursor(saved, inout state);
+    return emitcore.SourceFunction(symbol: symbol, signature: signature_id,
+        native_index: function_index, text_index: text_index,
+        hir_index: hir_index, code: coroutine_value);
+}
+
+pub func async_begin(function_index usize, state inout emitcore.Emitter) emitcore.AsyncState throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let signature_id = function.signature;
+    let task_type = emitcore.type_of(state, signature_id).result;
+    let layout = promise_type(task_type, inout state);
+    let text_index = d_text_index(state, function_index);
+
+    let entry = emitcore.new_block(text_index, "entry", inout state);
+    let final_block = emitcore.new_block(text_index, "async.final", inout state);
+    let suspend_return = emitcore.new_block(text_index, "async.suspend.return", inout state);
+    emitcore.position(entry, inout state);
+
+    // The coroutine prologue is emitted before B creates source-block text.
+    // Promise storage lives in the entry block; all slot allocas B adds through
+    // entry_result are printed in the same prefix.
+    let promise_alloca = emitcore.entry_result("ptr", "alloca " + layout.type_name, inout state);
+    var id_args = vec.empty[emitcore.Value]();
+    vec.push(id_args, emitcore.Value(type_name: "i32", reference: "8"));
+    vec.push(id_args, promise_alloca);
+    vec.push(id_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    vec.push(id_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    let token = emitcore.runtime("llvm.coro.id", "token", id_args, inout state);
+    var alloc_args = vec.empty[emitcore.Value]();
+    vec.push(alloc_args, token);
+    let need = emitcore.runtime("llvm.coro.alloc", "i1", alloc_args, inout state);
+    let size = emitcore.runtime("llvm.coro.size.i64", "i64", [], inout state);
+    var size_args = vec.empty[emitcore.Value]();
+    vec.push(size_args, size);
+    let allocated = emitcore.runtime("lang_async_frame_alloc_v1", "ptr", size_args, inout state);
+    let memory = emitcore.result("ptr", "select " + emitcore.typed(need) + ", " + emitcore.typed(allocated) +
+        ", ptr null", inout state);
+    var begin_args = vec.empty[emitcore.Value]();
+    vec.push(begin_args, token);
+    vec.push(begin_args, memory);
+    let handle = emitcore.runtime("llvm.coro.begin", "ptr", begin_args, inout state);
+    var promise_args = vec.empty[emitcore.Value]();
+    vec.push(promise_args, handle);
+    vec.push(promise_args, emitcore.Value(type_name: "i32", reference: "8"));
+    vec.push(promise_args, emitcore.Value(type_name: "i1", reference: "false"));
+    let promise = emitcore.runtime("llvm.coro.promise", "ptr", promise_args, inout state);
+
+    // B continues the slot/parameter prologue in this entry block.
+    return emitcore.AsyncState(task_type: task_type, promise_type: layout.type_name,
+        promise: promise, token: token, handle: handle, final_block: final_block,
+        suspend_return_block: suspend_return,
+        frame_metadata: option.Option[emitcore.Value].None,
+        frame_ops: option.Option[emitcore.Value].None);
+}
+
+// Copy every ordinary owning parameter into the frame before the first
+// suspension.  Move parameters already own their incoming value and keep the
+// entry-active flag B stored.
+pub func copy_async_ordinary_parameters(function_index usize, state inout emitcore.Emitter) throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let signature_id = function.signature;
+    let slots = function.slots;
+    let signature_value = emitcore.type_of(state, signature_id);
+    let text_index = d_text_index(state, function_index);
+    let saved = emitcore.save_cursor(state);
+    let entry = d_entry_block(text_index, state);
+    emitcore.position(entry, inout state);
+    for var index usize = 0; index < vec.len(slots); index += 1 {
+        let slot = slots[index];
+        var parameter_index usize = 0;
+        var is_parameter = false;
+        switch slot.parameter {
+            case option.Option.Some(value): { parameter_index = usize(value); is_parameter = true; }
+            case option.Option.None: {}
+        }
+        if !is_parameter || slot.is_inout || !option.is_some(slot.owner) { continue; }
+        if parameter_index >= vec.len(signature_value.parameters) {
+            throw emitcore.invalid("slot parameter index is out of range");
+        }
+        var ordinary = false;
+        switch signature_value.parameters[parameter_index].mode {
+            case model.ParamMode.Ordinary: ordinary = true;
+            default: {}
+        }
+        if !ordinary { continue; }
+        if index >= vec.len(state.frame.slots) { throw emitcore.invalid("slot has no storage record"); }
+        let storage = state.frame.slots[index];
+        let address = storage.address;
+        var active_address = emitcore.Value(type_name: "ptr", reference: "null");
+        switch storage.active {
+            case option.Option.Some(value): active_address = value;
+            case option.Option.None: throw emitcore.invalid("owning parameter slot has no active flag");
+        }
+        let operation = value_op(slot.type_id, true, inout state);
+        var operation_args = vec.empty[emitcore.Value]();
+        vec.push(operation_args, address);
+        let copy_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
+            operation, operation_args, inout state);
+        d_store("i1", emitcore.Value(type_name: "i1", reference: "true"), active_address, inout state);
+    }
+    emitcore.restore_cursor(saved, inout state);
+}
+
+func d_drop_async_parameters(function_index usize, state inout emitcore.Emitter) throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let slots = function.slots;
+    for var index usize = vec.len(slots); index > 0; index -= 1 {
+        let slot = slots[index - 1];
+        if option.is_some(slot.parameter) && option.is_some(slot.owner) && !slot.is_inout {
+            destroy_slot(index - 1, slot.type_id, inout state);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FrameGcOps.  Metadata stores exactly the address of the promise and the
+// address/active flag of every owning slot; the CoroSplit frame layout is never
+// guessed here.
+
+func d_gc_trace_type() emitcore.Signature {
+    return emitcore.Signature(result: "void", parameters: ["ptr", "ptr", "ptr"]);
+}
+
+func d_gc_visitor_call(target emitcore.Value, visitor emitcore.Value, visit_context emitcore.Value,
+                       state inout emitcore.Emitter) throws emitcore.Error {
+    let origin = emitcore.here(state);
+    let function_index = origin.function_index;
+    let present = emitcore.new_block(function_index, "gc.edge", inout state);
+    let done = emitcore.new_block(function_index, "gc.edge.done", inout state);
+    let present_condition = emitcore.result("i1", "icmp ne ptr " + target.reference + ", null", inout state);
+    emitcore.terminate("br " + emitcore.typed(present_condition) + ", label " + present.reference +
+        ", label " + done.reference, inout state);
+    emitcore.position(present, inout state);
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, target);
+    vec.push(args, visit_context);
+    let visitor_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr", "ptr"]),
+        visitor, args, inout state);
+    emitcore.terminate("br label " + done.reference, inout state);
+    emitcore.position(done, inout state);
+}
+
+func d_gc_conditional_trace(condition emitcore.Value, type_id usize, address emitcore.Value,
+                            visitor emitcore.Value, visit_context emitcore.Value,
+                            state inout emitcore.Emitter) throws emitcore.Error {
+    let origin = emitcore.here(state);
+    let function_index = origin.function_index;
+    let body = emitcore.new_block(function_index, "trace.edge", inout state);
+    let next = emitcore.new_block(function_index, "trace.next", inout state);
+    emitcore.terminate("br " + emitcore.typed(condition) + ", label " + body.reference +
+        ", label " + next.reference, inout state);
+    emitcore.position(body, inout state);
+    gc_trace_value(type_id, address, visitor, visit_context, inout state);
+    emitcore.terminate("br label " + next.reference, inout state);
+    emitcore.position(next, inout state);
+}
+
+func d_payload_type(fields Vec[hir.FieldDecl], state inout emitcore.Emitter) string throws emitcore.Error {
+    var parts = vec.empty[string]();
+    for field in fields {
+        vec.push(parts, emitcore.lower_type(field.type_id, inout state));
+    }
+    return "{ " + text.join(parts, ", ") + " }";
+}
+
+pub func has_strong_edge(type_id usize, state inout emitcore.Emitter) bool throws emitcore.Error {
+    var active = vec.empty[usize]();
+    return d_has_strong_edge(type_id, active, 0, inout state);
+}
+
+func d_has_strong_edge(type_id usize, active Vec[usize], depth u32,
+                       state inout emitcore.Emitter) bool throws emitcore.Error {
+    if depth > 64 { return true; }
+    let value = emitcore.type_of(state, type_id);
+    if d_kind_is(value.kind, model.TypeKind.Vec) ||
+       d_kind_is(value.kind, model.TypeKind.Function) ||
+       d_kind_is(value.kind, model.TypeKind.Slice) ||
+       d_kind_is(value.kind, model.TypeKind.Task) ||
+       d_kind_is(value.kind, model.TypeKind.TraitObject) {
+        return true;
+    }
+    if d_kind_is(value.kind, model.TypeKind.NominalStruct) ||
+       d_kind_is(value.kind, model.TypeKind.NominalEnum) {
+        if d_contains_id(active, type_id) { return false; }
+        vec.push(active, type_id);
+        var found = false;
+        if d_kind_is(value.kind, model.TypeKind.NominalStruct) {
+            let fields = emitcore.aggregate_fields(type_id, option.Option[usize].None, inout state);
+            for field in fields {
+                if d_has_strong_edge(field.type_id, active, depth + 1, inout state) {
+                    found = true;
+                    break;
+                }
+            }
+        } else {
+            let declaration = emitcore.aggregate_declaration(state, type_id);
+            for variant in declaration.variants {
+                if found { break; }
+                let variant_fields = emitcore.aggregate_fields(type_id, option.Option[usize].Some(variant.symbol), inout state);
+                for variant_field in variant_fields {
+                    if d_has_strong_edge(variant_field.type_id, active, depth + 1, inout state) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        d_remove_id(active, type_id);
+        return found;
+    }
+    return false;
+}
+
+pub func gc_trace_value(type_id usize, address emitcore.Value, visitor emitcore.Value,
+                        visit_context emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    let value = emitcore.type_of(state, type_id);
+    if d_kind_is(value.kind, model.TypeKind.Vec) {
+        let vec_target = d_load("ptr", address, inout state);
+        d_gc_visitor_call(vec_target, visitor, visit_context, inout state);
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.Function) {
+        let function_value = d_load(emitcore.FN_TYPE, address, inout state);
+        let function_environment = emitcore.result("ptr", "extractvalue " + emitcore.typed(function_value) + ", 1", inout state);
+        d_gc_visitor_call(function_environment, visitor, visit_context, inout state);
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.Slice) {
+        let slice_owner_address = d_gep(emitcore.SLICE_TYPE, address, 0, inout state);
+        let slice_owner = d_load("ptr", slice_owner_address, inout state);
+        d_gc_visitor_call(slice_owner, visitor, visit_context, inout state);
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.TraitObject) {
+        let trait_fat = d_load(emitcore.DYN_TYPE, address, inout state);
+        let trait_data = emitcore.result("ptr", "extractvalue " + emitcore.typed(trait_fat) + ", 0", inout state);
+        var trait_args = vec.empty[emitcore.Value]();
+        vec.push(trait_args, trait_data);
+        let trait_owner = emitcore.runtime("lang_trait_box_target_v1", "ptr", trait_args, inout state);
+        d_gc_visitor_call(trait_owner, visitor, visit_context, inout state);
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.Task) {
+        let task_future = d_load("ptr", address, inout state);
+        d_gc_visitor_call(task_future, visitor, visit_context, inout state);
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.NominalStruct) {
+        let struct_layout = emitcore.lower_type(type_id, inout state);
+        let struct_fields = emitcore.aggregate_fields(type_id, option.Option[usize].None, inout state);
+        for var struct_index usize = 0; struct_index < vec.len(struct_fields); struct_index += 1 {
+            if !has_strong_edge(struct_fields[struct_index].type_id, inout state) { continue; }
+            let struct_field_address = d_gep(struct_layout, address, struct_index, inout state);
+            gc_trace_value(struct_fields[struct_index].type_id, struct_field_address,
+                visitor, visit_context, inout state);
+        }
+        return;
+    }
+    if d_kind_is(value.kind, model.TypeKind.NominalEnum) {
+        let enum_layout = emitcore.lower_type(type_id, inout state);
+        let enum_declaration = emitcore.aggregate_declaration(state, type_id);
+        let tag_address = d_gep(enum_layout, address, 0, inout state);
+        let tag = d_load("i32", tag_address, inout state);
+        let enum_origin = emitcore.here(state);
+        let enum_function_index = enum_origin.function_index;
+        let enum_done = emitcore.new_block(enum_function_index, "gc.enum.done", inout state);
+        var enum_bodies = vec.empty[emitcore.BlockRef]();
+        for var create_variant usize = 0; create_variant < vec.len(enum_declaration.variants); create_variant += 1 {
+            vec.push(enum_bodies, emitcore.new_block(enum_function_index, "gc.enum.payload", inout state));
+        }
+        var enum_cases = "";
+        for var case_variant usize = 0; case_variant < vec.len(enum_bodies); case_variant += 1 {
+            enum_cases += " i32 " + emitcore.number(case_variant) + ", label " + enum_bodies[case_variant].reference;
+        }
+        emitcore.terminate("switch " + emitcore.typed(tag) + ", label " + enum_done.reference +
+            " [" + enum_cases + " ]", inout state);
+        if vec.len(enum_bodies) != 0 { emitcore.position(enum_bodies[0], inout state); }
+        for var payload_variant usize = 0; payload_variant < vec.len(enum_bodies); payload_variant += 1 {
+            let variant_decl = enum_declaration.variants[payload_variant];
+            let variant_fields = emitcore.aggregate_fields(type_id,
+                option.Option[usize].Some(variant_decl.symbol), inout state);
+            let payload_address = d_gep(enum_layout, address, payload_variant + 1, inout state);
+            let payload_type = d_payload_type(variant_fields, inout state);
+            for var variant_field_index usize = 0; variant_field_index < vec.len(variant_fields); variant_field_index += 1 {
+                if !has_strong_edge(variant_fields[variant_field_index].type_id, inout state) { continue; }
+                let variant_field_address = d_gep(payload_type, payload_address,
+                    variant_field_index, inout state);
+                gc_trace_value(variant_fields[variant_field_index].type_id,
+                    variant_field_address, visitor, visit_context, inout state);
+            }
+            emitcore.terminate("br label " + enum_done.reference, inout state);
+            if payload_variant + 1 < vec.len(enum_bodies) {
+                emitcore.position(enum_bodies[payload_variant + 1], inout state);
+            }
+        }
+        emitcore.position(enum_done, inout state);
+        return;
+    }
+}
+
+func d_gc_trace_for_vec(element usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for cached in state.d.trace_vecs {
+        if cached.type_id == element { return cached.function; }
+    }
+    let key = "v" + emitcore.number(element);
+    let saved = emitcore.save_cursor(state);
+    let index = emitcore.new_function("lang.gc.trace." + key, d_gc_trace_type(), "internal", "", inout state);
+    let function = emitcore.function_reference(state, index);
+    vec.push(state.d.trace_vecs, emitcore.TypeFunction(type_id: element, function: function));
+    let entry = emitcore.new_block(index, "entry", inout state);
+    let check = emitcore.new_block(index, "prefix.check", inout state);
+    let body = emitcore.new_block(index, "prefix.body", inout state);
+    let next = emitcore.new_block(index, "prefix.next", inout state);
+    let done = emitcore.new_block(index, "prefix.done", inout state);
+    emitcore.position(entry, inout state);
+    let object = emitcore.parameter(state, index, 0);
+    let visitor = emitcore.parameter(state, index, 1);
+    let visit_context = emitcore.parameter(state, index, 2);
+    let initialized_address = d_gep(emitcore.VEC_TYPE, object, 2, inout state);
+    let initialized = d_load("i64", initialized_address, inout state);
+    let data_address = d_gep(emitcore.VEC_TYPE, object, 5, inout state);
+    let data = d_load("ptr", data_address, inout state);
+    let stride_address = d_gep(emitcore.VEC_TYPE, object, 3, inout state);
+    let stride = d_load("i64", stride_address, inout state);
+    emitcore.terminate("br label " + check.reference, inout state);
+    emitcore.position(check, inout state);
+    let index_value = emitcore.fresh_value("i64", inout state);
+    let phi = emitcore.reserve_prefix(inout state);
+    let more = emitcore.result("i1", "icmp ult " + emitcore.typed(index_value) + ", " + initialized.reference, inout state);
+    emitcore.terminate("br " + emitcore.typed(more) + ", label " + body.reference + ", label " + done.reference, inout state);
+    emitcore.position(body, inout state);
+    let offset = emitcore.result("i64", "mul " + emitcore.typed(index_value) + ", " + stride.reference, inout state);
+    let element_address = d_gep_bytes(data, offset, inout state);
+    gc_trace_value(element, element_address, visitor, visit_context, inout state);
+    emitcore.terminate("br label " + next.reference, inout state);
+    emitcore.position(next, inout state);
+    let incremented = emitcore.result("i64", "add " + emitcore.typed(index_value) + ", 1", inout state);
+    emitcore.terminate("br label " + check.reference, inout state);
+    let phi_line = index_value.reference + " = phi i64 [ 0, " + entry.reference +
+        " ], [ " + incremented.reference + ", " + next.reference + " ]";
+    emitcore.set_prefix(phi, phi_line, inout state);
+    emitcore.position(done, inout state);
+    emitcore.terminate("ret void", inout state);
+    emitcore.restore_cursor(saved, inout state);
+    return function;
+}
+
+func d_gc_trace_for_fields(fields Vec[usize], state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for cached in state.d.trace_fields {
+        if d_same_ids(cached.fields, fields) { return cached.function; }
+    }
+    let key = d_fields_key(fields);
+    let saved = emitcore.save_cursor(state);
+    let index = emitcore.new_function("lang.gc.trace." + key, d_gc_trace_type(), "internal", "", inout state);
+    let function = emitcore.function_reference(state, index);
+    vec.push(state.d.trace_fields, emitcore.FieldsFunction(fields: d_copy_ids(fields), function: function));
+    let entry = emitcore.new_block(index, "entry", inout state);
+    let body = emitcore.new_block(index, "row", inout state);
+    let done = emitcore.new_block(index, "done", inout state);
+    emitcore.position(entry, inout state);
+    let object = emitcore.parameter(state, index, 0);
+    let visitor = emitcore.parameter(state, index, 1);
+    let visit_context = emitcore.parameter(state, index, 2);
+    let initialized_address = d_gep(emitcore.VEC_TYPE, object, 2, inout state);
+    let initialized = d_load("i64", initialized_address, inout state);
+    let present = emitcore.result("i1", "icmp ugt " + emitcore.typed(initialized) + ", 0", inout state);
+    emitcore.terminate("br " + emitcore.typed(present) + ", label " + body.reference + ", label " + done.reference, inout state);
+    emitcore.position(body, inout state);
+    let data_address = d_gep(emitcore.VEC_TYPE, object, 5, inout state);
+    let row = d_load("ptr", data_address, inout state);
+    let layout = env_record_type(d_copy_ids(fields), inout state);
+    for var index_field usize = 0; index_field < vec.len(fields); index_field += 1 {
+        if !has_strong_edge(fields[index_field], inout state) { continue; }
+        let address = d_gep(layout, row, index_field, inout state);
+        gc_trace_value(fields[index_field], address, visitor, visit_context, inout state);
+    }
+    emitcore.terminate("br label " + done.reference, inout state);
+    emitcore.position(done, inout state);
+    emitcore.terminate("ret void", inout state);
+    emitcore.restore_cursor(saved, inout state);
+    return function;
+}
+
+func d_gc_invalidate(state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    switch state.d.gc_invalidate {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {}
+    }
+    let saved = emitcore.save_cursor(state);
+    let index = emitcore.new_function("lang.gc.invalidate_weak",
+        emitcore.Signature(result: "void", parameters: ["ptr"]), "internal", "", inout state);
+    let function = emitcore.function_reference(state, index);
+    state.d.gc_invalidate = option.Option[emitcore.Value].Some(function);
+    let entry = emitcore.new_block(index, "entry", inout state);
+    emitcore.position(entry, inout state);
+    let object = emitcore.parameter(state, index, 0);
+    let slot = d_gep(emitcore.VEC_TYPE, object, 9, inout state);
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, slot);
+    let call_value = emitcore.runtime("lang_weak_invalidate_slot_v1", "void", args, inout state);
+    emitcore.terminate("ret void", inout state);
+    emitcore.restore_cursor(saved, inout state);
+    return function;
+}
+
+func d_gc_ops_for_vec(element usize, state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for cached in state.d.ops_vecs {
+        if cached.type_id == element { return cached.global; }
+    }
+    let trace = d_gc_trace_for_vec(element, inout state);
+    let clear = emitcore.declare_function("lang_vec_clear_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let retain = emitcore.declare_function("lang_vec_retain_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let release = emitcore.declare_function("lang_vec_release_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let invalidate = d_gc_invalidate(inout state);
+    let key = "v" + emitcore.number(element);
+    let body = "private constant { ptr, ptr, ptr, ptr, ptr } { ptr " + trace.reference +
+        ", ptr " + clear.reference + ", ptr " + retain.reference + ", ptr " +
+        release.reference + ", ptr " + invalidate.reference + " }";
+    let global = emitcore.define_global("lang.gc.ops." + key, body, inout state);
+    vec.push(state.d.ops_vecs, emitcore.TypeGlobal(type_id: element, global: global));
+    return global;
+}
+
+func d_gc_ops_for_fields(fields Vec[usize], state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    for cached in state.d.ops_fields {
+        if d_same_ids(cached.fields, fields) { return cached.global; }
+    }
+    let trace = d_gc_trace_for_fields(fields, inout state);
+    let clear = emitcore.declare_function("lang_vec_clear_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let retain = emitcore.declare_function("lang_vec_retain_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let release = emitcore.declare_function("lang_vec_release_v1", emitcore.Signature(result: "void", parameters: ["ptr"]), inout state);
+    let invalidate = d_gc_invalidate(inout state);
+    let key = d_fields_key(fields);
+    let body = "private constant { ptr, ptr, ptr, ptr, ptr } { ptr " + trace.reference +
+        ", ptr " + clear.reference + ", ptr " + retain.reference + ", ptr " +
+        release.reference + ", ptr " + invalidate.reference + " }";
+    let global = emitcore.define_global("lang.gc.ops." + key, body, inout state);
+    vec.push(state.d.ops_fields, emitcore.FieldsGlobal(fields: d_copy_ids(fields), global: global));
+    return global;
+}
+
+func d_gc_register_object(object emitcore.Value, ops emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    state.d.gc_program_required = true;
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, object);
+    vec.push(args, ops);
+    let registered = emitcore.runtime("lang_gc_program_register_v1", "i1", args, inout state);
+}
+
+pub func gc_register_vec(object emitcore.Value, element_type usize, state inout emitcore.Emitter) throws emitcore.Error {
+    if !has_strong_edge(element_type, inout state) { return; }
+    let ops = d_gc_ops_for_vec(element_type, inout state);
+    d_gc_register_object(object, ops, inout state);
+}
+
+pub func gc_register_fields(object emitcore.Value, fields Vec[usize], state inout emitcore.Emitter) throws emitcore.Error {
+    var needed = false;
+    for field in fields {
+        if has_strong_edge(field, inout state) {
+            needed = true;
+            break;
+        }
+    }
+    if !needed { return; }
+    let snapshot = d_copy_ids(fields);
+    let ops = d_gc_ops_for_fields(snapshot, inout state);
+    d_gc_register_object(object, ops, inout state);
+}
+
+// ---------------------------------------------------------------------------
+// Async frame metadata and publish/initial-suspend sequence.
+
+pub func build_async_frame_gc(function_index usize, owner_slots Vec[usize],
+                              state inout emitcore.Emitter) emitcore.AsyncFrameGcPlan throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let state_value = d_async_state(state);
+    let signature_value = emitcore.type_of(state, function.signature);
+    let task_type = signature_value.result;
+    let task = emitcore.type_of(state, task_type);
+    if !d_kind_is(task.kind, model.TypeKind.Task) || vec.len(task.type_args) != 2 {
+        throw emitcore.invalid("async signature result is not a Task");
+    }
+    let result_type = task.type_args[0];
+    let error_type = task.type_args[1];
+    let layout = promise_type(task_type, inout state);
+    let saved = emitcore.save_cursor(state);
+    let text_index = d_text_index(state, function_index);
+    let entry = d_entry_block(text_index, state);
+    emitcore.position(entry, inout state);
+
+    let id = emitcore.number(function.symbol);
+    var fields = "ptr";
+    for slot in owner_slots { fields += ", ptr, ptr"; }
+    let metadata_type = emitcore.define_type("lang.async.frame.meta." + id, "{ " + fields + " }", inout state);
+    let metadata = emitcore.entry_result("ptr", "alloca " + metadata_type, inout state);
+    let metadata_promise_field = d_gep(metadata_type, metadata, 0, inout state);
+    d_store("ptr", state_value.promise, metadata_promise_field, inout state);
+    for var store_position usize = 0; store_position < vec.len(owner_slots); store_position += 1 {
+        let store_slot_index = owner_slots[store_position];
+        if store_slot_index >= vec.len(state.frame.slots) { throw emitcore.invalid("frame owner slot is missing"); }
+        let store_storage = state.frame.slots[store_slot_index];
+        let store_address = store_storage.address;
+        var store_active = emitcore.Value(type_name: "ptr", reference: "null");
+        switch store_storage.active {
+            case option.Option.Some(value): store_active = value;
+            case option.Option.None: throw emitcore.invalid("frame owner slot has no active flag");
+        }
+        let store_address_field = d_gep(metadata_type, metadata, 1 + 2 * store_position, inout state);
+        d_store("ptr", store_address, store_address_field, inout state);
+        let store_flag_field = d_gep(metadata_type, metadata, 2 + 2 * store_position, inout state);
+        d_store("ptr", store_active, store_flag_field, inout state);
+    }
+
+    let result_strong = option.is_some(layout.result_slot) &&
+        has_strong_edge(result_type, inout state);
+    let error_strong = option.is_some(layout.error_slot) &&
+        has_strong_edge(error_type, inout state);
+    var trace = result_strong || error_strong;
+    for trace_slot in owner_slots {
+        if has_strong_edge(function.slots[trace_slot].type_id, inout state) {
+            trace = true;
+        }
+    }
+
+    var trace_value = emitcore.Value(type_name: "ptr", reference: "null");
+    if trace {
+        let trace_saved = emitcore.save_cursor(state);
+        let trace_index = emitcore.new_function("lang.async.frame.trace." + id,
+            d_gc_trace_type(), "internal", "", inout state);
+        trace_value = emitcore.function_reference(state, trace_index);
+        let trace_entry = emitcore.new_block(trace_index, "entry", inout state);
+        emitcore.position(trace_entry, inout state);
+        let trace_state = emitcore.parameter(state, trace_index, 0);
+        let visitor = emitcore.parameter(state, trace_index, 1);
+        let visit_context = emitcore.parameter(state, trace_index, 2);
+        let trace_promise_field = d_gep(metadata_type, trace_state, 0, inout state);
+        let trace_promise_pointer = d_load("ptr", trace_promise_field, inout state);
+        var trace_status = emitcore.Value(type_name: "i32", reference: "0");
+        var trace_claimed = emitcore.Value(type_name: "i32", reference: "0");
+        if result_strong || error_strong {
+            let trace_status_field = d_promise_field(trace_promise_pointer, layout, 0, inout state);
+            trace_status = d_load("i32", trace_status_field, inout state);
+            let trace_claimed_field = d_promise_field(trace_promise_pointer, layout, 1, inout state);
+            trace_claimed = d_load("i32", trace_claimed_field, inout state);
+        }
+        if result_strong {
+            let result_edge_owned = emitcore.result("i32", "and i32 " + trace_claimed.reference + ", 1", inout state);
+            let result_edge_owned_clear = emitcore.result("i1", "icmp eq " + emitcore.typed(result_edge_owned) + ", 0", inout state);
+            let result_edge_state_match = emitcore.result("i1", "icmp eq " + emitcore.typed(trace_status) + ", 1", inout state);
+            let result_edge_both = emitcore.result("i1", "and " + emitcore.typed(result_edge_state_match) + ", " +
+                result_edge_owned_clear.reference, inout state);
+            var result_slot_value u32 = 0;
+            switch layout.result_slot {
+                case option.Option.Some(value): result_slot_value = value;
+                case option.Option.None: throw emitcore.invalid("promise result slot missing for strong edge");
+            }
+            let result_edge_address = d_promise_field(trace_promise_pointer, layout,
+                usize(result_slot_value), inout state);
+            d_gc_conditional_trace(result_edge_both, result_type, result_edge_address,
+                visitor, visit_context, inout state);
+        }
+        if error_strong {
+            let error_edge_owned = emitcore.result("i32", "and i32 " + trace_claimed.reference + ", 2", inout state);
+            let error_edge_owned_clear = emitcore.result("i1", "icmp eq " + emitcore.typed(error_edge_owned) + ", 0", inout state);
+            let error_edge_state_match = emitcore.result("i1", "icmp eq " + emitcore.typed(trace_status) + ", 2", inout state);
+            let error_edge_both = emitcore.result("i1", "and " + emitcore.typed(error_edge_state_match) + ", " +
+                error_edge_owned_clear.reference, inout state);
+            var error_slot_value u32 = 0;
+            switch layout.error_slot {
+                case option.Option.Some(value): error_slot_value = value;
+                case option.Option.None: throw emitcore.invalid("promise error slot missing for strong edge");
+            }
+            let error_edge_address = d_promise_field(trace_promise_pointer, layout,
+                usize(error_slot_value), inout state);
+            d_gc_conditional_trace(error_edge_both, error_type, error_edge_address,
+                visitor, visit_context, inout state);
+        }
+        for var trace_position usize = 0; trace_position < vec.len(owner_slots); trace_position += 1 {
+            let trace_slot_index = owner_slots[trace_position];
+            let trace_slot_type = function.slots[trace_slot_index].type_id;
+            if !has_strong_edge(trace_slot_type, inout state) { continue; }
+            let trace_flag_field = d_gep(metadata_type, trace_state, 2 + 2 * trace_position, inout state);
+            let trace_flag_address = d_load("ptr", trace_flag_field, inout state);
+            let trace_flag = d_load("i1", trace_flag_address, inout state);
+            let trace_address_field = d_gep(metadata_type, trace_state, 1 + 2 * trace_position, inout state);
+            let trace_address = d_load("ptr", trace_address_field, inout state);
+            d_gc_conditional_trace(trace_flag, trace_slot_type, trace_address,
+                visitor, visit_context, inout state);
+        }
+        emitcore.terminate("ret void", inout state);
+        emitcore.restore_cursor(trace_saved, inout state);
+    }
+
+    // clear is always emitted.  It publishes inactive first so a repeated clear
+    // is a no-op and the initial destroy path cannot drop a move parameter
+    // twice.  It only calls generated Woozy value ops, never an external C
+    // release.
+    let clear_saved = emitcore.save_cursor(state);
+    let clear_index = emitcore.new_function("lang.async.frame.clear." + id,
+        emitcore.Signature(result: "void", parameters: ["ptr"]), "internal", "", inout state);
+    let clear_value = emitcore.function_reference(state, clear_index);
+    let clear_entry = emitcore.new_block(clear_index, "entry", inout state);
+    emitcore.position(clear_entry, inout state);
+    let clear_state = emitcore.parameter(state, clear_index, 0);
+    for var clear_position usize = vec.len(owner_slots); clear_position > 0; clear_position -= 1 {
+        let clear_n = clear_position - 1;
+        let clear_slot_index = owner_slots[clear_n];
+        let clear_flag_field = d_gep(metadata_type, clear_state, 2 + 2 * clear_n, inout state);
+        let clear_flag_address = d_load("ptr", clear_flag_field, inout state);
+        let clear_flag = d_load("i1", clear_flag_address, inout state);
+        let clear_drop = emitcore.new_block(clear_index, "clear.owner", inout state);
+        let clear_next = emitcore.new_block(clear_index, "clear.next", inout state);
+        emitcore.terminate("br " + emitcore.typed(clear_flag) + ", label " + clear_drop.reference +
+            ", label " + clear_next.reference, inout state);
+        emitcore.position(clear_drop, inout state);
+        d_store("i1", emitcore.Value(type_name: "i1", reference: "false"), clear_flag_address, inout state);
+        let clear_address_field = d_gep(metadata_type, clear_state, 1 + 2 * clear_n, inout state);
+        let clear_address = d_load("ptr", clear_address_field, inout state);
+        let clear_operation = value_op(function.slots[clear_slot_index].type_id, false, inout state);
+        var clear_operation_args = vec.empty[emitcore.Value]();
+        vec.push(clear_operation_args, clear_address);
+        let clear_drop_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
+            clear_operation, clear_operation_args, inout state);
+        emitcore.terminate("br label " + clear_next.reference, inout state);
+        emitcore.position(clear_next, inout state);
+    }
+    let clear_promise_field = d_gep(metadata_type, clear_state, 0, inout state);
+    let clear_promise_pointer = d_load("ptr", clear_promise_field, inout state);
+    let clear_status_field = d_promise_field(clear_promise_pointer, layout, 0, inout state);
+    let clear_status = d_load("i32", clear_status_field, inout state);
+    let clear_claimed_field = d_promise_field(clear_promise_pointer, layout, 1, inout state);
+    let clear_claimed = d_load("i32", clear_claimed_field, inout state);
+    d_gc_clear_promise(clear_promise_pointer, layout, result_type, layout.result_slot,
+        clear_status, clear_claimed, 1, 1, clear_index, inout state);
+    d_gc_clear_promise(clear_promise_pointer, layout, error_type, layout.error_slot,
+        clear_status, clear_claimed, 2, 2, clear_index, inout state);
+    emitcore.terminate("ret void", inout state);
+    emitcore.restore_cursor(clear_saved, inout state);
+
+    let ops_type = "{ ptr, ptr }";
+    let body = "private constant " + ops_type + " { ptr " + trace_value.reference +
+        ", ptr " + clear_value.reference + " }";
+    let ops = emitcore.define_global("lang.async.frame.ops." + id, body, inout state);
+    state.d.gc_ops_type = option.Option[string].Some(ops_type);
+    if trace { state.d.gc_program_required = true; }
+    emitcore.restore_cursor(saved, inout state);
+    return emitcore.AsyncFrameGcPlan(metadata_type: metadata_type, metadata: metadata,
+        ops: ops, trace: trace);
+}
+
+func d_gc_clear_promise(promise emitcore.Value, layout emitcore.PromiseLayout, type_id usize,
+                        slot option.Option[u32], status emitcore.Value, claimed emitcore.Value, bit u32,
+                        state_value u32, function_index usize,
+                        state inout emitcore.Emitter) throws emitcore.Error {
+    var slot_index usize = 0;
+    switch slot {
+        case option.Option.Some(value): slot_index = usize(value);
+        case option.Option.None: return;
+    }
+    if !owning(type_id, inout state) { return; }
+    let owned = emitcore.result("i32", "and i32 " + claimed.reference + ", " + emitcore.number(usize(bit)), inout state);
+    let owned_clear = emitcore.result("i1", "icmp eq " + emitcore.typed(owned) + ", 0", inout state);
+    let state_match = emitcore.result("i1", "icmp eq " + emitcore.typed(status) + ", " + emitcore.number(usize(state_value)), inout state);
+    let both = emitcore.result("i1", "and " + emitcore.typed(state_match) + ", " + owned_clear.reference, inout state);
+    let drop = emitcore.new_block(function_index, "clear.promise", inout state);
+    let next = emitcore.new_block(function_index, "clear.next", inout state);
+    emitcore.terminate("br " + emitcore.typed(both) + ", label " + drop.reference +
+        ", label " + next.reference, inout state);
+    emitcore.position(drop, inout state);
+    let claimed_address = d_promise_field(promise, layout, 1, inout state);
+    let combined = emitcore.result("i32", "or i32 " + claimed.reference + ", " + emitcore.number(usize(bit)), inout state);
+    d_store("i32", combined, claimed_address, inout state);
+    let address = d_promise_field(promise, layout, slot_index, inout state);
+    let operation = value_op(type_id, false, inout state);
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, address);
+    let drop_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]), operation, args, inout state);
+    emitcore.terminate("br label " + next.reference, inout state);
+    emitcore.position(next, inout state);
+}
+
+pub func async_publish_and_suspend(function_index usize, state inout emitcore.Emitter) throws emitcore.Error {
+    let function = d_native_function(state, function_index);
+    let state_value = d_async_state(state);
+    let saved = emitcore.save_cursor(state);
+    let text_index = d_text_index(state, function_index);
+    let entry = d_entry_block(text_index, state);
+    emitcore.position(entry, inout state);
+
+    let zero = emitcore.Value(type_name: "i32", reference: "0");
+    let status_address = d_gep(state_value.promise_type, state_value.promise, 0, inout state);
+    d_store("i32", zero, status_address, inout state);
+    let claimed_address = d_gep(state_value.promise_type, state_value.promise, 1, inout state);
+    d_store("i32", zero, claimed_address, inout state);
+
+    var owner_slots = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        let slot = function.slots[index];
+        if option.is_some(slot.owner) && !slot.is_inout { vec.push(owner_slots, index); }
+    }
+    let plan = build_async_frame_gc(function_index, owner_slots, inout state);
+
+    let parameter_count = vec.len(state.functions[text_index].signature.parameters);
+    if parameter_count == 0 { throw emitcore.invalid("coroutine has no future parameter"); }
+    let future = emitcore.parameter(state, text_index, parameter_count - 1);
+    let resume_value = emitcore.Value(type_name: "ptr", reference: "@" + emitcore.quoted_name("lang.resume." + emitcore.number(function.symbol)));
+    let destroy_value = emitcore.Value(type_name: "ptr", reference: "@" + emitcore.quoted_name("lang.destroy." + emitcore.number(function.symbol)));
+    var publish_args = vec.empty[emitcore.Value]();
+    vec.push(publish_args, future);
+    vec.push(publish_args, state_value.handle);
+    vec.push(publish_args, resume_value);
+    vec.push(publish_args, destroy_value);
+    vec.push(publish_args, state_value.promise);
+    vec.push(publish_args, plan.metadata);
+    vec.push(publish_args, plan.ops);
+    let publish_call = emitcore.runtime("lang_async_publish_v2", "void", publish_args, inout state);
+
+    var save_args = vec.empty[emitcore.Value]();
+    vec.push(save_args, state_value.handle);
+    let save_token = emitcore.runtime("llvm.coro.save", "token", save_args, inout state);
+    var suspend_args = vec.empty[emitcore.Value]();
+    vec.push(suspend_args, save_token);
+    vec.push(suspend_args, emitcore.Value(type_name: "i1", reference: "false"));
+    let suspended = emitcore.runtime("llvm.coro.suspend", "i8", suspend_args, inout state);
+
+    let body = emitcore.new_block(text_index, "async.body", inout state);
+    let initial_cleanup = emitcore.new_block(text_index, "async.initial.cleanup", inout state);
+    let initial_free = emitcore.new_block(text_index, "async.initial.free", inout state);
+    emitcore.terminate("switch " + emitcore.typed(suspended) + ", label " + state_value.suspend_return_block.reference +
+        " [" +
+        " i8 0, label " + body.reference +
+        " i8 1, label " + initial_cleanup.reference + " ]", inout state);
+
+    emitcore.position(state_value.suspend_return_block, inout state);
+    var end_args = vec.empty[emitcore.Value]();
+    vec.push(end_args, emitcore.Value(type_name: "ptr", reference: "null"));
+    vec.push(end_args, emitcore.Value(type_name: "i1", reference: "false"));
+    vec.push(end_args, emitcore.Value(type_name: "token", reference: "none"));
+    let end_call = emitcore.runtime("llvm.coro.end", "void", end_args, inout state);
+    emitcore.terminate("ret void", inout state);
+
+    emitcore.position(initial_cleanup, inout state);
+    d_drop_async_parameters(function_index, inout state);
+    var free_args = vec.empty[emitcore.Value]();
+    vec.push(free_args, state_value.token);
+    vec.push(free_args, state_value.handle);
+    let memory = emitcore.runtime("llvm.coro.free", "ptr", free_args, inout state);
+    let present = emitcore.result("i1", "icmp ne ptr " + memory.reference + ", null", inout state);
+    emitcore.terminate("br " + emitcore.typed(present) + ", label " + initial_free.reference +
+        ", label " + state_value.suspend_return_block.reference, inout state);
+
+    emitcore.position(initial_free, inout state);
+    var frame_free_args = vec.empty[emitcore.Value]();
+    vec.push(frame_free_args, memory);
+    let frame_free = emitcore.runtime("lang_async_frame_free_v1", "void", frame_free_args, inout state);
+    emitcore.terminate("br label " + state_value.suspend_return_block.reference, inout state);
+
+    emitcore.position(body, inout state);
+    let cancel_entry = emitcore.new_block(text_index, "async.cancel.entry", inout state);
+    let cancelled = emitcore.runtime("lang_async_current_cancelled_v1", "i32", [], inout state);
+    let pending = emitcore.result("i1", "icmp ne " + emitcore.typed(cancelled) + ", 0", inout state);
+    if vec.len(state.frame.blocks) == 0 { throw emitcore.invalid("async frame has no source blocks"); }
+    let first_body = state.frame.blocks[0];
+    emitcore.terminate("br " + emitcore.typed(pending) + ", label " + cancel_entry.reference +
+        ", label " + first_body.reference, inout state);
+    emitcore.position(cancel_entry, inout state);
+    let cancelled_value = emitcore.Value(type_name: "i32", reference: "3");
+    let cancelled_status = d_gep(state_value.promise_type, state_value.promise, 0, inout state);
+    d_store("i32", cancelled_value, cancelled_status, inout state);
+    let cancelled_claimed = d_gep(state_value.promise_type, state_value.promise, 1, inout state);
+    d_store("i32", cancelled_value, cancelled_claimed, inout state);
+    emitcore.terminate("br label " + state_value.final_block.reference, inout state);
+
+    let updated = emitcore.AsyncState(task_type: state_value.task_type,
+        promise_type: state_value.promise_type, promise: state_value.promise,
+        token: state_value.token, handle: state_value.handle,
+        final_block: state_value.final_block,
+        suspend_return_block: state_value.suspend_return_block,
+        frame_metadata: option.Option[emitcore.Value].Some(plan.metadata),
+        frame_ops: option.Option[emitcore.Value].Some(plan.ops));
+    state.frame.async_state = option.Option[emitcore.AsyncState].Some(updated);
+    emitcore.restore_cursor(saved, inout state);
+}
+
+// ---------------------------------------------------------------------------
+// Async-specific terminators.
+
+pub func emit_async_terminator(terminator nativeir.Terminator, block_id usize,
+                               state inout emitcore.Emitter) bool throws emitcore.Error {
+    if option.is_none(state.frame.async_state) { return false; }
+    let async_state = d_async_state(state);
+    switch terminator.kind {
+        case nativeir.Exit.Await: {
+            if vec.len(terminator.inputs) == 0 || vec.len(terminator.targets) < 3 {
+                throw emitcore.invalid("await terminator is missing its future or side targets");
+            }
+            let await_layout = promise_type(terminator.signature, inout state);
+            let await_task = emitcore.type_of(state, terminator.signature);
+            if !d_kind_is(await_task.kind, model.TypeKind.Task) || vec.len(await_task.type_args) != 2 {
+                throw emitcore.invalid("await signature is not a Task");
+            }
+            let await_payload = await_task.type_args[0];
+            let await_error_type = await_task.type_args[1];
+            let await_payload_value = emitcore.type_of(state, await_payload);
+            let await_error_value = emitcore.type_of(state, await_error_type);
+            let await_payload_unit = d_kind_is(await_payload_value.kind, model.TypeKind.Unit);
+            let await_error_unit = d_kind_is(await_error_value.kind, model.TypeKind.Unit);
+            let await_future = emitcore.value(state, terminator.inputs[0]);
+            if terminator.targets[0] >= vec.len(state.frame.blocks) ||
+               terminator.targets[1] >= vec.len(state.frame.blocks) ||
+               terminator.targets[2] >= vec.len(state.frame.blocks) {
+                throw emitcore.invalid("await side target has no source block");
+            }
+            let await_success_target = state.frame.blocks[terminator.targets[0]];
+            let await_error_target = state.frame.blocks[terminator.targets[1]];
+            let await_cancel_target = state.frame.blocks[terminator.targets[2]];
+            let await_origin = emitcore.here(state);
+            let await_function_index = await_origin.function_index;
+            let await_check = emitcore.new_block(await_function_index, "await.check", inout state);
+            let await_suspend = emitcore.new_block(await_function_index, "await.suspend", inout state);
+            let await_ready = emitcore.new_block(await_function_index, "await.ready", inout state);
+            let await_failed = emitcore.new_block(await_function_index, "await.error", inout state);
+            let await_cancelled = emitcore.new_block(await_function_index, "await.cancel", inout state);
+            emitcore.terminate("br label " + await_check.reference, inout state);
+            emitcore.position(await_check, inout state);
+            var await_args = vec.empty[emitcore.Value]();
+            vec.push(await_args, await_future);
+            let await_status = emitcore.runtime("lang_async_await_v1", "i32", await_args, inout state);
+            emitcore.terminate("switch i32 " + await_status.reference + ", label " + await_cancelled.reference +
+                " [ i32 0, label " + await_suspend.reference +
+                " i32 1, label " + await_ready.reference +
+                " i32 2, label " + await_failed.reference + " ]", inout state);
+            emitcore.position(await_suspend, inout state);
+            var await_save_args = vec.empty[emitcore.Value]();
+            vec.push(await_save_args, async_state.handle);
+            let await_save_token = emitcore.runtime("llvm.coro.save", "token", await_save_args, inout state);
+            var await_suspend_args = vec.empty[emitcore.Value]();
+            vec.push(await_suspend_args, await_save_token);
+            vec.push(await_suspend_args, emitcore.Value(type_name: "i1", reference: "false"));
+            let await_suspended = emitcore.runtime("llvm.coro.suspend", "i8", await_suspend_args, inout state);
+            let await_resumed_zero = emitcore.new_block(await_function_index, "await.resumed.0", inout state);
+            let await_resumed_one = emitcore.new_block(await_function_index, "await.resumed.1", inout state);
+            emitcore.terminate("switch i8 " + await_suspended.reference + ", label " +
+                async_state.suspend_return_block.reference +
+                " [ i8 0, label " + await_resumed_zero.reference +
+                " i8 1, label " + await_resumed_one.reference + " ]", inout state);
+            emitcore.position(await_resumed_zero, inout state);
+            emitcore.terminate("br label " + await_check.reference, inout state);
+            emitcore.position(await_resumed_one, inout state);
+            emitcore.terminate("br label " + await_check.reference, inout state);
+            emitcore.position(await_ready, inout state);
+            if !await_payload_unit {
+                // B only records an incoming storage address for a side whose
+                // payload is not Unit; a Unit side has no value to deliver.
+                let await_success_address = d_incoming_address(state, terminator.targets[0]);
+                var ready_promise_args = vec.empty[emitcore.Value]();
+                vec.push(ready_promise_args, await_future);
+                let ready_promise = emitcore.runtime("lang_async_promise_v1", "ptr", ready_promise_args, inout state);
+                let ready_address = d_promise_slot(ready_promise, await_layout, false, inout state);
+                if owning(await_payload, inout state) {
+                    let ready_operation = value_op(await_payload, true, inout state);
+                    var ready_operation_args = vec.empty[emitcore.Value]();
+                    vec.push(ready_operation_args, ready_address);
+                    let ready_copy_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
+                        ready_operation, ready_operation_args, inout state);
+                }
+                let ready_lowered = emitcore.lower_type(await_payload, inout state);
+                let ready_loaded = d_load(ready_lowered, ready_address, inout state);
+                if d_incoming_unique(state, terminator.targets[0]) {
+                    emitcore.start_lifetime(await_success_address, inout state);
+                }
+                d_store(ready_lowered, ready_loaded, await_success_address, inout state);
+            }
+            emitcore.terminate("br label " + await_success_target.reference, inout state);
+            emitcore.position(await_failed, inout state);
+            if !await_error_unit {
+                let await_error_address = d_incoming_address(state, terminator.targets[1]);
+                var failed_promise_args = vec.empty[emitcore.Value]();
+                vec.push(failed_promise_args, await_future);
+                let failed_promise = emitcore.runtime("lang_async_promise_v1", "ptr", failed_promise_args, inout state);
+                let failed_address = d_promise_slot(failed_promise, await_layout, true, inout state);
+                if owning(await_error_type, inout state) {
+                    let failed_operation = value_op(await_error_type, true, inout state);
+                    var failed_operation_args = vec.empty[emitcore.Value]();
+                    vec.push(failed_operation_args, failed_address);
+                    let failed_copy_call = emitcore.call(emitcore.Signature(result: "void", parameters: ["ptr"]),
+                        failed_operation, failed_operation_args, inout state);
+                }
+                let failed_lowered = emitcore.lower_type(await_error_type, inout state);
+                let failed_loaded = d_load(failed_lowered, failed_address, inout state);
+                if d_incoming_unique(state, terminator.targets[1]) {
+                    emitcore.start_lifetime(await_error_address, inout state);
+                }
+                d_store(failed_lowered, failed_loaded, await_error_address, inout state);
+            }
+            emitcore.terminate("br label " + await_error_target.reference, inout state);
+            emitcore.position(await_cancelled, inout state);
+            emitcore.terminate("br label " + await_cancel_target.reference, inout state);
+            return true;
+        }
+        case nativeir.Exit.Return: {
+            let return_layout = promise_type(async_state.task_type, inout state);
+            let return_task = emitcore.type_of(state, async_state.task_type);
+            if !d_kind_is(return_task.kind, model.TypeKind.Task) || vec.len(return_task.type_args) != 2 {
+                throw emitcore.invalid("async return task is not a Task");
+            }
+            if option.is_some(return_layout.result_slot) {
+                if vec.len(terminator.inputs) == 0 {
+                    throw emitcore.invalid("async return is missing its result value");
+                }
+                let return_result = emitcore.value(state, terminator.inputs[0]);
+                let return_result_type = return_task.type_args[0];
+                let return_address = d_promise_slot(async_state.promise, return_layout, false, inout state);
+                let return_lowered = emitcore.lower_type(return_result_type, inout state);
+                d_store(return_lowered, return_result, return_address, inout state);
+            }
+            let return_status_address = d_gep(async_state.promise_type, async_state.promise, 0, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "1"), return_status_address, inout state);
+            let return_claimed_address = d_gep(async_state.promise_type, async_state.promise, 1, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "2"), return_claimed_address, inout state);
+            emitcore.terminate("br label " + async_state.final_block.reference, inout state);
+            return true;
+        }
+        case nativeir.Exit.ErrorReturn: {
+            let error_return_layout = promise_type(async_state.task_type, inout state);
+            let error_return_task = emitcore.type_of(state, async_state.task_type);
+            if !d_kind_is(error_return_task.kind, model.TypeKind.Task) || vec.len(error_return_task.type_args) != 2 {
+                throw emitcore.invalid("async error return task is not a Task");
+            }
+            if option.is_some(error_return_layout.error_slot) {
+                if vec.len(terminator.inputs) == 0 {
+                    throw emitcore.invalid("async error return is missing its error value");
+                }
+                let error_return_value = emitcore.value(state, terminator.inputs[0]);
+                let error_return_type = error_return_task.type_args[1];
+                let error_return_address = d_promise_slot(async_state.promise, error_return_layout, true, inout state);
+                let error_return_lowered = emitcore.lower_type(error_return_type, inout state);
+                d_store(error_return_lowered, error_return_value, error_return_address, inout state);
+            }
+            let error_return_status_address = d_gep(async_state.promise_type, async_state.promise, 0, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "2"), error_return_status_address, inout state);
+            let error_return_claimed_address = d_gep(async_state.promise_type, async_state.promise, 1, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "1"), error_return_claimed_address, inout state);
+            emitcore.terminate("br label " + async_state.final_block.reference, inout state);
+            return true;
+        }
+        case nativeir.Exit.CancelReturn: {
+            let cancel_status_address = d_gep(async_state.promise_type, async_state.promise, 0, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "3"), cancel_status_address, inout state);
+            let cancel_claimed_address = d_gep(async_state.promise_type, async_state.promise, 1, inout state);
+            d_store("i32", emitcore.Value(type_name: "i32", reference: "3"), cancel_claimed_address, inout state);
+            emitcore.terminate("br label " + async_state.final_block.reference, inout state);
+            return true;
+        }
+        default: return false;
+    }
+}
+
+pub func async_finish(function_index usize, state inout emitcore.Emitter) throws emitcore.Error {
+    let async_state = d_async_state(state);
+    let saved = emitcore.save_cursor(state);
+    let text_index = d_text_index(state, function_index);
+    emitcore.position(async_state.final_block, inout state);
+    d_drop_async_parameters(function_index, inout state);
+    var save_args = vec.empty[emitcore.Value]();
+    vec.push(save_args, async_state.handle);
+    let save_token = emitcore.runtime("llvm.coro.save", "token", save_args, inout state);
+    var suspend_args = vec.empty[emitcore.Value]();
+    vec.push(suspend_args, save_token);
+    vec.push(suspend_args, emitcore.Value(type_name: "i1", reference: "true"));
+    let suspended = emitcore.runtime("llvm.coro.suspend", "i8", suspend_args, inout state);
+    let cleanup = emitcore.new_block(text_index, "async.cleanup", inout state);
+    let free_block = emitcore.new_block(text_index, "async.free", inout state);
+    emitcore.terminate("switch i8 " + suspended.reference + ", label " +
+        async_state.suspend_return_block.reference +
+        " [ i8 0, label " + cleanup.reference +
+        " i8 1, label " + cleanup.reference + " ]", inout state);
+    emitcore.position(cleanup, inout state);
+    var free_args = vec.empty[emitcore.Value]();
+    vec.push(free_args, async_state.token);
+    vec.push(free_args, async_state.handle);
+    let memory = emitcore.runtime("llvm.coro.free", "ptr", free_args, inout state);
+    let present = emitcore.result("i1", "icmp ne ptr " + memory.reference + ", null", inout state);
+    emitcore.terminate("br " + emitcore.typed(present) + ", label " + free_block.reference +
+        ", label " + async_state.suspend_return_block.reference, inout state);
+    emitcore.position(free_block, inout state);
+    var frame_free_args = vec.empty[emitcore.Value]();
+    vec.push(frame_free_args, memory);
+    let frame_free = emitcore.runtime("lang_async_frame_free_v1", "void", frame_free_args, inout state);
+    emitcore.terminate("br label " + async_state.suspend_return_block.reference, inout state);
+    emitcore.restore_cursor(saved, inout state);
+}
+
+// The async executable entry keeps the exact runtime lifecycle: spawn the
+// published future, run until it settles, dispatch status with a switch so a
+// cancelled Task never falls into the typed-error path, release, then finish.
+pub func emit_async_main(entry usize, state inout emitcore.Emitter) bool throws emitcore.Error {
+    let function_index = d_find_function_index(state, entry);
+    let function = d_native_function(state, function_index);
+    if !function.is_async { return false; }
+    let signature_value = emitcore.type_of(state, function.signature);
+    let task_type = signature_value.result;
+    let task = emitcore.type_of(state, task_type);
+    if !d_kind_is(task.kind, model.TypeKind.Task) || vec.len(task.type_args) != 2 {
+        throw emitcore.invalid("async entry signature is not a Task");
+    }
+    let payload = task.type_args[0];
+    let error_type = task.type_args[1];
+    let payload_value = emitcore.type_of(state, payload);
+    var supported = d_kind_is(payload_value.kind, model.TypeKind.Unit) ||
+        (d_kind_is(payload_value.kind, model.TypeKind.SignedInt) && payload_value.bits == 32);
+    if vec.len(signature_value.parameters) != 0 || !supported {
+        throw d_unsupported("async executable entry requires no parameters and i32 or Unit result");
+    }
+    let layout = promise_type(task_type, inout state);
+    let start_value = emitcore.call_target(state, entry);
+    let origin = emitcore.here(state);
+    let main_index = origin.function_index;
+    let done = emitcore.new_block(main_index, "async.done", inout state);
+    let error = emitcore.new_block(main_index, "async.error", inout state);
+    let cancelled = emitcore.new_block(main_index, "async.cancelled", inout state);
+
+    let future = emitcore.call(emitcore.Signature(result: "ptr", parameters: []), start_value, [], inout state);
+    var spawn_args = vec.empty[emitcore.Value]();
+    vec.push(spawn_args, future);
+    let spawn_call = emitcore.runtime("lang_async_spawn_v1", "void", spawn_args, inout state);
+    var run_args = vec.empty[emitcore.Value]();
+    vec.push(run_args, future);
+    let run_call = emitcore.runtime("lang_async_run_until_v1", "void", run_args, inout state);
+    var status_args = vec.empty[emitcore.Value]();
+    vec.push(status_args, future);
+    let status = emitcore.runtime("lang_async_status_v1", "i32", status_args, inout state);
+    emitcore.terminate("switch i32 " + status.reference + ", label " + cancelled.reference +
+        " [ i32 1, label " + done.reference +
+        " i32 2, label " + error.reference + " ]", inout state);
+
+    emitcore.position(done, inout state);
+    var value = emitcore.Value(type_name: "i32", reference: "0");
+    if !d_kind_is(payload_value.kind, model.TypeKind.Unit) {
+        var promise_args = vec.empty[emitcore.Value]();
+        vec.push(promise_args, future);
+        let promise = emitcore.runtime("lang_async_promise_v1", "ptr", promise_args, inout state);
+        let address = d_promise_slot(promise, layout, false, inout state);
+        let lowered = emitcore.lower_type(payload, inout state);
+        value = d_load(lowered, address, inout state);
+        let claimed_address = d_gep(layout.type_name, promise, 1, inout state);
+        let claimed = d_load("i32", claimed_address, inout state);
+        let combined = emitcore.result("i32", "or i32 " + claimed.reference + ", 1", inout state);
+        d_store("i32", combined, claimed_address, inout state);
+    }
+    let shutdown_call = emitcore.runtime("lang_async_shutdown_v1", "void", [], inout state);
+    var release_args = vec.empty[emitcore.Value]();
+    vec.push(release_args, future);
+    let release_call = emitcore.runtime("lang_async_task_release_v1", "void", release_args, inout state);
+    let finish_call = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+    emitcore.terminate("ret i32 " + value.reference, inout state);
+
+    emitcore.position(error, inout state);
+    if option.is_some(layout.error_slot) {
+        let shutdown_error = emitcore.runtime("lang_async_shutdown_v1", "void", [], inout state);
+        var release_error_args = vec.empty[emitcore.Value]();
+        vec.push(release_error_args, future);
+        let release_error = emitcore.runtime("lang_async_task_release_v1", "void", release_error_args, inout state);
+        let key = emitcore.type_key(state, error_type);
+        let bytes = text.bytes(key);
+        vec.push(bytes, u8(0));
+        let global = emitcore.define_global("lang.async.main.error." + emitcore.number(entry),
+            "private unnamed_addr constant [" + emitcore.number(vec.len(bytes)) + " x i8] " +
+            emitcore.llvm_bytes(bytes) + ", align 1", inout state);
+        var report_args = vec.empty[emitcore.Value]();
+        vec.push(report_args, global);
+        vec.push(report_args, emitcore.Value(type_name: "i64", reference: emitcore.number(d_text_length(key))));
+        let report_call = emitcore.runtime("lang_native_typed_error_v1", "void", report_args, inout state);
+        let finish_error = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+        emitcore.terminate("ret i32 1", inout state);
+    } else {
+        let shutdown_error_unit = emitcore.runtime("lang_async_shutdown_v1", "void", [], inout state);
+        var release_error_unit_args = vec.empty[emitcore.Value]();
+        vec.push(release_error_unit_args, future);
+        let release_error_unit = emitcore.runtime("lang_async_task_release_v1", "void", release_error_unit_args, inout state);
+        let finish_error_unit = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+        emitcore.terminate("ret i32 1", inout state);
+    }
+
+    emitcore.position(cancelled, inout state);
+    let shutdown_cancelled = emitcore.runtime("lang_async_shutdown_v1", "void", [], inout state);
+    var release_cancelled_args = vec.empty[emitcore.Value]();
+    vec.push(release_cancelled_args, future);
+    let release_cancelled = emitcore.runtime("lang_async_task_release_v1", "void", release_cancelled_args, inout state);
+    let finish_cancelled = emitcore.runtime("lang_gc_program_finish_v1", "i64", [], inout state);
+    emitcore.terminate("ret i32 1", inout state);
+    return true;
+}
+
+func d_text_length(value string) usize {
+    return vec.len(text.bytes(value));
+}
+
+// ---------------------------------------------------------------------------
+// GC polling and the stable loop safepoints from gc_ops.inc.
+
+pub func gc_poll(state inout emitcore.Emitter) throws emitcore.Error {
+    // One-load safepoint hint: bit 63 of the combined advisory word mirrors the
+    // world request and bits 0..62 hold the controller's remaining registration
+    // budget, so one acquire load and a signed <= 0 test covers both. A hit
+    // enters the proven controller poll, which services the world request
+    // before pressure and re-reads the authoritative words itself.
+    let origin = emitcore.here(state);
+    let function_index = origin.function_index;
+    let slow = emitcore.new_block(function_index, "gc.poll.slow", inout state);
+    let done = emitcore.new_block(function_index, "gc.poll.done", inout state);
+    let word = emitcore.define_global("lang_gc_safepoint_word_v1",
+        "external hidden global i64, align 8", inout state);
+    let value = emitcore.result("i64", "load atomic volatile i64, ptr " +
+        word.reference + " acquire, align 8", inout state);
+    let pending = emitcore.result("i1", "icmp sle " + emitcore.typed(value) + ", 0", inout state);
+    let weights = emitcore.define_metadata("gc.poll.weights",
+        "!{!\"branch_weights\", i32 1, i32 1024}", inout state);
+    emitcore.terminate("br " + emitcore.typed(pending) + ", label " + slow.reference +
+        ", label " + done.reference + ", !prof " + weights, inout state);
+    emitcore.position(slow, inout state);
+    let serviced = emitcore.runtime("lang_gc_runtime_poll_v1", "void", [], inout state);
+    emitcore.terminate("br label " + done.reference, inout state);
+    emitcore.position(done, inout state);
+}
+
+pub func gc_collect_loop_exit(state inout emitcore.Emitter) throws emitcore.Error {
+    let origin = emitcore.here(state);
+    let function_index = origin.function_index;
+    let live = emitcore.runtime("lang_gc_registry_live_v1", "i64", [], inout state);
+    let present = emitcore.result("i1", "icmp ugt " + emitcore.typed(live) + ", 0", inout state);
+    let collect = emitcore.new_block(function_index, "gc.exit.collect", inout state);
+    let done = emitcore.new_block(function_index, "gc.exit.done", inout state);
+    emitcore.terminate("br " + emitcore.typed(present) + ", label " + collect.reference +
+        ", label " + done.reference, inout state);
+    emitcore.position(collect, inout state);
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, emitcore.Value(type_name: "i64", reference: "10000000"));
+    vec.push(args, emitcore.Value(type_name: "ptr", reference: "null"));
+    let collected = emitcore.runtime("lang_gc_runtime_collect_v1", "i64", args, inout state);
+    emitcore.terminate("br label " + done.reference, inout state);
+    emitcore.position(done, inout state);
+}
+
+pub func gc_enter_critical(state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.runtime("lang_gc_program_enter_critical_v1", "i32", [], inout state);
+}
+
+pub func gc_leave_critical(token emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, token);
+    let left = emitcore.runtime("lang_gc_program_leave_critical_v1", "void", args, inout state);
+}
+
+pub func gc_enter_safe(state inout emitcore.Emitter) emitcore.Value throws emitcore.Error {
+    return emitcore.runtime("lang_gc_program_enter_safe_v1", "i32", [], inout state);
+}
+
+pub func gc_leave_safe(token emitcore.Value, state inout emitcore.Emitter) throws emitcore.Error {
+    var args = vec.empty[emitcore.Value]();
+    vec.push(args, token);
+    let left = emitcore.runtime("lang_gc_program_leave_safe_v1", "void", args, inout state);
+}
+
+func d_push_unique(values Vec[usize], value usize) {
+    if !d_contains_id(values, value) { vec.push(values, value); }
+}
+
+func d_same_set(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for value in left {
+        if !d_contains_id(right, value) { return false; }
+    }
+    return true;
+}
+
+func d_set_ids(destination Vec[usize], source Vec[usize]) {
+    vec.clear(destination);
+    for value in source { vec.push(destination, value); }
+}
+
+pub func gc_loop_safepoints(function nativeir.Function) emitcore.LoopSafepoints throws emitcore.Error {
+    let n = vec.len(function.blocks);
+    var headers = vec.empty[usize]();
+    var exits = vec.empty[usize]();
+    if n == 0 {
+        return emitcore.LoopSafepoints(headers: headers, exits: exits);
+    }
+    var predecessors = vec.empty[Vec[usize]]();
+    for var init_block usize = 0; init_block < n; init_block += 1 {
+        vec.push(predecessors, vec.empty[usize]());
+    }
+    for var edge_block usize = 0; edge_block < n; edge_block += 1 {
+        for target in function.blocks[edge_block].terminator.targets {
+            if target < n { vec.push(predecessors[target], edge_block); }
+        }
+    }
+    var reachable = vec.empty[bool]();
+    for var reach_init usize = 0; reach_init < n; reach_init += 1 {
+        vec.push(reachable, false);
+    }
+    reachable[0] = true;
+    var work = vec.empty[usize]();
+    vec.push(work, 0);
+    for vec.len(work) != 0 {
+        let reach_top = vec.pop(work);
+        var reach_block usize = 0;
+        switch reach_top {
+            case option.Option.Some(value): reach_block = value;
+            case option.Option.None: {}
+        }
+        for target in function.blocks[reach_block].terminator.targets {
+            if target < n && !reachable[target] {
+                reachable[target] = true;
+                vec.push(work, target);
+            }
+        }
+    }
+    var dominators = vec.empty[Vec[usize]]();
+    for var dom_block usize = 0; dom_block < n; dom_block += 1 {
+        var dom_set = vec.empty[usize]();
+        if !reachable[dom_block] {
+            vec.push(dom_set, dom_block);
+        } else {
+            for var dom_other usize = 0; dom_other < n; dom_other += 1 {
+                if reachable[dom_other] { vec.push(dom_set, dom_other); }
+            }
+        }
+        vec.push(dominators, dom_set);
+    }
+    vec.clear(dominators[0]);
+    vec.push(dominators[0], 0);
+    var changed = true;
+    for changed {
+        changed = false;
+        for var fix_block usize = 1; fix_block < n; fix_block += 1 {
+            if !reachable[fix_block] { continue; }
+            var next = vec.empty[usize]();
+            var first = true;
+            for predecessor in predecessors[fix_block] {
+                if !reachable[predecessor] { continue; }
+                if first {
+                    d_set_ids(next, dominators[predecessor]);
+                    first = false;
+                } else {
+                    var intersection = vec.empty[usize]();
+                    for value in next {
+                        if d_contains_id(dominators[predecessor], value) {
+                            vec.push(intersection, value);
+                        }
+                    }
+                    d_set_ids(next, intersection);
+                }
+            }
+            if first { vec.clear(next); }
+            d_push_unique(next, fix_block);
+            if !d_same_set(next, dominators[fix_block]) {
+                d_set_ids(dominators[fix_block], next);
+                changed = true;
+            }
+        }
+    }
+    for var body_block usize = 0; body_block < n; body_block += 1 {
+        if !reachable[body_block] { continue; }
+        for target in function.blocks[body_block].terminator.targets {
+            if target >= n || !reachable[target] ||
+               !d_contains_id(dominators[body_block], target) {
+                continue;
+            }
+            let header = target;
+            d_push_unique(headers, header);
+            var body = vec.empty[usize]();
+            vec.push(body, header);
+            var pending = vec.empty[usize]();
+            if body_block != header {
+                vec.push(body, body_block);
+                vec.push(pending, body_block);
+            }
+            for vec.len(pending) != 0 {
+                let pending_top = vec.pop(pending);
+                var pending_node usize = 0;
+                switch pending_top {
+                    case option.Option.Some(value): pending_node = value;
+                    case option.Option.None: {}
+                }
+                for predecessor in predecessors[pending_node] {
+                    if reachable[predecessor] && !d_contains_id(body, predecessor) {
+                        vec.push(body, predecessor);
+                        vec.push(pending, predecessor);
+                    }
+                }
+            }
+            for body_node in body {
+                for successor in function.blocks[body_node].terminator.targets {
+                    if successor < n && reachable[successor] &&
+                       !d_contains_id(body, successor) {
+                        d_push_unique(headers, successor);
+                        d_push_unique(exits, successor);
+                    }
+                }
+            }
+        }
+    }
+    var filtered_headers = vec.empty[usize]();
+    for filter_header in headers {
+        if filter_header != 0 { vec.push(filtered_headers, filter_header); }
+    }
+    var filtered_exits = vec.empty[usize]();
+    for filter_exit in exits {
+        if filter_exit != 0 { vec.push(filtered_exits, filter_exit); }
+    }
+    return emitcore.LoopSafepoints(headers: filtered_headers, exits: filtered_exits);
+}

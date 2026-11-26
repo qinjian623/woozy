@@ -1,0 +1,612 @@
+// Per-instruction checks: constants, conversions, aggregates and Vec access.
+package ops;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/nativeverify/cfg" as nvcfg;
+import "app/wzcc/nativeverify/containers" as nvcontainers;
+import "app/wzcc/nativeverify/state" as nvstate;
+import "app/wzcc/nativeverify/support" as nvsupport;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func type_struct_equal(left model.Type, right model.Type) bool {
+    if model.type_kind_id(left.kind) != model.type_kind_id(right.kind) ||
+       left.bits != right.bits || left.declaration != right.declaration ||
+       left.binding != right.binding || left.result != right.result ||
+       left.c_type != right.c_type ||
+       nvsupport.compare_option(left.throws_type, right.throws_type) != 0 ||
+       vec.len(left.parameters) != vec.len(right.parameters) ||
+       vec.len(left.type_args) != vec.len(right.type_args) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.parameters); index += 1 {
+        if nvsupport.param_mode_id(left.parameters[index].mode) !=
+               nvsupport.param_mode_id(right.parameters[index].mode) ||
+           left.parameters[index].type_id != right.parameters[index].type_id {
+            return false;
+        }
+    }
+    return nvsupport.usize_vec_equal(left.type_args, right.type_args);
+}
+
+func aggregate_op_matches(actual nativeir.Instruction, variant usize,
+                          has_variant bool, field_count usize) bool {
+    var shape = false;
+    if has_variant {
+        shape = nvsupport.op_is(actual.op, nativeir.Op.EnumInit) &&
+                actual.variant == variant;
+    } else {
+        shape = nvsupport.op_is(actual.op, nativeir.Op.StructInit);
+    }
+    return shape && vec.len(actual.inputs) == field_count;
+}
+
+func check_constant_value(state nvstate.Body, value hir.ConstantValue,
+                          actual nativeir.Instruction, depth usize,
+                          work inout usize, span model.Span)
+    throws nvsupport.VerifyError {
+    if depth > 128 {
+        throw nvsupport.bad("constant expansion exceeds budget", span);
+    }
+    work += 1;
+    if work > 100000 {
+        throw nvsupport.bad("constant expansion exceeds budget", span);
+    }
+    nvsupport.need(value.type_id == actual.type_id, "constant expansion type", span);
+    switch value.data {
+        case hir.ConstantData.ConstantAggregate(data): {
+            var variant usize = 0;
+            var has_variant = false;
+            switch data.variant {
+                case option.Option.Some(item): variant = item; has_variant = true;
+                case option.Option.None: {}
+            }
+            nvsupport.need(aggregate_op_matches(actual, variant, has_variant,
+                     vec.len(data.fields)),
+                 "constant expansion aggregate/variant", span);
+            for var index usize = 0; index < vec.len(data.fields); index += 1 {
+                let found = nvcontainers.instruction_find(state.instructions,
+                    actual.inputs[index]);
+                var field = default_instruction();
+                var present = false;
+                switch found {
+                    case option.Option.Some(item): field = item; present = true;
+                    case option.Option.None: {}
+                }
+                nvsupport.need(present, "constant field is not a real definition", span);
+                check_constant_value(state, data.fields[index], field,
+                    depth + 1, inout work, span);
+            }
+        }
+        case hir.ConstantData.StringLiteral(data): {
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.StringLiteral) &&
+                     actual.utf8 == data.utf8,
+                 "constant expansion bytes", span);
+        }
+        case hir.ConstantData.FunctionValue(data): {
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.Function) &&
+                     actual.function == data.symbol,
+                 "constant expansion function identity", span);
+        }
+        case hir.ConstantData.BoolLiteral(data): {
+            var bits u64 = 0;
+            if data.value {
+                bits = 1;
+            }
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.Constant) && actual.bits == bits,
+                 "constant expansion scalar value", span);
+        }
+        case hir.ConstantData.UnitLiteral(data): {
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.Constant) && actual.bits == 0,
+                 "constant expansion scalar value", span);
+        }
+        case hir.ConstantData.IntegerLiteral(data): {
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.Constant) &&
+                     actual.bits == data.bits,
+                 "constant expansion scalar value", span);
+        }
+        case hir.ConstantData.FloatLiteral(data): {
+            nvsupport.need(nvsupport.op_is(actual.op, nativeir.Op.Constant) &&
+                     actual.bits == data.bits,
+                 "constant expansion scalar value", span);
+        }
+    }
+}
+
+pub func check_constant_expansion(state nvstate.Body, instruction nativeir.Instruction,
+                              value_type model.Type) throws nvsupport.VerifyError {
+    switch instruction.origin {
+        case option.Option.Some(origin): {
+            if origin < vec.len(state.m.h.nodes) {
+                let root = state.m.h.nodes[origin];
+                if nvsupport.kind_is(hir.node_kind(root.data),
+                           hir.NodeKind.ConstantLiteral) {
+                    // Cleanup markers name the full expression, not its value.
+                    let cleanup =
+                        nvsupport.op_is(instruction.op, nativeir.Op.OwnershipBegin) ||
+                        nvsupport.op_is(instruction.op, nativeir.Op.OwnershipEnd);
+                    var ok = nvsupport.same_span(root.source.span, instruction.source);
+                    if cleanup {
+                        ok = ok && nvsupport.type_is(value_type.kind, model.TypeKind.Unit) &&
+                             !option.is_some(instruction.result);
+                    } else {
+                        ok = ok && root.type_id == instruction.type_id;
+                    }
+                    nvsupport.need(ok, "constant expansion changed its real source/type",
+                        instruction.source);
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    for root_entry in state.constant_roots.entries {
+        if root_entry.snapshot != instruction.source.snapshot ||
+           root_entry.begin_byte != instruction.source.begin_byte ||
+           root_entry.end_byte != instruction.source.end_byte ||
+           root_entry.type_id != instruction.type_id {
+            continue;
+        }
+        let root_index = root_entry.node;
+        let root = nvsupport.hir_node(state.m.h, root_index);
+        var literal = hir.ConstantValue(type_id: 0,
+            data: hir.ConstantData.UnitLiteral(
+                value: hir.UnitLiteral()));
+        var has_literal = false;
+        switch root.data {
+            case hir.NodeData.ConstantLiteral(payload):
+                literal = payload.value; has_literal = true;
+            default: {}
+        }
+        if !has_literal || !option.is_some(instruction.result) ||
+           root.type_id != instruction.type_id ||
+           !nvsupport.same_span(root.source.span, instruction.source) {
+            continue;
+        }
+        nvsupport.need(nvsupport.compare_option(instruction.origin,
+                 option.Option[usize].Some(root_index)) == 0,
+             "constant expansion lost its real HIR origin",
+             instruction.source);
+        var work usize = 0;
+        check_constant_value(state, literal, instruction, 0, inout work,
+            instruction.source);
+    }
+}
+
+func default_instruction() nativeir.Instruction {
+    return nativeir.empty_instruction();
+}
+
+pub func check_convert(state nvstate.Body, instruction nativeir.Instruction,
+                   args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 1, instruction.source);
+    let source = operand_type(state, args, 0, instruction.source);
+    let source_kind = source.kind;
+    let destination = instruction.type_id;
+    let destination_type = nvsupport.require_type(state.m.h, destination,
+        instruction.source);
+    let float_pair = nvsupport.type_is(source_kind, model.TypeKind.Float) &&
+                     nvsupport.type_is(destination_type.kind, model.TypeKind.Float) &&
+                     (source.bits == 32 || source.bits == 64) &&
+                     (destination_type.bits == 32 || destination_type.bits == 64);
+    nvsupport.need((nvsupport.integer(source_kind) && nvsupport.integer(destination_type.kind)) ||
+             (nvsupport.type_is(source_kind, model.TypeKind.Float) &&
+              nvsupport.integer(destination_type.kind)) ||
+             (nvsupport.integer(source_kind) &&
+              nvsupport.type_is(destination_type.kind, model.TypeKind.Float)) ||
+             float_pair,
+         "invalid numeric conversion", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "conversion without HIR origin", instruction.source);
+    let origin = state.m.h.nodes[origin_id];
+    var is_conversion = false;
+    switch origin.data {
+        case hir.NodeData.IntegerConvert(payload): is_conversion = true;
+        default: {}
+    }
+    nvsupport.need(is_conversion && origin.type_id == instruction.type_id &&
+             vec.len(origin.children) == 1,
+         "conversion origin is not the matching HIR conversion",
+         instruction.source);
+    nvsupport.need(nvsupport.hir_scope_function(state.m.h, origin.scope) == state.f.symbol,
+         "conversion origin belongs to another function", instruction.source);
+    nvsupport.need(nvsupport.span_contains(origin.source.span, instruction.source),
+         "conversion source span differs from HIR origin", instruction.source);
+    let operand = nvsupport.hir_node(state.m.h, origin.children[0]);
+    nvsupport.need(operand.type_id == args[0].type_id,
+         "conversion operand type differs from HIR", instruction.source);
+    var operand_value = instruction.inputs[0];
+    var visited = nvcontainers.node_set();
+    for true {
+        nvsupport.need(nvcontainers.node_set_insert(inout visited, operand_value),
+             "conversion operand value cycle", instruction.source);
+        let transparent = nvcontainers.instruction_find(state.instructions, operand_value);
+        var follow = false;
+        var next_value usize = 0;
+        switch transparent {
+            case option.Option.Some(value): {
+                if (nvsupport.op_is(value.op, nativeir.Op.Copy) ||
+                    nvsupport.op_is(value.op, nativeir.Op.Borrow)) &&
+                   vec.len(value.inputs) == 1 {
+                    follow = true;
+                    next_value = value.inputs[0];
+                }
+            }
+            case option.Option.None: {}
+        }
+        if follow {
+            operand_value = next_value;
+            continue;
+        }
+        let definition = nvcontainers.definition_require(state.definitions, operand_value);
+        nvsupport.need(nvsupport.same_span(definition.source, operand.source.span),
+             "conversion operand value differs from the real HIR operand",
+             instruction.source);
+        break;
+    }
+}
+
+pub func check_aggregate_init(state inout nvstate.Body, instruction nativeir.Instruction,
+                          args Vec[nvcontainers.Definition], value_type model.Type)
+    throws nvsupport.VerifyError {
+    let structure = nvsupport.op_is(instruction.op, nativeir.Op.StructInit);
+    var expected_kind = model.TypeKind.NominalEnum;
+    if structure {
+        expected_kind = model.TypeKind.NominalStruct;
+    }
+    nvsupport.need(nvsupport.type_is(value_type.kind, expected_kind),
+         "aggregate constructor kind", instruction.source);
+    var variant = option.Option[usize].None;
+    if !structure {
+        variant = option.Option[usize].Some(instruction.variant);
+    }
+    let fields = aggregate_fields(inout state, instruction.type_id, variant);
+    require_arity(args, vec.len(fields), instruction.source);
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        nvsupport.need(args[index].type_id == fields[index].type_id,
+             "constructor field type", instruction.source);
+    }
+}
+
+pub func check_field(state inout nvstate.Body, instruction nativeir.Instruction,
+                 args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 1, instruction.source);
+    let address = nvsupport.op_is(instruction.op, nativeir.Op.FieldAddress);
+    let receiver = nvsupport.require_type(state.m.h, args[0].type_id, instruction.source);
+    nvsupport.need(args[0].address == address &&
+             nvsupport.type_is(receiver.kind, model.TypeKind.NominalStruct),
+         "field receiver type/mode", instruction.source);
+    let fields = aggregate_fields(inout state, args[0].type_id,
+        option.Option[usize].None);
+    let index = aggregate_field_index(inout state, args[0].type_id,
+        instruction.field, option.Option[usize].None);
+    nvsupport.need(instruction.type_id == fields[index].type_id,
+         "field result type", instruction.source);
+    if address {
+        var found = false;
+        for source in state.m.h.nodes {
+            if !nvsupport.kind_is(hir.node_kind(source.data),
+                        hir.NodeKind.FieldPlace) ||
+               !nvsupport.same_span(source.source.span, instruction.source) ||
+               nvsupport.hir_scope_function(state.m.h, source.scope) != state.f.symbol {
+                continue;
+            }
+            switch source.data {
+                case hir.NodeData.FieldPlace(place): {
+                    nvsupport.need(place.field == instruction.field &&
+                             source.type_id == instruction.type_id,
+                         "field address differs from the HIR source place",
+                         instruction.source);
+                }
+                default: {}
+            }
+            found = true;
+            break;
+        }
+        nvsupport.need(found, "field address has no HIR source place",
+            instruction.source);
+    }
+}
+
+pub func check_vec_index(state inout nvstate.Body, instruction nativeir.Instruction,
+                     args Vec[nvcontainers.Definition], block usize, position usize)
+    throws nvsupport.VerifyError {
+    let is_read = nvsupport.op_is(instruction.op, nativeir.Op.VecRead);
+    let is_check = nvsupport.op_is(instruction.op, nativeir.Op.VecCheck);
+    var operand_count usize = 3;
+    if is_check || is_read {
+        operand_count = 2;
+    }
+    require_arity(args, operand_count, instruction.source);
+    let receiver = operand_type(state, args, 0, instruction.source);
+    let text = nvsupport.type_is(receiver.kind, model.TypeKind.String);
+    let index_type = operand_type(state, args, 1, instruction.source);
+    nvsupport.need((nvsupport.type_is(receiver.kind, model.TypeKind.Vec) ||
+          nvsupport.type_is(receiver.kind, model.TypeKind.Slice) ||
+          (text && is_read)) && nvsupport.integer(index_type.kind),
+         "index receiver/type", instruction.source);
+    if text {
+        source_operation(state, instruction.origin,
+            hir.NodeKind.IndexRead, instruction.type_id, args,
+            instruction.source);
+    } else if is_read {
+        var compound = false;
+        switch instruction.origin {
+            case option.Option.Some(origin): {
+                if origin < vec.len(state.m.h.nodes) &&
+                   nvsupport.kind_is(hir.node_kind(state.m.h.nodes[origin].data),
+                       hir.NodeKind.IndexPlace) {
+                    compound = true;
+                }
+            }
+            case option.Option.None: {}
+        }
+        var expected_kind = hir.NodeKind.IndexRead;
+        if compound {
+            expected_kind = hir.NodeKind.IndexPlace;
+        }
+        let node = index_operation(state, instruction.origin, expected_kind,
+            !compound, args, instruction.source);
+        nvsupport.need(node.type_id == instruction.type_id,
+             "indexed read source type", instruction.source);
+    } else {
+        index_operation(state, instruction.origin, hir.NodeKind.IndexPlace,
+            false, args, instruction.source);
+    }
+    if is_read {
+        if text {
+            nvsupport.need(nvsupport.type_is(nvsupport.require_type(state.m.h, instruction.type_id,
+                     instruction.source).kind,
+                     model.TypeKind.UnsignedInt) &&
+                     nvsupport.require_type(state.m.h, instruction.type_id,
+                         instruction.source).bits == 32,
+                 "indexed result", instruction.source);
+        } else {
+            nvsupport.need(nvsupport.type_arg(receiver, 0, instruction.source) ==
+                     instruction.type_id,
+                 "indexed result", instruction.source);
+        }
+    } else if is_check {
+        nvsupport.need(nvsupport.type_is(nvsupport.require_type(state.m.h, instruction.type_id,
+                 instruction.source).kind, model.TypeKind.Unit),
+             "Vec check type", instruction.source);
+    } else {
+        operand_type(state, args, 2, instruction.source);
+        nvsupport.need(nvsupport.type_arg(receiver, 0, instruction.source) == args[2].type_id &&
+                 nvsupport.type_is(nvsupport.require_type(state.m.h, instruction.type_id,
+                     instruction.source).kind, model.TypeKind.Unit),
+             "Vec write type", instruction.source);
+        var origin_id usize = 0;
+        switch instruction.origin {
+            case option.Option.Some(value): origin_id = value;
+            case option.Option.None: {}
+        }
+        vec.push(state.required_checks, nvstate.RequiredCheck(block: block,
+            position: position, origin: origin_id,
+            receiver: instruction.inputs[0], index: instruction.inputs[1],
+            source: instruction.source));
+    }
+}
+
+pub func check_vec_element_address(state inout nvstate.Body,
+                               instruction nativeir.Instruction,
+                               args Vec[nvcontainers.Definition], block usize,
+                               position usize) throws nvsupport.VerifyError {
+    require_arity(args, 2, instruction.source);
+    let receiver = operand_type(state, args, 0, instruction.source);
+    let index_type = operand_type(state, args, 1, instruction.source);
+    nvsupport.need((nvsupport.type_is(receiver.kind, model.TypeKind.Vec) ||
+          nvsupport.type_is(receiver.kind, model.TypeKind.Slice)) &&
+             nvsupport.integer(index_type.kind) &&
+             nvsupport.type_arg(receiver, 0, instruction.source) == instruction.type_id,
+         "Vec/Slice element address type", instruction.source);
+    var origin_id usize = 0;
+    var has_origin = false;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value; has_origin = true;
+        case option.Option.None: {}
+    }
+    nvsupport.need(has_origin && origin_id < vec.len(state.m.h.nodes),
+         "Vec element address without HIR place", instruction.source);
+    let place = state.m.h.nodes[origin_id];
+    nvsupport.need(nvsupport.kind_is(hir.node_kind(place.data), hir.NodeKind.IndexPlace) &&
+             place.type_id == instruction.type_id &&
+             vec.len(place.children) == 2,
+         "Vec element address origin is not the indexed place",
+         instruction.source);
+    vec.push(state.required_checks, nvstate.RequiredCheck(block: block,
+        position: position, origin: origin_id,
+        receiver: instruction.inputs[0], index: instruction.inputs[1],
+        source: instruction.source));
+    for var side usize = 0; side < 2; side += 1 {
+        let definition = nvcontainers.definition_require(state.definitions,
+            instruction.inputs[side]);
+        let child = nvsupport.hir_node(state.m.h, place.children[side]);
+        nvsupport.need(nvsupport.span_contains(child.source.span, definition.source),
+             "Vec element address receiver/index differs from the HIR indexed place",
+             instruction.source);
+    }
+}
+
+pub func check_vec_slice(state inout nvstate.Body, instruction nativeir.Instruction,
+                     args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    let receiver = operand_type(state, args, 0, instruction.source);
+    nvsupport.need((nvsupport.type_is(receiver.kind, model.TypeKind.Vec) ||
+          nvsupport.type_is(receiver.kind, model.TypeKind.Slice) ||
+          nvsupport.type_is(receiver.kind, model.TypeKind.String)) &&
+             args[0].type_id == instruction.type_id &&
+             instruction.bits <= 3,
+         "Vec/Slice slice type", instruction.source);
+    var expected_count usize = 1;
+    if (instruction.bits & 1) != 0 {
+        expected_count += 1;
+    }
+    if (instruction.bits & 2) != 0 {
+        expected_count += 1;
+    }
+    require_arity(args, expected_count, instruction.source);
+    for var index usize = 1; index < vec.len(args); index += 1 {
+        nvsupport.need(nvsupport.integer(operand_type(state, args, index,
+                 instruction.source).kind),
+             "slice endpoint type", instruction.source);
+    }
+    let origin = source_operation(state, instruction.origin,
+        hir.NodeKind.VecSlice, instruction.type_id, args, instruction.source);
+    switch origin.data {
+        case hir.NodeData.VecSlice(slice): {
+            var bits u64 = 0;
+            if option.is_some(slice.start) {
+                bits |= 1;
+            }
+            if option.is_some(slice.end) {
+                bits |= 2;
+            }
+            nvsupport.need(instruction.bits == bits,
+                 "slice endpoint presence differs from source",
+                 instruction.source);
+        }
+        default: {}
+    }
+}
+
+pub func check_iteration(state inout nvstate.Body, instruction nativeir.Instruction,
+                     args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    require_arity(args, 0, instruction.source);
+    nvsupport.need(instruction.slot < vec.len(state.f.slots),
+         "iteration slot", instruction.source);
+    let slot = state.f.slots[instruction.slot];
+    let slot_type = nvsupport.require_type(state.m.h, slot.type_id, instruction.source);
+    nvsupport.need(nvsupport.owner_kind_is(slot.owner, hir.OwnerKind.Iteration) &&
+             (nvsupport.type_is(slot_type.kind, model.TypeKind.Vec) ||
+              nvsupport.type_is(slot_type.kind, model.TypeKind.Slice) ||
+              nvsupport.type_is(slot_type.kind, model.TypeKind.String)),
+         "iteration slot", instruction.source);
+    let result = nvsupport.require_type(state.m.h, instruction.type_id,
+        instruction.source);
+    if nvsupport.op_is(instruction.op, nativeir.Op.IterationRead) {
+        if nvsupport.type_is(slot_type.kind, model.TypeKind.String) {
+            nvsupport.need(nvsupport.type_is(result.kind, model.TypeKind.UnsignedInt) &&
+                     result.bits == 32,
+                 "iteration element type", instruction.source);
+        } else {
+            nvsupport.need(instruction.type_id == nvsupport.type_arg(slot_type, 0,
+                     instruction.source),
+                 "iteration element type", instruction.source);
+        }
+    } else {
+        var expected_kind = model.TypeKind.Unit;
+        if nvsupport.op_is(instruction.op, nativeir.Op.IterationTest) {
+            expected_kind = model.TypeKind.Bool;
+        }
+        nvsupport.need(nvsupport.type_is(result.kind, expected_kind),
+             "iteration operation type", instruction.source);
+    }
+}
+
+pub func check_function_instruction(state inout nvstate.Body,
+                                instruction nativeir.Instruction,
+                                args Vec[nvcontainers.Definition]) throws nvsupport.VerifyError {
+    let found = nvstate.symbol_find(state.m.symbols, instruction.function);
+    nvsupport.need(option.is_some(found), "unknown function identity",
+        instruction.source);
+    if !option.is_some(instruction.origin) {
+        nvsupport.need(nvsupport.option_usize(found) == instruction.type_id,
+             "unknown function identity/signature", instruction.source);
+        require_arity(args, 0, instruction.source);
+        let hir_function = nvcfg.hir_function_for(state.m.h, instruction.function);
+        switch hir_function {
+            case option.Option.Some(value): {
+                nvsupport.need(vec.len(value.captures) == 0,
+                     "capturing function used as a direct callee",
+                     instruction.source);
+            }
+            case option.Option.None: {}
+        }
+        return;
+    }
+    var origin_id usize = 0;
+    switch instruction.origin {
+        case option.Option.Some(value): origin_id = value;
+        case option.Option.None: {}
+    }
+    nvsupport.need(origin_id < vec.len(state.m.h.nodes), "function instruction origin",
+        instruction.source);
+    let origin = state.m.h.nodes[origin_id];
+    switch origin.data {
+        case hir.NodeData.FunctionValue(value): {
+            nvsupport.need(value.symbol == instruction.function &&
+                     origin.type_id == instruction.type_id,
+                 "function instruction differs from its HIR value",
+                 instruction.source);
+            var is_bound = false;
+            var bound_type usize = 0;
+            switch value.bound {
+                case option.Option.Some(receiver):
+                    is_bound = true; bound_type = receiver.type_id;
+                case option.Option.None: {}
+            }
+            if is_bound {
+                let full = nvsupport.require_type(state.m.h, nvsupport.option_usize(found),
+                    instruction.source);
+                nvsupport.need(vec.len(full.parameters) > 0,
+                     "bound method has no Self", instruction.source);
+                var trimmed = full;
+                trimmed.parameters = full.parameters[1:vec.len(full.parameters)];
+                nvsupport.need(type_struct_equal(nvsupport.require_type(state.m.h,
+                         instruction.type_id, instruction.source), trimmed),
+                     "bound function instruction signature",
+                     instruction.source);
+            } else {
+                nvsupport.need(nvsupport.option_usize(found) == instruction.type_id,
+                     "unknown function identity/signature",
+                     instruction.source);
+            }
+            var expected usize = vec.len(value.captures);
+            if is_bound {
+                expected = 1;
+            }
+            require_arity(args, expected, instruction.source);
+            for var index usize = 0; index < expected; index += 1 {
+                operand_type(state, args, index, instruction.source);
+                var expected_type = bound_type;
+                if !is_bound {
+                    expected_type = value.captures[index].type_id;
+                }
+                nvsupport.need(args[index].type_id == expected_type,
+                     "function environment input type/order",
+                     instruction.source);
+            }
+        }
+        case hir.NodeData.ConstantLiteral(literal): {
+            var function_value = hir.FunctionValue(symbol: 0, type_args: [],
+                captures: [], move_capture: false,
+                bound: option.Option[hir.BoundReceiver].None);
+            var has_value = false;
+            switch literal.value.data {
+                case hir.ConstantData.FunctionValue(data):
+                    function_value = data; has_value = true;
+                default: {}
+            }
+            nvsupport.need(has_value && function_value.symbol == instruction.function &&
+                     vec.len(function_value.captures) == 0 &&
+                     !function_value.move_capture &&
+                     !option.is_some(function_value.bound) &&
+                     origin.type_id == instruction.type_id,
+                 "constant function instruction differs from HIR",
+                 instruction.source);
+            require_arity(args, 0, instruction.source);
+        }
+        default: {
+            nvsupport.need(false,
+                 "function instruction origin is not a function value",
+                 instruction.source);
+        }
+    }
+}

@@ -1,0 +1,449 @@
+// Shared error plumbing, span/type helpers and deep copies for the Native CFG
+// verifier.  Moved from the former monolithic nativeverify package.
+package support;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+// A C++ Bad (message + SourceSpan) or an exception from a shared algorithm.
+// The shared algorithms already keep their original text; this type never
+// Panics in place of an error return.
+pub enum VerifyError {
+    Bad(message string, span model.Span);
+    Support(error model.SupportError);
+}
+
+pub func bad(message string, span model.Span) VerifyError {
+    return VerifyError.Bad(message: message, span: span);
+}
+
+pub func support(error model.SupportError) VerifyError {
+    return VerifyError.Support(error: error);
+}
+
+pub func support_from_type_error(error types.Error) model.SupportError {
+    switch error {
+        case types.Error.Invalid(message):
+            return model.SupportError.Invalid(message);
+    }
+}
+
+pub func need(ok bool, message string, span model.Span) throws VerifyError {
+    if !ok {
+        throw bad(message, span);
+    }
+}
+
+pub func empty_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+pub func same_span(left model.Span, right model.Span) bool {
+    return left.snapshot == right.snapshot &&
+           left.begin_byte == right.begin_byte &&
+           left.end_byte == right.end_byte;
+}
+
+pub func span_contains(outer model.Span, inner model.Span) bool {
+    return inner.snapshot == outer.snapshot &&
+           inner.begin_byte >= outer.begin_byte &&
+           inner.end_byte <= outer.end_byte;
+}
+
+pub func kind_is(left hir.NodeKind, right hir.NodeKind) bool {
+    return hir.node_kind_id(left) == hir.node_kind_id(right);
+}
+
+pub func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+pub func integer(kind model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(model.TypeKind.SignedInt) ||
+           model.type_kind_id(kind) == model.type_kind_id(model.TypeKind.UnsignedInt) ||
+           model.type_kind_id(kind) == model.type_kind_id(model.TypeKind.Isize) ||
+           model.type_kind_id(kind) == model.type_kind_id(model.TypeKind.Usize);
+}
+
+pub func type_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+// C++ Verifier::type: an absent TypeId is a Bad with the caller's span.
+pub func require_type(h hir.HirModule, id usize, span model.Span) model.Type
+    throws VerifyError {
+    let found = types.find(h.types, id);
+    switch found {
+        case option.Option.Some(value): return value;
+        case option.Option.None:
+            throw bad("invalid TypeId", span);
+    }
+}
+
+// std::vector::at / std::map::at in the C++ verifier throw std::out_of_range,
+// which the outer handler reports as E_IR_INVALID without a primary span.
+pub func hir_node(h hir.HirModule, id usize) hir.HirNode throws VerifyError {
+    if id >= vec.len(h.nodes) {
+        throw support(model.SupportError.Invalid("invalid HIR node index"));
+    }
+    return h.nodes[id];
+}
+
+pub func hir_scope_function(h hir.HirModule, scope usize) usize throws VerifyError {
+    if scope >= vec.len(h.scopes) {
+        throw support(model.SupportError.Invalid("invalid HIR scope index"));
+    }
+    return h.scopes[scope].function;
+}
+
+// std::optional ordering: an empty optional sorts before an engaged one.
+pub func compare_option(left option.Option[usize], right option.Option[usize]) i32 {
+    var left_value usize = 0;
+    var right_value usize = 0;
+    var left_some = false;
+    var right_some = false;
+    switch left {
+        case option.Option.Some(item): left_some = true; left_value = item;
+        case option.Option.None: {}
+    }
+    switch right {
+        case option.Option.Some(item): right_some = true; right_value = item;
+        case option.Option.None: {}
+    }
+    if !left_some && !right_some { return 0; }
+    if !left_some { return -1; }
+    if !right_some { return 1; }
+    if left_value < right_value { return -1; }
+    if left_value > right_value { return 1; }
+    return 0;
+}
+
+pub func usize_compare(left usize, right usize) i32 {
+    if left < right { return -1; }
+    if left > right { return 1; }
+    return 0;
+}
+
+// Sorted insertion with binary search, mirroring std::set/std::map key order.
+pub func sorted_position[T](values Vec[T], probe T, compare func(T, T) i32) usize {
+    var low usize = 0;
+    var high usize = vec.len(values);
+    for low < high {
+        let middle = low + (high - low) / 2;
+        if compare(values[middle], probe) < 0 {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+pub func sorted_index[T](values Vec[T], probe T, compare func(T, T) i32) usize {
+    let at = sorted_position(values, probe, compare);
+    if at < vec.len(values) && compare(values[at], probe) == 0 {
+        return at;
+    }
+    return vec.len(values);
+}
+
+pub func sorted_insert[T](values inout Vec[T], value T, compare func(T, T) i32) bool {
+    let at = sorted_position(values, value, compare);
+    if at < vec.len(values) && compare(values[at], value) == 0 {
+        return false;
+    }
+    vec.push(values, value);
+    for var index usize = vec.len(values) - 1; index > at; index -= 1 {
+        values[index] = values[index - 1];
+    }
+    values[at] = value;
+    return true;
+}
+
+pub func owner_kind_id(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+pub func use_kind_id(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+pub func cleanup_kind_id(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+pub func callee_kind_id(kind hir.CalleeKind) u32 {
+    switch kind {
+        case hir.CalleeKind.Direct: return 0;
+        case hir.CalleeKind.FunctionValue: return 1;
+        case hir.CalleeKind.Foreign: return 2;
+        case hir.CalleeKind.System: return 3;
+        case hir.CalleeKind.CForeign: return 4;
+    }
+}
+
+pub func param_mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+pub func unary_op_id(op hir.UnaryOp) u32 {
+    switch op {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+pub func binary_op_id(op hir.BinaryOp) u32 {
+    switch op {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+func owner_ref_equal(left hir.OwnerRef, right hir.OwnerRef) bool {
+    return owner_kind_id(left.kind) == owner_kind_id(right.kind) &&
+           left.identity == right.identity;
+}
+
+pub func owner_ref_option_equal(left option.Option[hir.OwnerRef],
+                            right option.Option[hir.OwnerRef]) bool {
+    var left_some = false;
+    var right_some = false;
+    var left_value = hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 0);
+    var right_value = hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 0);
+    switch left {
+        case option.Option.Some(item): left_some = true; left_value = item;
+        case option.Option.None: {}
+    }
+    switch right {
+        case option.Option.Some(item): right_some = true; right_value = item;
+        case option.Option.None: {}
+    }
+    if left_some != right_some {
+        return false;
+    }
+    if !left_some {
+        return true;
+    }
+    return owner_ref_equal(left_value, right_value);
+}
+
+pub func owner_kind_is(value option.Option[hir.OwnerRef],
+                   kind hir.OwnerKind) bool {
+    switch value {
+        case option.Option.Some(item):
+            return owner_kind_id(item.kind) == owner_kind_id(kind);
+        case option.Option.None: return false;
+    }
+}
+
+pub func owner_identity(value option.Option[hir.OwnerRef]) u64 {
+    switch value {
+        case option.Option.Some(item): return item.identity;
+        case option.Option.None: return 0;
+    }
+}
+
+pub func owner_ref_is(value option.Option[hir.OwnerRef], kind hir.OwnerKind,
+                  identity u64) bool {
+    switch value {
+        case option.Option.Some(item):
+            return owner_kind_id(item.kind) == owner_kind_id(kind) &&
+                   item.identity == identity;
+        case option.Option.None: return false;
+    }
+}
+
+pub func exit_site_equal(left nativeir.ExitSite, right nativeir.ExitSite) bool {
+    return left.origin == right.origin &&
+           exit_kind_id(left.kind) == exit_kind_id(right.kind) &&
+           compare_option(left.error_type, right.error_type) == 0;
+}
+
+pub func usize_vec_equal(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub func u32_vec_equal(left Vec[u32], right Vec[u32]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub func u32_vec_copy(value Vec[u32]) Vec[u32] {
+    let result = vec.empty[u32]();
+    vec.reserve(result, vec.len(value));
+    for item in value {
+        vec.push(result, item);
+    }
+    return result;
+}
+
+pub func usize_vec_copy(value Vec[usize]) Vec[usize] {
+    let result = vec.empty[usize]();
+    vec.reserve(result, vec.len(value));
+    for item in value {
+        vec.push(result, item);
+    }
+    return result;
+}
+
+// std::vector<bool> style helper used by the C++ result-presence test.
+pub func op_writes_result(op nativeir.Op) bool {
+    let id = nativeir.op_id(op);
+    return id != nativeir.op_id(nativeir.Op.Store) &&
+           id != nativeir.op_id(nativeir.Op.StoreIndirect) &&
+           id != nativeir.op_id(nativeir.Op.ExitBegin) &&
+           id != nativeir.op_id(nativeir.Op.CleanupBegin) &&
+           id != nativeir.op_id(nativeir.Op.CleanupEnd) &&
+           id != nativeir.op_id(nativeir.Op.Take) &&
+           id != nativeir.op_id(nativeir.Op.Destroy) &&
+           id != nativeir.op_id(nativeir.Op.EndBorrow) &&
+           id != nativeir.op_id(nativeir.Op.SaveOutput) &&
+           id != nativeir.op_id(nativeir.Op.VecSet) &&
+           id != nativeir.op_id(nativeir.Op.IterationEnd) &&
+           id != nativeir.op_id(nativeir.Op.IterationBegin) &&
+           id != nativeir.op_id(nativeir.Op.IterationNext) &&
+           id != nativeir.op_id(nativeir.Op.OwnershipBegin) &&
+           id != nativeir.op_id(nativeir.Op.OwnershipEnd) &&
+           id != nativeir.op_id(nativeir.Op.ReplaceIndirect) &&
+           id != nativeir.op_id(nativeir.Op.BeginBorrow) &&
+           id != nativeir.op_id(nativeir.Op.VecCheck) &&
+           id != nativeir.op_id(nativeir.Op.CPtrWrite) &&
+           id != nativeir.op_id(nativeir.Op.CBufferWrite);
+}
+
+pub func op_is(op nativeir.Op, expected nativeir.Op) bool {
+    return nativeir.op_id(op) == nativeir.op_id(expected);
+}
+
+pub func exit_is(kind nativeir.Exit, expected nativeir.Exit) bool {
+    return nativeir.exit_id(kind) == nativeir.exit_id(expected);
+}
+
+pub func backend_id(backend model.Backend) u32 {
+    switch backend {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+pub func type_arg(value model.Type, index usize, span model.Span) usize
+    throws VerifyError {
+    if index >= vec.len(value.type_args) {
+        throw bad("invalid TypeId", span);
+    }
+    return value.type_args[index];
+}
+
+pub func parameter_type(value model.Type, index usize, span model.Span)
+    model.ParameterType throws VerifyError {
+    if index >= vec.len(value.parameters) {
+        throw bad("invalid TypeId", span);
+    }
+    return value.parameters[index];
+}
+
+pub func option_usize(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+pub func option_u32_value(value option.Option[u32]) u32 {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+pub func option_u32_equal(left option.Option[u32],
+                      right option.Option[u32]) bool {
+    var left_value u32 = 0;
+    var right_value u32 = 0;
+    var left_some = false;
+    var right_some = false;
+    switch left {
+        case option.Option.Some(item): left_value = item; left_some = true;
+        case option.Option.None: {}
+    }
+    switch right {
+        case option.Option.Some(item): right_value = item; right_some = true;
+        case option.Option.None: {}
+    }
+    if left_some != right_some {
+        return false;
+    }
+    return !left_some || left_value == right_value;
+}
+
+pub func option_binary_is(value option.Option[hir.BinaryOp],
+                      expected hir.BinaryOp) bool {
+    switch value {
+        case option.Option.Some(item):
+            return binary_op_id(item) == binary_op_id(expected);
+        case option.Option.None: return false;
+    }
+}

@@ -1,0 +1,131 @@
+// Complete speculative state isolation for CPP foreign_call's Checker trial.
+// This is not the initializer and does not evaluate/type-check source.
+package core;
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/model" as model;
+import "app/wzcc/sema/borrow" as borrow;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func copy_indices(values Vec[usize]) Vec[usize] {
+    let out=vec.empty[usize](); for value in values {vec.push(out,value);} return out;
+}
+func copy_bigint(value bigint.BigInt) bigint.BigInt {
+    let limbs=vec.empty[u32](); for limb in value.limbs {vec.push(limbs,limb);}
+    return bigint.BigInt(sign:value.sign,limbs:limbs);
+}
+func copy_value(value Value) Value {
+    var out=value;
+    switch value.integer {
+        case option.Option.Some(integer):out.integer=option.Option[bigint.BigInt].Some(copy_bigint(integer));
+        case option.Option.None:{}
+    }
+    return out;
+}
+func copy_constant_value(value hir.ConstantValue) hir.ConstantValue {
+    var out=value;
+    switch value.data {
+        case hir.ConstantData.FunctionValue(function): {
+            var copied=function;
+            copied.type_args=copy_indices(function.type_args);
+            copied.captures=vec.empty[hir.CaptureSource]();
+            for capture in function.captures {vec.push(copied.captures,capture);}
+            out.data=hir.ConstantData.FunctionValue(value:copied);
+        }
+        case hir.ConstantData.ConstantAggregate(aggregate): {
+            var copied=aggregate; copied.fields=vec.empty[hir.ConstantValue]();
+            for field in aggregate.fields {vec.push(copied.fields,copy_constant_value(field));}
+            out.data=hir.ConstantData.ConstantAggregate(value:copied);
+        }
+        default:{}
+    }
+    return out;
+}
+func copy_constant(value Constant) Constant {
+    var out=value; out.value=copy_value(value.value); out.type_args=copy_indices(value.type_args);
+    switch value.aggregate {
+        case option.Option.Some(aggregate):out.aggregate=option.Option[hir.ConstantValue].Some(copy_constant_value(aggregate));
+        case option.Option.None:{}
+    }
+    return out;
+}
+func copy_trait(value hir.TraitRef) hir.TraitRef {
+    var out=value;out.args=copy_indices(value.args);return out;
+}
+func copy_optional_trait(value option.Option[hir.TraitRef]) option.Option[hir.TraitRef] {
+    switch value {
+        case option.Option.Some(trait_ref):return option.Option[hir.TraitRef].Some(copy_trait(trait_ref));
+        case option.Option.None:return option.Option[hir.TraitRef].None;
+    }
+}
+func copy_generic_params(values Vec[hir.GenericParam]) Vec[hir.GenericParam] {
+    let out=vec.empty[hir.GenericParam]();
+    for value in values {var copied=value;copied.trait_ref=copy_optional_trait(value.trait_ref);vec.push(out,copied);}
+    return out;
+}
+func copy_trait_key(value TraitKey) TraitKey {
+    var out=value;out.args=copy_indices(value.args);return out;
+}
+func copy_trait_keys(values Vec[TraitKey]) Vec[TraitKey] {
+    let out=vec.empty[TraitKey]();for value in values {vec.push(out,copy_trait_key(value));}return out;
+}
+func copy_closure(value ClosureInfo) ClosureInfo {
+    var out=value;out.bindings=vec.empty[hir.CaptureBinding]();out.sources=vec.empty[hir.CaptureSource]();
+    for binding in value.bindings {vec.push(out.bindings,binding);}
+    for source in value.sources {vec.push(out.sources,source);}
+    return out;
+}
+
+pub func clone_checker(state Checker) Checker throws Error {
+    // Scalars/Options containing only scalars and immutable strings may share.
+    // Every Vec below, including keys/payloads nested inside entries, is fresh.
+    var out=state;
+    out.selected_templates=vec.empty[model.NodeRef]();
+    for reference in state.selected_templates {vec.push(out.selected_templates,reference);}
+    try {out.m=hirclone.clone_module(state.m);}
+    catch error model.SupportError {throw Error.Support(error);}
+    out.occurrences=vec.empty[NodeSymbolEntry]();for value in state.occurrences {vec.push(out.occurrences,value);}
+    out.definitions=vec.empty[NodeSymbolEntry]();for value in state.definitions {vec.push(out.definitions,value);}
+    out.signatures=vec.empty[SymbolTypeEntry]();for value in state.signatures {vec.push(out.signatures,value);}
+    out.trait_signature_context=vec.empty[TraitSignatureEntry]();for value in state.trait_signature_context {vec.push(out.trait_signature_context,value);}
+    out.parameters=vec.empty[ParametersEntry]();
+    for value in state.parameters {
+        var copied=value;copied.values=vec.empty[hir.Parameter]();
+        for parameter in value.values {vec.push(copied.values,parameter);}
+        vec.push(out.parameters,copied);
+    }
+    out.locals=vec.empty[LocalEntry]();for value in state.locals {vec.push(out.locals,value);}
+    out.constants=vec.empty[ConstantEntry]();
+    for value in state.constants {vec.push(out.constants,ConstantEntry(symbol:value.symbol,value:copy_constant(value.value)));}
+    out.evaluating=copy_indices(state.evaluating);
+    out.c_named_types=vec.empty[CNamedTypeEntry]();for value in state.c_named_types {vec.push(out.c_named_types,value);}
+    out.loops=copy_indices(state.loops);out.break_targets=copy_indices(state.break_targets);
+    out.nominal_ids=vec.empty[borrow.NominalIdEntry]();for value in state.nominal_ids {vec.push(out.nominal_ids,value);}
+    out.self_types=vec.empty[SymbolTypeEntry]();for value in state.self_types {vec.push(out.self_types,value);}
+    out.generic_params=vec.empty[GenericParamsEntry]();
+    for value in state.generic_params {vec.push(out.generic_params,GenericParamsEntry(owner:value.owner,params:copy_generic_params(value.params)));}
+    out.bounds=vec.empty[BoundEntry]();
+    for value in state.bounds {vec.push(out.bounds,BoundEntry(symbol:value.symbol,trait_ref:copy_optional_trait(value.trait_ref)));}
+    out.trait_parameters=vec.empty[GenericParamsEntry]();
+    for value in state.trait_parameters {vec.push(out.trait_parameters,GenericParamsEntry(owner:value.owner,params:copy_generic_params(value.params)));}
+    out.bodies=vec.empty[BodyEntry]();for value in state.bodies {vec.push(out.bodies,value);}
+    out.template_ids=vec.empty[TemplateIdEntry]();for value in state.template_ids {vec.push(out.template_ids,value);}
+    out.instance_cache=vec.empty[InstanceEntry]();
+    for value in state.instance_cache {var key=value.key;key.args=copy_indices(value.key.args);vec.push(out.instance_cache,InstanceEntry(key:key,symbol:value.symbol));}
+    out.trait_results=vec.empty[TraitResultEntry]();
+    for value in state.trait_results {vec.push(out.trait_results,TraitResultEntry(key:copy_trait_key(value.key),value:value.value));}
+    out.active_constraints=copy_trait_keys(state.active_constraints);
+    out.active_trait_bounds=copy_trait_keys(state.active_trait_bounds);
+    out.active_params=copy_generic_params(state.active_params);
+    out.signature_parameters=copy_indices(state.signature_parameters);
+    out.async_functions=copy_indices(state.async_functions);
+    out.closures=vec.empty[ClosureEntry]();
+    for value in state.closures {vec.push(out.closures,ClosureEntry(symbol:value.symbol,value:copy_closure(value.value)));}
+    out.capture_by_origin=vec.empty[CaptureOriginEntry]();for value in state.capture_by_origin {vec.push(out.capture_by_origin,value);}
+    out.capture_by_local=vec.empty[CaptureLocalEntry]();for value in state.capture_by_local {vec.push(out.capture_by_local,value);}
+    out.current_captures=vec.empty[hir.CaptureBinding]();for value in state.current_captures {vec.push(out.current_captures,value);}
+    out.weak_validated=copy_indices(state.weak_validated);
+    return out;
+}

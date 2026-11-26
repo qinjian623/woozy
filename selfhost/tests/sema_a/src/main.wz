@@ -1,4 +1,4 @@
 package app;
-import "app/wzcc/sema" as sema;
+import "app/wzcc/sema/declarations" as semadecl;
 import "std/os" as os;
-func main() i32 throws os.Error { return sema.run_a_tests(); }
+func main() i32 throws os.Error { return semadecl.run_a_tests(); }
